@@ -5,4 +5,5 @@
 html,
 body {
   @apply bg-white;
+  resize: none;
 }
