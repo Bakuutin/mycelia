@@ -15,6 +15,10 @@ const zTimelineItem = z.object({
 type TimelineItem = z.infer<typeof zTimelineItem>;
 
 
+const day = 1000 * 60 * 60 * 24;
+const year = day * 365;
+
+
 function getDaysAgo(n: number) {
     const today = new Date(new Date().toISOString().split('T')[0])
     const monthAgo = new Date(today.getTime() - n * 24 * 60 * 60 * 1000)
@@ -30,6 +34,7 @@ const zLoaderData = z.object({
     items: z.array(zTimelineItem),
     start: z.date(),
     end: z.date(),
+    gap: z.number(),
 });
 
 type LoaderData = z.infer<typeof zLoaderData>;
@@ -46,7 +51,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         console.error(error);
         throw new Response("Invalid format", { status: 400 });
     }
-    let {start, end } = params;
+    let { start, end } = params;
 
     const duration = end.getTime() - start.getTime();
     const originalStart = start;
@@ -54,12 +59,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     start = new Date(start.getTime() - duration / 2);
     end = new Date(end.getTime() + duration / 2);
 
-    const day = 1000 * 60 * 60 * 24;
-  
+
     let gap = 0;
 
-    if (duration > day * 3) {
-        gap = duration * 0.03;
+    if (duration > day * 7) {
+        gap = day / 4;
+    }
+    if (duration > day * 300) {
+        gap = day * 10;
     }
 
     const client = new MongoClient(process.env.MONGO_URL as string);
@@ -79,7 +86,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             .toArray();
 
         const timelineData: TimelineItem[] = [];
-        
+
 
         if (gap > 0) {
             let prev: TimelineItem | null = null;
@@ -117,12 +124,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
             items: timelineData,
             start: originalStart,
             end: originalEnd,
+            gap,
         });
     } finally {
         await client.close();
     }
 }
-
 
 const TimelineAxis = ({
     scale,
@@ -135,14 +142,34 @@ const TimelineAxis = ({
     height: number;
     width: number;
 }) => {
+    // First, compute the scaled ticks which will be needed by other calculations
     const ticks = useMemo(() => {
         const newScale = transform.rescaleX(scale);
-        return newScale.ticks().map(tick => ({
+        const tickValues = newScale.ticks();
+        
+        return tickValues.map(tick => ({
             value: tick,
-            xOffset: newScale(tick)
+            xOffset: newScale(tick),
+            isNewYear: tick.getMonth() === 0 && tick.getDate() === 1
         }));
     }, [scale, transform]);
 
+    // Determine if timeline spans multiple years using the computed ticks
+    const spansMultipleYears = useMemo(() => {
+        if (ticks.length < 2) return false;
+        const firstYear = ticks[0].value.getFullYear();
+        const lastYear = ticks[ticks.length - 1].value.getFullYear();
+        return firstYear !== lastYear;
+    }, [ticks]);
+
+    // Check if all ticks fall on January 1st
+    const allJanFirst = useMemo(() => {
+        return ticks.length > 0 && ticks.every(({ value }) => 
+            value.getMonth() === 0 && value.getDate() === 1
+        );
+    }, [ticks]);
+
+    // Detect presence of time components
     const hasTime = useMemo(() => {
         return ticks.some(({ value }) => (
             value.getHours() !== 0 ||
@@ -151,11 +178,31 @@ const TimelineAxis = ({
         ));
     }, [ticks]);
 
+    // Detect presence of seconds specifically
     const hasSeconds = useMemo(() => {
         return ticks.some(({ value }) => value.getSeconds() !== 0);
     }, [ticks]);
 
+    // Get the range for the axis path
     const [start, end] = scale.range();
+
+    // Helper function to format the date label based on display context
+    const formatDateLabel = (date: Date, i: number) => {
+        // If all ticks are January 1st, show only the year
+        if (allJanFirst) {
+            return date.getFullYear().toString();
+        }
+        
+        const month = date.toLocaleDateString([], { month: 'short' });
+        const day = date.getDate();
+        
+        // If spanning multiple years, include year on January 1st
+        if (spansMultipleYears && date.getMonth() === 0 && date.getDate() === 1 || i === 0) {
+            return `${month} ${day}, ${date.getFullYear()}`;
+        }
+        
+        return `${month} ${day}`;
+    };
 
     return (
         <g transform={`translate(0,${height})`}>
@@ -164,16 +211,22 @@ const TimelineAxis = ({
                 fill="none"
                 stroke="currentColor"
             />
-            {ticks.map(({ value, xOffset }) => (
-                <g key={value.toISOString()} transform={`translate(${xOffset},0)`}>
-                    <line y2="6" stroke="currentColor" />
+            {ticks.map(({ value, xOffset, isNewYear }, i) => (
+                <g 
+                    key={value.toISOString()} 
+                    transform={`translate(${xOffset},0)`}
+                >
+                    <line 
+                        y2={isNewYear && (spansMultipleYears || allJanFirst) ? "9" : "6"} 
+                        stroke="currentColor"
+                    />
                     <text
                         style={{
                             fontSize: "10px",
                             textAnchor: "middle",
                             transform: "translateY(20px)",
                         }}>
-                        {value.toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        {formatDateLabel(value, i)}
                     </text>
                     {hasTime && (
                         <text
@@ -184,8 +237,17 @@ const TimelineAxis = ({
                             }}>
                             {
                                 hasSeconds ?
-                                    value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) :
-                                    value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+                                    value.toLocaleTimeString([], { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit', 
+                                        second: '2-digit', 
+                                        hour12: false 
+                                    }) :
+                                    value.toLocaleTimeString([], { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit', 
+                                        hour12: false 
+                                    })
                             }
                         </text>
                     )}
@@ -196,17 +258,18 @@ const TimelineAxis = ({
 };
 
 
+
 interface OptimizedTimelineItem {
     start: Date;
     end: Date;
     layer: number;
     duration: number;
     original: TimelineItem;
-  }
-  
-  // This function optimizes the vertical positioning of timeline items
-  function optimizeTimelineLayout(items: TimelineItem[], epsilon: number): OptimizedTimelineItem[] {
-    
+}
+
+// This function optimizes the vertical positioning of timeline items
+function optimizeTimelineLayout(items: TimelineItem[], epsilon: number): OptimizedTimelineItem[] {
+
     const oItems: OptimizedTimelineItem[] = items.map(item => ({
         start: new Date(item.start),
         end: new Date(item.end),
@@ -215,44 +278,44 @@ interface OptimizedTimelineItem {
         layer: 0,
     }));
 
-    
+
     // Track active items in each layer
     const layers: OptimizedTimelineItem[][] = [];
-    
+
     // Process each item to assign layers
     const optimizedItems = oItems.map(item => {
-      let targetLayer = 0;
-      let foundLayer = false;
-      
-      // Find the lowest available layer
-      while (!foundLayer) {
-        if (targetLayer >= layers.length) {
-          // Create new layer if needed
-          layers[targetLayer] = [];
-          foundLayer = true;
-        } else {
-          // Check for conflicts in current layer
+        let targetLayer = 0;
+        let foundLayer = false;
 
-          const hasConflict = (
-            layers[targetLayer].length > 0 &&
-            layers[targetLayer][layers[targetLayer].length - 1].end.getTime() > item.start.getTime() + epsilon
-          ); 
-          
-          if (!hasConflict) {
-            foundLayer = true;
-          } else {
-            targetLayer++;
-          }
+        // Find the lowest available layer
+        while (!foundLayer) {
+            if (targetLayer >= layers.length) {
+                // Create new layer if needed
+                layers[targetLayer] = [];
+                foundLayer = true;
+            } else {
+                // Check for conflicts in current layer
+
+                const hasConflict = (
+                    layers[targetLayer].length > 0 &&
+                    layers[targetLayer][layers[targetLayer].length - 1].end.getTime() > item.start.getTime() + epsilon
+                );
+
+                if (!hasConflict) {
+                    foundLayer = true;
+                } else {
+                    targetLayer++;
+                }
+            }
         }
-      }
-      const optimizedItem = { ...item, layer: targetLayer };
-      layers[targetLayer].push(optimizedItem);
-      
-      return optimizedItem;
+        const optimizedItem = { ...item, layer: targetLayer };
+        layers[targetLayer].push(optimizedItem);
+
+        return optimizedItem;
     });
-  
+
     return optimizedItems;
-  }
+}
 
 const TimelineItems = ({
     items,
@@ -278,7 +341,7 @@ const TimelineItems = ({
             {optimizedItems.map(item => {
                 const startX = newScale(item.start);
                 const endX = newScale(item.end);
-                const width = Math.max(endX - startX, 2);
+                const width = duration < 1000 * year ? Math.max(endX - startX, 2): 2;
 
                 return (
                     <rect
@@ -293,6 +356,27 @@ const TimelineItems = ({
                 );
             })}
         </g>
+    );
+};
+
+
+const CursorLine = ({
+    position,
+    height,
+}: {
+    position: number;
+    height: number;
+}) => {
+    return (
+        <line
+            x1={position}
+            y1={0}
+            x2={position}
+            y2={height}
+            stroke="red"
+            strokeWidth={1}
+            pointerEvents="none" // Ensures the line doesn't interfere with click events
+        />
     );
 };
 
@@ -312,6 +396,8 @@ const TimelinePage = () => {
     const margin = { top: 20, right: 20, bottom: 60, left: 40 };
     const width = dimensions.width - margin.left - margin.right;
     const height = dimensions.height - margin.top - margin.bottom;
+
+    const [cursor, setCursor] = useState<Date | null>(null);
 
 
     const [transform, setTransform] = useState(d3.zoomIdentity);
@@ -357,6 +443,7 @@ const TimelinePage = () => {
 
     const handleZoom = useCallback((event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         setTransform(event.transform);
+        console.log(event.transform);
 
         const newScale = event.transform.rescaleX(timeScale);
         const [
@@ -368,7 +455,7 @@ const TimelinePage = () => {
 
     const zoom = useMemo(() => {
         return d3.zoom()
-            .scaleExtent([0, 304549])
+            .scaleExtent([5e-7, 304549])
             .extent([[0, 0], [width, height]])
             .on("zoom", handleZoom);
     }, [width, height, handleZoom]);
@@ -393,6 +480,15 @@ const TimelinePage = () => {
                     className="w-full h-full overflow-x-scroll"
                     width={width + margin.left + margin.right}
                     height={height + margin.top + margin.bottom}
+                    onClick={(event) => {
+                        // Calculate cursor position based on click coordinates
+                        const svgElement = event.currentTarget;
+                        const rect = svgElement.getBoundingClientRect();
+                        const x = event.clientX - rect.left - margin.left;
+                        const newScale = transform.rescaleX(timeScale);
+                        const clickedDate = newScale.invert(x);
+                        setCursor(clickedDate);
+                    }}
                 >
                     <g transform={`translate(${margin.left},${margin.top})`}>
                         <clipPath id="clip">
@@ -404,6 +500,12 @@ const TimelinePage = () => {
                                 scale={timeScale}
                                 transform={transform}
                             />
+                            {cursor !== null && (
+                                <CursorLine
+                                    position={transform.applyX(timeScale(cursor))}
+                                    height={height - margin.top}
+                                />
+                            )}
                         </g>
                         <TimelineAxis
                             scale={timeScale}
