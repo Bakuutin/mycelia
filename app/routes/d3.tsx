@@ -5,6 +5,9 @@ import _ from 'lodash';
 import { LoaderFunctionArgs } from '@remix-run/node';
 import { MongoClient } from 'mongodb';
 import { z } from "zod";
+import { CursorLine } from "~/components/cursorLine"
+
+import { useDateStore, AudioPlayer } from '~/components/player';
 
 const zTimelineItem = z.object({
     id: z.string(),
@@ -13,6 +16,11 @@ const zTimelineItem = z.object({
 });
 
 type TimelineItem = z.infer<typeof zTimelineItem>;
+
+interface StartEnd {
+    start: Date;
+    end: Date;
+}
 
 
 const day = 1000 * 60 * 60 * 24;
@@ -30,14 +38,69 @@ const QuerySchema = z.object({
     end: z.coerce.date(),
 });
 
+// "segments": [
+//     {
+//       "id": 0,
+//       "text": " Слышу тебя хорошо, старый дед.",
+//       "start": 0,
+//       "end": 2.88,
+//       "tokens": [
+//         2933,
+//         693,
+//         12533,
+//         585,
+//         12644,
+//         16977,
+//         11,
+//         17241,
+//         4851,
+//         1070,
+//         2229,
+//         13
+//       ],
+//       "words": [
+//         {
+//           "word": " С",
+//           "start": 0,
+//           "end": 0.1,
+//           "t_dtw": -1,
+//           "probability": 0.6369001865386963
+//         },
+
 const zLoaderData = z.object({
     items: z.array(zTimelineItem),
+    voices: z.array(z.object({
+        start: z.date(),
+        end: z.date(),
+        _id: z.string(),
+    })),
+    transcripts: z.array(z.object({
+        start: z.date(),
+        end: z.date(),
+        text: z.string(),
+        segments: z.array(z.object({
+            words: z.array(z.object({
+                word: z.string(),
+                start: z.number(),
+                end: z.number(),
+                t_dtw: z.number(),
+                probability: z.number(),
+            })),
+            id: z.number(),
+            start: z.number(),
+            end: z.number(),
+        })),
+        _id: z.string(),
+    })),
     start: z.date(),
     end: z.date(),
     gap: z.number(),
 });
 
 type LoaderData = z.infer<typeof zLoaderData>;
+
+
+
 
 export async function loader({ request }: LoaderFunctionArgs) {
     const url = new URL(request.url);
@@ -52,6 +115,36 @@ export async function loader({ request }: LoaderFunctionArgs) {
         throw new Response("Invalid format", { status: 400 });
     }
     let { start, end } = params;
+
+    const mergeGap = (items: StartEnd[], gap: number, updateKey: any = null) => { 
+        if (gap <= 0) {
+            return items;
+        }
+        const result: StartEnd[] = [];
+        let prev: StartEnd | null = null;
+        for (const item of items) {
+            if (prev) {
+                if (prev.end.getTime() > item.start.getTime() - gap) {
+                    prev.end = _.max([prev.end, item.end]) as Date;
+                    if (
+                        updateKey && typeof updateKey === 'function'
+                    ) {
+                        prev = updateKey(prev, item);
+                    }
+                } else {
+                    result.push(prev);
+                    prev = null;
+                }
+            } else {
+                prev = item;
+            }
+
+        }
+        if (prev) {
+            result.push(prev);
+        }
+        return result;
+    }
 
     const duration = end.getTime() - start.getTime();
     const originalStart = start;
@@ -74,7 +167,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         await client.connect();
         const database = client.db("a5t-2024-11-19");
         const collection = database.collection("source_files");
-        const items = await collection.find({
+        const items: any[] = await collection.find({
             start: {
                 $lte: end,
             },
@@ -85,46 +178,65 @@ export async function loader({ request }: LoaderFunctionArgs) {
             .sort({ start: 1 })
             .toArray();
 
-        const timelineData: TimelineItem[] = [];
+        let sources: TimelineItem[] = mergeGap(items, gap).map(item => ({
+            start: item.start,
+            end: item.end,
+            id: item._id.toHexString(),
+        }));
 
-
-        if (gap > 0) {
-            let prev: TimelineItem | null = null;
-            for (const _item of items) {
-                const item: TimelineItem = {
-                    start: _item.start,
-                    end: _item.end,
-                    id: _item._id.toHexString(),
-                };
-
-                if (prev) {
-                    if (prev.end.getTime() > item.start.getTime() - gap) {
-                        prev.end = _.max([prev.end, item.end]) as Date;
-                    } else {
-                        timelineData.push(prev);
-                        prev = null;
-                    }
-                } else {
-                    prev = item;
-                }
-
-            }
-            if (prev) {
-                timelineData.push(prev);
-            }
-        } else {
-            timelineData.push(...items.map(item => ({
-                start: item.start,
-                end: item.end,
-                id: item._id.toHexString(),
-            })));
+    
+        let voices: any[] = [];
+        if (duration < day * 2) {
+            voices = await database.collection("diarizations").find({
+                start: {
+                    $lte: end,
+                },
+                end: {
+                    $gte: start,
+                },
+            })
+            .sort({ start: 1 })
+            .toArray();
+            voices = voices.map(voice => ({
+                start: voice.start,
+                end: voice.end,
+                _id: voice._id.toHexString(),
+            }));
+            voices = mergeGap(voices, duration / 100);
         }
 
+        let transcripts: any[] = [];
+        if (duration < day) {
+            transcripts = await database.collection("transcriptions").find({
+                start: {
+                    $lte: end,
+                },
+                end: {
+                    $gte: start,
+                },
+            })
+            .sort({ start: 1 })
+            .toArray();
+            transcripts = transcripts.map(t => {
+                t._id = t._id.toHexString();
+                return t;
+            });
+            // transcripts = mergeGap(transcripts, duration / 100, (prev, item) => {
+            //     prev.text += ' ' + item.text;
+            //     prev.end = item.end;
+            //     return prev;
+            // });
+        }
+        
+
+
         return ({
-            items: timelineData,
+            items: sources,
             start: originalStart,
             end: originalEnd,
             gap,
+            voices,
+            transcripts,
         });
     } finally {
         await client.close();
@@ -142,10 +254,9 @@ const TimelineAxis = ({
     height: number;
     width: number;
 }) => {
-    // First, compute the scaled ticks which will be needed by other calculations
     const ticks = useMemo(() => {
         const newScale = transform.rescaleX(scale);
-        const tickValues = newScale.ticks();
+        const tickValues = newScale.ticks( width > 500 ? 10 : 5);
         
         return tickValues.map(tick => ({
             value: tick,
@@ -154,7 +265,6 @@ const TimelineAxis = ({
         }));
     }, [scale, transform]);
 
-    // Determine if timeline spans multiple years using the computed ticks
     const spansMultipleYears = useMemo(() => {
         if (ticks.length < 2) return false;
         const firstYear = ticks[0].value.getFullYear();
@@ -162,14 +272,12 @@ const TimelineAxis = ({
         return firstYear !== lastYear;
     }, [ticks]);
 
-    // Check if all ticks fall on January 1st
     const allJanFirst = useMemo(() => {
         return ticks.length > 0 && ticks.every(({ value }) => 
             value.getMonth() === 0 && value.getDate() === 1
         );
     }, [ticks]);
 
-    // Detect presence of time components
     const hasTime = useMemo(() => {
         return ticks.some(({ value }) => (
             value.getHours() !== 0 ||
@@ -178,30 +286,26 @@ const TimelineAxis = ({
         ));
     }, [ticks]);
 
-    // Detect presence of seconds specifically
     const hasSeconds = useMemo(() => {
         return ticks.some(({ value }) => value.getSeconds() !== 0);
     }, [ticks]);
 
-    // Get the range for the axis path
     const [start, end] = scale.range();
 
-    // Helper function to format the date label based on display context
     const formatDateLabel = (date: Date, i: number) => {
-        // If all ticks are January 1st, show only the year
         if (allJanFirst) {
             return date.getFullYear().toString();
         }
         
         const month = date.toLocaleDateString([], { month: 'short' });
         const day = date.getDate();
+        const weekday = date.toLocaleDateString([], { weekday: 'short' });
         
-        // If spanning multiple years, include year on January 1st
         if (spansMultipleYears && date.getMonth() === 0 && date.getDate() === 1 || i === 0) {
-            return `${month} ${day}, ${date.getFullYear()}`;
+            return `${month} ${day} ${weekday}, ${date.getFullYear()}`;
         }
         
-        return `${month} ${day}`;
+        return `${month} ${day} ${weekday}`;
     };
 
     return (
@@ -298,8 +402,13 @@ function optimizeTimelineLayout(items: TimelineItem[], epsilon: number): Optimiz
 
                 const hasConflict = (
                     layers[targetLayer].length > 0 &&
+
                     layers[targetLayer][layers[targetLayer].length - 1].end.getTime() > item.start.getTime() + epsilon
                 );
+
+                if (hasConflict && 3) {
+                    foundLayer = true;
+                }
 
                 if (!hasConflict) {
                     foundLayer = true;
@@ -309,6 +418,7 @@ function optimizeTimelineLayout(items: TimelineItem[], epsilon: number): Optimiz
             }
         }
         const optimizedItem = { ...item, layer: targetLayer };
+        layers[targetLayer] = layers[targetLayer] || [];
         layers[targetLayer].push(optimizedItem);
 
         return optimizedItem;
@@ -330,6 +440,7 @@ const TimelineItems = ({
     const [start, end] = newScale.domain();
     const duration = end.getTime() - start.getTime();
 
+    const MARGIN = 14;
     const ITEM_HEIGHT = 20;
     const LAYER_GAP = 4;
     const TOTAL_HEIGHT = ITEM_HEIGHT + LAYER_GAP;
@@ -347,12 +458,14 @@ const TimelineItems = ({
                     <rect
                         key={item.original.id}
                         x={startX}
-                        y={item.layer * TOTAL_HEIGHT}
+                        y={item.layer * TOTAL_HEIGHT + MARGIN}
                         width={width}
                         height={ITEM_HEIGHT}
                         fill="#4299e1"
                         opacity={0.7}
-                    />
+                    >
+                        <title>{item.original.id}</title>
+                    </rect>
                 );
             })}
         </g>
@@ -360,45 +473,167 @@ const TimelineItems = ({
 };
 
 
-const CursorLine = ({
-    position,
-    height,
+const VoiceRow = ({
+    voices,
+    scale,
+    transform,
 }: {
-    position: number;
-    height: number;
+    voices: any[];
+    scale: d3.ScaleTime<number, number>;
+    transform: d3.ZoomTransform;
 }) => {
+    const newScale = transform.rescaleX(scale);
     return (
-        <line
-            x1={position}
-            y1={0}
-            x2={position}
-            y2={height}
-            stroke="red"
-            strokeWidth={1}
-            pointerEvents="none" // Ensures the line doesn't interfere with click events
-        />
+        <>
+        <h1>{voices.length}</h1>
+        <g>
+            {voices.map(item => {
+                const startX = newScale(item.start);
+                const endX = newScale(item.end);
+                const width = Math.max(endX - startX, 1);
+                
+                return (
+                    <rect
+                    key={item._id}
+                    x={startX}
+                    y={0}
+                    width={width}
+                    height={10}
+                    fill="orange"
+                    opacity={0.7}
+                    />
+                );
+            })}
+        </g>
+        </>
+    );
+}
+
+const TranscriptsRow = ({
+    transcripts,
+}: {
+    transcripts: any[];
+}) => {
+    const { resetDate, currentDate, setIsPlaying } = useDateStore();
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    
+    // Find the active transcript and scroll to it
+    useEffect(() => {
+        if (!currentDate || transcripts.length === 0) {
+            return
+        }
+        const activeTranscript = transcripts.find(
+            t => currentDate >= t.start && 
+                (t.end ? currentDate <= t.end : currentDate <= new Date(t.start.getTime() + 2000))
+        );
+
+        if (activeTranscript && scrollContainerRef.current) {
+            const element = document.getElementById(`transcript-${activeTranscript._id}`);
+            
+            if (element) {
+                const container = scrollContainerRef.current;
+                const scrollLeft = element.offsetLeft - (container.clientWidth / 2) + (element.offsetWidth / 2);
+                
+                // Add a small delay to make the scroll more noticeable
+                setTimeout(() => {
+                    container.scrollTo({
+                        left: scrollLeft,
+                        behavior: 'smooth'
+                    });
+                }, 100);
+                
+                // Optionally add a CSS transition for even smoother movement
+                container.style.scrollBehavior = 'smooth';
+            }
+        }
+    }, [currentDate, transcripts]);
+
+    if (!currentDate || transcripts.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="w-full">
+            <div 
+                ref={scrollContainerRef}
+                className="flex overflow-x-auto space-x-4 p-4 scroll-smooth"
+                style={{ 
+                    scrollbarWidth: 'thin',
+                    scrollBehavior: 'smooth',
+                    transition: 'scroll-left 0.5s ease-in-out'
+                }}
+                style={{ scrollbarWidth: 'thin' }}
+            >
+                {transcripts.map(t => {
+                    const isActive = currentDate >= t.start && 
+                        (t.end ? currentDate <= t.end : currentDate <= new Date(t.start.getTime() + 2000));
+
+                    return (
+                        <div
+                            id={`transcript-${t._id}`}
+                            key={t._id}
+                            onClick={() => {
+                                resetDate(t.start);
+                                setIsPlaying(true);
+                            }}
+                            className={`
+                                flex-shrink-0 
+                                w-48 
+                                p-4 
+                                rounded-lg 
+                                border-2 
+                                cursor-pointer
+                                transition-all 
+                                duration-300
+                                ${isActive 
+                                    ? 'border-blue-500 bg-blue-50' 
+                                    : 'border-gray-200 bg-white hover:border-gray-300'}
+                            `}
+                        >
+                            <h3 className="font-medium text-gray-900">
+                                {t.start.toLocaleTimeString()}
+                            </h3>
+                            <p className="mt-2 text-sm text-gray-600 line-clamp-3">
+                                {t.text}
+                            </p>
+                        </div>
+                    );
+                })}
+            </div>
+            <div className="flex justify-center mt-4">
+            {transcripts.filter(t => currentDate >= t.start && currentDate <= t.end).map(t => (
+                {t.se}
+                
+                <p key={t._id} className="text-sm text-gray-500 text-center">
+
+                </p>
+            ))}
+            </div>
+        </div>
     );
 };
 
 const TimelinePage = () => {
-    let { items, start, end } = zLoaderData.parse(useLoaderData<LoaderData>());
+    let { items, voices, start, end, transcripts } = zLoaderData.parse(useLoaderData<LoaderData>());
 
     const fetcher = useFetcher<LoaderData>();
 
     if (fetcher.data) {
-        items = zLoaderData.parse(fetcher.data).items;
+        const data = zLoaderData.parse(fetcher.data);
+        items = data.items;
+        voices = data.voices;
+        transcripts = data.transcripts;
     }
 
     const containerRef = useRef<HTMLDivElement>(null);
 
     const [dimensions, setDimensions] = useState({ width: 800, height: 300 });
 
-    const margin = { top: 20, right: 20, bottom: 60, left: 40 };
+    const margin = { top: 0, right: 20, bottom: 50, left: 40 };
     const width = dimensions.width - margin.left - margin.right;
     const height = dimensions.height - margin.top - margin.bottom;
 
-    const [cursor, setCursor] = useState<Date | null>(null);
-
+    const { currentDate, resetDate, isPlaying, setIsPlaying } = useDateStore();
 
     const [transform, setTransform] = useState(d3.zoomIdentity);
 
@@ -407,10 +642,11 @@ const TimelinePage = () => {
 
         const resizeObserver = new ResizeObserver(entries => {
             const entry = entries[0];
+            
             if (entry) {
                 setDimensions({
                     width: entry.contentRect.width,
-                    height: entry.contentRect.height
+                    height
                 });
             }
         });
@@ -429,26 +665,23 @@ const TimelinePage = () => {
 
     const fetchMore = useCallback(_.debounce((start, end) => {
         const duration = end.getTime() - start.getTime();
-        const formData = new FormData();
-        formData.append('start', start.toISOString());
-        formData.append('end', end.toISOString());
+        const form = new FormData();
+        form.append('start', start.toISOString());
+        form.append('end', end.toISOString());
+        fetcher.submit(form);
 
-        fetcher.submit(formData, {
-            method: 'get',
-            preventScrollReset: true,
-        });
     }, 500),
         [fetcher]
     );
 
     const handleZoom = useCallback((event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         setTransform(event.transform);
-        console.log(event.transform);
-
         const newScale = event.transform.rescaleX(timeScale);
         const [
             start, end
         ] = newScale.domain();
+
+
 
         fetchMore(start, end);
     }, [timeScale, fetcher]);
@@ -465,15 +698,14 @@ const TimelinePage = () => {
         svg.call(zoom as any);
     }, [zoom]);
 
-    // if (!containerRef.current) return;
-
     return (
-        <div className="h-screen p-4" ref={containerRef}>
+        <div className="p-4" ref={containerRef}>
             {fetcher.state === "loading" && (
                 <div className="absolute top-4 right-4 bg-blue-500 text-white px-4 py-2 rounded">
                     Loading...
                 </div>
             )}
+            <AudioPlayer />
             {containerRef.current && (
                 <svg
                     id="timeline-svg"
@@ -487,7 +719,8 @@ const TimelinePage = () => {
                         const x = event.clientX - rect.left - margin.left;
                         const newScale = transform.rescaleX(timeScale);
                         const clickedDate = newScale.invert(x);
-                        setCursor(clickedDate);
+                        resetDate(clickedDate);
+                        setIsPlaying(true);
                     }}
                 >
                     <g transform={`translate(${margin.left},${margin.top})`}>
@@ -500,13 +733,14 @@ const TimelinePage = () => {
                                 scale={timeScale}
                                 transform={transform}
                             />
-                            {cursor !== null && (
+                            <VoiceRow voices={voices} scale={timeScale} transform={transform} />
+                            {currentDate !== null && (
                                 <CursorLine
-                                    position={transform.applyX(timeScale(cursor))}
+                                    position={transform.applyX(timeScale(currentDate))}
                                     height={height - margin.top}
                                 />
                             )}
-                        </g>
+                            </g>
                         <TimelineAxis
                             scale={timeScale}
                             transform={transform}
@@ -516,6 +750,16 @@ const TimelinePage = () => {
                     </g>
                 </svg>
             )}
+            <div className='flex justify-start flex-col'>
+                <div className='flex justify-between flex-row'>
+                    
+
+                    <button role="button" onClick={() => setIsPlaying(!isPlaying)}>
+                        {isPlaying ? "Pause" : "Play"}
+                    </button>
+                </div>
+                <TranscriptsRow transcripts={transcripts} />
+            </div>
         </div>
     );
 };
