@@ -2,9 +2,13 @@ import { getDB } from '../mongo';
 import { LoaderFunctionArgs } from '@remix-run/node';
 import { ObjectId } from 'mongodb';
 import _ from 'lodash';
+import { authenticateOr401 } from '~/lib/auth.server';
 
 
 export async function loader({ request }: LoaderFunctionArgs) {
+    const auth = await authenticateOr401(request);
+    
+
     const url = new URL(request.url);
     const startParam = url.searchParams.get('start');
     const lastIdParam = url.searchParams.get('lastId');

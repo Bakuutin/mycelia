@@ -17,7 +17,9 @@ export interface DateStore {
     startDate: Date | null;
     chunks: Chunk[];
     currentChunk: Chunk | null;
+    volume: number;
     setIsPlaying: (isPlaying: boolean) => void;
+    toggleIsPlaying: () => void;
     updateDate: (date: Date) => void;
     resetDate: (date: Date | null) => void;
     appendChunks: (chunks: Chunk[]) => void;
@@ -30,7 +32,9 @@ export const useDateStore = create<DateStore>((set) => ({
     chunks: [],
     currentChunk: null,
     isPlaying: false,
+    volume: 1,
     setIsPlaying: (isPlaying: boolean) => set({ isPlaying }),
+    toggleIsPlaying: () => set(state => ({ isPlaying: !state.isPlaying })),
     updateDate: (date: Date) => set({ currentDate: date }),
     resetDate(date: Date | null) {
         set({ currentDate: date, chunks: [], startDate: date, currentChunk: null });
@@ -51,6 +55,9 @@ export const useDateStore = create<DateStore>((set) => ({
                 return { chunks: rest, currentChunk: first };
             });
         });
+    },
+    update(data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>)) {
+        set(data);
     }
 }));
 
@@ -75,7 +82,7 @@ export const AudioPlayer: React.FC = () => {
 
     const ensureAudioContext = () => {
         if (!audioContext) {
-            const newAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const newAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
             setAudioContext(newAudioContext);
         }
     };

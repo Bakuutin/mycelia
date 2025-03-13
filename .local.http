@@ -1,0 +1,8 @@
+
+###
+GET 127.0.0.1:3000
+Host: mycelia.tigor.net
+
+###
+GET 127.0.0.1:8888
+Host: whoami.tigor.net

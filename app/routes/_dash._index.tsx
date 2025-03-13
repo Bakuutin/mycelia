@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFetcher, useLoaderData, useNavigation, useSubmit } from "@remix-run/react";
+import { redirect, useFetcher, useLoaderData, useNavigation, useSubmit } from "@remix-run/react";
 import * as d3 from 'd3';
 import _ from 'lodash';
 import { LoaderFunctionArgs } from '@remix-run/node';
@@ -9,11 +9,43 @@ import { CursorLine } from "~/components/cursorLine"
 
 import { useDateStore, AudioPlayer } from '~/components/player';
 
+import { Pause, Play } from "lucide-react"
+
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardFooter,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card"
+
+import { Button } from "@/components/ui/button"
+import { authenticate } from '~/lib/auth.server';
+
+
 const zTimelineItem = z.object({
     id: z.string(),
     start: z.date(),
     end: z.date(),
 });
+
+const zTranscript = z.object({
+    text: z.string(),
+    words: z.array(z.object({
+        word: z.string(),
+        start: z.number(),
+        end: z.number(),
+        t_dtw: z.number(),
+        probability: z.number(),
+    })),
+    id: z.number(),
+    start: z.date(),
+    end: z.date(),
+    transcriptID: z.string(),
+});
+
+type Transcript = z.infer<typeof zTranscript>;
 
 type TimelineItem = z.infer<typeof zTimelineItem>;
 
@@ -38,34 +70,6 @@ const QuerySchema = z.object({
     end: z.coerce.date(),
 });
 
-// "segments": [
-//     {
-//       "id": 0,
-//       "text": " Слышу тебя хорошо, старый дед.",
-//       "start": 0,
-//       "end": 2.88,
-//       "tokens": [
-//         2933,
-//         693,
-//         12533,
-//         585,
-//         12644,
-//         16977,
-//         11,
-//         17241,
-//         4851,
-//         1070,
-//         2229,
-//         13
-//       ],
-//       "words": [
-//         {
-//           "word": " С",
-//           "start": 0,
-//           "end": 0.1,
-//           "t_dtw": -1,
-//           "probability": 0.6369001865386963
-//         },
 
 const zLoaderData = z.object({
     items: z.array(zTimelineItem),
@@ -74,24 +78,7 @@ const zLoaderData = z.object({
         end: z.date(),
         _id: z.string(),
     })),
-    transcripts: z.array(z.object({
-        start: z.date(),
-        end: z.date(),
-        text: z.string(),
-        segments: z.array(z.object({
-            words: z.array(z.object({
-                word: z.string(),
-                start: z.number(),
-                end: z.number(),
-                t_dtw: z.number(),
-                probability: z.number(),
-            })),
-            id: z.number(),
-            start: z.number(),
-            end: z.number(),
-        })),
-        _id: z.string(),
-    })),
+    transcripts: z.array(zTranscript),
     start: z.date(),
     end: z.date(),
     gap: z.number(),
@@ -102,7 +89,11 @@ type LoaderData = z.infer<typeof zLoaderData>;
 
 
 
+
+
 export async function loader({ request }: LoaderFunctionArgs) {
+    const auth = authenticate(request);
+    
     const url = new URL(request.url);
     let params;
     try {
@@ -116,7 +107,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     let { start, end } = params;
 
-    const mergeGap = (items: StartEnd[], gap: number, updateKey: any = null) => { 
+    const mergeGap = (items: StartEnd[], gap: number, updateKey: any = null) => {
         if (gap <= 0) {
             return items;
         }
@@ -184,7 +175,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             id: item._id.toHexString(),
         }));
 
-    
+
         let voices: any[] = [];
         if (duration < day * 2) {
             voices = await database.collection("diarizations").find({
@@ -195,8 +186,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
                     $gte: start,
                 },
             })
-            .sort({ start: 1 })
-            .toArray();
+                .sort({ start: 1 })
+                .toArray();
             voices = voices.map(voice => ({
                 start: voice.start,
                 end: voice.end,
@@ -205,29 +196,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
             voices = mergeGap(voices, duration / 100);
         }
 
-        let transcripts: any[] = [];
+        let transcripts: Transcript[] = [];
         if (duration < day) {
-            transcripts = await database.collection("transcriptions").find({
-                start: {
-                    $lte: end,
-                },
-                end: {
-                    $gte: start,
-                },
-            })
-            .sort({ start: 1 })
-            .toArray();
-            transcripts = transcripts.map(t => {
-                t._id = t._id.toHexString();
-                return t;
-            });
-            // transcripts = mergeGap(transcripts, duration / 100, (prev, item) => {
-            //     prev.text += ' ' + item.text;
-            //     prev.end = item.end;
-            //     return prev;
-            // });
+            transcripts = (
+                await database.collection("transcriptions").find({
+                    start: {
+                        $lte: end,
+                    },
+                    end: {
+                        $gte: start,
+                    },
+                })
+                    .sort({ start: 1 })
+                    .toArray()
+            ).flatMap(t => {
+                const transcriptID = t._id.toHexString();
+                return t.segments.map((s: any) => ({
+                    ...s,
+                    start: new Date(t.start.getTime() + s.start * 1000),
+                    end: new Date(t.start.getTime() + s.end * 1000),
+                    transcriptID,
+                }) as Transcript);
+            }).sort((a, b) => a.start.getTime() - b.start.getTime());
         }
-        
+
 
 
         return ({
@@ -256,8 +248,8 @@ const TimelineAxis = ({
 }) => {
     const ticks = useMemo(() => {
         const newScale = transform.rescaleX(scale);
-        const tickValues = newScale.ticks( width > 500 ? 10 : 5);
-        
+        const tickValues = newScale.ticks(Math.ceil(width / 227));
+
         return tickValues.map(tick => ({
             value: tick,
             xOffset: newScale(tick),
@@ -265,15 +257,8 @@ const TimelineAxis = ({
         }));
     }, [scale, transform]);
 
-    const spansMultipleYears = useMemo(() => {
-        if (ticks.length < 2) return false;
-        const firstYear = ticks[0].value.getFullYear();
-        const lastYear = ticks[ticks.length - 1].value.getFullYear();
-        return firstYear !== lastYear;
-    }, [ticks]);
-
     const allJanFirst = useMemo(() => {
-        return ticks.length > 0 && ticks.every(({ value }) => 
+        return ticks.length > 0 && ticks.every(({ value }) =>
             value.getMonth() === 0 && value.getDate() === 1
         );
     }, [ticks]);
@@ -286,27 +271,75 @@ const TimelineAxis = ({
         ));
     }, [ticks]);
 
+    const hasWeekdays = useMemo(() => {
+        // diff in days between first and last tick is less than 30
+        const [first, last] = [ticks[0].value, ticks[ticks.length - 1].value];
+
+        return last.getTime() - first.getTime() < 30 * day;
+    }, [ticks]);
+
     const hasSeconds = useMemo(() => {
         return ticks.some(({ value }) => value.getSeconds() !== 0);
     }, [ticks]);
 
     const [start, end] = scale.range();
 
-    const formatDateLabel = (date: Date, i: number) => {
+    const formatTime = (date: Date): string => {
+        return hasSeconds ?
+            date.toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            }) :
+            date.toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            })
+    }
+
+
+    const formatLabel = (date: Date): string[] => {
+        const year = date.getFullYear().toString();
+
         if (allJanFirst) {
-            return date.getFullYear().toString();
+            return [year];
         }
-        
+
         const month = date.toLocaleDateString([], { month: 'short' });
         const day = date.getDate();
         const weekday = date.toLocaleDateString([], { weekday: 'short' });
-        
-        if (spansMultipleYears && date.getMonth() === 0 && date.getDate() === 1 || i === 0) {
-            return `${month} ${day} ${weekday}, ${date.getFullYear()}`;
-        }
-        
-        return `${month} ${day} ${weekday}`;
+
+
+        return [
+            hasTime ? formatTime(date) : null,
+            hasWeekdays ? weekday : null,
+            `${month} ${day}`,
+            year,
+        ].filter(Boolean) as string[];
+
+        // if (spansMultipleYears && date.getMonth() === 0 && date.getDate() === 1 || i === 0) {
+        //     return [`${month} ${day}`, date.getFullYear().toString(), weekday];
+        // }
+
+        // return [`${month} ${day}`, weekday];
     };
+
+    const labels = useMemo(() => {
+        let prev: any = null;
+        return ticks.map(({ value, xOffset }, i) => {
+            const fullLabels = formatLabel(value);
+            const result = {
+                value,
+                xOffset,
+                labels: !prev ? fullLabels : fullLabels.filter((label, i) => label !== prev[i]),
+            }
+            prev = fullLabels;
+            return result;
+        });
+    }, [ticks]);
+
 
     return (
         <g transform={`translate(0,${height})`}>
@@ -315,46 +348,25 @@ const TimelineAxis = ({
                 fill="none"
                 stroke="currentColor"
             />
-            {ticks.map(({ value, xOffset, isNewYear }, i) => (
-                <g 
-                    key={value.toISOString()} 
+            {labels.map(({ value, xOffset, labels }, i) => (
+                <g
+                    key={value.getTime().toString()}
                     transform={`translate(${xOffset},0)`}
                 >
-                    <line 
-                        y2={isNewYear && (spansMultipleYears || allJanFirst) ? "9" : "6"} 
+                    <line
+                        y2="6"
                         stroke="currentColor"
                     />
-                    <text
+                    <foreignObject
+                        width="100px"
+                        height="200px"
                         style={{
-                            fontSize: "10px",
-                            textAnchor: "middle",
-                            transform: "translateY(20px)",
+                            transform: "translateY(10px) translateX(-50px)",
                         }}>
-                        {formatDateLabel(value, i)}
-                    </text>
-                    {hasTime && (
-                        <text
-                            style={{
-                                fontSize: "10px",
-                                textAnchor: "middle",
-                                transform: "translateY(30px)",
-                            }}>
-                            {
-                                hasSeconds ?
-                                    value.toLocaleTimeString([], { 
-                                        hour: '2-digit', 
-                                        minute: '2-digit', 
-                                        second: '2-digit', 
-                                        hour12: false 
-                                    }) :
-                                    value.toLocaleTimeString([], { 
-                                        hour: '2-digit', 
-                                        minute: '2-digit', 
-                                        hour12: false 
-                                    })
-                            }
-                        </text>
-                    )}
+                        {labels.map((segment) => (
+                            <p className="text-center" key={segment}>{segment}</p>
+                        ))}
+                    </foreignObject>
                 </g>
             ))}
         </g>
@@ -452,7 +464,7 @@ const TimelineItems = ({
             {optimizedItems.map(item => {
                 const startX = newScale(item.start);
                 const endX = newScale(item.end);
-                const width = duration < 1000 * year ? Math.max(endX - startX, 2): 2;
+                const width = duration < 1000 * year ? Math.max(endX - startX, 2) : 2;
 
                 return (
                     <rect
@@ -461,8 +473,7 @@ const TimelineItems = ({
                         y={item.layer * TOTAL_HEIGHT + MARGIN}
                         width={width}
                         height={ITEM_HEIGHT}
-                        fill="#4299e1"
-                        opacity={0.7}
+                        className="fill-chart-1"
                     >
                         <title>{item.original.id}</title>
                     </rect>
@@ -485,26 +496,26 @@ const VoiceRow = ({
     const newScale = transform.rescaleX(scale);
     return (
         <>
-        <h1>{voices.length}</h1>
-        <g>
-            {voices.map(item => {
-                const startX = newScale(item.start);
-                const endX = newScale(item.end);
-                const width = Math.max(endX - startX, 1);
-                
-                return (
-                    <rect
-                    key={item._id}
-                    x={startX}
-                    y={0}
-                    width={width}
-                    height={10}
-                    fill="orange"
-                    opacity={0.7}
-                    />
-                );
-            })}
-        </g>
+            <h1>{voices.length}</h1>
+            <g>
+                {voices.map(item => {
+                    const startX = newScale(item.start);
+                    const endX = newScale(item.end);
+                    const width = Math.max(endX - startX, 1);
+
+                    return (
+                        <rect
+                            key={item._id}
+                            x={startX}
+                            y={0}
+                            width={width}
+                            height={10}
+
+                            className="fill-chart-2"
+                        />
+                    );
+                })}
+            </g>
         </>
     );
 }
@@ -512,28 +523,27 @@ const VoiceRow = ({
 const TranscriptsRow = ({
     transcripts,
 }: {
-    transcripts: any[];
+    transcripts: Transcript[];
 }) => {
     const { resetDate, currentDate, setIsPlaying } = useDateStore();
     const scrollContainerRef = useRef<HTMLDivElement>(null);
-    
-    // Find the active transcript and scroll to it
+
     useEffect(() => {
         if (!currentDate || transcripts.length === 0) {
             return
         }
         const activeTranscript = transcripts.find(
-            t => currentDate >= t.start && 
+            t => currentDate >= t.start &&
                 (t.end ? currentDate <= t.end : currentDate <= new Date(t.start.getTime() + 2000))
         );
 
         if (activeTranscript && scrollContainerRef.current) {
-            const element = document.getElementById(`transcript-${activeTranscript._id}`);
-            
+            const element = document.getElementById(`transcript-${activeTranscript.transcriptID}-${activeTranscript.id}`);
+
             if (element) {
                 const container = scrollContainerRef.current;
                 const scrollLeft = element.offsetLeft - (container.clientWidth / 2) + (element.offsetWidth / 2);
-                
+
                 // Add a small delay to make the scroll more noticeable
                 setTimeout(() => {
                     container.scrollTo({
@@ -541,7 +551,7 @@ const TranscriptsRow = ({
                         behavior: 'smooth'
                     });
                 }, 100);
-                
+
                 // Optionally add a CSS transition for even smoother movement
                 container.style.scrollBehavior = 'smooth';
             }
@@ -554,26 +564,24 @@ const TranscriptsRow = ({
 
     return (
         <div className="w-full">
-            <div 
-                ref={scrollContainerRef}
+            <div
                 className="flex overflow-x-auto space-x-4 p-4 scroll-smooth"
-                style={{ 
+                ref={scrollContainerRef}
+                style={{
                     scrollbarWidth: 'thin',
                     scrollBehavior: 'smooth',
                     transition: 'scroll-left 0.5s ease-in-out'
                 }}
-                style={{ scrollbarWidth: 'thin' }}
             >
-                {transcripts.map(t => {
-                    const isActive = currentDate >= t.start && 
-                        (t.end ? currentDate <= t.end : currentDate <= new Date(t.start.getTime() + 2000));
+                {transcripts.map((s: Transcript) => {
+                    const isActive: boolean = currentDate && currentDate >= s.start && currentDate <= s.end;
 
                     return (
                         <div
-                            id={`transcript-${t._id}`}
-                            key={t._id}
+                            key={`transcript-${s.transcriptID}-${s.id}`}
+                            id={`transcript-${s.transcriptID}-${s.id}`}
                             onClick={() => {
-                                resetDate(t.start);
+                                resetDate(s.start);
                                 setIsPlaying(true);
                             }}
                             className={`
@@ -585,33 +593,41 @@ const TranscriptsRow = ({
                                 cursor-pointer
                                 transition-all 
                                 duration-300
-                                ${isActive 
-                                    ? 'border-blue-500 bg-blue-50' 
+                                ${isActive
+                                    ? 'border-blue-500 bg-blue-50'
                                     : 'border-gray-200 bg-white hover:border-gray-300'}
                             `}
                         >
                             <h3 className="font-medium text-gray-900">
-                                {t.start.toLocaleTimeString()}
+                                {s.start.toLocaleTimeString()}
                             </h3>
                             <p className="mt-2 text-sm text-gray-600 line-clamp-3">
-                                {t.text}
+                                {s.text}
                             </p>
                         </div>
                     );
-                })}
-            </div>
-            <div className="flex justify-center mt-4">
-            {transcripts.filter(t => currentDate >= t.start && currentDate <= t.end).map(t => (
-                {t.se}
-                
-                <p key={t._id} className="text-sm text-gray-500 text-center">
+                }
+                )}
 
-                </p>
-            ))}
             </div>
         </div>
     );
 };
+
+const PlayPauseButton = () => {
+    const { isPlaying, toggleIsPlaying } = useDateStore();
+    return (
+        <Button onClick={() => toggleIsPlaying()} >
+            {isPlaying ? (
+                <Pause />
+            ) : (
+                <Play />
+            )}
+        </Button>
+    );
+};
+
+
 
 const TimelinePage = () => {
     let { items, voices, start, end, transcripts } = zLoaderData.parse(useLoaderData<LoaderData>());
@@ -627,9 +643,9 @@ const TimelinePage = () => {
 
     const containerRef = useRef<HTMLDivElement>(null);
 
-    const [dimensions, setDimensions] = useState({ width: 800, height: 300 });
+    const [dimensions, setDimensions] = useState({ width: 800, height: 350 });
 
-    const margin = { top: 0, right: 20, bottom: 50, left: 40 };
+    const margin = { top: 10, right: 20, bottom: 110, left: 40 };
     const width = dimensions.width - margin.left - margin.right;
     const height = dimensions.height - margin.top - margin.bottom;
 
@@ -642,7 +658,7 @@ const TimelinePage = () => {
 
         const resizeObserver = new ResizeObserver(entries => {
             const entry = entries[0];
-            
+
             if (entry) {
                 setDimensions({
                     width: entry.contentRect.width,
@@ -664,7 +680,7 @@ const TimelinePage = () => {
     }, [start, end, width]);
 
     const fetchMore = useCallback(_.debounce((start, end) => {
-        const duration = end.getTime() - start.getTime();
+        // const duration = end.getTime() - start.getTime();
         const form = new FormData();
         form.append('start', start.toISOString());
         form.append('end', end.toISOString());
@@ -699,68 +715,74 @@ const TimelinePage = () => {
     }, [zoom]);
 
     return (
-        <div className="p-4" ref={containerRef}>
-            {fetcher.state === "loading" && (
-                <div className="absolute top-4 right-4 bg-blue-500 text-white px-4 py-2 rounded">
-                    Loading...
-                </div>
-            )}
-            <AudioPlayer />
-            {containerRef.current && (
-                <svg
-                    id="timeline-svg"
-                    className="w-full h-full overflow-x-scroll"
-                    width={width + margin.left + margin.right}
-                    height={height + margin.top + margin.bottom}
-                    onClick={(event) => {
-                        // Calculate cursor position based on click coordinates
-                        const svgElement = event.currentTarget;
-                        const rect = svgElement.getBoundingClientRect();
-                        const x = event.clientX - rect.left - margin.left;
-                        const newScale = transform.rescaleX(timeScale);
-                        const clickedDate = newScale.invert(x);
-                        resetDate(clickedDate);
-                        setIsPlaying(true);
-                    }}
-                >
-                    <g transform={`translate(${margin.left},${margin.top})`}>
-                        <clipPath id="clip">
-                            <rect width={width} height={height} />
-                        </clipPath>
-                        <g clipPath="url(#clip)">
-                            <TimelineItems
-                                items={items}
-                                scale={timeScale}
-                                transform={transform}
-                            />
-                            <VoiceRow voices={voices} scale={timeScale} transform={transform} />
-                            {currentDate !== null && (
-                                <CursorLine
-                                    position={transform.applyX(timeScale(currentDate))}
+        <>
+            <div className="p-4 gap-4 flex flex-col">
+                <div ref={containerRef} style={{ height: height + margin.top + margin.bottom }}>
+                    {fetcher.state === "loading" && (
+                        <div className="absolute top-4 right-4 bg-blue-500 text-white px-4 py-2 rounded">
+                            Loading...
+                        </div>
+                    )}
+                    <AudioPlayer />
+                    {containerRef.current && (
+                        <svg
+                            id="timeline-svg"
+                            className="w-full h-full overflow-x-scroll"
+                            width={width + margin.left + margin.right}
+                            height={height + margin.top + margin.bottom}
+                            onClick={(event) => {
+                                // Calculate cursor position based on click coordinates
+                                const svgElement = event.currentTarget;
+                                const rect = svgElement.getBoundingClientRect();
+                                const x = event.clientX - rect.left - margin.left;
+                                const newScale = transform.rescaleX(timeScale);
+                                const clickedDate = newScale.invert(x);
+                                resetDate(clickedDate);
+                                setIsPlaying(true);
+                            }}
+                        >
+                            <g transform={`translate(${margin.left},${margin.top})`}>
+                                <clipPath id="clip">
+                                    <rect width={width} height={height} />
+                                </clipPath>
+                                <g clipPath="url(#clip)">
+                                    <TimelineItems
+                                        items={items}
+                                        scale={timeScale}
+                                        transform={transform}
+                                    />
+                                    <VoiceRow voices={voices} scale={timeScale} transform={transform} />
+                                    {currentDate !== null && (
+                                        <CursorLine
+                                            position={transform.applyX(timeScale(currentDate))}
+                                            height={height - margin.top}
+                                        />
+                                    )}
+                                </g>
+                                <TimelineAxis
+                                    scale={timeScale}
+                                    transform={transform}
                                     height={height - margin.top}
+                                    width={width}
                                 />
-                            )}
                             </g>
-                        <TimelineAxis
-                            scale={timeScale}
-                            transform={transform}
-                            height={height - margin.top}
-                            width={width}
-                        />
-                    </g>
-                </svg>
-            )}
-            <div className='flex justify-start flex-col'>
-                <div className='flex justify-between flex-row'>
-                    
-
-                    <button role="button" onClick={() => setIsPlaying(!isPlaying)}>
-                        {isPlaying ? "Pause" : "Play"}
-                    </button>
+                        </svg>
+                    )}
                 </div>
-                <TranscriptsRow transcripts={transcripts} />
+                <div className="flex flex-row">
+
+                    <PlayPauseButton />
+                </div>
+
             </div>
-        </div>
+
+            <div className="p-4">
+
+                <div className='flex justify-start flex-col px-[2.5rem]'>
+                    <TranscriptsRow transcripts={transcripts} />
+                </div>
+            </div>
+        </>
     );
 };
 
