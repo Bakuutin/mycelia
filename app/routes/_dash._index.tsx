@@ -13,7 +13,7 @@ import { Pause, Play } from "lucide-react"
 
 
 import { Button } from "@/components/ui/button"
-import { authenticateOrRedirect } from '~/lib/auth.server';
+import { authenticateOrRedirect } from '~/lib/auth/core';
 import { getDB } from '~/lib/mongo';
 
 

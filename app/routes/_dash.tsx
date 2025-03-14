@@ -16,7 +16,7 @@ import {
 import { LoaderFunctionArgs } from "@remix-run/node";
 import { Outlet, useLoaderData } from "@remix-run/react";
 import { GalleryVerticalEnd, AudioWaveform, Command, SquareTerminal, Bot, BookOpen, Settings2, Frame, PieChart } from "lucide-react";
-import { Auth, authenticateOrRedirect } from "~/lib/auth.server";
+import { Auth, authenticateOrRedirect } from "~/lib/auth/core";
 
 // This is sample data.
 const data = {

@@ -1,4 +1,4 @@
-import { Auth, ScopeAction, Scope, permissionDenied } from "./auth.server";
+import { Auth, ScopeAction, Scope, permissionDenied } from "./auth/core";
 
 import sift from "sift";
 

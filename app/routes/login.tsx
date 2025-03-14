@@ -1,6 +1,6 @@
 import { ActionFunction, redirect } from "@remix-run/node";
 import { Form, useActionData } from "@remix-run/react";
-import { authCookie, verifyToken } from "~/lib/auth.server";
+import { authCookie, verifyToken } from "~/lib/auth/core";
 
 import { Button } from "~/components/ui/button"
 import {

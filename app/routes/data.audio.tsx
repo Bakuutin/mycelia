@@ -2,7 +2,7 @@ import { getDB } from '../lib/mongo';
 import { LoaderFunctionArgs } from '@remix-run/node';
 import { ObjectId } from 'mongodb';
 import _ from 'lodash';
-import { authenticateOr401 } from '~/lib/auth.server';
+import { authenticateOr401 } from '~/lib/auth/core';
 
 
 export async function loader({ request }: LoaderFunctionArgs) {
