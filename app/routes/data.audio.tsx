@@ -1,4 +1,4 @@
-import { getDB } from '../mongo';
+import { getDB } from '../lib/mongo';
 import { LoaderFunctionArgs } from '@remix-run/node';
 import { ObjectId } from 'mongodb';
 import _ from 'lodash';
@@ -18,6 +18,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         return { segments: [] };
     }
 
+
     let startDate = new Date(startParam);
     const limit = 10;
     if (isNaN(startDate.getTime())) {
@@ -28,14 +29,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         throw new Response('Invalid limit parameter', { status: 400 });
     }
 
-    const db = await getDB();
+    const db = await getDB(auth);
     const collection = db.collection('audio_chunks');
 
     const load = async (filter: any) => collection
-        .find(filter)
-        .sort({ start: 1 })
-        .limit(limit)
-        .toArray();
+        .find(filter, { sort: { start: 1 }, limit })
         
     
 

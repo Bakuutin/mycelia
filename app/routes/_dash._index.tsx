@@ -1,9 +1,9 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { redirect, useFetcher, useLoaderData, useNavigation, useSubmit } from "@remix-run/react";
+import { useFetcher, useLoaderData } from "@remix-run/react";
 import * as d3 from 'd3';
 import _ from 'lodash';
 import { LoaderFunctionArgs } from '@remix-run/node';
-import { MongoClient } from 'mongodb';
+import { ObjectId } from 'mongodb';
 import { z } from "zod";
 import { CursorLine } from "~/components/cursorLine"
 
@@ -11,17 +11,10 @@ import { useDateStore, AudioPlayer } from '~/components/player';
 
 import { Pause, Play } from "lucide-react"
 
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardFooter,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card"
 
 import { Button } from "@/components/ui/button"
-import { authenticate } from '~/lib/auth.server';
+import { authenticateOrRedirect } from '~/lib/auth.server';
+import { getDB } from '~/lib/mongo';
 
 
 const zTimelineItem = z.object({
@@ -52,6 +45,7 @@ type TimelineItem = z.infer<typeof zTimelineItem>;
 interface StartEnd {
     start: Date;
     end: Date;
+    _id: ObjectId;
 }
 
 
@@ -92,8 +86,8 @@ type LoaderData = z.infer<typeof zLoaderData>;
 
 
 export async function loader({ request }: LoaderFunctionArgs) {
-    const auth = authenticate(request);
-    
+    const auth = await authenticateOrRedirect(request);
+
     const url = new URL(request.url);
     let params;
     try {
@@ -153,86 +147,75 @@ export async function loader({ request }: LoaderFunctionArgs) {
         gap = day * 10;
     }
 
-    const client = new MongoClient(process.env.MONGO_URL as string);
-    try {
-        await client.connect();
-        const database = client.db("a5t-2024-11-19");
-        const collection = database.collection("source_files");
-        const items: any[] = await collection.find({
+    const db = await getDB(auth);
+    const collection = db.collection("source_files");
+    const items: any[] = await collection.find({
+        start: {
+            $lte: end,
+        },
+        end: {
+            $gte: start,
+        }
+    }, { sort: { start: 1 } })
+
+    let sources: TimelineItem[] = mergeGap(items, gap).map(item => ({
+        start: item.start,
+        end: item.end,
+        id: item._id.toHexString(),
+    }));
+
+
+    let voices: any[] = [];
+    if (duration < day * 2) {
+        voices = await db.collection("diarizations").find({
             start: {
                 $lte: end,
             },
             end: {
                 $gte: start,
             },
-        })
-            .sort({ start: 1 })
-            .toArray();
-
-        let sources: TimelineItem[] = mergeGap(items, gap).map(item => ({
-            start: item.start,
-            end: item.end,
-            id: item._id.toHexString(),
+        }, { sort: { start: 1 } })
+        voices = voices.map(voice => ({
+            start: voice.start,
+            end: voice.end,
+            _id: voice._id.toHexString(),
         }));
+        voices = mergeGap(voices, duration / 100);
+    }
 
-
-        let voices: any[] = [];
-        if (duration < day * 2) {
-            voices = await database.collection("diarizations").find({
+    let transcripts: Transcript[] = [];
+    if (duration < day) {
+        transcripts = (
+            await db.collection("transcriptions").find({
                 start: {
                     $lte: end,
                 },
                 end: {
                     $gte: start,
                 },
-            })
-                .sort({ start: 1 })
-                .toArray();
-            voices = voices.map(voice => ({
-                start: voice.start,
-                end: voice.end,
-                _id: voice._id.toHexString(),
-            }));
-            voices = mergeGap(voices, duration / 100);
-        }
-
-        let transcripts: Transcript[] = [];
-        if (duration < day) {
-            transcripts = (
-                await database.collection("transcriptions").find({
-                    start: {
-                        $lte: end,
-                    },
-                    end: {
-                        $gte: start,
-                    },
-                })
-                    .sort({ start: 1 })
-                    .toArray()
-            ).flatMap(t => {
-                const transcriptID = t._id.toHexString();
-                return t.segments.map((s: any) => ({
-                    ...s,
-                    start: new Date(t.start.getTime() + s.start * 1000),
-                    end: new Date(t.start.getTime() + s.end * 1000),
-                    transcriptID,
-                }) as Transcript);
-            }).sort((a, b) => a.start.getTime() - b.start.getTime());
-        }
-
-
-
-        return ({
-            items: sources,
-            start: originalStart,
-            end: originalEnd,
-            gap,
-            voices,
-            transcripts,
-        });
-    } finally {
-        await client.close();
+            }, { sort: { start: 1 } })
+        ).flatMap(t => {
+            const transcriptID = t._id.toHexString();
+            return t.segments.map((s: any) => ({
+                ...s,
+                start: new Date(t.start.getTime() + s.start * 1000),
+                end: new Date(t.start.getTime() + s.end * 1000),
+                transcriptID,
+            }) as Transcript);
+        }).sort((a, b) => a.start.getTime() - b.start.getTime());
     }
+
+
+
+    return ({
+        items: sources,
+        start: originalStart,
+        end: originalEnd,
+        gap,
+        voices,
+        transcripts,
+    });
+
 }
 
 const TimelineAxis = ({
