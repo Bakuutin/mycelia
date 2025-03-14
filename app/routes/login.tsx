@@ -17,7 +17,6 @@ import { Label } from "~/components/ui/label"
 export let action: ActionFunction = async ({ request }) => {
     let formData = await request.formData();
     let token = formData.get("token");
-    console.log(formData);
 
     if (typeof token !== "string" || token.length === 0) {
         return { error: "Token is required" }

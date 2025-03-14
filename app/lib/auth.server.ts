@@ -104,9 +104,6 @@ export const authenticate = async (request: Request): Promise<Auth | null> => {
         return null;
     }
 
-    const auth = verifyToken(token);
-    console.log(auth);
-
     return verifyToken(token) as Auth;
 }
 

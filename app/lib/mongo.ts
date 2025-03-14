@@ -54,8 +54,6 @@ export class ScopedCollection<TSchema extends Document = Document> {
     }
 
     private applyFilter(query: Filter<TSchema> = {}): Filter<TSchema> {
-        console.log(query, this.scope.filter);
-        // return query;
         return {
             $and: [
                 query,

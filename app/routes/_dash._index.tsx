@@ -184,7 +184,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     let transcripts: Transcript[] = [];
-    if (duration < day) {
+    if (false) {
         transcripts = (
             await db.collection("transcriptions").find({
                 start: {
