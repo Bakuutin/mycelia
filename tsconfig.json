@@ -8,11 +8,11 @@
     "**/.client/**/*.tsx"
   ],
   "compilerOptions": {
-    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "lib": ["DOM", "deno.window"],
     "types": ["@remix-run/node", "vite/client"],
     "isolatedModules": true,
     "esModuleInterop": true,
-    "jsx": "react-jsx",
+    "jsx": "react",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,

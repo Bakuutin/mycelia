@@ -1,4 +1,4 @@
-import jsonwebtoken from "jsonwebtoken";
+import { jwtVerify } from "jose";
 import { createCookie, redirect } from "@remix-run/node";
 import { expandTypedObjects, Scope } from "./scopes.ts";
 import { permissionDenied } from "./utils.ts";
@@ -17,11 +17,11 @@ export interface Auth {
   };
 }
 
-export const verifyToken = (token: string) => {
+export const verifyToken = async (token: string) => {
   try {
-    const payload = jsonwebtoken.verify(
+    const { payload } = await jwtVerify(
       token,
-      process.env.SECRET_KEY as string,
+      new TextEncoder().encode(process.env.SECRET_KEY)
     );
     if (typeof payload === "string") {
       permissionDenied();
@@ -42,7 +42,7 @@ export const authenticate = async (request: Request): Promise<Auth | null> => {
     return null;
   }
 
-  return verifyToken(token) as Auth;
+  return await verifyToken(token) as Auth;
 };
 
 export const authenticateOrRedirect = async (

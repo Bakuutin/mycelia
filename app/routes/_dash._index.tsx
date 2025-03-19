@@ -20,7 +20,7 @@ import { Pause, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button.tsx";
 import { authenticateOrRedirect } from "@/lib/auth/core.ts";
-import { getDB } from "@/lib/mongo.ts";
+import { getDB } from "../lib/mongo/scoped.ts";
 
 const zTimelineItem = z.object({
   id: z.string(),

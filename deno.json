@@ -6,18 +6,12 @@
     }
   },
   "compilerOptions": {
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-      "ES2022",
-      "deno.ns"
-    ],
-    "types": [
-      "@remix-run/node",
-      "vite/client"
-    ],
+    "lib": ["deno.window", "dom"],
     "jsx": "react-jsx",
-    "strict": true
+    "jsxImportSource": "react",
+    "jsxImportSourceTypes": "@types/react",
+    "rootDirs": [".", "./.react-router/types"],
+    "types": ["vite/client"]
   },
   "unstable": [
     "sloppy-imports"

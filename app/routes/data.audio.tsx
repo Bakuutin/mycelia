@@ -1,4 +1,4 @@
-import { getDB } from "@/lib/mongo.ts";
+import { getDB } from "../lib/mongo/scoped.ts";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import { ObjectId } from "mongodb";
 import _ from "lodash";

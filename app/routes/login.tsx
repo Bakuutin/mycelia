@@ -49,7 +49,13 @@ export default function Login() {
               <Form method="post">
                 <div className="flex flex-col gap-6">
                   <div className="grid gap-2">
-                    <Label htmlFor="token">Token</Label>
+                    <Label htmlFor="token">{
+                      actionData?.error  ? (
+                        <span className="text-red-500">
+                          {actionData.error}
+                        </span>
+                      ) : "Token"
+                      }</Label>
                     <Input
                       id="token"
                       type="password"

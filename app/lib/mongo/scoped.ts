@@ -1,8 +1,11 @@
-import { Auth, permissionDenied, Scope, ScopeAction } from "./auth/core.ts";
+import { Auth } from "@/lib/auth/core.ts";
+import { permissionDenied } from "@/lib/auth/utils.ts";
+import { Scope, ScopeAction } from "@/lib/auth/scopes.ts";
 
 import sift from "sift";
 
 import {
+BulkWriteOptions,
   Collection,
   Db,
   DeleteOptions,
@@ -13,22 +16,17 @@ import {
   InsertManyResult,
   InsertOneOptions,
   InsertOneResult,
-  MongoClient,
   OptionalUnlessRequiredId,
   UpdateFilter,
   UpdateOptions,
   UpdateResult,
   WithId,
 } from "mongodb";
-import process from "node:process";
 
-export const DATABASE_NAME = "a5t-2024-11-19";
-
-const client = new MongoClient(process.env.MONGO_URL as string);
+import { getRootDB } from "@/lib/mongo/core.ts";
 
 export const getDB = async (auth: Auth): Promise<ScopedDB> => {
-  await client.connect();
-  return new ScopedDB(client.db(DATABASE_NAME), auth);
+  return new ScopedDB(await getRootDB(), auth);
 };
 
 export class ScopedDB {
@@ -116,7 +114,7 @@ export class ScopedCollection<TSchema extends Document = Document> {
 
   async insertMany(
     docs: OptionalUnlessRequiredId<TSchema>[],
-    options?: InsertManyOptions,
+    options?: BulkWriteOptions,
   ): Promise<InsertManyResult<TSchema>> {
     this.checkAction("write");
     const matcher = sift(this.scope.filter);

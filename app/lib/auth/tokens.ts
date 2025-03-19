@@ -1,56 +1,89 @@
-import jsonwebtoken from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
-import { createHash, randomBytes } from "crypto";
 import { Buffer } from "node:buffer";
 import process from "node:process";
+import mongoose, { Schema } from "mongoose";
+import { getRootDB } from "@/lib/mongo/core.ts";
+import { createSecretKey, createHash, randomBytes } from "node:crypto";
+import { SignJWT } from "jose";
 
 const OPEN_PREFIX_LENGTH = 16;
+
+export interface Policy {
+  resource: string;
+  effect: "allow" | "deny";
+  actions: string[];
+}
 
 interface APIKey {
   hashedKey: string;
   salt: string;
   owner: string;
   name: string;
-  scopes: string[];
   openPrefix: string;
   createdAt: Date;
   isActive: boolean;
+  policies: Policy[];
 }
 
-const apiKeys: APIKey[] = []; // This should be replaced with your database logic
+const policySchema = new Schema<Policy>({
+  resource: { type: String, required: true },
+  effect: { type: String, required: true, enum: ["allow", "deny"] },
+  actions: { type: [String], required: true },
+});
+
+const apiKeySchema = new Schema<APIKey>({
+  hashedKey: { type: String, required: true },
+  salt: { type: String, required: true },
+  owner: { type: String, required: true },
+  name: { type: String, required: true },
+  policies: { type: [policySchema], required: true },
+  
+  openPrefix: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+  isActive: { type: Boolean, default: true },
+});
+
+const APIKeyModel = mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
+  
+const key = createSecretKey(
+  Buffer.from(process.env.SECRET_KEY as string, "utf-8"),
+);
 
 function hashApiKey(apiKey: string, salt: Buffer): string {
   return createHash("sha256").update(salt).update(apiKey).digest("base64");
 }
 
-export function generateApiKey(
+export async function generateApiKey(
   owner: string,
   name: string,
-  scopes: string[],
-): string {
+  policies: Policy[],
+): Promise<string> {
   const apiKey = `mycelia_${randomBytes(32).toString("base64url")}`;
   const salt = randomBytes(32);
   const hashedKey = hashApiKey(apiKey, salt);
 
-  apiKeys.push({
+  const newApiKey = new APIKeyModel({
     hashedKey,
     salt: salt.toString("base64"),
     owner,
     name,
-    scopes,
+    policies,
     openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
     createdAt: new Date(),
     isActive: true,
   });
 
+  await newApiKey.save();
+
   return apiKey;
 }
 
-export function verifyApiKey(apiKey: string): APIKey | null {
-  const keyDoc = apiKeys.find(
-    (key) =>
-      key.openPrefix === apiKey.slice(0, OPEN_PREFIX_LENGTH) && key.isActive,
-  );
+export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
+  const db = await getRootDB();
+  const keyDoc = await APIKeyModel.findOne({
+    openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
+    isActive: true,
+  });
 
   if (!keyDoc) {
     return null;
@@ -66,25 +99,24 @@ export function verifyApiKey(apiKey: string): APIKey | null {
   return keyDoc;
 }
 
-export function exchangeApiKeyForAccessToken(
+export async function exchangeApiKeyForAccessToken(
   apiKey: string,
-  duration: string = "1d",
-): string | null {
-  const keyDoc = verifyApiKey(apiKey);
+  duration: string = "1 day",
+): Promise<string | null> {
+  const keyDoc = await verifyApiKey(apiKey);
 
   if (!keyDoc) {
     return null;
   }
 
-  const token = jsonwebtoken.sign(
-    {
-      owner: keyDoc.owner,
-      keyId: uuidv4(),
-      scopes: keyDoc.scopes,
-    },
-    process.env.SECRET_KEY as string,
-    { expiresIn: duration },
-  );
+  const jwt = await new SignJWT({
+    owner: keyDoc.owner,
+    keyId: uuidv4(),
+    policies: keyDoc.policies,
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime(duration)
+    .sign(key);
 
-  return token;
+  return jwt;
 }

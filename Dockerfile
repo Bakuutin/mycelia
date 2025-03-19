@@ -1,10 +1,10 @@
-FROM node:23
+FROM denoland/deno:2.2.4
 WORKDIR /app
-ADD ./package.json /app/package.json
-ADD ./package-lock.json /app/package-lock.json
-RUN npm install
+USER deno
+ADD ./deno.json /app/deno.json
+ADD ./deno.lock /app/deno.lock
+RUN deno install --lock
 ADD . /app
 EXPOSE 3000
-ENV NODE_ENV=production
-RUN npm run build
-CMD ["npm", "run", "start"]
+RUN deno task build
+CMD ["deno", "task", "start"]

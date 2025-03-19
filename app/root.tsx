@@ -7,8 +7,11 @@ import {
 } from "@remix-run/react";
 import type { LinksFunction } from "@remix-run/node";
 
+import { ensureDbConnected } from "./lib/mongo/core.ts";
 import "./tailwind.css";
-import { Suspense } from "react";
+
+
+await ensureDbConnected();
 
 export const links: LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
