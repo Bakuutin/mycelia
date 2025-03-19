@@ -753,7 +753,6 @@ const TimelinePage = () => {
                     )}
                 </div>
                 <div className="flex flex-row">
-
                     <PlayPauseButton />
                 </div>
 
