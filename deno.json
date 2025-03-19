@@ -1,0 +1,27 @@
+{
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "exclude": ["no-explicit-any", "no-unused-vars", "require-await"]
+    }
+  },
+  "compilerOptions": {
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "types": [
+      "@remix-run/node",
+      "vite/client"
+    ],
+    "jsx": "react-jsx",
+    "strict": true
+  },
+  "unstable": [
+    "sloppy-imports"
+  ],
+  "imports": {
+    "~/": "./app/"
+  }
+}

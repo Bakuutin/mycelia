@@ -1,19 +1,15 @@
-import * as React from "react"
+import * as React from "react";
 
-
-import { NavMain } from "~/components/nav-main"
-import { NavProjects } from "~/components/nav-projects"
-import { NavUser } from "~/components/nav-user"
+import { NavMain } from "./nav-main.tsx";
+import { NavProjects } from "./nav-projects.tsx";
+import { NavUser } from "./nav-user.tsx";
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
   SidebarRail,
-} from "~/components/ui/sidebar"
-
-
-
+} from "./ui/sidebar.tsx";
 
 export function AppSidebar({ data }: { data: any }) {
   return (
@@ -22,13 +18,15 @@ export function AppSidebar({ data }: { data: any }) {
         {/* <TeamSwitcher teams={data.teams} /> */}
       </SidebarHeader>
       <SidebarContent>
-        {/* <NavMain items={data.navMain} />
-        <NavProjects projects={data.projects} /> */}
+        {
+          /* <NavMain items={data.navMain} />
+        <NavProjects projects={data.projects} /> */
+        }
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={data.user} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
-  )
+  );
 }

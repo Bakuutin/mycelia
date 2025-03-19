@@ -25,7 +25,9 @@
     "paths": {
       "~/*": ["./app/*"],
       "@/*": ["./app/*"],
-      "vis-timeline/dist/vis-timeline-graph2d.esm.js": ["./node_modules/@types/vis"]
+      "vis-timeline/dist/vis-timeline-graph2d.esm.js": [
+        "./node_modules/@types/vis"
+      ]
     },
     // Vite takes care of building everything, not tsc.
     "noEmit": true
