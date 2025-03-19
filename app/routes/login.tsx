@@ -1,17 +1,17 @@
 import { ActionFunction, redirect } from "@remix-run/node";
 import { Form, useActionData } from "@remix-run/react";
-import { authCookie, verifyToken } from "../lib/auth/core.ts";
+import { authCookie, verifyToken } from "@/lib/auth/core.ts";
 
-import { Button } from "../components/ui/button.tsx";
+import { Button } from "@/components/ui/button.tsx";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "../components/ui/card.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
+} from "@/components/ui/card.tsx";
+import { Input } from "@/components/ui/input.tsx";
+import { Label } from "@/components/ui/label.tsx";
 
 export const action: ActionFunction = async ({ request }) => {
   const formData = await request.formData();

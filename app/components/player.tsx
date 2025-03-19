@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useFetcher } from "@remix-run/react";
 import { create } from "zustand";
-import _, { reject } from "lodash";
+import _ from "lodash";
 
 const DEFAULT_DATE = new Date();
 

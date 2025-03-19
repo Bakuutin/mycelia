@@ -1,6 +1,15 @@
 {
   "version": "4",
   "specifiers": {
+    "jsr:@cliffy/command@^1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@cliffy/flags@1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@cliffy/internal@1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@cliffy/table@1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@std/dotenv@~0.225.3": "0.225.3",
+    "jsr:@std/encoding@0.224.0": "0.224.0",
+    "jsr:@std/fmt@~1.0.2": "1.0.6",
+    "jsr:@std/text@~1.0.7": "1.0.11",
+    "jsr:@zaubrik/djwt@^3.0.2": "3.0.2",
     "npm:@oclif/core@^4.2.10": "4.2.10",
     "npm:@radix-ui/react-avatar@^1.1.3": "1.1.3_@types+react@18.3.18_@types+react-dom@18.3.5__@types+react@18.3.18_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-collapsible@^1.1.3": "1.1.3_@types+react@18.3.18_@types+react-dom@18.3.5__@types+react@18.3.18_react@18.3.1_react-dom@18.3.1__react@18.3.1",
@@ -19,6 +28,7 @@
     "npm:@types/d3@^7.4.3": "7.4.3",
     "npm:@types/jsonwebtoken@^9.0.8": "9.0.9",
     "npm:@types/lodash@^4.17.13": "4.17.16",
+    "npm:@types/node@*": "22.12.0",
     "npm:@types/node@^18.19.80": "18.19.80",
     "npm:@types/react-dom@^18.2.7": "18.3.5_@types+react@18.3.18",
     "npm:@types/react@^18.2.20": "18.3.18",
@@ -30,6 +40,7 @@
     "npm:class-variance-authority@~0.7.1": "0.7.1",
     "npm:clsx@^2.1.1": "2.1.1",
     "npm:d3@^7.9.0": "7.9.0_d3-selection@3.0.0",
+    "npm:dotenv@*": "16.4.7",
     "npm:eslint-import-resolver-typescript@^3.6.1": "3.9.1_eslint@8.57.1_eslint-plugin-import@2.31.0__eslint@8.57.1",
     "npm:eslint-plugin-import@^2.28.1": "2.31.0_eslint@8.57.1",
     "npm:eslint-plugin-jsx-a11y@^6.7.1": "6.10.2_eslint@8.57.1",
@@ -58,6 +69,51 @@
     "npm:vite@^5.1.0": "5.4.14_@types+node@18.19.80",
     "npm:zod@^3.24.1": "3.24.2",
     "npm:zustand@^5.0.2": "5.0.3_@types+react@18.3.18_react@18.3.1"
+  },
+  "jsr": {
+    "@cliffy/command@1.0.0-rc.7": {
+      "integrity": "1288808d7a3cd18b86c24c2f920e47a6d954b7e23cadc35c8cbd78f8be41f0cd",
+      "dependencies": [
+        "jsr:@cliffy/flags",
+        "jsr:@cliffy/internal",
+        "jsr:@cliffy/table",
+        "jsr:@std/fmt",
+        "jsr:@std/text"
+      ]
+    },
+    "@cliffy/flags@1.0.0-rc.7": {
+      "integrity": "318d9be98f6a6417b108e03dec427dea96cdd41a15beb21d2554ae6da450a781",
+      "dependencies": [
+        "jsr:@std/text"
+      ]
+    },
+    "@cliffy/internal@1.0.0-rc.7": {
+      "integrity": "10412636ab3e67517d448be9eaab1b70c88eba9be22617b5d146257a11cc9b17"
+    },
+    "@cliffy/table@1.0.0-rc.7": {
+      "integrity": "9fdd9776eda28a0b397981c400eeb1aa36da2371b43eefe12e6ff555290e3180",
+      "dependencies": [
+        "jsr:@std/fmt"
+      ]
+    },
+    "@std/dotenv@0.225.3": {
+      "integrity": "a95e5b812c27b0854c52acbae215856d9cce9d4bbf774d938c51d212711e8d4a"
+    },
+    "@std/encoding@0.224.0": {
+      "integrity": "efb6dca97d3e9c31392bd5c8cfd9f9fc9decf5a1f4d1f78af7900a493bcf89b5"
+    },
+    "@std/fmt@1.0.6": {
+      "integrity": "a2c56a69a2369876ddb3ad6a500bb6501b5bad47bb3ea16bfb0c18974d2661fc"
+    },
+    "@std/text@1.0.11": {
+      "integrity": "f191fa22590cac8b1cdba6cc4ab97940e720f7cc67b3084e54405b428bf5843d"
+    },
+    "@zaubrik/djwt@3.0.2": {
+      "integrity": "8070adaa49cd9e5d2b8ae82fd461132c966ef2f8ff8378db4a4da8df4f17c664",
+      "dependencies": [
+        "jsr:@std/encoding"
+      ]
+    }
   },
   "npm": {
     "@alloc/quick-lru@5.2.0": {
@@ -6658,7 +6714,25 @@
       "integrity": "sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A=="
     }
   },
+  "remote": {
+    "https://deno.land/std@0.205.0/encoding/_util.ts": "f368920189c4fe6592ab2e93bd7ded8f3065b84f95cd3e036a4a10a75649dcba",
+    "https://deno.land/std@0.205.0/encoding/base64.ts": "cc03110d6518170aeaa68ec97f89c6d6e2276294b30807e7332591d7ce2e4b72",
+    "https://deno.land/std@0.205.0/encoding/base64url.ts": "7608862858d28a003f9d6cb78dd61e645ecd1ae1f45faf0e09a306eafe66b16e",
+    "https://deno.land/std@0.220.1/dotenv/mod.ts": "0180eaeedaaf88647318811cdaa418cc64dc51fb08354f91f5f480d0a1309f7d",
+    "https://deno.land/std@0.220.1/dotenv/parse.ts": "09977ff88dfd1f24f9973a338f0f91bbdb9307eb5ff6085446e7c423e4c7ba0c",
+    "https://deno.land/std@0.220.1/dotenv/stringify.ts": "0047ad7068289735d08964046aea267a750c141b494ca0e38831b89be6c020c2",
+    "https://deno.land/x/djwt@v3.0.1/algorithm.ts": "b1c6645f9dbd6e6c47c123a3b18c28b956f91c65ed17f5b6d5d968fc3750542b",
+    "https://deno.land/x/djwt@v3.0.1/deps.ts": "c8b329dc18c54f93879699ffb728bd805d548f7c64c4d2916efa5fb2c712cc47",
+    "https://deno.land/x/djwt@v3.0.1/mod.ts": "eca176976595654b8a536e7b8029a029c435d079ef58feff2d3bde33ea107417",
+    "https://deno.land/x/djwt@v3.0.1/signature.ts": "a5649368a4b433b2810e7d47f53661fe3b0f7fe1778cb49234ceae3d6e861185",
+    "https://deno.land/x/djwt@v3.0.1/util.ts": "5cb264d2125c553678e11446bcfa0494025d120e3f59d0a3ab38f6800def697d"
+  },
   "workspace": {
+    "dependencies": [
+      "jsr:@cliffy/command@^1.0.0-rc.7",
+      "jsr:@std/dotenv@~0.225.3",
+      "jsr:@zaubrik/djwt@^3.0.2"
+    ],
     "packageJson": {
       "dependencies": [
         "npm:@oclif/core@^4.2.10",

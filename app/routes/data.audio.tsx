@@ -1,8 +1,8 @@
-import { getDB } from "../lib/mongo.ts";
+import { getDB } from "@/lib/mongo.ts";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import { ObjectId } from "mongodb";
 import _ from "lodash";
-import { authenticateOr401 } from "../lib/auth/core.ts";
+import { authenticateOr401 } from "@/lib/auth/core.ts";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOr401(request);

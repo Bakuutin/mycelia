@@ -12,15 +12,15 @@ import _ from "lodash";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
-import { CursorLine } from "../components/cursorLine.tsx";
+import { CursorLine } from "@/components/cursorLine.tsx";
 
-import { AudioPlayer, useDateStore } from "../components/player.tsx";
+import { AudioPlayer, useDateStore } from "@/components/player.tsx";
 
 import { Pause, Play } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { authenticateOrRedirect } from "../lib/auth/core.ts";
-import { getDB } from "../lib/mongo.ts";
+import { Button } from "@/components/ui/button.tsx";
+import { authenticateOrRedirect } from "@/lib/auth/core.ts";
+import { getDB } from "@/lib/mongo.ts";
 
 const zTimelineItem = z.object({
   id: z.string(),

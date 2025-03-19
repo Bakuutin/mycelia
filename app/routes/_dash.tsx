@@ -26,7 +26,7 @@ import {
   Settings2,
   SquareTerminal,
 } from "lucide-react";
-import { Auth, authenticateOrRedirect } from "../lib/auth/core.ts";
+import { Auth, authenticateOrRedirect } from "@/lib/auth/core.ts";
 
 // This is sample data.
 const data = {
