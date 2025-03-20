@@ -1,3 +1,4 @@
+import React from "react";
 import { ActionFunction, redirect } from "@remix-run/node";
 import { Form, useActionData } from "@remix-run/react";
 import { authCookie, verifyToken } from "@/lib/auth/core.ts";
@@ -12,6 +13,7 @@ import {
 } from "@/components/ui/card.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
+import { exchangeApiKeyForAccessToken, verifyApiKey } from "@/lib/auth/tokens.ts";
 
 export const action: ActionFunction = async ({ request }) => {
   const formData = await request.formData();
@@ -21,8 +23,8 @@ export const action: ActionFunction = async ({ request }) => {
     return { error: "Token is required" };
   }
 
-  const auth = verifyToken(token);
-  if (!auth) {
+  const key = await exchangeApiKeyForAccessToken(token);
+  if (!key) {
     return { error: "Invalid token" };
   }
 

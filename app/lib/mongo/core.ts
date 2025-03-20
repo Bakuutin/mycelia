@@ -15,6 +15,6 @@ export const getRootDB = async (): Promise<Db> => {
 export const ensureDbConnected = async () => {
   await getRootDB()
   await mongoose.connect(process.env.MONGO_URL as string, {
-    dbName: process.env.MONGO_DB_NAME,
+    dbName: process.env.DATABASE_NAME,
   });
 }

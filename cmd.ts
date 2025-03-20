@@ -1,5 +1,6 @@
 import { Command } from "@cliffy/command";
-import { generateApiKey } from "@/lib/auth/tokens.ts";
+import { Secret } from "@cliffy/prompt";
+import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import { ensureDbConnected } from "@/lib/mongo/core.ts";
 import { exit } from "node:process";
 
@@ -17,8 +18,26 @@ const root = new Command()
         console.log(`Owner: ${owner}`);
         console.log(`Name: ${name}`);
         console.log("Generating token...");
-        const key = await generateApiKey(owner, name, []);
+        const key = await generateApiKey(owner, name, []); 
         console.log(`Token: ${key}`);
+        exit(0);
+      })
+    )
+    .command("validate", new Command()
+      .description("Validate a token.")
+      .action(async () => {
+        const token = await Secret.prompt("Enter the token: ");
+        const doc = await verifyApiKey(token);
+        if (!doc) {
+          console.log("Invalid token");
+          exit(1);
+        }
+        console.log("Token is valid");
+        console.log(`Owner: ${doc.owner}`);
+        console.log(`Name: ${doc.name}`);
+        console.log(`Policies: ${JSON.stringify(doc.policies)}`);  
+        console.log(`Created at: ${doc.createdAt}`);
+
         exit(0);
       })
     )

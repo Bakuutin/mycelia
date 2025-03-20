@@ -1,9 +1,8 @@
-import { v4 as uuidv4 } from "uuid";
 import { Buffer } from "node:buffer";
 import process from "node:process";
-import mongoose, { Schema } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
 import { getRootDB } from "@/lib/mongo/core.ts";
-import { createSecretKey, createHash, randomBytes } from "node:crypto";
+import { createSecretKey, createHash, randomUUID, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
 
 const OPEN_PREFIX_LENGTH = 16;
@@ -23,6 +22,7 @@ interface APIKey {
   createdAt: Date;
   isActive: boolean;
   policies: Policy[];
+  _id?: Types.ObjectId;
 }
 
 const policySchema = new Schema<Policy>({
@@ -43,7 +43,7 @@ const apiKeySchema = new Schema<APIKey>({
   isActive: { type: Boolean, default: true },
 });
 
-const APIKeyModel = mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
+const APIKeyModel = mongoose.models.APIKey || mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
   
 const key = createSecretKey(
   Buffer.from(process.env.SECRET_KEY as string, "utf-8"),
@@ -74,6 +74,8 @@ export async function generateApiKey(
   });
 
   await newApiKey.save();
+
+  console.log(newApiKey._id);
 
   return apiKey;
 }
@@ -111,8 +113,8 @@ export async function exchangeApiKeyForAccessToken(
 
   const jwt = await new SignJWT({
     owner: keyDoc.owner,
-    keyId: uuidv4(),
-    policies: keyDoc.policies,
+    keyId: keyDoc._id!.toString(),
+    policies: JSON.stringify(keyDoc.policies),
   })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime(duration)

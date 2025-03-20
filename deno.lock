@@ -1,14 +1,23 @@
 {
   "version": "4",
   "specifiers": {
+    "jsr:@cliffy/ansi@1.0.0-rc.7": "1.0.0-rc.7",
     "jsr:@cliffy/command@^1.0.0-rc.7": "1.0.0-rc.7",
     "jsr:@cliffy/flags@1.0.0-rc.7": "1.0.0-rc.7",
     "jsr:@cliffy/internal@1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@cliffy/keycode@1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@cliffy/prompt@^1.0.0-rc.7": "1.0.0-rc.7",
     "jsr:@cliffy/table@1.0.0-rc.7": "1.0.0-rc.7",
+    "jsr:@std/assert@~1.0.6": "1.0.11",
+    "jsr:@std/bytes@^1.0.5": "1.0.5",
+    "jsr:@std/crypto@^1.0.4": "1.0.4",
     "jsr:@std/dotenv@~0.225.3": "0.225.3",
     "jsr:@std/encoding@0.224.0": "0.224.0",
+    "jsr:@std/encoding@~1.0.5": "1.0.7",
     "jsr:@std/fmt@~1.0.2": "1.0.6",
+    "jsr:@std/path@~1.0.6": "1.0.8",
     "jsr:@std/text@~1.0.7": "1.0.11",
+    "jsr:@std/uuid@^1.0.5": "1.0.5",
     "jsr:@zaubrik/djwt@^3.0.2": "3.0.2",
     "npm:@deno/vite-plugin@^1.0.4": "1.0.4_vite@5.4.14__@types+node@18.19.80__lightningcss@1.29.2_@types+node@18.19.80",
     "npm:@oclif/core@^4.2.10": "4.2.10",
@@ -79,6 +88,13 @@
     "npm:zustand@^5.0.2": "5.0.3_@types+react@18.3.19_react@18.3.1"
   },
   "jsr": {
+    "@cliffy/ansi@1.0.0-rc.7": {
+      "integrity": "f71c921cce224c13d322e5cedba4f38e8f7354c7d855c9cb22729362a53f25aa",
+      "dependencies": [
+        "jsr:@cliffy/internal",
+        "jsr:@std/encoding@~1.0.5"
+      ]
+    },
     "@cliffy/command@1.0.0-rc.7": {
       "integrity": "1288808d7a3cd18b86c24c2f920e47a6d954b7e23cadc35c8cbd78f8be41f0cd",
       "dependencies": [
@@ -98,11 +114,35 @@
     "@cliffy/internal@1.0.0-rc.7": {
       "integrity": "10412636ab3e67517d448be9eaab1b70c88eba9be22617b5d146257a11cc9b17"
     },
+    "@cliffy/keycode@1.0.0-rc.7": {
+      "integrity": "5b3f6c33994e81a76b79f108b1989642ac22705840da33781f7972d7dff05503"
+    },
+    "@cliffy/prompt@1.0.0-rc.7": {
+      "integrity": "a9cbd13acd8073558447cae8ca4cf593c09d23bcbe429cc63346920c21187b83",
+      "dependencies": [
+        "jsr:@cliffy/ansi",
+        "jsr:@cliffy/internal",
+        "jsr:@cliffy/keycode",
+        "jsr:@std/assert",
+        "jsr:@std/fmt",
+        "jsr:@std/path",
+        "jsr:@std/text"
+      ]
+    },
     "@cliffy/table@1.0.0-rc.7": {
       "integrity": "9fdd9776eda28a0b397981c400eeb1aa36da2371b43eefe12e6ff555290e3180",
       "dependencies": [
         "jsr:@std/fmt"
       ]
+    },
+    "@std/assert@1.0.11": {
+      "integrity": "2461ef3c368fe88bc60e186e7744a93112f16fd110022e113a0849e94d1c83c1"
+    },
+    "@std/bytes@1.0.5": {
+      "integrity": "4465dd739d7963d964c809202ebea6d5c6b8e3829ef25c6a224290fbb8a1021e"
+    },
+    "@std/crypto@1.0.4": {
+      "integrity": "cee245c453bd5366207f4d8aa25ea3e9c86cecad2be3fefcaa6cb17203d79340"
     },
     "@std/dotenv@0.225.3": {
       "integrity": "a95e5b812c27b0854c52acbae215856d9cce9d4bbf774d938c51d212711e8d4a"
@@ -110,16 +150,29 @@
     "@std/encoding@0.224.0": {
       "integrity": "efb6dca97d3e9c31392bd5c8cfd9f9fc9decf5a1f4d1f78af7900a493bcf89b5"
     },
+    "@std/encoding@1.0.7": {
+      "integrity": "f631247c1698fef289f2de9e2a33d571e46133b38d042905e3eac3715030a82d"
+    },
     "@std/fmt@1.0.6": {
       "integrity": "a2c56a69a2369876ddb3ad6a500bb6501b5bad47bb3ea16bfb0c18974d2661fc"
+    },
+    "@std/path@1.0.8": {
+      "integrity": "548fa456bb6a04d3c1a1e7477986b6cffbce95102d0bb447c67c4ee70e0364be"
     },
     "@std/text@1.0.11": {
       "integrity": "f191fa22590cac8b1cdba6cc4ab97940e720f7cc67b3084e54405b428bf5843d"
     },
+    "@std/uuid@1.0.5": {
+      "integrity": "d0b8da73ec1934c32346e3a090d526f77dded587664859afabae0cc2c782428b",
+      "dependencies": [
+        "jsr:@std/bytes",
+        "jsr:@std/crypto"
+      ]
+    },
     "@zaubrik/djwt@3.0.2": {
       "integrity": "8070adaa49cd9e5d2b8ae82fd461132c966ef2f8ff8378db4a4da8df4f17c664",
       "dependencies": [
-        "jsr:@std/encoding"
+        "jsr:@std/encoding@0.224.0"
       ]
     }
   },
@@ -7014,7 +7067,9 @@
   "workspace": {
     "dependencies": [
       "jsr:@cliffy/command@^1.0.0-rc.7",
+      "jsr:@cliffy/prompt@^1.0.0-rc.7",
       "jsr:@std/dotenv@~0.225.3",
+      "jsr:@std/uuid@^1.0.5",
       "jsr:@zaubrik/djwt@^3.0.2"
     ],
     "packageJson": {
