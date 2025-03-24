@@ -5,13 +5,11 @@ import {
   Scripts,
   ScrollRestoration,
 } from "@remix-run/react";
-import type { LinksFunction } from "@remix-run/node";
 
-import { ensureDbConnected } from "./lib/mongo/core.ts";
+import type { LinksFunction } from "@remix-run/deno";
+
 import "./tailwind.css";
 
-
-await ensureDbConnected();
 
 export const links: LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },

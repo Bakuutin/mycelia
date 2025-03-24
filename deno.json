@@ -16,5 +16,17 @@
     "@std/dotenv": "jsr:@std/dotenv@^0.225.3",
     "@std/uuid": "jsr:@std/uuid@^1.0.5",
     "@zaubrik/djwt": "jsr:@zaubrik/djwt@^3.0.2"
+  },
+  "compilerOptions": {
+    "lib": [
+      "DOM",
+      "deno.window"
+    ],
+    "types": [
+      "@remix-run/node",
+      "vite/client"
+    ],
+    "jsx": "react",
+    "strict": true
   }
 }

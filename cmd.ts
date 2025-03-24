@@ -1,8 +1,9 @@
 import { Command } from "@cliffy/command";
 import { Secret } from "@cliffy/prompt";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
-import { ensureDbConnected } from "@/lib/mongo/core.ts";
+import { ensureDbConnected } from "./app/lib/mongo/core.server.ts";
 import { exit } from "node:process";
+import { verifyToken } from "./app/lib/auth/core.server.ts";
 
 await ensureDbConnected();
 
@@ -27,17 +28,27 @@ const root = new Command()
       .description("Validate a token.")
       .action(async () => {
         const token = await Secret.prompt("Enter the token: ");
-        const doc = await verifyApiKey(token);
-        if (!doc) {
-          console.log("Invalid token");
-          exit(1);
+        if (token.startsWith("mycelia_")) {
+          const doc = await verifyApiKey(token);
+          if (!doc) {
+            console.log("Invalid token");
+            exit(1);
+          }
+          console.log("Token is valid");
+          console.log(`Owner: ${doc.owner}`);
+          console.log(`Name: ${doc.name}`);
+          console.log(`Policies: ${JSON.stringify(doc.policies)}`);  
+          console.log(`Created at: ${doc.createdAt}`);
+        } else {
+          // assume it's a JWT
+          const doc = await verifyToken(token);
+          if (!doc) {
+            console.log("Invalid token");
+            exit(1);
+          }
+          console.log("Token is valid");
+          console.log(JSON.stringify(doc, null, 2));
         }
-        console.log("Token is valid");
-        console.log(`Owner: ${doc.owner}`);
-        console.log(`Name: ${doc.name}`);
-        console.log(`Policies: ${JSON.stringify(doc.policies)}`);  
-        console.log(`Created at: ${doc.createdAt}`);
-
         exit(0);
       })
     )

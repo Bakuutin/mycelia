@@ -1,0 +1,10 @@
+services:
+  mongo:
+    image: mongo:8
+    ports:
+      - 27017:27017
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME
+      - MONGO_INITDB_ROOT_PASSWORD
+    volumes:
+      - .docker/mongo:/data/db

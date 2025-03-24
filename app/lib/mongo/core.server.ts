@@ -18,3 +18,5 @@ export const ensureDbConnected = async () => {
     dbName: process.env.DATABASE_NAME,
   });
 }
+
+await ensureDbConnected();

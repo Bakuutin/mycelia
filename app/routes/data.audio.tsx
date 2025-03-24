@@ -1,8 +1,7 @@
-import { getDB } from "../lib/mongo/scoped.ts";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import { ObjectId } from "mongodb";
 import _ from "lodash";
-import { authenticateOr401 } from "@/lib/auth/core.ts";
+import { authenticateOr401 } from "../lib/auth/core.server.ts";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOr401(request);
@@ -26,8 +25,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response("Invalid limit parameter", { status: 400 });
   }
 
-  const db = await getDB(auth);
-  const collection = db.collection("audio_chunks");
+  const collection = auth.db.collection("audio_chunks");
 
   const load = async (filter: any) =>
     collection

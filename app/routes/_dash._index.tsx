@@ -19,8 +19,7 @@ import { AudioPlayer, useDateStore } from "@/components/player.tsx";
 import { Pause, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button.tsx";
-import { authenticateOrRedirect } from "@/lib/auth/core.ts";
-import { getDB } from "../lib/mongo/scoped.ts";
+import { authenticateOrRedirect } from "../lib/auth/core.server.ts";
 
 const zTimelineItem = z.object({
   id: z.string(),
@@ -99,7 +98,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let { start, end } = params;
 
   const mergeGap = (items: StartEnd[], gap: number, updateKey: any = null) => {
-    if (gap <= 0) {
+    if (gap <= 0 || items.length === 0) {
       return items;
     }
     const result: StartEnd[] = [];
@@ -141,10 +140,22 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (duration > day * 300) {
     gap = day * 10;
   }
+  
+  // console.log(await auth.db.collection("source_files").findOne({}))
+  // return {
+  //   items: [],
+  //   start: originalStart,
+  //   end: originalEnd,
+  //   gap,
+  //   voices: [],
+  //   transcripts: [],
+  // }
+  const col = auth.db.collection("source_files");
+  // console.log(col);
+  const res =  await col.find({}, {limit: 1});
+  // console.log(155, Object.keys(res));
 
-  const db = await getDB(auth);
-  const collection = db.collection("source_files");
-  const items: any[] = await collection.find({
+  const items: any[] = await col.find({
     start: {
       $lte: end,
     },
@@ -161,7 +172,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   let voices: any[] = [];
   if (duration < day * 2) {
-    voices = await db.collection("diarizations").find({
+    voices = await auth.db.collection('diarizations').find({
       start: {
         $lte: end,
       },
@@ -177,29 +188,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
     voices = mergeGap(voices, duration / 100);
   }
 
-  const transcripts: Transcript[] = [];
-//   if (false) {
-//     transcripts = (
-//       await db.collection("transcriptions").find({
-//         start: {
-//           $lte: end,
-//         },
-//         end: {
-//           $gte: start,
-//         },
-//       }, { sort: { start: 1 } })
-//     ).flatMap((t) => {
-//       const transcriptID = t._id.toHexString();
-//       return t.segments.map((s: any) =>
-//         ({
-//           ...s,
-//           start: new Date(t.start.getTime() + s.start * 1000),
-//           end: new Date(t.start.getTime() + s.end * 1000),
-//           transcriptID,
-//         }) as Transcript
-//       );
-//     }).sort((a, b) => a.start.getTime() - b.start.getTime());
-//   }
+  let transcripts: Transcript[] = [];
+  if (true) {
+    transcripts = (
+      await auth.db.collection("transcriptions").find({
+        start: {
+          $lte: end,
+        },
+        end: {
+          $gte: start,
+        },
+      }, { sort: { start: 1 }, limit: 20 })
+    ).flatMap((t) => {
+      const transcriptID = t._id.toHexString();
+      return t.segments.map((s: any) =>
+        ({
+          ...s,
+          start: new Date(t.start.getTime() + s.start * 1000),
+          end: new Date(t.start.getTime() + s.end * 1000),
+          transcriptID,
+        }) as Transcript
+      );
+    }).sort((a, b) => a.start.getTime() - b.start.getTime());
+  }
 
   return ({
     items: sources,
@@ -293,12 +304,6 @@ const TimelineAxis = ({
       `${month} ${day}`,
       year,
     ].filter(Boolean) as string[];
-
-    // if (spansMultipleYears && date.getMonth() === 0 && date.getDate() === 1 || i === 0) {
-    //     return [`${month} ${day}`, date.getFullYear().toString(), weekday];
-    // }
-
-    // return [`${month} ${day}`, weekday];
   };
 
   const labels = useMemo(() => {

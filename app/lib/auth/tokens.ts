@@ -1,42 +1,18 @@
 import { Buffer } from "node:buffer";
 import process from "node:process";
 import mongoose, { Schema, Types } from "mongoose";
-import { getRootDB } from "@/lib/mongo/core.ts";
-import { createSecretKey, createHash, randomUUID, randomBytes } from "node:crypto";
+import { createSecretKey, createHash, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
+import { Policy, APIKey } from "./core.server.ts";
 
 const OPEN_PREFIX_LENGTH = 16;
-
-export interface Policy {
-  resource: string;
-  effect: "allow" | "deny";
-  actions: string[];
-}
-
-interface APIKey {
-  hashedKey: string;
-  salt: string;
-  owner: string;
-  name: string;
-  openPrefix: string;
-  createdAt: Date;
-  isActive: boolean;
-  policies: Policy[];
-  _id?: Types.ObjectId;
-}
-
-const policySchema = new Schema<Policy>({
-  resource: { type: String, required: true },
-  effect: { type: String, required: true, enum: ["allow", "deny"] },
-  actions: { type: [String], required: true },
-});
 
 const apiKeySchema = new Schema<APIKey>({
   hashedKey: { type: String, required: true },
   salt: { type: String, required: true },
   owner: { type: String, required: true },
   name: { type: String, required: true },
-  policies: { type: [policySchema], required: true },
+  policies: { type: [Object], required: true },
   
   openPrefix: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
@@ -81,7 +57,6 @@ export async function generateApiKey(
 }
 
 export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
-  const db = await getRootDB();
   const keyDoc = await APIKeyModel.findOne({
     openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
     isActive: true,
@@ -114,7 +89,7 @@ export async function exchangeApiKeyForAccessToken(
   const jwt = await new SignJWT({
     owner: keyDoc.owner,
     keyId: keyDoc._id!.toString(),
-    policies: JSON.stringify(keyDoc.policies),
+    policies: JSON.parse(JSON.stringify(keyDoc.policies)),
   })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime(duration)

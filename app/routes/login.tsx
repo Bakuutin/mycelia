@@ -1,7 +1,7 @@
 import React from "react";
 import { ActionFunction, redirect } from "@remix-run/node";
 import { Form, useActionData } from "@remix-run/react";
-import { authCookie, verifyToken } from "@/lib/auth/core.ts";
+import { authCookie, verifyToken } from "../lib/auth/core.server.ts";
 
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -29,7 +29,7 @@ export const action: ActionFunction = async ({ request }) => {
   }
 
   return redirect("/", {
-    headers: { "Set-Cookie": await authCookie.serialize(token) },
+    headers: { "Set-Cookie": await authCookie.serialize(key) },
   });
 };
 

@@ -1,13 +1,12 @@
-import { Auth } from "@/lib/auth/core.ts";
+import type{ Auth } from "../auth/core.server.ts";
 import { permissionDenied } from "@/lib/auth/utils.ts";
-import { Scope, ScopeAction } from "@/lib/auth/scopes.ts";
 
 import sift from "sift";
 
 import {
-BulkWriteOptions,
-  Collection,
   Db,
+  BulkWriteOptions,
+  Collection,
   DeleteOptions,
   DeleteResult,
   Document,
@@ -23,88 +22,65 @@ BulkWriteOptions,
   WithId,
 } from "mongodb";
 
-import { getRootDB } from "@/lib/mongo/core.ts";
 
-export const getDB = async (auth: Auth): Promise<ScopedDB> => {
-  return new ScopedDB(await getRootDB(), auth);
-};
 
 export class ScopedDB {
-  private db: Db;
-  private auth: Auth;
-
-  constructor(db: Db, auth: Auth) {
-    this.db = db;
+  auth: Auth;
+  db: Db;
+  constructor(auth: Auth, db: Db) {
     this.auth = auth;
+    this.db = db;
   }
 
   collection<TSchema extends Document = Document>(
     collectionName: string,
   ): ScopedCollection<TSchema> {
-    if (!this.hasAccess(collectionName)) {
-      permissionDenied();
-    }
-
     const originalCollection = this.db.collection<TSchema>(collectionName);
     return new ScopedCollection<TSchema>(
       originalCollection,
-      this.auth.scopes[collectionName],
+      this.auth,
     );
-  }
-
-  hasAccess(collectionName: string): boolean {
-    return !!this.auth.scopes[collectionName];
   }
 }
 
 export class ScopedCollection<TSchema extends Document = Document> {
-  private collection: Collection<TSchema>;
-  private scope: Scope;
+  collection: Collection<TSchema>;
+  auth: Auth;
 
-  constructor(collection: Collection<TSchema>, scope: Scope) {
+  constructor(collection: Collection<TSchema>, auth: Auth) {
     this.collection = collection;
-    this.scope = scope;
+    this.auth = auth;
   }
 
-  private applyFilter(query: Filter<TSchema> = {}): Filter<TSchema> {
+  
+  getFilter(action: string, query: Filter<TSchema> = {}): Filter<TSchema> {
     return {
       $and: [
         query,
-        this.scope.filter,
+        ...this.auth.getFilters(`db:${this.collection.collectionName}`, action),
       ],
     } as Filter<TSchema>;
-  }
-
-  private checkAction(action: ScopeAction): void {
-    if (!this.scope.actions.includes(action)) {
-      permissionDenied();
-    }
   }
 
   async find(
     query: Filter<TSchema> = {},
     options?: FindOptions<TSchema>,
   ): Promise<WithId<TSchema>[]> {
-    this.checkAction("read");
-    const filteredQuery = this.applyFilter(query);
-    return this.collection.find(filteredQuery, options).toArray();
+    return this.collection.find(this.getFilter("read", query), options).toArray();
   }
 
   async findOne(
     query: Filter<TSchema> = {},
     options?: FindOptions<TSchema>,
   ): Promise<TSchema | null> {
-    this.checkAction("read");
-    const filteredQuery = this.applyFilter(query);
-    return this.collection.findOne(filteredQuery, options);
+    return this.collection.findOne(this.getFilter("read", query), options);
   }
 
   async insertOne(
     doc: OptionalUnlessRequiredId<TSchema>,
     options?: InsertOneOptions,
   ): Promise<InsertOneResult<TSchema>> {
-    this.checkAction("write");
-    const matcher = sift(this.scope.filter);
+    const matcher = sift(this.getFilter("create"));
     if (!matcher(doc)) {
       permissionDenied();
     }
@@ -116,8 +92,7 @@ export class ScopedCollection<TSchema extends Document = Document> {
     docs: OptionalUnlessRequiredId<TSchema>[],
     options?: BulkWriteOptions,
   ): Promise<InsertManyResult<TSchema>> {
-    this.checkAction("write");
-    const matcher = sift(this.scope.filter);
+    const matcher = sift(this.getFilter("create"));
     for (const doc of docs) {
       if (!matcher(doc)) {
         permissionDenied();
@@ -132,9 +107,8 @@ export class ScopedCollection<TSchema extends Document = Document> {
     update: UpdateFilter<TSchema> | Partial<TSchema>,
     options?: UpdateOptions,
   ): Promise<UpdateResult<TSchema>> {
-    this.checkAction("modify");
     // TODO: the update might modify the scope fields, but we don't check for that yet
-    return this.collection.updateMany(this.applyFilter(query), update, options);
+    return this.collection.updateMany(this.getFilter("update", query), update, options);
   }
 
   async updateOne(
@@ -142,29 +116,26 @@ export class ScopedCollection<TSchema extends Document = Document> {
     update: UpdateFilter<TSchema> | Partial<TSchema>,
     options?: UpdateOptions,
   ): Promise<UpdateResult<TSchema>> {
-    this.checkAction("modify");
-    return this.collection.updateOne(this.applyFilter(query), update, options);
+
+    // TODO: the update might modify the scope fields, but we don't check for that yet
+    return this.collection.updateOne(this.getFilter("update", query), update, options);
   }
 
   async deleteMany(
     query: Filter<TSchema>,
     options?: DeleteOptions,
   ): Promise<DeleteResult> {
-    this.checkAction("delete");
-    return this.collection.deleteMany(this.applyFilter(query), options);
+    return this.collection.deleteMany(this.getFilter("delete", query), options);
   }
 
   async deleteOne(
     query: Filter<TSchema>,
     options?: DeleteOptions,
   ): Promise<DeleteResult> {
-    this.checkAction("delete");
-    return this.collection.deleteOne(this.applyFilter(query), options);
+    return this.collection.deleteOne(this.getFilter("delete", query), options);
   }
 
   async countDocuments(query: Filter<TSchema> = {}): Promise<number> {
-    this.checkAction("read");
-    const filteredQuery = this.applyFilter(query);
-    return this.collection.countDocuments(filteredQuery);
+    return this.collection.countDocuments(this.getFilter("read", query));
   }
 }
