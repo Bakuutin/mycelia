@@ -8,7 +8,7 @@ export default async function handleRequest(
   responseStatusCode: number,
   responseHeaders: Headers,
   remixContext: EntryContext,
-  loadContext: AppLoadContext
+  loadContext: AppLoadContext,
 ) {
   const body = await renderToReadableStream(
     <RemixServer context={remixContext} url={request.url} />,
@@ -17,7 +17,7 @@ export default async function handleRequest(
         console.error(error);
         responseStatusCode = 500;
       },
-    }
+    },
   );
 
   if (isBotRequest(request.headers.get("user-agent"))) {

@@ -4,7 +4,7 @@ import { expandTypedObjects } from "./typed.ts";
 import { permissionDenied } from "./utils.ts";
 import process from "node:process";
 import { Types } from "mongoose";
-import { minimatch } from 'minimatch';
+import { minimatch } from "minimatch";
 import { ScopedDB } from "../mongo/scoped.server.ts";
 import { getRootDB } from "../mongo/core.server.ts";
 export const authCookie = createCookie("token", {
@@ -17,16 +17,16 @@ type Rule = string & { __brand: "Rule" };
 type BasePolicy = {
   resource: Rule;
   action: Rule;
-}
+};
 
 type SimplePolicy = BasePolicy & {
   effect: "allow" | "deny";
-}
+};
 
 type FilterPolicy = BasePolicy & {
   filter: any;
   effect: "filter";
-}
+};
 
 export type Policy = SimplePolicy | FilterPolicy;
 
@@ -45,15 +45,13 @@ export interface APIKey {
 const match = (policy: Policy, resource: string, action: string): boolean => {
   // TODO: Cache the compiled regex for performance
   // console.log(action, resource, JSON.stringify(policy), minimatch(resource, policy.resource))
-  return minimatch(action, policy.action)// && minimatch(resource, policy.resource)
-}
-
+  return minimatch(action, policy.action); // && minimatch(resource, policy.resource)
+};
 
 export class Auth {
-  options: any
+  options: any;
   policies: Policy[];
   db: ScopedDB;
-
 
   constructor(options: any) {
     this.options = options;
@@ -63,27 +61,26 @@ export class Auth {
 
   hasAccess(resource: string, action: string): boolean {
     let isAllowed = false;
-    
+
     for (const policy of this.policies) {
       if (!match(policy, resource, action)) continue;
-      
-      
+
       if (policy.effect === "deny" || policy.effect === "filter") {
         return false;
       }
-      
+
       if (policy.effect === "allow") {
         isAllowed = true; // can be overridden by a deny policy later
       }
     }
-    
+
     return isAllowed;
   }
 
   getFilters(resource: string, action: string): any[] {
     const filters: any[] = [];
     let hasAnyPolicy = false;
-    
+
     for (const policy of this.policies) {
       if (!match(policy, resource, action)) continue;
 
@@ -101,7 +98,7 @@ export class Auth {
     if (!hasAnyPolicy) {
       permissionDenied();
     }
-    
+
     return filters;
   }
 }
@@ -110,12 +107,12 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
   try {
     const { payload } = await jwtVerify(
       token,
-      new TextEncoder().encode(process.env.SECRET_KEY)
+      new TextEncoder().encode(process.env.SECRET_KEY),
     );
     if (typeof payload === "string") {
       permissionDenied();
     }
-    return new Auth({...expandTypedObjects(payload), db: await getRootDB()});
+    return new Auth({ ...expandTypedObjects(payload), db: await getRootDB() });
   } catch (error) {
     return null;
   }

@@ -13,7 +13,10 @@ import {
 } from "@/components/ui/card.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
-import { exchangeApiKeyForAccessToken, verifyApiKey } from "@/lib/auth/tokens.ts";
+import {
+  exchangeApiKeyForAccessToken,
+  verifyApiKey,
+} from "@/lib/auth/tokens.ts";
 
 export const action: ActionFunction = async ({ request }) => {
   const formData = await request.formData();
@@ -51,13 +54,15 @@ export default function Login() {
               <Form method="post">
                 <div className="flex flex-col gap-6">
                   <div className="grid gap-2">
-                    <Label htmlFor="token">{
-                      actionData?.error  ? (
-                        <span className="text-red-500">
-                          {actionData.error}
-                        </span>
-                      ) : "Token"
-                      }</Label>
+                    <Label htmlFor="token">
+                      {actionData?.error
+                        ? (
+                          <span className="text-red-500">
+                            {actionData.error}
+                          </span>
+                        )
+                        : "Token"}
+                    </Label>
                     <Input
                       id="token"
                       type="password"

@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer";
 import process from "node:process";
 import mongoose, { Schema, Types } from "mongoose";
-import { createSecretKey, createHash, randomBytes } from "node:crypto";
+import { createHash, createSecretKey, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
-import { Policy, APIKey } from "./core.server.ts";
+import { APIKey, Policy } from "./core.server.ts";
 
 const OPEN_PREFIX_LENGTH = 16;
 
@@ -13,14 +13,15 @@ const apiKeySchema = new Schema<APIKey>({
   owner: { type: String, required: true },
   name: { type: String, required: true },
   policies: { type: [Object], required: true },
-  
+
   openPrefix: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
   isActive: { type: Boolean, default: true },
 });
 
-const APIKeyModel = mongoose.models.APIKey || mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
-  
+const APIKeyModel = mongoose.models.APIKey ||
+  mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
+
 const key = createSecretKey(
   Buffer.from(process.env.SECRET_KEY as string, "utf-8"),
 );

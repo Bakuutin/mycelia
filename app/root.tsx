@@ -10,7 +10,6 @@ import type { LinksFunction } from "@remix-run/deno";
 
 import "./tailwind.css";
 
-
 export const links: LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   {

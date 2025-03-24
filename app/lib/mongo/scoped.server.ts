@@ -1,12 +1,12 @@
-import type{ Auth } from "../auth/core.server.ts";
+import type { Auth } from "../auth/core.server.ts";
 import { permissionDenied } from "@/lib/auth/utils.ts";
 
 import sift from "sift";
 
 import {
-  Db,
   BulkWriteOptions,
   Collection,
+  Db,
   DeleteOptions,
   DeleteResult,
   Document,
@@ -21,8 +21,6 @@ import {
   UpdateResult,
   WithId,
 } from "mongodb";
-
-
 
 export class ScopedDB {
   auth: Auth;
@@ -52,7 +50,6 @@ export class ScopedCollection<TSchema extends Document = Document> {
     this.auth = auth;
   }
 
-  
   getFilter(action: string, query: Filter<TSchema> = {}): Filter<TSchema> {
     return {
       $and: [
@@ -66,7 +63,8 @@ export class ScopedCollection<TSchema extends Document = Document> {
     query: Filter<TSchema> = {},
     options?: FindOptions<TSchema>,
   ): Promise<WithId<TSchema>[]> {
-    return this.collection.find(this.getFilter("read", query), options).toArray();
+    return this.collection.find(this.getFilter("read", query), options)
+      .toArray();
   }
 
   async findOne(
@@ -108,7 +106,11 @@ export class ScopedCollection<TSchema extends Document = Document> {
     options?: UpdateOptions,
   ): Promise<UpdateResult<TSchema>> {
     // TODO: the update might modify the scope fields, but we don't check for that yet
-    return this.collection.updateMany(this.getFilter("update", query), update, options);
+    return this.collection.updateMany(
+      this.getFilter("update", query),
+      update,
+      options,
+    );
   }
 
   async updateOne(
@@ -116,9 +118,12 @@ export class ScopedCollection<TSchema extends Document = Document> {
     update: UpdateFilter<TSchema> | Partial<TSchema>,
     options?: UpdateOptions,
   ): Promise<UpdateResult<TSchema>> {
-
     // TODO: the update might modify the scope fields, but we don't check for that yet
-    return this.collection.updateOne(this.getFilter("update", query), update, options);
+    return this.collection.updateOne(
+      this.getFilter("update", query),
+      update,
+      options,
+    );
   }
 
   async deleteMany(

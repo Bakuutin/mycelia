@@ -140,7 +140,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (duration > day * 300) {
     gap = day * 10;
   }
-  
+
   // console.log(await auth.db.collection("source_files").findOne({}))
   // return {
   //   items: [],
@@ -152,7 +152,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // }
   const col = auth.db.collection("source_files");
   // console.log(col);
-  const res =  await col.find({}, {limit: 1});
+  const res = await col.find({}, { limit: 1 });
   // console.log(155, Object.keys(res));
 
   const items: any[] = await col.find({
@@ -172,7 +172,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   let voices: any[] = [];
   if (duration < day * 2) {
-    voices = await auth.db.collection('diarizations').find({
+    voices = await auth.db.collection("diarizations").find({
       start: {
         $lte: end,
       },
@@ -188,29 +188,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
     voices = mergeGap(voices, duration / 100);
   }
 
-  let transcripts: Transcript[] = [];
-  if (true) {
-    transcripts = (
-      await auth.db.collection("transcriptions").find({
-        start: {
-          $lte: end,
-        },
-        end: {
-          $gte: start,
-        },
-      }, { sort: { start: 1 }, limit: 20 })
-    ).flatMap((t) => {
-      const transcriptID = t._id.toHexString();
-      return t.segments.map((s: any) =>
-        ({
-          ...s,
-          start: new Date(t.start.getTime() + s.start * 1000),
-          end: new Date(t.start.getTime() + s.end * 1000),
-          transcriptID,
-        }) as Transcript
-      );
-    }).sort((a, b) => a.start.getTime() - b.start.getTime());
-  }
+  const transcripts = (
+    await auth.db.collection("transcriptions").find({
+      start: {
+        $lte: end,
+      },
+      end: {
+        $gte: start,
+      },
+    }, { sort: { start: 1 }, limit: 20 })
+  ).flatMap((t) => {
+    const transcriptID = t._id.toHexString();
+    return t.segments.map((s: any) =>
+      ({
+        ...s,
+        start: new Date(t.start.getTime() + s.start * 1000),
+        end: new Date(t.start.getTime() + s.end * 1000),
+        transcriptID,
+      }) as Transcript
+    );
+  }).sort((a, b) => a.start.getTime() - b.start.getTime());
 
   return ({
     items: sources,
