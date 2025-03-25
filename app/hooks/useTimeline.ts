@@ -44,7 +44,7 @@ export function useTimeline(
 
     resizeObserver.observe(containerRef.current);
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [containerRef]);
 
   const timeScale = useMemo(() => {
     return d3.scaleTime()

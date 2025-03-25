@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import * as d3 from "d3";
-import { Label, generateGregorianLabels } from "./formatters/gregorian";
-import { generateSILabels } from "./formatters/si";
+import { Label } from "./formatters/types";
+import gregorianFormatter from "./formatters/gregorian";
 
 interface TimelineAxisProps {
   scale: d3.ScaleTime<number, number>;
@@ -73,10 +73,13 @@ export const TimelineAxis = ({
   transform,
   height,
   width,
-  formatter = generateSILabels,
+  formatter = gregorianFormatter,
 }: TimelineAxisProps) => {
   const labels = useMemo(() => formatter(scale, transform, width), [scale, transform, width, formatter]);
   const [start, end] = scale.range();
+
+
+  // TODO: Add Big Bang to the timeline 3.787 ± 0.020 billion years ago
 
   return (
     <g transform={`translate(0,${height})`}>

@@ -1,34 +1,21 @@
 import * as d3 from "d3";
 import React from "react";
-import { Label } from "./gregorian";
+import { Label } from "./types.ts";
 
 const SI_PREFIXES = [
-  { value: 1e-30, symbol: "qs" }, // quectosecond
-  { value: 1e-27, symbol: "rs" }, // rontosecond
-  { value: 1e-24, symbol: "ys" }, // yoctosecond
-  { value: 1e-21, symbol: "zs" }, // zeptosecond
-  { value: 1e-18, symbol: "as" }, // attosecond
-  { value: 1e-15, symbol: "fs" }, // femtosecond
-  { value: 1e-12, symbol: "ps" }, // picosecond
-  { value: 1e-9, symbol: "ns" },  // nanosecond
-  { value: 1e-6, symbol: "μs" },  // microsecond
-  { value: 1e-3, symbol: "ms" },  // millisecond
-  { value: 1e-2, symbol: "cs" },  // centisecond
-  { value: 1e-1, symbol: "ds" },  // decisecond
-  { value: 1, symbol: "s" },      // second
-  // { value: 1e1, symbol: "das" },  // decasecond
-  // { value: 1e2, symbol: "hs" },   // hectosecond
-  { value: 1e3, symbol: "ks" },   // kilosecond
-  { value: 1e6, symbol: "Ms" },   // megasecond
-  { value: 1e9, symbol: "Gs" },   // gigasecond
-  { value: 1e12, symbol: "Ts" },  // terasecond
-  { value: 1e15, symbol: "Ps" },  // petasecond
-  { value: 1e18, symbol: "Es" },  // exasecond
-  { value: 1e21, symbol: "Zs" },  // zettasecond
-  { value: 1e24, symbol: "Ys" },  // yottasecond
-  { value: 1e27, symbol: "Rs" },  // ronnasecond
-  { value: 1e30, symbol: "Qs" },  // quettasecond
-].reverse(); // Reverse to find largest prefix first
+  { value: 1e-3, symbol: "ms", power: -3, unit: "millisecond" },
+  { value: 1,    symbol: "s", power: 0, unit: "second" },
+  { value: 1e3, symbol: "ks", power: 3, unit: "kilosecond" }, 
+  { value: 1e6, symbol: "Ms", power: 6, unit: "megasecond" }, 
+  { value: 1e9, symbol: "Gs", power: 9, unit: "gigasecond" }, 
+  { value: 1e12, symbol: "Ts", power: 12, unit: "terasecond" },
+  { value: 1e15, symbol: "Ps", power: 15, unit: "petasecond" },
+  { value: 1e18, symbol: "Es", power: 18, unit: "exasecond" },
+  { value: 1e21, symbol: "Zs", power: 21, unit: "zettasecond" },
+  { value: 1e24, symbol: "Ys", power: 24, unit: "yottasecond" },
+  { value: 1e27, symbol: "Rs", power: 27, unit: "ronnasecond" },
+  { value: 1e30, symbol: "Qs", power: 30, unit: "quettasecond" },
+].reverse();
 
 const formatDuration = (ms: number): React.ReactNode[] => {
   const isNegative = ms < 0;

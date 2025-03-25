@@ -73,6 +73,7 @@ const TimelinePage = () => {
     height,
   } = useTimeline({ items, voices, start, end, transcripts, gap: 0 }, handleDateRangeChange);
 
+  
   return (
     <>
       <div className="p-4 gap-4 flex flex-col">

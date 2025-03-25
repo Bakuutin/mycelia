@@ -1,18 +1,8 @@
 import * as d3 from "d3";
 import React from "react";
+import { Tick, Label } from "./types.ts";
 
 const day = 1000 * 60 * 60 * 24;
-
-interface Tick {
-  value: Date;
-  xOffset: number;
-}
-
-export interface Label {
-  value: Date;
-  xOffset: number;
-  segments: React.ReactNode[];
-}
 
 const checkAllJanFirst = (ticks: Tick[]): boolean => {
   return ticks.length > 0 && ticks.every(({ value }) => value.getMonth() === 0 && value.getDate() === 1);
@@ -82,7 +72,7 @@ const formatLabel = (date: Date, allJanFirst: boolean, hasTime: boolean, hasWeek
   ].filter(Boolean) as React.ReactNode[];
 };
 
-export const generateGregorianLabels = (
+const generateGregorianLabels = (
   scale: d3.ScaleTime<number, number>,
   transform: d3.ZoomTransform,
   width: number
@@ -113,4 +103,6 @@ export const generateGregorianLabels = (
     prev = fullSegments;
     return result;
   });
-}; 
+};
+
+export default generateGregorianLabels; 
