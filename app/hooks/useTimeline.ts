@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import _ from "lodash";
-import { type LoaderData } from "../types/timeline";
+import { type LoaderData } from "../types/timeline.ts";
 
 interface TimelineDimensions {
   width: number;
@@ -16,7 +16,7 @@ interface TimelineDimensions {
 
 export function useTimeline(
   data: LoaderData,
-  onDateRangeChange: (start: Date, end: Date) => void
+  onDateRangeChange: (start: Date, end: Date) => void,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState<TimelineDimensions>({
@@ -26,8 +26,10 @@ export function useTimeline(
   });
   const [transform, setTransform] = useState(d3.zoomIdentity);
 
-  const width = dimensions.width - dimensions.margin.left - dimensions.margin.right;
-  const height = dimensions.height - dimensions.margin.top - dimensions.margin.bottom;
+  const width = dimensions.width - dimensions.margin.left -
+    dimensions.margin.right;
+  const height = dimensions.height - dimensions.margin.top -
+    dimensions.margin.bottom;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -35,7 +37,7 @@ export function useTimeline(
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (entry) {
-        setDimensions(prev => ({
+        setDimensions((prev) => ({
           ...prev,
           width: entry.contentRect.width,
         }));
@@ -56,7 +58,7 @@ export function useTimeline(
     _.debounce((start: Date, end: Date) => {
       onDateRangeChange(start, end);
     }, 300),
-    [onDateRangeChange]
+    [onDateRangeChange],
   );
 
   const handleZoom = useCallback(
@@ -69,7 +71,7 @@ export function useTimeline(
       setTransform(event.transform);
       fetchMore(start, end);
     },
-    [timeScale, fetchMore]
+    [timeScale, fetchMore],
   );
 
   const zoom = useMemo(() => {
@@ -91,4 +93,4 @@ export function useTimeline(
     width,
     height,
   };
-} 
+}

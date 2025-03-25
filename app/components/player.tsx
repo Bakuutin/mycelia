@@ -3,8 +3,6 @@ import { useFetcher } from "@remix-run/react";
 import { create } from "zustand";
 import _ from "lodash";
 
-const DEFAULT_DATE = new Date();
-
 export interface Chunk {
   start: Date;
   buffer: AudioBuffer;
@@ -24,6 +22,8 @@ export interface DateStore {
   resetDate: (date: Date | null) => void;
   appendChunks: (chunks: Chunk[]) => void;
   popChunk: () => Promise<Chunk | null>;
+  setVolume: (volume: number) => void;
+  update: (data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>)) => void;
 }
 
 export const useDateStore = create<DateStore>((set) => ({
@@ -61,6 +61,7 @@ export const useDateStore = create<DateStore>((set) => ({
   ) {
     set(data);
   },
+  setVolume: (volume: number) => set({ volume }),
 }));
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
@@ -79,7 +80,8 @@ export const AudioPlayer: React.FC = () => {
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [source, setSource] = useState<AudioBufferSourceNode | null>(null);
   const fetcher = useFetcher();
-  const preloadLimit = 2; // Number of segments to preload
+  const preloadLimit = 20; // Number of segments to preload
+  const [gainNode, setGainNode] = useState<GainNode | null>(null);
 
   const ensureAudioContext = () => {
     if (!audioContext) {
@@ -91,10 +93,9 @@ export const AudioPlayer: React.FC = () => {
 
   const {
     isPlaying,
-    setIsPlaying,
+    volume,
     currentDate,
     updateDate,
-    resetDate,
     appendChunks,
     chunks,
     popChunk,
@@ -109,6 +110,8 @@ export const AudioPlayer: React.FC = () => {
     if (fetcher.state !== "idle") return;
     const prev = chunks[chunks.length - 1];
     const start = prev ? prev.start : currentDate;
+    if (!start) return;
+  
     const lastId = prev ? prev._id : null;
     fetcher.load(
       `/data/audio?start=${start.toISOString()}&limit=${preloadLimit}${
@@ -140,6 +143,22 @@ export const AudioPlayer: React.FC = () => {
 
   const isBufferSourceCreating = useRef(false);
 
+  useEffect(() => {
+    if (audioContext && !gainNode) {
+      const newGainNode = audioContext.createGain();
+      newGainNode.gain.value = 1; // Default gain value
+      newGainNode.connect(audioContext.destination);
+      setGainNode(newGainNode);
+    }
+  }, [audioContext, gainNode]);
+
+  useEffect(() => {
+    if (gainNode) {
+      gainNode.gain.value = volume;
+    }
+  }, [volume, gainNode]);
+
+
   const createBufferSource = async () => {
     if (
       !audioContext || chunks.length === 0 || isBufferSourceCreating.current
@@ -151,10 +170,11 @@ export const AudioPlayer: React.FC = () => {
     setSource(bufferSource);
 
     const chunk = await popChunk();
+    if (!chunk) return; // Handle null chunk
     console.log("Playing", chunk.start.toISOString());
     updateDate(chunk.start);
     bufferSource.buffer = chunk.buffer;
-    bufferSource.connect(audioContext.destination);
+    bufferSource.connect(gainNode!);
 
     bufferSource.start();
 

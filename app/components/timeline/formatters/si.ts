@@ -4,10 +4,10 @@ import { Label } from "./types.ts";
 
 const SI_PREFIXES = [
   { value: 1e-3, symbol: "ms", power: -3, unit: "millisecond" },
-  { value: 1,    symbol: "s", power: 0, unit: "second" },
-  { value: 1e3, symbol: "ks", power: 3, unit: "kilosecond" }, 
-  { value: 1e6, symbol: "Ms", power: 6, unit: "megasecond" }, 
-  { value: 1e9, symbol: "Gs", power: 9, unit: "gigasecond" }, 
+  { value: 1, symbol: "s", power: 0, unit: "second" },
+  { value: 1e3, symbol: "ks", power: 3, unit: "kilosecond" },
+  { value: 1e6, symbol: "Ms", power: 6, unit: "megasecond" },
+  { value: 1e9, symbol: "Gs", power: 9, unit: "gigasecond" },
   { value: 1e12, symbol: "Ts", power: 12, unit: "terasecond" },
   { value: 1e15, symbol: "Ps", power: 15, unit: "petasecond" },
   { value: 1e18, symbol: "Es", power: 18, unit: "exasecond" },
@@ -26,17 +26,19 @@ const formatDuration = (ms: number): React.ReactNode[] => {
   if (ms === 0) {
     return ["0"];
   }
-  
+
   // Find all non-zero units using modulo
-  SI_PREFIXES.forEach(prefix => {
+  SI_PREFIXES.forEach((prefix) => {
     const value = remaining / prefix.value;
     if (value >= 1) {
       const segment = `${Math.floor(value)}${prefix.symbol}`;
-      segments.push(isNegative && segments.length === 0 ? `-${segment}` : segment);
+      segments.push(
+        isNegative && segments.length === 0 ? `-${segment}` : segment,
+      );
       remaining = remaining % prefix.value;
     }
   });
-  
+
   return segments;
 };
 
@@ -44,20 +46,20 @@ const generateTicks = (start: number, end: number, width: number) => {
   const range = end - start;
   const count = Math.ceil(width / 227);
   let step = Math.pow(10, Math.floor(Math.log10(range / count)));
-  
+
   const ticksPerPx = (end - start) / (step * width);
-  if (ticksPerPx > 1/60) {
+  if (ticksPerPx > 1 / 60) {
     step *= 10;
   }
-  
+
   const ticks: number[] = [];
   let current = Math.floor(start / step) * step;
-  
+
   while (current <= end) {
     ticks.push(current);
     current += step;
   }
-  
+
   // Skip first tick if it's too close to the start
   if (ticks.length > 0) {
     const firstTickOffset = (ticks[0] - start) / range * width;
@@ -65,21 +67,21 @@ const generateTicks = (start: number, end: number, width: number) => {
       ticks.shift();
     }
   }
-  
+
   return ticks;
 };
 
 export const generateSILabels = (
   scale: d3.ScaleTime<number, number>,
   transform: d3.ZoomTransform,
-  width: number
+  width: number,
 ): Label[] => {
   const newScale = transform.rescaleX(scale);
   const [start, end] = newScale.domain();
   const tickValues = generateTicks(start.getTime(), end.getTime(), width);
-  
+
   let prevSegments: React.ReactNode[] = [];
-  
+
   return tickValues.map((time) => {
     const segments = formatDuration(time);
     const result = {
@@ -90,4 +92,4 @@ export const generateSILabels = (
     prevSegments = segments;
     return result;
   });
-}; 
+};

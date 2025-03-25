@@ -41,6 +41,34 @@ export class ScopedDB {
   }
 }
 
+const safeReadOperators = new Set([
+  "$match",
+  "$group",
+  "$sort",
+  "$limit",
+  "$skip",
+  "$count",
+  "$lookup",
+  "$facet",
+  "$unwind",
+  "$project",
+  "$addFields",
+  "$sample",
+  "$search",
+]);
+
+function determinePipelineScope(pipeline: any[]): "read" | "update" {
+  for (const stage of pipeline) {
+    for (const key of Object.keys(stage)) {
+      if (!safeReadOperators.has(key)) {
+        return "update";
+      }
+    }
+  }
+
+  return "read";
+}
+
 export class ScopedCollection<TSchema extends Document = Document> {
   collection: Collection<TSchema>;
   auth: Auth;
@@ -78,7 +106,7 @@ export class ScopedCollection<TSchema extends Document = Document> {
     doc: OptionalUnlessRequiredId<TSchema>,
     options?: InsertOneOptions,
   ): Promise<InsertOneResult<TSchema>> {
-    const matcher = sift(this.getFilter("create"));
+    const matcher = sift(this.getFilter("create") as any);
     if (!matcher(doc)) {
       permissionDenied();
     }
@@ -90,7 +118,7 @@ export class ScopedCollection<TSchema extends Document = Document> {
     docs: OptionalUnlessRequiredId<TSchema>[],
     options?: BulkWriteOptions,
   ): Promise<InsertManyResult<TSchema>> {
-    const matcher = sift(this.getFilter("create"));
+    const matcher = sift(this.getFilter("create") as any);
     for (const doc of docs) {
       if (!matcher(doc)) {
         permissionDenied();
@@ -142,5 +170,12 @@ export class ScopedCollection<TSchema extends Document = Document> {
 
   async countDocuments(query: Filter<TSchema> = {}): Promise<number> {
     return this.collection.countDocuments(this.getFilter("read", query));
+  }
+
+  async aggregate(pipeline: any[]): Promise<any[]> {
+    return this.collection.aggregate([
+      { $match: this.getFilter(determinePipelineScope(pipeline)) },
+      ...pipeline,
+    ]).toArray();
   }
 }

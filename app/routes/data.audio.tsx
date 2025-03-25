@@ -16,13 +16,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const startDate = new Date(startParam);
-  const limit = 10;
+  let limit: number = parseInt(url.searchParams.get("limit")!) || 10;
   if (isNaN(startDate.getTime())) {
     throw new Response("Invalid start parameter", { status: 400 });
   }
 
   if (isNaN(limit) || limit <= 0) {
-    throw new Response("Invalid limit parameter", { status: 400 });
+    limit = 10;
   }
 
   const collection = auth.db.collection("audio_chunks");

@@ -9,4 +9,4 @@ export interface Label {
   value: Date;
   xOffset: number;
   segments: React.ReactNode[];
-} 
+}

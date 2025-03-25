@@ -1,11 +1,12 @@
 import * as d3 from "d3";
 import React from "react";
-import { Tick, Label } from "./types.ts";
+import { Label, Tick } from "./types.ts";
 
 const day = 1000 * 60 * 60 * 24;
 
 const checkAllJanFirst = (ticks: Tick[]): boolean => {
-  return ticks.length > 0 && ticks.every(({ value }) => value.getMonth() === 0 && value.getDate() === 1);
+  return ticks.length > 0 &&
+    ticks.every(({ value }) => value.getMonth() === 0 && value.getDate() === 1);
 };
 
 const checkHasTime = (ticks: Tick[]): boolean => {
@@ -29,14 +30,18 @@ const checkHasMilliseconds = (ticks: Tick[]): boolean => {
   return ticks.some(({ value }) => value.getMilliseconds() !== 0);
 };
 
-const formatTime = (date: Date, hasSeconds: boolean, hasMilliseconds: boolean): string => {
+const formatTime = (
+  date: Date,
+  hasSeconds: boolean,
+  hasMilliseconds: boolean,
+): string => {
   if (hasMilliseconds) {
     return date.toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
-    }) + `.${date.getMilliseconds().toString().padStart(3, '0')}`;
+    }) + `.${date.getMilliseconds().toString().padStart(3, "0")}`;
   }
 
   return hasSeconds
@@ -53,7 +58,14 @@ const formatTime = (date: Date, hasSeconds: boolean, hasMilliseconds: boolean): 
     });
 };
 
-const formatLabel = (date: Date, allJanFirst: boolean, hasTime: boolean, hasWeekdays: boolean, hasSeconds: boolean, hasMilliseconds: boolean): React.ReactNode[] => {
+const formatLabel = (
+  date: Date,
+  allJanFirst: boolean,
+  hasTime: boolean,
+  hasWeekdays: boolean,
+  hasSeconds: boolean,
+  hasMilliseconds: boolean,
+): React.ReactNode[] => {
   const year = date.getFullYear().toString();
 
   if (allJanFirst) {
@@ -75,7 +87,7 @@ const formatLabel = (date: Date, allJanFirst: boolean, hasTime: boolean, hasWeek
 const generateGregorianLabels = (
   scale: d3.ScaleTime<number, number>,
   transform: d3.ZoomTransform,
-  width: number
+  width: number,
 ): Label[] => {
   const newScale = transform.rescaleX(scale);
   const tickValues = newScale.ticks(Math.ceil(width / 227));
@@ -92,7 +104,14 @@ const generateGregorianLabels = (
 
   let prev: React.ReactNode[] | null = null;
   return ticks.map(({ value, xOffset }) => {
-    const fullSegments = formatLabel(value, allJanFirst, hasTime, hasWeekdays, hasSeconds, hasMilliseconds);
+    const fullSegments = formatLabel(
+      value,
+      allJanFirst,
+      hasTime,
+      hasWeekdays,
+      hasSeconds,
+      hasMilliseconds,
+    );
     const result = {
       value,
       xOffset,
@@ -105,4 +124,4 @@ const generateGregorianLabels = (
   });
 };
 
-export default generateGregorianLabels; 
+export default generateGregorianLabels;

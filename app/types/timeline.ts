@@ -3,7 +3,9 @@ import { ObjectId } from "mongodb";
 
 export type Timestamp = bigint & { readonly __brand: unique symbol };
 
-export const zTimestamp = z.coerce.bigint().transform((val) => val as Timestamp);
+export const zTimestamp = z.coerce.bigint().transform((val) =>
+  val as Timestamp
+);
 
 export const zTimelineItem = z.object({
   id: z.string(),
@@ -64,4 +66,4 @@ export interface TimelineDimensions {
     bottom: number;
     left: number;
   };
-} 
+}

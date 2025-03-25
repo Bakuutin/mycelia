@@ -1,6 +1,12 @@
 import { ObjectId } from "mongodb";
 import _ from "lodash";
-import { zQueryParams, zLoaderData, type StartEnd, type LoaderData, type Timestamp } from "../types/timeline";
+import {
+  type LoaderData,
+  type StartEnd,
+  type Timestamp,
+  zLoaderData,
+  zQueryParams,
+} from "../types/timeline.ts";
 
 const day = 1000 * 60 * 60 * 24;
 const year = day * 365;
@@ -14,7 +20,7 @@ export function getDaysAgo(n: number) {
 export function mergeGap<T extends StartEnd>(
   items: T[],
   gap: number,
-  updateKey?: (prev: T, item: T) => T
+  updateKey?: (prev: T, item: T) => T,
 ): T[] {
   if (gap <= 0 || items.length === 0) {
     return items;
@@ -45,7 +51,7 @@ export function mergeGap<T extends StartEnd>(
 export async function fetchTimelineData(
   db: any,
   start: Timestamp,
-  end: Timestamp
+  end: Timestamp,
 ): Promise<LoaderData> {
   const startDate = new Date(Number(start));
   const endDate = new Date(Number(end));
@@ -80,15 +86,18 @@ export async function fetchTimelineData(
       start: { $lte: queryEnd },
       end: { $gte: queryStart },
     }, { sort: { start: 1 } });
-    
+
     voices = voiceItems.map((voice: StartEnd) => ({
       start: voice.start,
       end: voice.end,
       _id: voice._id.toHexString(),
     }));
-    
-    voices = mergeGap(voices.map(v => ({ ...v, _id: new ObjectId(v._id) })), duration / 100)
-      .map(v => ({ ...v, _id: v._id.toHexString() }));
+
+    voices = mergeGap(
+      voices.map((v) => ({ ...v, _id: new ObjectId(v._id) })),
+      duration / 100,
+    )
+      .map((v) => ({ ...v, _id: v._id.toHexString() }));
   }
 
   const transcripts = (
@@ -114,4 +123,4 @@ export async function fetchTimelineData(
     voices,
     transcripts,
   };
-} 
+}

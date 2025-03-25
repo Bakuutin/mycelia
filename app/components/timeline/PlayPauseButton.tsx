@@ -1,10 +1,25 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 import { useDateStore } from "@/components/player.tsx";
 
 export const PlayPauseButton = () => {
   const { isPlaying, toggleIsPlaying } = useDateStore();
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'Space') {
+        event.preventDefault();
+        toggleIsPlaying();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [toggleIsPlaying]);
+
   return (
     <Button onClick={() => toggleIsPlaying()}>
       {isPlaying ? <Pause /> : <Play />}

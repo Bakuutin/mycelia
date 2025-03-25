@@ -35,7 +35,7 @@ export const VoiceRow = ({
               y={0}
               width={width}
               height={10}
-              className="fill-chart-2"
+              className="fill-chart-3"
             />
           );
         })}
