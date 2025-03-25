@@ -77,6 +77,10 @@ const TimelinePage = () => {
   return (
     <>
       <div className="p-4 gap-4 flex flex-col">
+
+      <div className="flex flex-row">
+          <PlayPauseButton />
+        </div>
         <div
           ref={containerRef}
           style={{ height: height + dimensions.margin.top + dimensions.margin.bottom }}
@@ -93,6 +97,7 @@ const TimelinePage = () => {
               className="w-full h-full overflow-x-scroll"
               width={width + dimensions.margin.left + dimensions.margin.right}
               height={height + dimensions.margin.top + dimensions.margin.bottom}
+              style={{ backgroundColor: 'purple' }}
               onClick={(event) => {
                 const svgElement = event.currentTarget;
                 const rect = svgElement.getBoundingClientRect();
@@ -128,15 +133,12 @@ const TimelinePage = () => {
                 <TimelineAxis
                   scale={timeScale}
                   transform={transform}
-                  height={height - dimensions.margin.top}
+                  height={height}
                   width={width}
                 />
               </g>
             </svg>
           )}
-        </div>
-        <div className="flex flex-row">
-          <PlayPauseButton />
         </div>
       </div>
 

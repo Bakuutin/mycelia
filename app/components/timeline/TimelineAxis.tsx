@@ -83,7 +83,6 @@ export const TimelineAxis = ({
 
   return (
     <g transform={`translate(0,${height})`}>
-      <AxisLine start={start} end={end} height={height} />
       <TickLabels labels={labels} />
     </g>
   );
