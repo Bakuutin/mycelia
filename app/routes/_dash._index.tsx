@@ -2,7 +2,7 @@ import React, { Suspense } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import { zLoaderData, type LoaderData, zTimestamp, type Timestamp } from "../types/timeline";
-import { CursorLine } from "@/components/cursorLine.tsx";
+import { CursorLine } from "@/components/timeline/cursorLine.tsx";
 import { AudioPlayer, useDateStore } from "@/components/player.tsx";
 import { TimelineAxis } from "@/components/timeline/TimelineAxis.tsx";
 import { TimelineItems } from "@/components/timeline/TimelineItems.tsx";

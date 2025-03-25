@@ -61,17 +61,21 @@ export function useTimeline(
 
   const handleZoom = useCallback(
     (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
-      setTransform(event.transform);
       const newScale = event.transform.rescaleX(timeScale);
       const [start, end] = newScale.domain();
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return;
+      }
+      setTransform(event.transform);
       fetchMore(start, end);
     },
     [timeScale, fetchMore]
   );
 
   const zoom = useMemo(() => {
-    return d3.zoom()
-      .on("zoom", handleZoom);
+    const zoom = d3.zoom();
+    zoom.on("zoom", handleZoom);
+    return zoom;
   }, [width, height, handleZoom]);
 
   useEffect(() => {
