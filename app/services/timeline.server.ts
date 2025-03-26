@@ -105,14 +105,22 @@ export async function fetchTimelineData(
       start: { $lte: queryEnd },
       end: { $gte: queryStart },
     }, { sort: { start: 1 }, limit: 20 })
-  ).flatMap((t: any) => {
-    const transcriptID = t._id.toHexString();
-    return t.segments.map((s: any) => ({
-      ...s,
-      start: new Date(t.start.getTime() + s.start * 1000),
-      end: new Date(t.start.getTime() + s.end * 1000),
-      transcriptID,
-    }));
+  ).map((t: any) => {
+    return {
+      start: new Date(t.start.getTime() + t.segments[0].start * 1000),
+      end: new Date(
+        t.start.getTime() + t.segments[t.segments.length - 1].end * 1000,
+      ),
+      text: t.text,
+      id: t._id.toHexString(),
+    };
+
+    // return t.segments.map((s: any) => ({
+    //   ...s,
+    //   start: new Date(t.start.getTime() + s.start * 1000),
+    //   end: new Date(t.start.getTime() + s.end * 1000),
+    //   text:
+    // }));
   }).sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
 
   return {

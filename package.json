@@ -4,11 +4,8 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "build": "remix vite:build",
-    "dev": "remix vite:dev",
-    "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
-    "start": "remix-serve ./build/server/index.js",
-    "typecheck": "tsc"
+    "dev": "deno run --env-file -A cmd.ts serve",
+    "cli": "deno run --env-file -A cmd.ts"
   },
   "bin": {
     "mycelia": "./bin/dev.js"
@@ -33,6 +30,8 @@
     "@remix-run/serve": "^2.15.2",
     "@tailwindcss/vite": "^4.0.14",
     "@types/minimatch": "^5.1.2",
+    "bullmq": "^5.44.4",
+    "chokidar": "^4.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
@@ -50,6 +49,8 @@
     "react-router": "^7.4.0",
     "remix-auth": "^4.1.0",
     "sift": "^17.1.3",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
     "tailwind-merge": "^3.0.1",
     "tailwindcss-animate": "^1.0.7",
     "vis-timeline": "^7.7.3",

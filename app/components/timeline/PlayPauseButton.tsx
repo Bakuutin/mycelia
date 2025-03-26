@@ -8,15 +8,15 @@ export const PlayPauseButton = () => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code === 'Space') {
+      if (event.code === "Space") {
         event.preventDefault();
         toggleIsPlaying();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
+    globalThis.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      globalThis.removeEventListener("keydown", handleKeyDown);
     };
   }, [toggleIsPlaying]);
 

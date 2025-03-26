@@ -1,14 +1,54 @@
 import { Command } from "@cliffy/command";
 import { Secret } from "@cliffy/prompt";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
-import { ensureDbConnected } from "./app/lib/mongo/core.server.ts";
+import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import { exit } from "node:process";
-import { verifyToken } from "./app/lib/auth/core.server.ts";
+import { verifyToken } from "@/lib/auth/core.server.ts";
+import { createServer, build } from 'vite';
 
 await ensureDbConnected();
 
 const root = new Command()
-  .name("mycelia")
+  .name("deno run -A --env cmd.ts")
+  .action(() => {
+    console.log(root.getHelp());
+  })
+  .command(
+    "serve",
+    new Command()
+      .description("Start the development server.")
+      .option("-p, --port <port:number>", "Port to serve on.", { default: 5173 })
+      .option("-h, --host <host:string>", "Host to serve on.", { default: "0.0.0.0" })
+      .option("--prod", "Serve in production mode", { default: false })
+      .action(async ({ port, host, prod }) => {
+        try {
+          if (prod) {
+            console.log('Building for production...');
+            await build({
+              configFile: 'vite.config.ts',
+              mode: 'production',
+            });
+            console.log('Build complete!');
+          }
+
+          const server = await createServer({
+            configFile: 'vite.config.ts',
+            mode: prod ? 'production' : 'development',
+            server: {
+              port,
+              host,
+            },
+          });
+        
+          await server.listen();
+        
+          console.log(`${prod ? 'Production' : 'Development'} server running at:`, server.resolvedUrls?.local?.[0] || 'unknown');
+        } catch (err) {
+          console.error('Failed to start server:', err);
+          exit(1);
+        }
+      }),
+  )
   .command(
     "token",
     new Command()
@@ -29,7 +69,6 @@ const root = new Command()
             console.log("Generating token...");
             const key = await generateApiKey(owner, name, []);
             console.log(`Token: ${key}`);
-            exit(0);
           }),
       )
       .command(
@@ -59,9 +98,11 @@ const root = new Command()
               console.log("Token is valid");
               console.log(JSON.stringify(doc, null, 2));
             }
-            exit(0);
           }),
       ),
   );
 
-await root.parse();
+
+root.parse().then(() => {
+  exit(0);
+});

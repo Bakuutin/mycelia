@@ -12,7 +12,6 @@ import { AudioPlayer, useDateStore } from "@/components/player.tsx";
 import { TimelineAxis } from "@/components/timeline/TimelineAxis.tsx";
 import { TimelineItems } from "@/components/timeline/TimelineItems.tsx";
 import { VoiceRow } from "@/components/timeline/VoiceRow.tsx";
-import { TranscriptsRow } from "@/components/timeline/TranscriptsRow.tsx";
 import { PlayPauseButton } from "@/components/timeline/PlayPauseButton.tsx";
 import { authenticateOrRedirect } from "../lib/auth/core.server.ts";
 import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
@@ -57,7 +56,7 @@ const TimelinePage = () => {
     transcripts = data.transcripts;
   }
 
-  const { currentDate, resetDate, isPlaying, setIsPlaying } = useDateStore();
+  const { currentDate, resetDate, setIsPlaying } = useDateStore();
 
   const handleDateRangeChange = (start: Date, end: Date) => {
     const form = new FormData();
@@ -89,7 +88,7 @@ const TimelinePage = () => {
       <div className="p-4 gap-4 flex flex-col">
         <div className="flex flex-row items-center gap-4">
           <PlayPauseButton />
-          <GainSlider/>
+          <GainSlider />
         </div>
         <div
           ref={containerRef}
@@ -142,6 +141,24 @@ const TimelinePage = () => {
                       height={height - dimensions.margin.top}
                     />
                   )}
+                  <g className="transcripts">
+                    {transcripts.map((transcript, index) => {
+                      const xPosition = transform.applyX(
+                        timeScale(new Date(transcript.start)),
+                      );
+                      return (
+                        <foreignObject
+                          key={index}
+                          x={xPosition}
+                          y={height - dimensions.margin.bottom - 20}
+                          width="1900px"
+                          height="30px"
+                        >
+                          <p className="text-left">{transcript.text}</p>
+                        </foreignObject>
+                      );
+                    })}
+                  </g>
                 </g>
                 <TimelineAxis
                   scale={timeScale}
@@ -152,12 +169,6 @@ const TimelinePage = () => {
               </g>
             </svg>
           )}
-        </div>
-      </div>
-
-      <div className="p-4">
-        <div className="flex justify-start flex-col px-[2.5rem]">
-          <TranscriptsRow transcripts={transcripts} />
         </div>
       </div>
     </>

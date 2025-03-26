@@ -23,7 +23,9 @@ export interface DateStore {
   appendChunks: (chunks: Chunk[]) => void;
   popChunk: () => Promise<Chunk | null>;
   setVolume: (volume: number) => void;
-  update: (data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>)) => void;
+  update: (
+    data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>),
+  ) => void;
 }
 
 export const useDateStore = create<DateStore>((set) => ({
@@ -111,7 +113,7 @@ export const AudioPlayer: React.FC = () => {
     const prev = chunks[chunks.length - 1];
     const start = prev ? prev.start : currentDate;
     if (!start) return;
-  
+
     const lastId = prev ? prev._id : null;
     fetcher.load(
       `/data/audio?start=${start.toISOString()}&limit=${preloadLimit}${
@@ -157,7 +159,6 @@ export const AudioPlayer: React.FC = () => {
       gainNode.gain.value = volume;
     }
   }, [volume, gainNode]);
-
 
   const createBufferSource = async () => {
     if (

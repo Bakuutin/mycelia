@@ -21,7 +21,7 @@ export function useTimeline(
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState<TimelineDimensions>({
     width: 800,
-    height: 350,
+    height: 500,
     margin: { top: 10, right: 20, bottom: 110, left: 40 },
   });
   const [transform, setTransform] = useState(d3.zoomIdentity);

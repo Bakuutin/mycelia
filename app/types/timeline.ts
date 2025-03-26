@@ -15,17 +15,9 @@ export const zTimelineItem = z.object({
 
 export const zTranscript = z.object({
   text: z.string(),
-  words: z.array(z.object({
-    word: z.string(),
-    start: z.number(),
-    end: z.number(),
-    t_dtw: z.number(),
-    probability: z.number(),
-  })),
-  id: z.number(),
   start: z.date(),
   end: z.date(),
-  transcriptID: z.string(),
+  // transcriptID: z.string(),
 });
 
 export const zQueryParams = z.object({

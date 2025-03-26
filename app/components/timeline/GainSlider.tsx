@@ -5,7 +5,7 @@ const GainSlider: React.FC = () => {
   const { volume, setVolume } = useDateStore();
 
   const handleGainChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setVolume(parseFloat(event.target.value)); 
+    setVolume(parseFloat(event.target.value));
   };
 
   return (
@@ -24,4 +24,4 @@ const GainSlider: React.FC = () => {
   );
 };
 
-export default GainSlider; 
+export default GainSlider;
