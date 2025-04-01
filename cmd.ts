@@ -5,7 +5,7 @@ import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import process, { exit } from "node:process";
 import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
-import { createServer, build } from 'vite';
+import { build, createServer } from "vite";
 
 await ensureDbConnected();
 
@@ -19,41 +19,48 @@ const root = new Command()
     "serve",
     new Command()
       .description("Start the development server.")
-      .option("-p, --port <port:number>", "Port to serve on.", { default: 5173 })
-      .option("-h, --host <host:string>", "Host to serve on.", { default: "0.0.0.0" })
+      .option("-p, --port <port:number>", "Port to serve on.", {
+        default: 5173,
+      })
+      .option("-h, --host <host:string>", "Host to serve on.", {
+        default: "0.0.0.0",
+      })
       .option("--prod", "Serve in production mode", { default: false })
       .action(async ({ port, host, prod }) => {
         try {
           if (prod) {
-            console.log('Building for production...');
+            console.log("Building for production...");
             await build({
-              configFile: 'vite.config.ts',
-              mode: 'production',
+              configFile: "vite.config.ts",
+              mode: "production",
             });
-            console.log('Build complete!');
+            console.log("Build complete!");
           }
 
           const server = await createServer({
-            configFile: 'vite.config.ts',
-            mode: prod ? 'production' : 'development',
+            configFile: "vite.config.ts",
+            mode: prod ? "production" : "development",
             server: {
               port,
               host,
             },
           });
-        
+
           await server.listen();
-        
-          console.log(`${prod ? 'Production' : 'Development'} server running at:`, server.resolvedUrls?.local?.[0] || 'unknown');
+
+          console.log(
+            `${prod ? "Production" : "Development"} server running at:`,
+            server.resolvedUrls?.local?.[0] || "unknown",
+          );
 
           await new Promise((resolve) => {
-            process.on('SIGINT', resolve);
-            process.on('SIGTERM', resolve);
+            process.on("SIGINT", resolve);
+            process.on("SIGTERM", resolve);
           });
 
           await server.close();
         } catch (err) {
-          console.error('Failed to start server:', err);
+          console.error("Failed to start server:", err);
           exit(1);
         }
       }),
@@ -80,8 +87,8 @@ const root = new Command()
               {
                 "resource": "*",
                 "action": "*",
-                "effect": "allow"
-              } as Policy
+                "effect": "allow",
+              } as Policy,
             ]);
             console.log(`Token: ${key}`);
           }),
@@ -116,7 +123,6 @@ const root = new Command()
           }),
       ),
   );
-
 
 root.parse().then(() => {
   exit(0);

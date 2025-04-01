@@ -77,14 +77,17 @@ export async function fetchTimelineData(
     projection: {
       _id: 1,
       start: 1,
-    }
+    },
   });
 
-  const sources = mergeGap(items.map((item: any) => ({
-    start: item.start,
-    end: item.start,
-    id: item._id.toHexString(),
-  })), gap);
+  const sources = mergeGap(
+    items.map((item: any) => ({
+      start: item.start,
+      end: item.start,
+      id: item._id.toHexString(),
+    })),
+    gap,
+  );
 
   let voices: Array<{ start: Date; end: Date; _id: string }> = [];
   if (duration < day * 2) {
