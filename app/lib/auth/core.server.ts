@@ -7,6 +7,8 @@ import { Types } from "mongoose";
 import { minimatch } from "minimatch";
 import { ScopedDB } from "../mongo/scoped.server.ts";
 import { getRootDB } from "../mongo/core.server.ts";
+
+
 export const authCookie = createCookie("token", {
   path: "/",
   httpOnly: true,

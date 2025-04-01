@@ -1,9 +1,10 @@
 import { Command } from "@cliffy/command";
 import { Secret } from "@cliffy/prompt";
+import { CompletionsCommand } from "@cliffy/command/completions";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
-import { exit } from "node:process";
-import { verifyToken } from "@/lib/auth/core.server.ts";
+import process, { exit } from "node:process";
+import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
 import { createServer, build } from 'vite';
 
 await ensureDbConnected();
@@ -13,6 +14,7 @@ const root = new Command()
   .action(() => {
     console.log(root.getHelp());
   })
+  .command("completions", new CompletionsCommand())
   .command(
     "serve",
     new Command()
@@ -43,6 +45,13 @@ const root = new Command()
           await server.listen();
         
           console.log(`${prod ? 'Production' : 'Development'} server running at:`, server.resolvedUrls?.local?.[0] || 'unknown');
+
+          await new Promise((resolve) => {
+            process.on('SIGINT', resolve);
+            process.on('SIGTERM', resolve);
+          });
+
+          await server.close();
         } catch (err) {
           console.error('Failed to start server:', err);
           exit(1);
@@ -67,7 +76,13 @@ const root = new Command()
             console.log(`Owner: ${owner}`);
             console.log(`Name: ${name}`);
             console.log("Generating token...");
-            const key = await generateApiKey(owner, name, []);
+            const key = await generateApiKey(owner, name, [
+              {
+                "resource": "*",
+                "action": "*",
+                "effect": "allow"
+              } as Policy
+            ]);
             console.log(`Token: ${key}`);
           }),
       )

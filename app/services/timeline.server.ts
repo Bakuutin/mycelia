@@ -61,7 +61,7 @@ export async function fetchTimelineData(
   const queryStart = new Date(startDate.getTime() - duration / 2);
   const queryEnd = new Date(endDate.getTime() + duration / 2);
 
-  let gap = 0;
+  let gap = day / 24 / 60;
   if (duration > day * 7) {
     gap = day / 4;
   }
@@ -69,16 +69,22 @@ export async function fetchTimelineData(
     gap = day * 10;
   }
 
-  const items = await db.collection("source_files").find({
-    start: { $lte: queryEnd },
-    end: { $gte: queryStart },
-  }, { sort: { start: 1 } });
+  // TODO: For zoomed out views we should use buckets for performance
+  const items = await db.collection("audio_chunks").find({
+    start: { $lte: queryEnd, $gte: queryStart },
+  }, {
+    sort: { start: 1 },
+    projection: {
+      _id: 1,
+      start: 1,
+    }
+  });
 
-  const sources = mergeGap(items, gap).map((item: StartEnd) => ({
+  const sources = mergeGap(items.map((item: any) => ({
     start: item.start,
-    end: item.end,
+    end: item.start,
     id: item._id.toHexString(),
-  }));
+  })), gap);
 
   let voices: Array<{ start: Date; end: Date; _id: string }> = [];
   if (duration < day * 2) {
@@ -114,13 +120,6 @@ export async function fetchTimelineData(
       text: t.text,
       id: t._id.toHexString(),
     };
-
-    // return t.segments.map((s: any) => ({
-    //   ...s,
-    //   start: new Date(t.start.getTime() + s.start * 1000),
-    //   end: new Date(t.start.getTime() + s.end * 1000),
-    //   text:
-    // }));
   }).sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
 
   return {

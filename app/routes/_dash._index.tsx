@@ -154,7 +154,7 @@ const TimelinePage = () => {
                           width="1900px"
                           height="30px"
                         >
-                          <p className="text-left">{transcript.text}</p>
+                          <p className="opacity-20">{transcript.text}</p>
                         </foreignObject>
                       );
                     })}
