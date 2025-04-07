@@ -8,7 +8,7 @@ export const zTimestamp = z.coerce.bigint().transform((val) =>
 );
 
 export const zTimelineItem = z.object({
-  id: z.string(),
+  // id: z.string(),
   start: z.date(),
   end: z.date(),
 });

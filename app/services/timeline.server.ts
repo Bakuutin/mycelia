@@ -62,51 +62,20 @@ export async function fetchTimelineData(
   const queryEnd = new Date(endDate.getTime() + duration / 2);
 
   let gap = day / 24 / 60;
-  if (duration > day * 7) {
+
+  if (duration > day * 300) {
+    gap = day * 7;
+  } else if (duration > day * 30) {
+    gap = day * 1;
+  } else if (duration > day * 7) {
     gap = day / 4;
   }
-  if (duration > day * 300) {
-    gap = day * 10;
-  }
 
-  // TODO: For zoomed out views we should use buckets for performance
-  const items = await db.collection("audio_chunks").find({
-    start: { $lte: queryEnd, $gte: queryStart },
-  }, {
-    sort: { start: 1 },
-    projection: {
-      _id: 1,
-      start: 1,
-    },
-  });
+  const step = gap;
 
-  const sources = mergeGap(
-    items.map((item: any) => ({
-      start: item.start,
-      end: item.start,
-      id: item._id.toHexString(),
-    })),
-    gap,
-  );
-
-  let voices: Array<{ start: Date; end: Date; _id: string }> = [];
-  if (duration < day * 2) {
-    const voiceItems = await db.collection("diarizations").find({
-      start: { $lte: queryEnd },
-      end: { $gte: queryStart },
-    }, { sort: { start: 1 } });
-
-    voices = voiceItems.map((voice: StartEnd) => ({
-      start: voice.start,
-      end: voice.end,
-      _id: voice._id.toHexString(),
-    }));
-
-    voices = mergeGap(
-      voices.map((v) => ({ ...v, _id: new ObjectId(v._id) })),
-      duration / 100,
-    )
-      .map((v) => ({ ...v, _id: v._id.toHexString() }));
+  const boundaries = [];
+  for (let i = queryStart; i < queryEnd; i = new Date(i.getTime() + step)) {
+    boundaries.push(i);
   }
 
   const transcripts = (
@@ -126,11 +95,11 @@ export async function fetchTimelineData(
   }).sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
 
   return {
-    items: sources,
+    voices: [],
+    items: [], // TODO: restore this
     start: originalStart,
     end: originalEnd,
     gap,
-    voices,
     transcripts,
   };
 }

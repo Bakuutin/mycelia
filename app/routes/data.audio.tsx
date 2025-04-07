@@ -25,7 +25,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     limit = 10;
   }
 
-  const collection = auth.db.collection("audio_chunks");
+  const collection = auth.db.collection("ts_audio");
 
   const load = async (filter: any) =>
     collection
@@ -36,8 +36,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const filter: any = { start: { $gte: startDate } };
 
   if (lastIdParam) {
+    const [originalIdString, prevIndexString] = lastIdParam.split("-");
+    const originalId = new ObjectId(originalIdString);
+    const prevIndex = parseInt(prevIndexString);
     const prevSegment = await collection.findOne({
-      _id: new ObjectId(lastIdParam),
+      meta: {
+        original_id: new ObjectId(originalId),
+      },
+      index: prevIndex,
     });
     if (!prevSegment) {
       throw new Response("Invalid lastId parameter", { status: 400 });
@@ -45,10 +51,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     segments = await load({
       start: { $gt: prevSegment.start },
-      original_id: prevSegment.original_id,
+      meta: { original_id: prevSegment.original_id },
     });
     const lastIdIndex = segments.findIndex((segment) =>
-      segment._id.toString() === lastIdParam
+      segment.index  === prevIndex
     );
     if (lastIdIndex != -1) {
       segments = segments.slice(lastIdIndex + 1);
@@ -66,8 +72,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .map((segment: any) => ({
       start: segment.start,
       data: segment.data.buffer.toString("base64"),
-      originalID: segment.original_id.toString(),
-      _id: segment._id.toString(),
+      originalID: segment.meta.original_id.toString(),
+      _id: `${segment.meta.original_id}-${segment.index}`,
     }));
 
   console.log("Segments", segments.map((segment) => segment.start));

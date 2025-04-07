@@ -7,7 +7,7 @@ import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { Db } from "npm:mongodb";
 import { z, ZodTypeAny } from "zod";
 import mongoose, { Schema, Types } from "mongoose";
-
+import { ingestPendingSourceFiles } from "./chunking.ts";
 export type Metadata = {
   [key: string]: any;
 };
@@ -196,35 +196,34 @@ registerImporterHandler(
 );
 
 async function handleImporter(importer: Importer, dryRun = false) {
-    const handler = importerRegistry[importer.type];
-    if (!handler) {
-      console.warn(`No handler registered for importer type: ${importer.type}`);
-      return;
-    }
+  const handler = importerRegistry[importer.type];
+  if (!handler) {
+    console.warn(`No handler registered for importer type: ${importer.type}`);
+    return;
+  }
 
-    const parsed = handler.schema.safeParse(importer.config);
-    if (!parsed.success) {
-      console.error(
-        `Invalid config for importer ${importer.name}:`,
-        parsed.error.format(),
-      );
-      return;
-    }
+  const parsed = handler.schema.safeParse(importer.config);
+  if (!parsed.success) {
+    console.error(
+      `Invalid config for importer ${importer.name}:`,
+      parsed.error.format(),
+    );
+    return;
+  }
 
-    await handler.handle({
-      _id: importer._id,
-      name: importer.name,
-      config: parsed.data,
+  await handler.handle({
+    _id: importer._id,
+    name: importer.name,
+    config: parsed.data,
   }, dryRun);
 }
 
-async function test() {
+export async function findAndImportFiles() {
   const importers = await ImporterModel.find({ enabled: true });
 
   for (const importer of importers) {
     await handleImporter(importer);
   }
-}
 
-await test();
-process.exit(0);
+  await ingestPendingSourceFiles();
+}

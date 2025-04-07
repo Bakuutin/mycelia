@@ -6,6 +6,7 @@ import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import process, { exit } from "node:process";
 import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
 import { build, createServer } from "vite";
+import { findAndImportFiles } from "@/lib/importers/main.ts";
 
 await ensureDbConnected();
 
@@ -15,6 +16,19 @@ const root = new Command()
     console.log(root.getHelp());
   })
   .command("completions", new CompletionsCommand())
+  .command(
+    "importers",
+    new Command()
+      .description("Manage importers.")
+      .command(
+        "run",
+        new Command()
+          .description("Scan fs for new files to import.")
+          .action(async () => {
+            await findAndImportFiles();
+          }),
+      ),
+  )
   .command(
     "serve",
     new Command()

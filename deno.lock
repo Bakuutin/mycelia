@@ -55,7 +55,7 @@
     "npm:@typescript-eslint/eslint-plugin@^6.7.4": "6.21.0_@typescript-eslint+parser@6.21.0__eslint@8.57.1__typescript@5.8.2_eslint@8.57.1_typescript@5.8.2",
     "npm:@typescript-eslint/parser@^6.7.4": "6.21.0_eslint@8.57.1_typescript@5.8.2",
     "npm:autoprefixer@^10.4.19": "10.4.21_postcss@8.5.3",
-    "npm:bullmq@^5.44.4": "5.44.4",
+    "npm:bullmq@^5.47.1": "5.47.1",
     "npm:chokidar@^4.0.3": "4.0.3",
     "npm:class-variance-authority@~0.7.1": "0.7.1",
     "npm:clsx@^2.1.1": "2.1.1",
@@ -67,6 +67,7 @@
     "npm:eslint-plugin-react@^7.33.2": "7.37.4_eslint@8.57.1",
     "npm:eslint@^8.38.0": "8.57.1",
     "npm:fs@*": "0.0.1-security",
+    "npm:ioredis@^5.6.0": "5.6.0",
     "npm:isbot@^4.1.0": "4.4.0",
     "npm:jose@^6.0.10": "6.0.10",
     "npm:jsonwebtoken@^9.0.2": "9.0.2",
@@ -2491,8 +2492,8 @@
         "ieee754"
       ]
     },
-    "bullmq@5.44.4": {
-      "integrity": "sha512-0BjgABM/7U85Fxatj586ftsoWiGdjmg7fR7PwRYNOOGfvGpiUX9nQoUmx+9VZW/OtHO/4um/BVh2Y2S9BEhKFg==",
+    "bullmq@5.47.1": {
+      "integrity": "sha512-pAsnI5OjiXYdrFr2sDURlXBhE0ny/zZ/jB/jp4MYCLi+weQlknYVhuFrLPbwdM20yn9B6dep1014Zlw6Ac7zuA==",
       "dependencies": [
         "cron-parser",
         "ioredis",
@@ -2725,7 +2726,7 @@
     "cron-parser@4.9.0": {
       "integrity": "sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==",
       "dependencies": [
-        "luxon@3.6.0"
+        "luxon"
       ]
     },
     "cross-spawn@7.0.6": {
@@ -4141,8 +4142,8 @@
     "internmap@2.0.3": {
       "integrity": "sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg=="
     },
-    "ioredis@5.4.1": {
-      "integrity": "sha512-2YZsvl7jopIa1gaePkeMtd9rAcSjOOjPtpcLlOeusyO+XH2SK5ZcT+UCrElPP+WVIInh2TzeI4XW9ENaSLVVHA==",
+    "ioredis@5.6.0": {
+      "integrity": "sha512-tBZlIIWbndeWBWCXWZiqtOF/yxf6yZX3tAlTJ7nfo5jhd6dctNxF7QnYlZLZ1a0o0pDoen7CgZqO+zjNaFbJAg==",
       "dependencies": [
         "@ioredis/commands",
         "cluster-key-slot",
@@ -4687,9 +4688,6 @@
       "dependencies": [
         "react@18.3.1"
       ]
-    },
-    "luxon@3.6.0": {
-      "integrity": "sha512-WE7p0p7W1xji9qxkLYsvcIxZyfP48GuFrWIBQZIsbjCyf65dG1rv4n83HcOyEyhvzxJCrUoObCRNFgRNIQ5KNA=="
     },
     "luxon@3.6.1": {
       "integrity": "sha512-tJLxrKJhO2ukZ5z0gyjY1zPh3Rh88Ej9P7jNrZiHMUXHae1yvI2imgOZtL1TO8TW6biMMKfTtAOoEJANgtWBMQ=="
@@ -7378,7 +7376,7 @@
         "npm:@typescript-eslint/eslint-plugin@^6.7.4",
         "npm:@typescript-eslint/parser@^6.7.4",
         "npm:autoprefixer@^10.4.19",
-        "npm:bullmq@^5.44.4",
+        "npm:bullmq@^5.47.1",
         "npm:chokidar@^4.0.3",
         "npm:class-variance-authority@~0.7.1",
         "npm:clsx@^2.1.1",
@@ -7389,6 +7387,7 @@
         "npm:eslint-plugin-react-hooks@^4.6.0",
         "npm:eslint-plugin-react@^7.33.2",
         "npm:eslint@^8.38.0",
+        "npm:ioredis@^5.6.0",
         "npm:isbot@^4.1.0",
         "npm:jose@^6.0.10",
         "npm:jsonwebtoken@^9.0.2",
