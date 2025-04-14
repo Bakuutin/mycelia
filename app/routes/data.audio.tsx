@@ -54,7 +54,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       meta: { original_id: prevSegment.original_id },
     });
     const lastIdIndex = segments.findIndex((segment) =>
-      segment.index  === prevIndex
+      segment.index === prevIndex
     );
     if (lastIdIndex != -1) {
       segments = segments.slice(lastIdIndex + 1);
