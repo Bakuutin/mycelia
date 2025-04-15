@@ -8,16 +8,15 @@ export const zTimestamp = z.coerce.bigint().transform((val) =>
 );
 
 export const zTimelineItem = z.object({
-  // id: z.string(),
   start: z.date(),
   end: z.date(),
+  density: z.number(),
 });
 
 export const zTranscript = z.object({
   text: z.string(),
   start: z.date(),
   end: z.date(),
-  // transcriptID: z.string(),
 });
 
 export const zQueryParams = z.object({
@@ -30,12 +29,10 @@ export const zLoaderData = z.object({
   voices: z.array(z.object({
     start: z.date(),
     end: z.date(),
-    _id: z.string(),
   })),
   transcripts: z.array(zTranscript),
   start: z.date(),
   end: z.date(),
-  gap: z.number(),
 });
 
 export type TimelineItem = z.infer<typeof zTimelineItem>;

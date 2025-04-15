@@ -5,7 +5,7 @@ import _ from "lodash";
 interface TimelineItem {
   start: Date;
   end: Date;
-  id: string;
+  density: number;
 }
 
 interface OptimizedTimelineItem {
@@ -83,39 +83,31 @@ export const TimelineItems = ({
   transform,
 }: TimelineItemsProps) => {
   const newScale = transform.rescaleX(scale);
-  const [start, end] = newScale.domain();
-  const duration = end.getTime() - start.getTime();
 
-  const MARGIN = 14;
-  const ITEM_HEIGHT = 20;
-  const LAYER_GAP = 4;
-  const TOTAL_HEIGHT = ITEM_HEIGHT + LAYER_GAP;
+  const colorScale = useMemo(() => {
 
-  const optimizedItems = useMemo(
-    () => optimizeTimelineLayout(items, duration * 0.01),
-    [items, duration],
-  );
+    return d3.scaleSequential()
+      .domain([-15, -2])
+      .interpolator(d3.interpolateRdYlBu);
+  }, []);
 
   return (
     <g>
-      {optimizedItems.map((item) => {
+      {items.map((item) => {
         const startX = newScale(item.start);
         const endX = newScale(item.end);
-        const width = duration < 1000 * 365 * 24 * 60 * 60 * 1000
-          ? Math.max(endX - startX, 2)
-          : 2;
+        const width = Math.max(endX - startX + 2, 2);
 
         return (
           <rect
-            key={item.original.id}
+            key={item.start.getTime()}
             x={startX}
-            y={item.layer * TOTAL_HEIGHT + MARGIN}
+            y={24 + 14}
             width={width}
-            height={ITEM_HEIGHT}
-            className="fill-chart-1"
-          >
-            <title>{item.original.id}</title>
-          </rect>
+            height={20}
+            fill={colorScale(Math.log(item.density))}
+            className="timeline-item"
+          />
         );
       })}
     </g>

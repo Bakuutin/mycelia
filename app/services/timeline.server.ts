@@ -41,6 +41,22 @@ export async function updateHistogram(
   start = new Date(Math.floor(start.getTime() / binSize) * binSize);
   end = new Date(Math.ceil(end.getTime() / binSize) * binSize);
 
+
+  console.log("Updating histogram", start, end, resolution);
+
+  const BATCH_SIZE = day*10;
+  if (end.getTime() - start.getTime() > BATCH_SIZE) {
+    const steps = Math.ceil((end.getTime() - start.getTime() + 0.0) / Number(BATCH_SIZE));
+    for (let i = 0; i < steps; i++) {
+      await updateHistogramOptimized(
+        new Date(start.getTime() + i * BATCH_SIZE),
+        new Date(start.getTime() + (i + 1) * BATCH_SIZE),
+        resolution,
+      );
+    }
+    return;
+  }
+
   for (const sourceCollectionName of TARGET_COLLECTIONS) {
     const sourceCollection = db.collection(sourceCollectionName);
 
@@ -91,6 +107,7 @@ export async function updateHistogramOptimized(
   end: Date,
   resolution: Resolution,
 ): Promise<void> {
+
   if (resolution === LOWEST_RESOLUTION) {
     return updateHistogram(start, end, resolution);
   }
@@ -102,6 +119,9 @@ export async function updateHistogramOptimized(
   // Floor start and ceil end to nearest resolution point
   start = new Date(Math.floor(start.getTime() / binSize) * binSize);
   end = new Date(Math.ceil(end.getTime() / binSize) * binSize);
+
+
+  console.log("Updating histogram", start, end, resolution);
 
   // Get the next lower resolution
   const currentIndex = RESOLUTION_ORDER.indexOf(resolution);
@@ -200,25 +220,34 @@ export async function fetchTimelineData(
   const duration = endDate.getTime() - startDate.getTime();
   const originalStart = startDate;
   const originalEnd = endDate;
-  const queryStart = new Date(startDate.getTime() - duration / 2);
-  const queryEnd = new Date(endDate.getTime() + duration / 2);
 
-  let gap = day / 24 / 60;
-
-  if (duration > day * 300) {
-    gap = day * 7;
-  } else if (duration > day * 30) {
-    gap = day * 1;
-  } else if (duration > day * 7) {
-    gap = day / 4;
+  // Determine appropriate resolution based on duration
+  let resolution: Resolution;
+  if (duration > 50 * day) {
+    resolution = "1week";
+  } else if (duration > day) {  
+    resolution = "1hour";
+  } else {
+    resolution = "5min";
   }
 
-  const step = gap;
+  const binSeconds = RESOLUTION_TO_MS[resolution] / 1000; 
+  const queryStart = new Date(startDate.getTime() - duration - binSeconds);
+  const queryEnd = new Date(endDate.getTime() + duration + binSeconds);
 
-  const boundaries = [];
-  for (let i = queryStart; i < queryEnd; i = new Date(i.getTime() + step)) {
-    boundaries.push(i);
-  }
+  // Fetch histogram data
+  const histogramCollection = db.collection(`histogram_${resolution}`);
+  const histogramData = await histogramCollection
+    .find({
+      start: { $gte: queryStart, $lt: queryEnd },
+    }, { sort: { start: 1 } });
+
+
+  const items = histogramData.map((doc: any) => ({
+      start: doc.start,
+      end: new Date(doc.start.getTime() + RESOLUTION_TO_MS[resolution]),
+      density: (doc.totals["audio_chunks"] || 0) / binSeconds,
+  }));
 
   const transcripts = (
     await db.collection("transcriptions").find({
@@ -238,10 +267,48 @@ export async function fetchTimelineData(
 
   return {
     voices: [],
-    items: [], // TODO: restore this
+    items,
     start: originalStart,
     end: originalEnd,
-    gap,
     transcripts,
   };
+}
+
+export async function updateAllHistogram(
+  start?: Date,
+  end?: Date,
+): Promise<void> {
+  const db = await getRootDB();
+  
+  let earliestStart: Date | null = null;
+  let latestStart: Date | null = null;
+
+  if (!start || !end) {
+    for (const collectionName of TARGET_COLLECTIONS) {
+      const collection = db.collection(collectionName);
+      
+      const firstDoc = await collection.find({}, { sort: { start: 1 }, limit: 1 }).toArray();
+      if (firstDoc.length > 0 && (!earliestStart || firstDoc[0].start < earliestStart)) {
+        earliestStart = firstDoc[0].start;
+      }
+
+      const lastDoc = await collection.find({}, { sort: { start: -1 }, limit: 1 }).toArray();
+      if (lastDoc.length > 0 && (!latestStart || lastDoc[0].start > latestStart)) {
+        latestStart = lastDoc[0].start;
+      }
+    }
+
+    if (!earliestStart || !latestStart) {
+      throw new Error("No data found in target collections");
+    }
+
+    start = earliestStart;
+    end = latestStart;
+  }
+
+  console.log("Updating all histograms", start, end);
+
+  for (const resolution of RESOLUTION_ORDER) {
+    await updateHistogramOptimized(start, end, resolution);
+  }
 }

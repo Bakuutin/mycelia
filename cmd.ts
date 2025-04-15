@@ -7,6 +7,23 @@ import process, { exit } from "node:process";
 import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
 import { build, createServer } from "vite";
 import { findAndImportFiles } from "@/lib/importers/main.ts";
+import { updateAllHistogram } from "@/services/timeline.server.ts";
+import ms from "ms";
+
+function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
+  if (!expr) return undefined;
+  try {
+    // Try parsing as a relative time first
+    const relativeMs = ms(expr);
+    if (relativeMs) {
+      return new Date(Date.now() - relativeMs);
+    }
+    // If not a relative time, try parsing as an absolute date
+    return new Date(expr);
+  } catch {
+    throw new Error(`Invalid time expression: ${expr}. Use format like "5d" or "10m" or an ISO date`);
+  }
+}
 
 await ensureDbConnected();
 
@@ -16,6 +33,29 @@ const root = new Command()
     console.log(root.getHelp());
   })
   .command("completions", new CompletionsCommand())
+  .command(
+    "timeline",
+    new Command()
+      .description("Manage timeline data.")
+      .command(
+        "recalculate",
+        new Command()
+          .description("Update histogram resolutions.")
+          .option("-a, --all", "Update all resolutions", { default: false })
+          .arguments("[start:string] [end:string]")
+          .action(async ({ all }, start, end) => {
+            console.log("Updating histograms...");
+            if (all) {
+              await updateAllHistogram();
+            } else {
+              const startDate = parseDateOrRelativeTime(start);
+              const endDate = end ? parseDateOrRelativeTime(end) : new Date();
+              await updateAllHistogram(startDate, endDate);
+            }
+            console.log("Histogram update complete!");
+          }),
+      ),
+  )
   .command(
     "importers",
     new Command()
