@@ -1,22 +1,22 @@
-import { ObjectId } from "mongodb";
 import _ from "lodash";
 import {
   type LoaderData,
   type StartEnd,
   type Timestamp,
-  zLoaderData,
-  zQueryParams,
 } from "../types/timeline.ts";
+
+import ms from "ms";
 
 
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 
-type Resolution = "5min" | "1hour" | "1week";
+type Resolution = "5min" | "1hour" | "1day" | "1week";
 
 const RESOLUTION_TO_MS: Record<Resolution, number> = {
-  "5min": 5 * 60 * 1000,
-  "1hour": 60 * 60 * 1000,
-  "1week": 7 * 24 * 60 * 60 * 1000,
+  "5min": ms("5m"),
+  "1hour": ms("1h"),
+  "1day": ms("1d"),
+  "1week": ms("1w"),
 };
 
 const RESOLUTION_ORDER: Resolution[] = Object.keys(RESOLUTION_TO_MS) as Resolution[];
@@ -223,8 +223,10 @@ export async function fetchTimelineData(
 
   // Determine appropriate resolution based on duration
   let resolution: Resolution;
-  if (duration > 50 * day) {
+  if (duration > 300 * day) {
     resolution = "1week";
+  } else if (duration > 50 * day) {
+    resolution = "1day";
   } else if (duration > day) {  
     resolution = "1hour";
   } else {
