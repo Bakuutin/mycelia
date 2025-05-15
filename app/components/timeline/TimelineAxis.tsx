@@ -27,37 +27,47 @@ interface TickLabelProps {
   segments: React.ReactNode[];
 }
 
-const AxisLine: React.FC<AxisLineProps> = ({ start, end, height }) => (
-  <g transform={`translate(0,${height})`}>
-    <path
-      d={`M${start},6V0H${end}V6`}
-      fill="none"
-      stroke="currentColor"
-    />
-  </g>
-);
+const TickLabel: React.FC<TickLabelProps> = ({ value, xOffset, segments }) => {
+  const [first, ...rest] = segments;
 
-const TickLabel: React.FC<TickLabelProps> = ({ value, xOffset, segments }) => (
-  <g
-    transform={`translate(${xOffset},0)`}
-  >
-    <line
-      y2="6"
-      stroke="currentColor"
-    />
-    <foreignObject
+
+  return (
+    <g
+      transform={`translate(${xOffset},0)`}
+    >
+      <foreignObject
       width="100px"
-      height="200px"
+      height="45px"
       style={{
-        transform: "translateY(10px) translateX(-50px)",
+        transform: "translateX(-50px)",
       }}
     >
-      {segments.map((segment, i) => (
-        <p className="text-center" key={i}>{segment}</p>
-      ))}
+          <div className="flex flex-col-reverse h-full">
+            <p className="text-center text-xs">{first}</p>
+            {
+              rest.length > 0 && (
+                <div className="mx-auto text-center text-xs flex flex-row-reverse gap-1">
+                    {
+                      rest.map((segment, i) => (
+                        <span key={i}>{segment}</span>
+                      ))
+                    }
+                </div>
+              )
+            }
+          </div>
     </foreignObject>
+    <line
+      x1="0"
+      x2="0"
+      y1="48"
+      y2="45"
+      stroke="currentColor"
+      strokeWidth="1"
+    />
   </g>
 );
+}
 
 const TickLabels: React.FC<{ labels: Label[] }> = ({ labels }) => (
   <>

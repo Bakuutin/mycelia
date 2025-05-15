@@ -4,38 +4,47 @@ Remember everything - A personal timeline and memory management system.
 
 ## About
 
-Mycelia is a powerful application for managing and visualizing your personal timeline. It allows you to:
+Mycelia is a powerful application for managing and visualizing your personal
+timeline. It allows you to:
 
 - Track and organize events on a customizable timeline
 - Import and process various data sources
 - Play back audio recordings with transcript synchronization
 - Manage and search through your personal history
 
-The application uses MongoDB for data storage, Redis for queuing and caching, and a modern React frontend with Remix and Tailwind CSS.
+The application uses MongoDB for data storage, Redis for queuing and caching,
+and a modern React frontend with Remix and Tailwind CSS.
 
 ## Installation
 
 ### Install Deno
-To run this project, you need to have Deno installed. You can install it using one of the following methods:
+
+To run this project, you need to have Deno installed. You can install it using
+one of the following methods:
 
 **For Mac/Linux:**
+
 ```sh
 curl -fsSL https://deno.land/x/install/install.sh | sh
 ```
 
 **For Windows (PowerShell):**
+
 ```sh
 irm https://deno.land/install.ps1 | iex
 ```
 
 **Using Package Managers:**
+
 - **Homebrew (Mac)**: `brew install deno`
 - **Chocolatey (Windows)**: `choco install deno`
 - **Scoop (Windows)**: `scoop install deno`
 
-For more installation options, visit [deno.land](https://deno.land/#installation).
+For more installation options, visit
+[deno.land](https://deno.land/#installation).
 
 ### Dependencies
+
 - **MongoDB** (v8)
 - **Redis** (v7)
 - **Node.js** (v20+)
@@ -66,6 +75,7 @@ deno run -A --env cmd.ts serve
 ## Environment Configuration
 
 Modify the `.env` file with your settings:
+
 ```
 MONGO_URL=mongodb://localhost:27017
 DATABASE_NAME=mycelia
@@ -96,6 +106,7 @@ deno run -A --env cmd.ts token create
 ## Development
 
 This project uses:
+
 - **Remix** for server-side rendering and routing
 - **React** for UI components
 - **Tailwind CSS** for styling

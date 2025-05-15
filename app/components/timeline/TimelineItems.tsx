@@ -85,7 +85,6 @@ export const TimelineItems = ({
   const newScale = transform.rescaleX(scale);
 
   const colorScale = useMemo(() => {
-
     return d3.scaleSequential()
       .domain([-15, -2])
       .interpolator(d3.interpolateRdYlBu);
@@ -98,11 +97,11 @@ export const TimelineItems = ({
         const endX = newScale(item.end);
         const width = Math.max(endX - startX + 2, 2);
 
-        return (
+        return item.density && (
           <rect
             key={item.start.getTime()}
             x={startX}
-            y={24 + 14}
+            y={50}
             width={width}
             height={20}
             fill={colorScale(Math.log(item.density))}

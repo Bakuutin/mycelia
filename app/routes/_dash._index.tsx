@@ -79,7 +79,7 @@ const TimelinePage = () => {
     width,
     height,
   } = useTimeline(
-    { items, voices, start, end, transcripts, gap: 0 },
+    { items, voices, start, end, transcripts },
     handleDateRangeChange,
   );
 
@@ -89,6 +89,8 @@ const TimelinePage = () => {
         <div className="flex flex-row items-center gap-4">
           <PlayPauseButton />
           <GainSlider />
+
+          <AudioPlayer />
         </div>
         <div
           ref={containerRef}
@@ -96,7 +98,6 @@ const TimelinePage = () => {
             height: height + dimensions.margin.top + dimensions.margin.bottom,
           }}
         >
-          <AudioPlayer />
           {containerRef.current && (
             <svg
               id="timeline-svg"
@@ -114,11 +115,14 @@ const TimelinePage = () => {
               }}
             >
               <g
-                transform={`translate(${dimensions.margin.left},${dimensions.margin.top})`}
+                transform={`translate(${dimensions.margin.left},0)`}
               >
-                <clipPath id="clip">
-                  <rect width={width} height={height} />
-                </clipPath>
+                <TimelineAxis
+                  scale={timeScale}
+                  transform={transform}
+                  height={0}
+                  width={width}
+                />
                 <g clipPath="url(#clip)">
                   <TimelineItems
                     items={items}
@@ -155,12 +159,7 @@ const TimelinePage = () => {
                     })}
                   </g>
                 </g>
-                <TimelineAxis
-                  scale={timeScale}
-                  transform={transform}
-                  height={height}
-                  width={width}
-                />
+               
               </g>
             </svg>
           )}
