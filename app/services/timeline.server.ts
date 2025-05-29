@@ -1,7 +1,6 @@
 import _ from "lodash";
 import {
   type LoaderData,
-  type StartEnd,
   type Timestamp,
 } from "../types/timeline.ts";
 
@@ -292,36 +291,6 @@ export function getDaysAgo(n: number) {
   return monthAgo;
 }
 
-export function mergeGap<T extends StartEnd>(
-  items: T[],
-  gap: number,
-  updateKey?: (prev: T, item: T) => T,
-): T[] {
-  if (gap <= 0 || items.length === 0) {
-    return items;
-  }
-  const result: T[] = [];
-  let prev: T | null = null;
-  for (const item of items) {
-    if (prev) {
-      if (prev.end.getTime() > item.start.getTime() - gap) {
-        prev.end = _.max([prev.end, item.end]) as Date;
-        if (updateKey) {
-          prev = updateKey(prev, item);
-        }
-      } else {
-        result.push(prev);
-        prev = null;
-      }
-    } else {
-      prev = item;
-    }
-  }
-  if (prev) {
-    result.push(prev);
-  }
-  return result;
-}
 
 export async function fetchTimelineData(
   db: any,
@@ -360,31 +329,34 @@ export async function fetchTimelineData(
   const items = histogramData.map((doc: any) => ({
     start: doc.start,
     end: new Date(doc.start.getTime() + RESOLUTION_TO_MS[resolution]),
-    density: (doc.totals?.audio_chunks?.has_speech || 0) / binSeconds,
+    totals: {
+      seconds: binSeconds,
+      ...doc.totals,
+    },
   }));
 
-  const transcripts = (
-    await db.collection("transcriptions").find({
-      start: { $lte: queryEnd },
-      end: { $gte: queryStart },
-    }, { sort: { start: 1 }, limit: 20 })
-  ).map((t: any) => {
-    return {
-      start: new Date(t.start.getTime() + t.segments[0].start * 1000),
-      end: new Date(
-        t.start.getTime() + t.segments[t.segments.length - 1].end * 1000,
-      ),
-      text: t.text,
-      id: t._id.toHexString(),
-    };
-  }).sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
+  //  (
+  //   await db.collection("transcriptions").find({
+  //     start: { $lte: queryEnd },
+  //     end: { $gte: queryStart },
+  //   }, { sort: { start: 1 }, limit: 20 })
+  // ).map((t: any) => {
+  //   return {
+  //     start: new Date(t.start.getTime() + t.segments[0].start * 1000),
+  //     end: new Date(
+  //       t.start.getTime() + t.segments[t.segments.length - 1].end * 1000,
+  //     ),
+  //     text: t.text,
+  //     id: t._id.toHexString(),
+  //   };
+  // }).sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
 
   return {
     voices: [],
     items,
     start: originalStart,
     end: originalEnd,
-    transcripts,
+    transcripts: [],
   };
 }
 

@@ -7,3 +7,7 @@ node_modules
 *.local
 *.local.*
 .docker
+**/.venv
+**/.DS_Store
+.ruff_cache
+*.ipynb

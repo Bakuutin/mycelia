@@ -1,0 +1,14 @@
+[project]
+name = "mycelia-whisper"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.12",
+    "faster-whisper>=1.1.1",
+    "ffmpeg-python>=0.2.0",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.34.2",
+    "wave>=0.0.2",
+]

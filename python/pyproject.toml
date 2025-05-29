@@ -1,0 +1,31 @@
+[project]
+name = "mycelia"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dotenv>=0.9.9",
+    "ffmpeg-python>=0.2.0",
+    "hdbscan>=0.8.40",
+    "ipykernel>=6.29.5",
+    "ipython>=9.2.0",
+    "lazy-object-proxy>=1.11.0",
+    "matplotlib>=3.10.3",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "parakeet-mlx>=0.2.7",
+    "pdbpp>=0.11.6",
+    "pyannote-audio>=3.3.2",
+    "pydantic>=2.11.4",
+    "pydub>=0.25.1",
+    "pymongo>=4.13.0",
+    "pytz>=2025.2",
+    "requests>=2.32.3",
+    "safetensors>=0.5.3",
+    "scikit-learn>=1.6.1",
+    "torch>=2.7.0",
+    "torchaudio>=2.7.0",
+    "tqdm>=4.67.1",
+    "umap-learn>=0.5.7",
+]

@@ -11,7 +11,6 @@ import { CursorLine } from "@/components/timeline/cursorLine.tsx";
 import { AudioPlayer, useDateStore } from "@/components/player.tsx";
 import { TimelineAxis } from "@/components/timeline/TimelineAxis.tsx";
 import { TimelineItems } from "@/components/timeline/TimelineItems.tsx";
-import { VoiceRow } from "@/components/timeline/VoiceRow.tsx";
 import { PlayPauseButton } from "@/components/timeline/PlayPauseButton.tsx";
 import { authenticateOrRedirect } from "../lib/auth/core.server.ts";
 import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
@@ -126,11 +125,6 @@ const TimelinePage = () => {
                 <g clipPath="url(#clip)">
                   <TimelineItems
                     items={items}
-                    scale={timeScale}
-                    transform={transform}
-                  />
-                  <VoiceRow
-                    voices={voices}
                     scale={timeScale}
                     transform={transform}
                   />

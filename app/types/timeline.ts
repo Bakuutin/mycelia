@@ -10,7 +10,7 @@ export const zTimestamp = z.coerce.bigint().transform((val) =>
 export const zTimelineItem = z.object({
   start: z.date(),
   end: z.date(),
-  density: z.number(),
+  totals: z.any(),
 });
 
 export const zTranscript = z.object({
