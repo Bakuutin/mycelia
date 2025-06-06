@@ -8,6 +8,7 @@ import ms from "ms";
 
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 
+
 type Resolution = "5min" | "1hour" | "1day" | "1week";
 
 const RESOLUTION_TO_MS: Record<Resolution, number> = {
@@ -335,28 +336,41 @@ export async function fetchTimelineData(
     },
   }));
 
-  //  (
-  //   await db.collection("transcriptions").find({
-  //     start: { $lte: queryEnd },
-  //     end: { $gte: queryStart },
-  //   }, { sort: { start: 1 }, limit: 20 })
-  // ).map((t: any) => {
-  //   return {
-  //     start: new Date(t.start.getTime() + t.segments[0].start * 1000),
-  //     end: new Date(
-  //       t.start.getTime() + t.segments[t.segments.length - 1].end * 1000,
-  //     ),
-  //     text: t.text,
-  //     id: t._id.toHexString(),
-  //   };
-  // }).sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
+  const transcriptions = (
+    await db.collection("transcriptions").find({
+      start: { $lte: queryEnd },
+      end: { $gte: queryStart },
+      segments: {
+        $exists: true, 
+        $type: "array", 
+        $not: { $size: 0 } 
+      }
+    }, { sort: { start: 1 }, limit: 30 })
+  )
+
+  const transcripts = [];
+
+  for (const t of transcriptions) {
+    for (const s of t.segments) {
+      transcripts.push({
+        start: new Date(t.start.getTime() + s.start * 1000),
+        end: new Date(t.start.getTime() + s.end * 1000),
+        text: s.text,
+        id: t._id.toHexString() + "-" + s.start.toFixed(3),
+        no_speech_prob: s.no_speech_prob,
+        top_language_probs: t.top_language_probs,
+      });
+    }
+  }
+
+  transcripts.sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
 
   return {
     voices: [],
     items,
     start: originalStart,
     end: originalEnd,
-    transcripts: [],
+    transcripts,
   };
 }
 

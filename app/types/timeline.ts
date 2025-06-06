@@ -13,12 +13,6 @@ export const zTimelineItem = z.object({
   totals: z.any(),
 });
 
-export const zTranscript = z.object({
-  text: z.string(),
-  start: z.date(),
-  end: z.date(),
-});
-
 export const zQueryParams = z.object({
   start: zTimestamp,
   end: zTimestamp,
@@ -30,13 +24,13 @@ export const zLoaderData = z.object({
     start: z.date(),
     end: z.date(),
   })),
-  transcripts: z.array(zTranscript),
+  transcripts: z.array(z.any()),
   start: z.date(),
   end: z.date(),
 });
 
 export type TimelineItem = z.infer<typeof zTimelineItem>;
-export type Transcript = z.infer<typeof zTranscript>;
+// export type Transcript = z.infer<typeof zTranscript>;
 export type QueryParams = z.infer<typeof zQueryParams>;
 export type LoaderData = z.infer<typeof zLoaderData>;
 
@@ -49,10 +43,4 @@ export interface StartEnd {
 export interface TimelineDimensions {
   width: number;
   height: number;
-  margin: {
-    top: number;
-    right: number;
-    bottom: number;
-    left: number;
-  };
 }

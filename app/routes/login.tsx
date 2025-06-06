@@ -26,7 +26,7 @@ export const action: ActionFunction = async ({ request }) => {
     return { error: "Token is required" };
   }
 
-  const key = await exchangeApiKeyForAccessToken(token);
+  const key = await exchangeApiKeyForAccessToken(token, "30 days");
   if (!key) {
     return { error: "Invalid token" };
   }

@@ -1,4 +1,4 @@
-import React, { Suspense } from "react";
+import React, { Suspense, useRef, useState, useEffect } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import {
@@ -42,6 +42,80 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return fetchTimelineData(auth.db, params.start, params.end);
 }
 
+
+
+const FONT_SIZE = 16;
+const LINE_HEIGHT = 24;
+const PADDING = 6;
+
+interface TextBlockProps {
+  x: number;
+  y: number;
+  text: string;
+}
+
+const TextBlock = ({ x, y, text }: TextBlockProps) => {
+  const ref = useRef<SVGTextElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    if (ref.current) {
+      setWidth(ref.current.getBBox().width + PADDING * 2);
+    }
+  }, [text]);
+
+  return (
+    <g transform={`translate(${x}, ${y})`}>
+      <rect
+        x={0}
+        y={0}
+        width={width}
+        height={LINE_HEIGHT}
+        fill="lightblue"
+        rx={4}
+      />
+      <text
+        ref={ref}
+        x={PADDING}
+        y={LINE_HEIGHT / 2 + FONT_SIZE / 2 - 4}
+        fontSize={FONT_SIZE}
+      >
+        {text}
+      </text>
+    </g>
+  );
+};
+
+interface Transcript {
+  start: string;
+  text: string;
+}
+
+interface TranscriptsRowProps {
+  transcripts: Transcript[];
+}
+
+function TranscriptsRow({ transcripts }: TranscriptsRowProps) {
+  const { resetDate, setIsPlaying } = useDateStore();
+
+  return (
+    <div className="">
+      {
+        transcripts.map((transcript) => {
+          return (
+            <span className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer" key={transcript.start} onClick={() => {
+              resetDate(new Date(transcript.start));
+              setIsPlaying(true);
+            }}>
+              {transcript.text} 
+            </span>
+          )
+        })
+      }
+    </div>
+  );
+}
+
 const TimelinePage = () => {
   let { items, voices, start, end, transcripts } = zLoaderData.parse(
     useLoaderData<LoaderData>(),
@@ -72,7 +146,6 @@ const TimelinePage = () => {
 
   const {
     containerRef,
-    dimensions,
     transform,
     timeScale,
     width,
@@ -94,70 +167,54 @@ const TimelinePage = () => {
         <div
           ref={containerRef}
           style={{
-            height: height + dimensions.margin.top + dimensions.margin.bottom,
+            height: height,
           }}
         >
           {containerRef.current && (
-            <svg
-              id="timeline-svg"
-              className="w-full h-full overflow-x-scroll"
-              width={width + dimensions.margin.left + dimensions.margin.right}
-              height={height + dimensions.margin.top + dimensions.margin.bottom}
-              onClick={(event) => {
-                const svgElement = event.currentTarget;
-                const rect = svgElement.getBoundingClientRect();
-                const x = event.clientX - rect.left - dimensions.margin.left;
-                const newScale = transform.rescaleX(timeScale);
-                const clickedDate = newScale.invert(x);
-                resetDate(clickedDate);
-                setIsPlaying(true);
-              }}
-            >
-              <g
-                transform={`translate(${dimensions.margin.left},0)`}
+              <svg
+                id="timeline-svg"
+                className="w-full h-full overflow-x-scroll"
+                width={width}
+                height={height}
+                onClick={(event) => {
+                  const svgElement = event.currentTarget;
+                  console.log(svgElement);
+                  const rect = svgElement.getBoundingClientRect();
+                  const x = event.clientX - rect.left;
+                  const newScale = transform.rescaleX(timeScale);
+                  const clickedDate = newScale.invert(x);
+                  resetDate(clickedDate);
+                  setIsPlaying(true);
+                }}
               >
-                <TimelineAxis
-                  scale={timeScale}
-                  transform={transform}
-                  height={0}
-                  width={width}
-                />
-                <g clipPath="url(#clip)">
-                  <TimelineItems
-                    items={items}
+                <g
+                >
+                  <TimelineAxis
                     scale={timeScale}
                     transform={transform}
+                    height={0}
+                    width={width}
                   />
-                  {currentDate !== null && (
-                    <CursorLine
-                      position={transform.applyX(timeScale(currentDate))}
-                      height={height - dimensions.margin.top}
+                  <g clipPath="url(#clip)">
+                    <TimelineItems
+                      items={items}
+                      scale={timeScale}
+                      transform={transform}
                     />
-                  )}
-                  <g className="transcripts">
-                    {transcripts.map((transcript, index) => {
-                      const xPosition = transform.applyX(
-                        timeScale(new Date(transcript.start)),
-                      );
-                      return (
-                        <foreignObject
-                          key={index}
-                          x={xPosition}
-                          y={height - dimensions.margin.bottom - 20}
-                          width="1900px"
-                          height="30px"
-                        >
-                          <p className="opacity-20">{transcript.text}</p>
-                        </foreignObject>
-                      );
-                    })}
+                    {currentDate !== null && (
+                      <CursorLine
+                        position={transform.applyX(timeScale(currentDate))}
+                        height={80}
+                      />
+                    )}
                   </g>
                 </g>
-               
-              </g>
-            </svg>
+              </svg>
           )}
         </div>
+        <TranscriptsRow
+          transcripts={transcripts}
+        />
       </div>
     </>
   );

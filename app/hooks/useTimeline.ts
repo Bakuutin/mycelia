@@ -6,12 +6,6 @@ import { type LoaderData } from "../types/timeline.ts";
 interface TimelineDimensions {
   width: number;
   height: number;
-  margin: {
-    top: number;
-    right: number;
-    bottom: number;
-    left: number;
-  };
 }
 
 export function useTimeline(
@@ -21,15 +15,12 @@ export function useTimeline(
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState<TimelineDimensions>({
     width: 800,
-    height: 500,
-    margin: { top: 50, right: 20, bottom: 110, left: 40 },
+    height: 100,
   });
   const [transform, setTransform] = useState(d3.zoomIdentity);
 
-  const width = dimensions.width - dimensions.margin.left -
-    dimensions.margin.right;
-  const height = dimensions.height - dimensions.margin.top -
-    dimensions.margin.bottom;
+  const width = dimensions.width;
+  const height = dimensions.height;
 
   useEffect(() => {
     if (!containerRef.current) return;

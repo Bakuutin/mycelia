@@ -109,7 +109,7 @@ export const TranscriptsRow = ({
                 {s.start.toLocaleTimeString()}
               </h3>
               <p className="mt-2 text-sm text-gray-600 line-clamp-3">
-                {s.text}
+                {JSON.stringify(s)}
               </p>
             </div>
           );
