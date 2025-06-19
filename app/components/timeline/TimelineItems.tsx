@@ -36,7 +36,6 @@ export const TimelineItems = ({
           <rect
             key={item.start.getTime()}
             x={startX}
-            y={50}
             width={width}
             height={20}
             fill={getFill(item)}

@@ -16,6 +16,8 @@ import { authenticateOrRedirect } from "../lib/auth/core.server.ts";
 import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
 import { useTimeline } from "../hooks/useTimeline.ts";
 import GainSlider from "@/components/timeline/GainSlider.tsx";
+import { config } from "@/config.ts";
+
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOrRedirect(request);
@@ -43,49 +45,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 
-
-const FONT_SIZE = 16;
-const LINE_HEIGHT = 24;
-const PADDING = 6;
-
-interface TextBlockProps {
-  x: number;
-  y: number;
-  text: string;
-}
-
-const TextBlock = ({ x, y, text }: TextBlockProps) => {
-  const ref = useRef<SVGTextElement>(null);
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    if (ref.current) {
-      setWidth(ref.current.getBBox().width + PADDING * 2);
-    }
-  }, [text]);
-
-  return (
-    <g transform={`translate(${x}, ${y})`}>
-      <rect
-        x={0}
-        y={0}
-        width={width}
-        height={LINE_HEIGHT}
-        fill="lightblue"
-        rx={4}
-      />
-      <text
-        ref={ref}
-        x={PADDING}
-        y={LINE_HEIGHT / 2 + FONT_SIZE / 2 - 4}
-        fontSize={FONT_SIZE}
-      >
-        {text}
-      </text>
-    </g>
-  );
-};
-
 interface Transcript {
   start: string;
   text: string;
@@ -103,7 +62,7 @@ function TranscriptsRow({ transcripts }: TranscriptsRowProps) {
       {
         transcripts.map((transcript) => {
           return (
-            <span className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer" key={transcript.start} onClick={() => {
+            <span className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer" key={transcript.start.getTime().toString()} onClick={() => {
               resetDate(new Date(transcript.start));
               setIsPlaying(true);
             }}>
@@ -166,16 +125,24 @@ const TimelinePage = () => {
         </div>
         <div
           ref={containerRef}
-          style={{
-            height: height,
-          }}
         >
           {containerRef.current && (
+            <>
+            {
+                config.layers.map((layer, i) => (
+                    <layer.component
+                      key={i}
+                      scale={timeScale}
+                      transform={transform}
+                      width={width}
+                    />
+                ))
+              }
+              
               <svg
-                id="timeline-svg"
-                className="w-full h-full overflow-x-scroll"
+                className="w-full h-full overflow-x-scroll zoomable"
                 width={width}
-                height={height}
+                height={40}
                 onClick={(event) => {
                   const svgElement = event.currentTarget;
                   console.log(svgElement);
@@ -189,13 +156,8 @@ const TimelinePage = () => {
               >
                 <g
                 >
-                  <TimelineAxis
-                    scale={timeScale}
-                    transform={transform}
-                    height={0}
-                    width={width}
-                  />
-                  <g clipPath="url(#clip)">
+                  
+                  <g>
                     <TimelineItems
                       items={items}
                       scale={timeScale}
@@ -210,6 +172,8 @@ const TimelinePage = () => {
                   </g>
                 </g>
               </svg>
+           
+            </>   
           )}
         </div>
         <TranscriptsRow

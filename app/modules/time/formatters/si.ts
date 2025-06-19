@@ -71,7 +71,7 @@ const generateTicks = (start: number, end: number, width: number) => {
   return ticks;
 };
 
-export const generateSILabels = (
+const generateSILabels = (
   scale: d3.ScaleTime<number, number>,
   transform: d3.ZoomTransform,
   width: number,
@@ -90,6 +90,9 @@ export const generateSILabels = (
       segments: segments.filter((segment, i) => segment !== prevSegments[i]),
     };
     prevSegments = segments;
+    result.segments.reverse();
     return result;
   });
 };
+
+export default generateSILabels;

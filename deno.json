@@ -16,7 +16,8 @@
     "@std/dotenv": "jsr:@std/dotenv@^0.225.3",
     "@std/uuid": "jsr:@std/uuid@^1.0.5",
     "@zaubrik/djwt": "jsr:@zaubrik/djwt@^3.0.2",
-    "ms": "npm:ms"
+    "ms": "npm:ms",
+    "react": "npm:react@^18.3.1"
   },
   "compilerOptions": {
     "lib": [

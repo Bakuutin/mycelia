@@ -52,6 +52,25 @@ export function useTimeline(
     [onDateRangeChange],
   );
 
+  
+
+  const zoomables = useMemo(() => {
+    if (!containerRef.current) return [];
+
+    return d3.selectAll(".zoomable");
+  }, [containerRef]);
+
+  const zooms = useMemo(() => {
+    const zooms = [];
+    for (const node of zoomables) {
+      const zoom = d3.zoom();
+      zooms.push(zoom);
+      d3.select(node).call(zoom as any);
+    }
+    return zooms;
+  }, [zoomables]);
+
+
   const handleZoom = useCallback(
     (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
       const newScale = event.transform.rescaleX(timeScale);
@@ -59,22 +78,21 @@ export function useTimeline(
       if (isNaN(start.getTime()) || isNaN(end.getTime())) {
         return;
       }
+      console.log(event);
       setTransform(event.transform);
       fetchMore(start, end);
     },
-    [timeScale, fetchMore],
+    [timeScale, fetchMore, zoomables, zooms],
   );
 
-  const zoom = useMemo(() => {
-    const zoom = d3.zoom();
-    zoom.on("zoom", handleZoom);
-    return zoom;
-  }, [width, height, handleZoom]);
-
   useEffect(() => {
-    const svg = d3.select("#timeline-svg");
-    svg.call(zoom as any);
-  }, [zoom]);
+    zooms.forEach(zoom => zoom.on("zoom", e => handleZoom(e)));
+  }, [zooms, handleZoom]);
+
+  // useEffect(() => {
+  //   const svg = d3.selectAll(".zoomable");
+  //   svg.call(zoom as any);
+  // }, [zoom]);
 
   return {
     containerRef,
