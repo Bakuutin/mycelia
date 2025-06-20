@@ -13,93 +13,89 @@ export function useTimeline(
   onDateRangeChange: (start: Date, end: Date) => void,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState<TimelineDimensions>({
-    width: 800,
-    height: 100,
-  });
-  const [transform, setTransform] = useState(d3.zoomIdentity);
+  const [dimensions, setDimensions] = useState<TimelineDimensions>({ width: 800, height: 100 });
+  const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
 
-  const width = dimensions.width;
-  const height = dimensions.height;
-
+  // Resize observer for width
   useEffect(() => {
     if (!containerRef.current) return;
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) {
-        setDimensions((prev) => ({
-          ...prev,
-          width: entry.contentRect.width,
-        }));
-      }
+    const ro = new ResizeObserver(([{ contentRect }]) => {
+      setDimensions(prev => ({ ...prev, width: contentRect.width }));
     });
-
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
   }, [containerRef]);
 
-  const timeScale = useMemo(() => {
-    return d3.scaleTime()
+  // Base time scale
+  const timeScale = useMemo(() =>
+    d3.scaleTime()
       .domain([new Date(data.start), new Date(data.end)])
-      .range([0, width]);
-  }, [data.start, data.end, width]);
-
-  const fetchMore = useCallback(
-    _.debounce((start: Date, end: Date) => {
-      onDateRangeChange(start, end);
-    }, 300),
-    [onDateRangeChange],
+      .range([0, dimensions.width]),
+    [dimensions.width]
   );
 
-  
+  // Debounced data fetch
+  const fetchMore = useCallback(
+    _.debounce((start: Date, end: Date) => onDateRangeChange(start, end), 300),
+    [onDateRangeChange]
+  );
 
-  const zoomables = useMemo(() => {
-    if (!containerRef.current) return [];
-
-    return d3.selectAll(".zoomable");
-  }, [containerRef]);
-
-  const zooms = useMemo(() => {
-    const zooms = [];
-    for (const node of zoomables) {
-      const zoom = d3.zoom();
-      zooms.push(zoom);
-      d3.select(node).call(zoom as any);
-    }
-    return zooms;
-  }, [zoomables]);
-
-
+  // Zoom event handler: horizontal only, syncs state
   const handleZoom = useCallback(
     (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
-      const newScale = event.transform.rescaleX(timeScale);
-      const [start, end] = newScale.domain();
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return;
-      }
-      console.log(event);
-      setTransform(event.transform);
-      fetchMore(start, end);
+      const t = event.transform;
+      setTransform(t);
+
+      // fetch new domain
+      const newDomain = t.rescaleX(timeScale).domain();
+      if (!isNaN(newDomain[0].getTime())) fetchMore(newDomain[0], newDomain[1]);
+
+      // Sync zoom state across all zoomable SVGs
+      d3.selectAll<SVGSVGElement, unknown>('.zoomable').each(function() {
+        const svg = d3.select(this);
+        const node = svg.node();
+        
+        if (!node || node.contains(event.sourceEvent?.target as Element)) return;
+        
+        svg.property('__zoom', t);
+      });
     },
-    [timeScale, fetchMore, zoomables, zooms],
+    [timeScale]
   );
 
-  useEffect(() => {
-    zooms.forEach(zoom => zoom.on("zoom", e => handleZoom(e)));
-  }, [zooms, handleZoom]);
+  // Memoize zoom behavior to prevent recreation
+  const zoomBehavior = useMemo(() => 
+    d3.zoom<SVGSVGElement, unknown>()
+      .on('zoom', handleZoom)
+      // .scaleExtent([0.1, 100])
+      // .translateExtent([[0, 0], [dimensions.width, dimensions.height]])
+      .wheelDelta((event) => -event.deltaY * 0.002),
+    [handleZoom, dimensions.width, dimensions.height]
+  );
 
-  // useEffect(() => {
-  //   const svg = d3.selectAll(".zoomable");
-  //   svg.call(zoom as any);
-  // }, [zoom]);
+  // Attach zoom once
+  useEffect(() => {
+    const svgs = d3.selectAll<SVGSVGElement, unknown>('.zoomable');
+
+    svgs.each(function() {
+      const svg = d3.select(this);
+      // attach zoom
+      svg.call(zoomBehavior as any);
+      // initialize internal state
+      svg.property('__zoom', transform);
+    });
+
+    return () => {
+      svgs.on('zoom', null);
+    };
+  }, [zoomBehavior, dimensions.width, dimensions.height]);
 
   return {
     containerRef,
     dimensions,
     transform,
     timeScale,
-    width,
-    height,
+    width: dimensions.width,
+    height: dimensions.height,
   };
 }

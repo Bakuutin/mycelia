@@ -8,3 +8,17 @@ body {
 body {
   @apply bg-gray-800 text-gray-50;
 }
+
+/* Ensure smooth zooming */
+.zoomable {
+  touch-action: none;
+  user-select: none;
+}
+
+.zoomable * {
+  pointer-events: none;
+}
+
+.zoomable rect.timeline-item {
+  pointer-events: auto;
+}

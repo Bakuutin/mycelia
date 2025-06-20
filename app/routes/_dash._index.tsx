@@ -46,6 +46,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 
 interface Transcript {
+  id: string;
   start: string;
   text: string;
 }
@@ -62,7 +63,7 @@ function TranscriptsRow({ transcripts }: TranscriptsRowProps) {
       {
         transcripts.map((transcript) => {
           return (
-            <span className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer" key={transcript.start.getTime().toString()} onClick={() => {
+            <span className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer" key={transcript.id} onClick={() => {
               resetDate(new Date(transcript.start));
               setIsPlaying(true);
             }}>
@@ -140,7 +141,7 @@ const TimelinePage = () => {
               }
               
               <svg
-                className="w-full h-full overflow-x-scroll zoomable"
+                className="w-full h-full zoomable"
                 width={width}
                 height={40}
                 onClick={(event) => {
@@ -154,22 +155,18 @@ const TimelinePage = () => {
                   setIsPlaying(true);
                 }}
               >
-                <g
-                >
-                  
-                  <g>
-                    <TimelineItems
-                      items={items}
-                      scale={timeScale}
-                      transform={transform}
+                <g>
+                  <TimelineItems
+                    items={items}
+                    scale={timeScale}
+                    transform={transform}
+                  />
+                  {currentDate !== null && (
+                    <CursorLine
+                      position={transform.applyX(timeScale(currentDate))}
+                      height={80}
                     />
-                    {currentDate !== null && (
-                      <CursorLine
-                        position={transform.applyX(timeScale(currentDate))}
-                        height={80}
-                      />
-                    )}
-                  </g>
+                  )}
                 </g>
               </svg>
            

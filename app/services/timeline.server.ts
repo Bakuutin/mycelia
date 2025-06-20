@@ -316,11 +316,10 @@ export async function fetchTimelineData(
     resolution = "5min";
   }
 
-  const binSeconds = RESOLUTION_TO_MS[resolution] / 1000;
-  const queryStart = new Date(startDate.getTime() - duration - binSeconds);
-  const queryEnd = new Date(endDate.getTime() + duration + binSeconds);
+  const binSize = RESOLUTION_TO_MS[resolution];
+  const queryStart = new Date(startDate.getTime() - duration - binSize);
+  const queryEnd = new Date(endDate.getTime() + duration + binSize);
 
-  // Fetch histogram data
   const histogramCollection = db.collection(`histogram_${resolution}`);
   const histogramData = await histogramCollection
     .find({
@@ -328,10 +327,11 @@ export async function fetchTimelineData(
     }, { sort: { start: 1 } });
 
   const items = histogramData.map((doc: any) => ({
+    id: doc._id.toHexString(),
     start: doc.start,
     end: new Date(doc.start.getTime() + RESOLUTION_TO_MS[resolution]),
     totals: {
-      seconds: binSeconds,
+      seconds: binSize,
       ...doc.totals,
     },
   }));

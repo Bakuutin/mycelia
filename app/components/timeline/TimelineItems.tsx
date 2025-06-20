@@ -32,9 +32,10 @@ export const TimelineItems = ({
         const endX = newScale(item.end);
         const width = Math.max(endX - startX + 2, 2);
 
-        return (
+        // return null 
+        return(
           <rect
-            key={item.start.getTime()}
+            key={item.id}
             x={startX}
             width={width}
             height={20}

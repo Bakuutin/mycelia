@@ -11,6 +11,7 @@ export const zTimelineItem = z.object({
   start: z.date(),
   end: z.date(),
   totals: z.any(),
+  id: z.string(),
 });
 
 export const zQueryParams = z.object({
