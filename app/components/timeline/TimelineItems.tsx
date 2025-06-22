@@ -10,13 +10,14 @@ interface TimelineItemsProps {
 }
 
 const colorScale = d3.scaleSequential()
-    .domain([-15, -2])
-    .interpolator(d3.interpolateRdYlBu);
+  .domain([-15, -2])
+  .interpolator(d3.interpolateRdYlBu);
 
 const getFill = (item: TimelineItem) => {
-  const density = (item.totals.audio_chunks?.has_speech || 0.1) / item.totals.seconds;
+  const density = (item.totals.audio_chunks?.has_speech || 0.1) /
+    item.totals.seconds;
   return colorScale(Math.log(density));
-}
+};
 
 export const TimelineItems = ({
   items,
@@ -32,8 +33,7 @@ export const TimelineItems = ({
         const endX = newScale(item.end);
         const width = Math.max(endX - startX + 2, 2);
 
-        // return null 
-        return(
+        return (
           <rect
             key={item.id}
             x={startX}

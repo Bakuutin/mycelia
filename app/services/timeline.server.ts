@@ -1,13 +1,9 @@
 import _ from "lodash";
-import {
-  type LoaderData,
-  type Timestamp,
-} from "../types/timeline.ts";
+import { type LoaderData, type Timestamp } from "../types/timeline.ts";
 
 import ms from "ms";
 
 import { getRootDB } from "@/lib/mongo/core.server.ts";
-
 
 type Resolution = "5min" | "1hour" | "1day" | "1week";
 
@@ -45,7 +41,12 @@ const TARGET_COLLECTIONS: Record<string, AggregationConfig> = {
     aggregations: [
       { key: "speech_probability_max", operation: { $max: "$vad.prob" } },
       { key: "speech_probability_avg", operation: { $avg: "$vad.prob" } },
-      { key: "has_speech", operation: { $sum: { $cond: [{ $eq: ["$vad.has_speech", true] }, 1, 0] } } },
+      {
+        key: "has_speech",
+        operation: {
+          $sum: { $cond: [{ $eq: ["$vad.has_speech", true] }, 1, 0] },
+        },
+      },
     ],
   },
   diarizations: {
@@ -116,7 +117,6 @@ export async function updateHistogram(
     ];
 
     const results = await sourceCollection.aggregate(pipeline).toArray();
-
 
     const ops = results.map(({ _id: binStart, ...aggr }) => ({
       updateOne: {
@@ -292,7 +292,6 @@ export function getDaysAgo(n: number) {
   return monthAgo;
 }
 
-
 export async function fetchTimelineData(
   db: any,
   start: Timestamp,
@@ -336,17 +335,15 @@ export async function fetchTimelineData(
     },
   }));
 
-  const transcriptions = (
-    await db.collection("transcriptions").find({
-      start: { $lte: queryEnd },
-      end: { $gte: queryStart },
-      segments: {
-        $exists: true, 
-        $type: "array", 
-        $not: { $size: 0 } 
-      }
-    }, { sort: { start: 1 }, limit: 30 })
-  )
+  const transcriptions = await db.collection("transcriptions").find({
+    start: { $lte: queryEnd },
+    end: { $gte: queryStart },
+    segments: {
+      $exists: true,
+      $type: "array",
+      $not: { $size: 0 },
+    },
+  }, { sort: { start: 1 }, limit: 30 });
 
   const transcripts = [];
 
@@ -426,15 +423,15 @@ export async function updateAllHistogram(
 
 export async function ensureHistogramIndex(): Promise<void> {
   const db = await getRootDB();
-  
+
   for (const resolution of RESOLUTION_ORDER) {
     const collection = db.collection(`histogram_${resolution}`);
     const indexes = await collection.indexes();
-    
-    const hasStartIndex = indexes.some(index => 
+
+    const hasStartIndex = indexes.some((index) =>
       index.key && index.key.start === 1
     );
-    
+
     if (!hasStartIndex) {
       console.log(`Creating index on start field for histogram_${resolution}`);
       await collection.createIndex({ start: 1 });

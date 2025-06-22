@@ -1,4 +1,4 @@
-import React, { Suspense, useRef, useState, useEffect } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
 import { LoaderFunctionArgs } from "@remix-run/node";
 import {
@@ -17,7 +17,6 @@ import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
 import { useTimeline } from "../hooks/useTimeline.ts";
 import GainSlider from "@/components/timeline/GainSlider.tsx";
 import { config } from "@/config.ts";
-
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOrRedirect(request);
@@ -44,7 +43,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return fetchTimelineData(auth.db, params.start, params.end);
 }
 
-
 interface Transcript {
   id: string;
   start: string;
@@ -60,18 +58,20 @@ function TranscriptsRow({ transcripts }: TranscriptsRowProps) {
 
   return (
     <div className="">
-      {
-        transcripts.map((transcript) => {
-          return (
-            <span className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer" key={transcript.id} onClick={() => {
+      {transcripts.map((transcript) => {
+        return (
+          <span
+            className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer"
+            key={transcript.id}
+            onClick={() => {
               resetDate(new Date(transcript.start));
               setIsPlaying(true);
-            }}>
-              {transcript.text} 
-            </span>
-          )
-        })
-      }
+            }}
+          >
+            {transcript.text}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -129,17 +129,15 @@ const TimelinePage = () => {
         >
           {containerRef.current && (
             <>
-            {
-                config.layers.map((layer, i) => (
-                    <layer.component
-                      key={i}
-                      scale={timeScale}
-                      transform={transform}
-                      width={width}
-                    />
-                ))
-              }
-              
+              {config.layers.map((layer, i) => (
+                <layer.component
+                  key={i}
+                  scale={timeScale}
+                  transform={transform}
+                  width={width}
+                />
+              ))}
+
               <svg
                 className="w-full h-full zoomable"
                 width={width}
@@ -169,8 +167,7 @@ const TimelinePage = () => {
                   )}
                 </g>
               </svg>
-           
-            </>   
+            </>
           )}
         </div>
         <TranscriptsRow

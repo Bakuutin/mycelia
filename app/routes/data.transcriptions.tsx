@@ -14,7 +14,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return { transcriptions: [] };
   }
 
-
   const startDate = new Date(startParam);
   const endDate = new Date(endParam);
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {

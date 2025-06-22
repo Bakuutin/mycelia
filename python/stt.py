@@ -172,4 +172,3 @@ def mark_as_transcribed(seq: SpeechSequence):
 
 if __name__ == '__main__':
     process_speech_sequences(limit=None, max_workers=5)
-    # list(get_speech_sequences(limit=10))

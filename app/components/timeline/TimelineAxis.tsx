@@ -30,44 +30,37 @@ interface TickLabelProps {
 const TickLabel: React.FC<TickLabelProps> = ({ value, xOffset, segments }) => {
   const [first, ...rest] = segments;
 
-
   return (
     <g
       transform={`translate(${xOffset},0)`}
     >
       <foreignObject
-      width="100px"
-      height="45px"
-      style={{
-        transform: "translateX(-50px)",
-      }}
-    >
-          <div className="flex flex-col-reverse h-full">
-            <p className="text-center text-xs">{first}</p>
-            {
-              rest.length > 0 && (
-                <div className="mx-auto text-center text-xs flex flex-row-reverse gap-1">
-                    {
-                      rest.map((segment, i) => (
-                        <span key={i}>{segment}</span>
-                      ))
-                    }
-                </div>
-              )
-            }
-          </div>
-    </foreignObject>
-    <line
-      x1="0"
-      x2="0"
-      y1="48"
-      y2="45"
-      stroke="currentColor"
-      strokeWidth="1"
-    />
-  </g>
-);
-}
+        width="100px"
+        height="45px"
+        style={{
+          transform: "translateX(-50px)",
+        }}
+      >
+        <div className="flex flex-col-reverse h-full">
+          <p className="text-center text-xs">{first}</p>
+          {rest.length > 0 && (
+            <div className="mx-auto text-center text-xs flex flex-row-reverse gap-1">
+              {rest.map((segment, i) => <span key={i}>{segment}</span>)}
+            </div>
+          )}
+        </div>
+      </foreignObject>
+      <line
+        x1="0"
+        x2="0"
+        y1="48"
+        y2="45"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+    </g>
+  );
+};
 
 const TickLabels: React.FC<{ labels: Label[] }> = ({ labels }) => (
   <>
