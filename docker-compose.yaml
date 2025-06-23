@@ -1,16 +1,57 @@
 services:
-  mongo:
-    image: mongo:8
-    ports:
-      - 27017:27017
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD
-    volumes:
-      - .docker/mongo:/data/db
   redis:
-    image: redis:7
+    image: redis
     ports:
-      - 6379:6379
+      - "6379:6379"
     volumes:
-      - .docker/redis:/data
+      - /mnt/data/mycelia/redis:/data
+    environment:
+      - REDIS_PASSWORD
+    networks:
+      - a5t
+  mongo:
+    image: mongo:8.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - /mnt/data/mycelia/mongo:/data/db
+    restart: unless-stopped
+    command: ["mongod", "--keyFile", "/data/db/mongo-keyfile", "--bind_ip_all"]
+    networks:
+      - a5t
+  storage:
+    image: minio/minio
+    volumes:
+      - /mnt/data/mycelia/minio:/data
+    environment:
+      - MINIO_ROOT_USER
+      - MINIO_ROOT_PASSWORD
+    command: server /data --console-address :9001
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.storage.rule=Host(`storage.tigor.net`)"
+      - "traefik.http.routers.storage.service=svc_storage"
+      - "traefik.http.services.svc_storage.loadbalancer.server.port=9000"
+    networks:
+      - traefik_default
+      - a5t
+
+  app:
+    image: ${IMAGE}
+    environment:
+      - MONGO_URL
+      - SECRET_KEY
+      - DATABASE_NAME
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
+      - "traefik.http.routers.mycelia.service=mycelia"
+      - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
+    networks:
+      - traefik_default
+      - a5t
+
+networks:
+  a5t:
+  traefik_default:
+    external: true
