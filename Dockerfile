@@ -1,4 +1,4 @@
-FROM denoland/deno:2.3.1
+FROM denoland/deno:2.3.6
 WORKDIR /app
 USER deno
 ADD ./deno.json /app/deno.json

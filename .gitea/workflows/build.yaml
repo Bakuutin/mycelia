@@ -32,17 +32,17 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.PROJECT_NAME }}:latest
-          cache-to: type=inline
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.PROJECT_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.PROJECT_NAME }}:${{ gitea.sha }}
+      # - name: Build and push
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: .
+      #     file: ./Dockerfile
+      #     push: true
+      #     cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.PROJECT_NAME }}:latest
+      #     cache-to: type=inline
+      #     tags: |
+      #       ${{ env.REGISTRY }}/${{ env.PROJECT_NAME }}:latest
+      #       ${{ env.REGISTRY }}/${{ env.PROJECT_NAME }}:${{ gitea.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
