@@ -37,4 +37,7 @@ export default defineConfig({
       externalConditions: ["deno", "node"],
     },
   },
+  server: {
+    allowedHosts: ["mycelia.tigor.net", "localhost", "127.0.0.1"],
+  },
 });
