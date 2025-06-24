@@ -4,4 +4,4 @@ ADD . /app
 RUN deno cache cmd.ts --lock=deno.lock
 USER deno
 EXPOSE 3000
-CMD ["deno", "run", "-A", "--env", "cmd.ts", "serve"]
+CMD ["deno", "run", "-A", "cmd.ts", "serve"]
