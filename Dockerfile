@@ -1,9 +1,7 @@
 FROM denoland/deno:2.3.6
 WORKDIR /app
-USER deno
-ADD ./deno.json /app/deno.json
-ADD ./deno.lock /app/deno.lock
-RUN deno install --lock
 ADD . /app
+RUN deno cache cmd.ts --lock=deno.lock
+USER deno
 EXPOSE 3000
 CMD ["deno", "run", "-A", "--env", "cmd.ts", "serve"]

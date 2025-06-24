@@ -1,3 +1,17 @@
 .env
 .git
 node_modules
+
+node_modules
+
+/.cache
+/build
+.env
+.local
+*.local
+*.local.*
+.docker
+**/.venv
+**/.DS_Store
+.ruff_cache
+*.ipynb
