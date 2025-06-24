@@ -1,6 +1,7 @@
 FROM denoland/deno:2.3.6
 EXPOSE 5173
 WORKDIR /app
+ENV NODE_ENV=production
 COPY . /app
 RUN chown -R deno:deno /app
 USER deno
