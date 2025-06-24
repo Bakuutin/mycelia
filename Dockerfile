@@ -1,7 +1,8 @@
 FROM denoland/deno:2.3.6
-WORKDIR /app
-ADD . /app
-RUN deno cache cmd.ts --lock=deno.lock
-USER deno
 EXPOSE 3000
+WORKDIR /app
+COPY . /app
+RUN chown -R deno:deno /app
+USER deno
+RUN deno cache cmd.ts --lock=deno.lock
 CMD ["deno", "run", "-A", "cmd.ts", "serve"]

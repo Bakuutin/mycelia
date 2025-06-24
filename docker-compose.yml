@@ -47,8 +47,6 @@ services:
       - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
       - "traefik.http.routers.mycelia.service=mycelia"
       - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
-    volumes:
-      - /mnt/data/mycelia/app:/app
     networks:
       - traefik_default
       - a5t
