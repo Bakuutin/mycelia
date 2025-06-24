@@ -36,20 +36,20 @@ services:
       - traefik_default
       - a5t
 
-  # app:
-  #   image: ${IMAGE}
-  #   environment:
-  #     - MONGO_URL
-  #     - SECRET_KEY
-  #     - DATABASE_NAME
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
-  #     - "traefik.http.routers.mycelia.service=mycelia"
-  #     - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
-  #   networks:
-  #     - traefik_default
-  #     - a5t
+  app:
+    image: ${IMAGE}
+    environment:
+      - MONGO_URL
+      - SECRET_KEY
+      - DATABASE_NAME
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
+      - "traefik.http.routers.mycelia.service=mycelia"
+      - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
+    networks:
+      - traefik_default
+      - a5t
 
 networks:
   a5t:
