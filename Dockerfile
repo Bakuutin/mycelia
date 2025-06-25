@@ -1,5 +1,5 @@
 FROM denoland/deno:2.3.6
-EXPOSE 5173
+EXPOSE 3000
 WORKDIR /app
 ENV NODE_ENV=production
 COPY . /app
