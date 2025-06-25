@@ -6,4 +6,5 @@ COPY . /app
 RUN chown -R deno:deno /app
 USER deno
 RUN deno cache cmd.ts --lock=deno.lock
-CMD ["deno", "run", "-A", "cmd.ts", "serve", "--prod"]
+RUN deno run -A npm:@remix-run/dev vite:build
+CMD ["deno", "run", "-A", "npm:@remix-run/serve", "./build/server/index.js"]

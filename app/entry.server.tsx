@@ -2,6 +2,7 @@ import type { AppLoadContext, EntryContext } from "@remix-run/deno";
 import { RemixServer } from "@remix-run/react";
 import * as isbotModule from "isbot";
 import { renderToReadableStream } from "react-dom/server";
+import React from "react";
 
 export default async function handleRequest(
   request: Request,
