@@ -6,9 +6,18 @@ import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import process, { exit } from "node:process";
 import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
 import { build, createServer } from "vite";
+import express from "npm:express";
+import morgan from "npm:morgan";
+
+import {
+  type ServerBuild,
+  installGlobals,
+  createRequestHandler,
+} from "@remix-run/node";
 import { findAndImportFiles } from "@/lib/importers/main.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
 import ms from "ms";
+import path from "node:path";
 
 function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
   if (!expr) return undefined;
@@ -28,6 +37,51 @@ function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
 }
 
 await ensureDbConnected();
+
+async function startProdServer() {
+  const app = express();
+  const buildPath = path.resolve("./build/server/index.js");
+  const build: ServerBuild = await import(buildPath);
+  app.disable("x-powered-by");
+  app.use(
+    build.publicPath,
+    express.static(build.assetsBuildDirectory, {
+      immutable: true,
+      maxAge: "1y",
+    })
+  );
+  app.use(express.static("public", { maxAge: "1h" }));
+  app.use(morgan("tiny"));
+
+  app.all(
+    "*",
+    createRequestHandler(build)
+  );
+
+  const server = app.listen(3000, () => {
+    console.log("Server is running on port 3000");
+  });
+
+  ["SIGTERM", "SIGINT"].forEach((signal) => {
+    process.once(signal, () => server?.close(console.error)); 
+  });
+}
+
+async function startDevServer() {
+  const server = await createServer({
+    configFile: "vite.config.ts",
+    mode: "development",
+  });
+
+  await server.listen(5173);
+
+  console.log("Server is running on port 5173");
+
+  ["SIGTERM", "SIGINT"].forEach((signal) => {
+    process.once(signal, () => server?.close());
+  });
+}
+
 
 const root = new Command()
   .name("deno run -A --env cmd.ts")
@@ -85,36 +139,10 @@ const root = new Command()
       .action(async ({ port, host, prod }) => {
         try {
           if (prod) {
-            console.log("Building for production...");
-            await build({
-              configFile: "vite.config.ts",
-              mode: "production",
-            });
-            console.log("Build complete!");
+            await startProdServer();
+          } else {
+            await startDevServer();
           }
-
-          const server = await createServer({
-            configFile: "vite.config.ts",
-            mode: prod ? "production" : "development",
-            server: {
-              port,
-              host,
-            },
-          });
-
-          await server.listen();
-
-          console.log(
-            `${prod ? "Production" : "Development"} server running at:`,
-            server.resolvedUrls?.local?.[0] || "unknown",
-          );
-
-          await new Promise((resolve) => {
-            process.on("SIGINT", resolve);
-            process.on("SIGTERM", resolve);
-          });
-
-          await server.close();
         } catch (err) {
           console.error("Failed to start server:", err);
           exit(1);
