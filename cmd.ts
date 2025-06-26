@@ -55,7 +55,7 @@ async function startProdServer() {
 
   app.all(
     "*",
-    createRequestHandler(build)
+    createRequestHandler(build, "production")
   );
 
   const server = app.listen(3000, () => {
