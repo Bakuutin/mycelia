@@ -1,4 +1,4 @@
-FROM denoland/deno:2.3.6
+FROM denoland/deno:2.3.7
 EXPOSE 3000
 WORKDIR /app
 ENV NODE_ENV=production
