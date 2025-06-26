@@ -5,7 +5,7 @@ import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import process, { exit } from "node:process";
 import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
-import { build, createServer } from "vite";
+import { createServer } from "vite";
 import express from "npm:express";
 import morgan from "npm:morgan";
 
@@ -64,7 +64,7 @@ async function startProdServer() {
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
     process.once(signal, () => server?.close(console.error)); 
-  });
+  }); 
 }
 
 async function startDevServer() {
@@ -143,6 +143,10 @@ const root = new Command()
           } else {
             await startDevServer();
           }
+          await new Promise((resolve) => {
+            process.on("SIGINT", resolve);
+            process.on("SIGTERM", resolve);
+          });
         } catch (err) {
           console.error("Failed to start server:", err);
           exit(1);
