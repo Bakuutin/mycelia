@@ -11,9 +11,9 @@ import morgan from "npm:morgan";
 
 import {
   type ServerBuild,
-  installGlobals,
-  createRequestHandler,
 } from "@remix-run/node";
+import { createRequestHandler as createRemixHandler } from "@remix-run/express"
+
 import { findAndImportFiles } from "@/lib/importers/main.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
 import ms from "ms";
@@ -55,7 +55,7 @@ async function startProdServer() {
 
   app.all(
     "*",
-    createRequestHandler(build, "production")
+    createRemixHandler({ build, mode: "production" })
   );
 
   const server = app.listen(3000, () => {
