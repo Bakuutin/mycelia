@@ -12,7 +12,7 @@ import morgan from "npm:morgan";
 import {
   type ServerBuild,
 } from "@remix-run/node";
-import { createRequestHandler as createRemixHandler } from "@remix-run/express"
+import { createRequestHandler } from "@remix-run/express"
 
 import { findAndImportFiles } from "@/lib/importers/main.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
@@ -43,6 +43,8 @@ async function startProdServer() {
   const buildPath = path.resolve("./build/server/index.js");
   const build: ServerBuild = await import(buildPath);
   app.disable("x-powered-by");
+  console.log(build.publicPath);
+  console.log(build.assetsBuildDirectory);
   app.use(
     build.publicPath,
     express.static(build.assetsBuildDirectory, {
@@ -55,7 +57,7 @@ async function startProdServer() {
 
   app.all(
     "*",
-    createRemixHandler({ build, mode: "production" })
+    createRequestHandler({ build, mode: "production" })
   );
 
   const server = app.listen(3000, () => {
