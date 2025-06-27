@@ -1,47 +1,13 @@
-import React, { Suspense, useEffect, useRef, useState } from "react";
-import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
-import { LoaderFunctionArgs } from "@remix-run/node";
-import {
-  type LoaderData,
-  type Timestamp,
-  zLoaderData,
-  zTimestamp,
-} from "../types/timeline.ts";
-import { CursorLine } from "@/components/timeline/cursorLine.tsx";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AudioPlayer, useDateStore } from "@/components/player.tsx";
-import { TimelineAxis } from "@/components/timeline/TimelineAxis.tsx";
-import { TimelineItems } from "@/components/timeline/TimelineItems.tsx";
 import { PlayPauseButton } from "@/components/timeline/PlayPauseButton.tsx";
-import { authenticateOrRedirect } from "../lib/auth/core.server.ts";
-import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
 import { useTimeline } from "../hooks/useTimeline.ts";
 import GainSlider from "@/components/timeline/GainSlider.tsx";
 import { config } from "@/config.ts";
+import { useTimelineRange } from "../stores/timelineRange.ts";
+import _ from "lodash";
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  const auth = await authenticateOrRedirect(request);
 
-  const url = new URL(request.url);
-  let params;
-  try {
-    const startParam = url.searchParams.get("start");
-    const endParam = url.searchParams.get("end");
-
-    params = {
-      start: startParam
-        ? zTimestamp.parse(startParam)
-        : BigInt(getDaysAgo(30).getTime()) as Timestamp,
-      end: endParam
-        ? zTimestamp.parse(endParam)
-        : BigInt(getDaysAgo(-1).getTime()) as Timestamp,
-    };
-  } catch (error) {
-    console.error(error);
-    throw new Response("Invalid format", { status: 400 });
-  }
-
-  return fetchTimelineData(auth.db, params.start, params.end);
-}
 
 interface Transcript {
   id: string;
@@ -77,43 +43,33 @@ function TranscriptsRow({ transcripts }: TranscriptsRowProps) {
 }
 
 const TimelinePage = () => {
-  let { items, voices, start, end, transcripts } = zLoaderData.parse(
-    useLoaderData<LoaderData>(),
+  const { start, end } = useTimelineRange();
+
+  const setQueryParams = useCallback(
+    _.debounce((start: Date, end: Date) => {
+      const form = new FormData();
+      form.append("start", start.getTime().toString());
+      form.append("end", end.getTime().toString());
+      
+      const searchParams = new URLSearchParams({
+        start: start.getTime().toString(),
+        end: end.getTime().toString(),
+      });
+      globalThis.history.replaceState(null, "", `?${searchParams.toString()}`);
+    }, 500),
+    [],
   );
-  const fetcher = useFetcher<LoaderData>();
 
-  if (fetcher.data) {
-    const data = zLoaderData.parse(fetcher.data);
-    items = data.items;
-    voices = data.voices;
-    transcripts = data.transcripts;
-  }
-
-  const { currentDate, resetDate, setIsPlaying } = useDateStore();
-
-  const handleDateRangeChange = (start: Date, end: Date) => {
-    const form = new FormData();
-    form.append("start", BigInt(start.getTime()).toString());
-    form.append("end", BigInt(end.getTime()).toString());
-    fetcher.submit(form);
-
-    const searchParams = new URLSearchParams({
-      start: BigInt(start.getTime()).toString(),
-      end: BigInt(end.getTime()).toString(),
-    });
-    globalThis.history.replaceState(null, "", `?${searchParams.toString()}`);
-  };
+    useEffect(() => {
+      setQueryParams(start, end);
+  }, [start, end]);
 
   const {
     containerRef,
     transform,
     timeScale,
     width,
-    height,
-  } = useTimeline(
-    { items, voices, start, end, transcripts },
-    handleDateRangeChange,
-  );
+  } = useTimeline();
 
   return (
     <>
@@ -137,42 +93,12 @@ const TimelinePage = () => {
                   width={width}
                 />
               ))}
-
-              <svg
-                className="w-full h-full zoomable"
-                width={width}
-                height={40}
-                onClick={(event) => {
-                  const svgElement = event.currentTarget;
-                  console.log(svgElement);
-                  const rect = svgElement.getBoundingClientRect();
-                  const x = event.clientX - rect.left;
-                  const newScale = transform.rescaleX(timeScale);
-                  const clickedDate = newScale.invert(x);
-                  resetDate(clickedDate);
-                  setIsPlaying(true);
-                }}
-              >
-                <g>
-                  <TimelineItems
-                    items={items}
-                    scale={timeScale}
-                    transform={transform}
-                  />
-                  {currentDate !== null && (
-                    <CursorLine
-                      position={transform.applyX(timeScale(currentDate))}
-                      height={80}
-                    />
-                  )}
-                </g>
-              </svg>
             </>
           )}
         </div>
-        <TranscriptsRow
+        {/* <TranscriptsRow
           transcripts={transcripts}
-        />
+        /> */}
       </div>
     </>
   );

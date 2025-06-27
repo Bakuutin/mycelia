@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { ObjectId } from "mongodb";
 
-export type Timestamp = bigint & { readonly __brand: unique symbol };
+export type Timestamp = number & { readonly __brand: unique symbol };
 
-export const zTimestamp = z.coerce.bigint().transform((val) =>
+export const zTimestamp = z.coerce.number().transform((val) =>
   val as Timestamp
 );
 
@@ -20,12 +20,6 @@ export const zQueryParams = z.object({
 });
 
 export const zLoaderData = z.object({
-  items: z.array(zTimelineItem),
-  voices: z.array(z.object({
-    start: z.date(),
-    end: z.date(),
-  })),
-  transcripts: z.array(z.any()),
   start: z.date(),
   end: z.date(),
 });

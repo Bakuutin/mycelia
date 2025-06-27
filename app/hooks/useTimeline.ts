@@ -2,22 +2,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import _ from "lodash";
 import { type LoaderData } from "../types/timeline.ts";
+import { useTimelineRange } from "../stores/timelineRange.ts";
 
 interface TimelineDimensions {
   width: number;
   height: number;
 }
 
-export function useTimeline(
-  data: LoaderData,
-  onDateRangeChange: (start: Date, end: Date) => void,
-) {
+export function useTimeline() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState<TimelineDimensions>({
     width: 800,
     height: 100,
   });
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
+  
+  // Use the timeline range store
+  const { start, end, setRange } = useTimelineRange();
 
   // Resize observer for width
   useEffect(() => {
@@ -32,26 +33,26 @@ export function useTimeline(
   // Base time scale
   const timeScale = useMemo(() =>
     d3.scaleTime()
-      .domain([new Date(data.start), new Date(data.end)])
-      .range([0, dimensions.width]), [dimensions.width]);
+      .domain([start, end])
+      .range([0, dimensions.width]),
+      [dimensions.width]
+    );
 
-  // Debounced data fetch
-  const fetchMore = useCallback(
-    _.debounce((start: Date, end: Date) => onDateRangeChange(start, end), 300),
-    [onDateRangeChange],
+  const onZoom = useCallback(
+    _.debounce((start: Date, end: Date) => {
+      setRange(start, end);
+    }, 10),
+    [setRange],
   );
 
-  // Zoom event handler: horizontal only, syncs state
   const handleZoom = useCallback(
     (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
       const t = event.transform;
       setTransform(t);
 
-      // fetch new domain
-      const newDomain = t.rescaleX(timeScale).domain();
-      if (!isNaN(newDomain[0].getTime())) fetchMore(newDomain[0], newDomain[1]);
+      const [start, end] = t.rescaleX(timeScale).domain();
+      if (!isNaN(start.getTime())) onZoom(start, end);
 
-      // Sync zoom state across all zoomable SVGs
       d3.selectAll<SVGSVGElement, unknown>(".zoomable").each(function () {
         const svg = d3.select(this);
         const node = svg.node();
@@ -63,15 +64,12 @@ export function useTimeline(
         svg.property("__zoom", t);
       });
     },
-    [timeScale],
+    [timeScale, onZoom],
   );
 
-  // Memoize zoom behavior to prevent recreation
   const zoomBehavior = useMemo(() =>
     d3.zoom<SVGSVGElement, unknown>()
       .on("zoom", handleZoom)
-      // .scaleExtent([0.1, 100])
-      // .translateExtent([[0, 0], [dimensions.width, dimensions.height]])
       .wheelDelta((event) => -event.deltaY * 0.002), [
     handleZoom,
     dimensions.width,
@@ -101,6 +99,5 @@ export function useTimeline(
     transform,
     timeScale,
     width: dimensions.width,
-    height: dimensions.height,
   };
 }

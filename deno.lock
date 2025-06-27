@@ -74,6 +74,7 @@
     "npm:isbot@^4.1.0": "4.4.0",
     "npm:jose@^6.0.10": "6.0.11",
     "npm:jsonwebtoken@^9.0.2": "9.0.2",
+    "npm:lodash@*": "4.17.21",
     "npm:lodash@^4.17.21": "4.17.21",
     "npm:lucide-react@0.475": "0.475.0_react@18.3.1",
     "npm:luxon@*": "3.6.1",

@@ -5,7 +5,7 @@ import ms from "ms";
 
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 
-type Resolution = "5min" | "1hour" | "1day" | "1week";
+export type Resolution = "5min" | "1hour" | "1day" | "1week";
 
 const RESOLUTION_TO_MS: Record<Resolution, number> = {
   "5min": ms("5m"),
@@ -296,6 +296,7 @@ export async function fetchTimelineData(
   db: any,
   start: Timestamp,
   end: Timestamp,
+  resolution: Resolution,
 ): Promise<LoaderData> {
   const startDate = new Date(Number(start));
   const endDate = new Date(Number(end));
@@ -303,18 +304,7 @@ export async function fetchTimelineData(
   const originalStart = startDate;
   const originalEnd = endDate;
 
-  // Determine appropriate resolution based on duration
-  let resolution: Resolution;
-  if (duration > 300 * day) {
-    resolution = "1week";
-  } else if (duration > 50 * day) {
-    resolution = "1day";
-  } else if (duration > day) {
-    resolution = "1hour";
-  } else {
-    resolution = "5min";
-  }
-
+  
   const binSize = RESOLUTION_TO_MS[resolution];
   const queryStart = new Date(startDate.getTime() - duration - binSize);
   const queryEnd = new Date(endDate.getTime() + duration + binSize);

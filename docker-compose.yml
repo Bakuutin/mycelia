@@ -50,8 +50,15 @@ services:
     networks:
       - traefik_default
       - a5t
+    secrets:
+      - config.yml
 
 networks:
   a5t:
   traefik_default:
+    external: true
+
+
+secrets:
+  config.yml:
     external: true
