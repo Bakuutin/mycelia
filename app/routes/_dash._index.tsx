@@ -1,8 +1,8 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AudioPlayer, useDateStore } from "@/components/player.tsx";
-import { PlayPauseButton } from "@/components/timeline/PlayPauseButton.tsx";
+import { PlayPauseButton } from "../modules/audio/PlayPauseButton.tsx";
 import { useTimeline } from "../hooks/useTimeline.ts";
-import GainSlider from "@/components/timeline/GainSlider.tsx";
+import GainSlider from "../modules/audio/GainSlider.tsx";
 import { config } from "@/config.ts";
 import { useTimelineRange } from "../stores/timelineRange.ts";
 import _ from "lodash";
@@ -75,10 +75,11 @@ const TimelinePage = () => {
     <>
       <div className="p-4 gap-4 flex flex-col">
         <div className="flex flex-row items-center gap-4">
-          <PlayPauseButton />
-          <GainSlider />
-
-          <AudioPlayer />
+          {config.tools.map((tool, i) => (
+            <tool.component
+              key={i}
+            />
+          ))}
         </div>
         <div
           ref={containerRef}

@@ -9,6 +9,11 @@ export type Layer = {
   component: React.ComponentType<LayerComponentProps>;
 };
 
+export type Tool = {
+  component: React.ComponentType<any>;
+};
+
 export type Config = {
   layers: Layer[];
+  tools: Tool[];
 };

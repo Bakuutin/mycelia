@@ -353,7 +353,6 @@ export async function fetchTimelineData(
   transcripts.sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
 
   return {
-    voices: [],
     items,
     start: originalStart,
     end: originalEnd,
