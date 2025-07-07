@@ -8,9 +8,9 @@ env:
   PROJECT_NAME: mycelia
   IMAGE_TAG: ${{ gitea.sha }}
   PORTAINER_URL: ${{ secrets.PORTAINER_URL }}
-  PORTAINER_ENDPOINT_ID: 2
-  PORTAINER_SWARM_ID: py11xtob9km7kvehcv0as8yth
-  REGISTRY: gitea.tigor.net/tigor
+  PORTAINER_ENDPOINT_ID: ${{ secrets.PORTAINER_ENDPOINT_ID }}
+  PORTAINER_SWARM_ID: ${{ secrets.PORTAINER_SWARM_ID }}
+  REGISTRY: ${{ secrets.REGISTRY }}
 
 jobs:
   build-and-push:
