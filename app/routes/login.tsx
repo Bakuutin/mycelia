@@ -13,26 +13,19 @@ import {
 } from "@/components/ui/card.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
-import {
-  exchangeApiKeyForAccessToken,
-  verifyApiKey,
-} from "@/lib/auth/tokens.ts";
+import { exchangeApiKeyForAccessToken } from "@/lib/auth/tokens.ts";
 
 export const action: ActionFunction = async ({ request }) => {
   const formData = await request.formData();
-  const token = formData.get("token");
+  const token = formData.get("token") as string;
 
-  if (typeof token !== "string" || token.length === 0) {
-    return { error: "Token is required" };
-  }
-
-  const key = await exchangeApiKeyForAccessToken(token, "30 days");
-  if (!key) {
-    return { error: "Invalid token" };
+  const { jwt, error } = await exchangeApiKeyForAccessToken(token);
+  if (error) {
+    return { error };
   }
 
   return redirect("/", {
-    headers: { "Set-Cookie": await authCookie.serialize(key) },
+    headers: { "Set-Cookie": await authCookie.serialize(jwt) },
   });
 };
 

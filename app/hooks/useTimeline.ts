@@ -16,7 +16,7 @@ export function useTimeline() {
     height: 100,
   });
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
-  
+
   // Use the timeline range store
   const { start, end, setRange } = useTimelineRange();
 
@@ -34,9 +34,7 @@ export function useTimeline() {
   const timeScale = useMemo(() =>
     d3.scaleTime()
       .domain([start, end])
-      .range([0, dimensions.width]),
-      [dimensions.width]
-    );
+      .range([0, dimensions.width]), [dimensions.width]);
 
   const onZoom = useCallback(
     _.debounce((start: Date, end: Date) => {

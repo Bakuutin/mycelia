@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type ScopeAction = "read" | "write" | "modify" | "delete";
 
 export type Scope = {
@@ -16,8 +18,16 @@ export interface ConverterRegistry {
   [type: string]: TypeConverter<any>;
 }
 
+const isoDateSchema = z.string().datetime({ local: false });
+
 const converters: ConverterRegistry = {
-  "isodate": (value: any) => new Date(value),
+  "isodate": (value: any) => {
+    const result = isoDateSchema.safeParse(value);
+    if (!result.success) {
+      throw new Error(`Invalid ISO date: ${result.error.message}`);
+    }
+    return new Date(result.data);
+  },
 };
 
 /**

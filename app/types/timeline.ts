@@ -22,6 +22,8 @@ export const zQueryParams = z.object({
 export const zLoaderData = z.object({
   start: z.date(),
   end: z.date(),
+  items: z.array(zTimelineItem),
+  transcripts: z.array(z.any()),
 });
 
 export type TimelineItem = z.infer<typeof zTimelineItem>;

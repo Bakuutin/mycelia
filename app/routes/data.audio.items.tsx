@@ -4,20 +4,12 @@ import _ from "lodash";
 
 import React, { Suspense, useEffect, useRef, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
-import { LoaderFunctionArgs } from "@remix-run/node";
-import {
-  type Timestamp,
-  zTimestamp,
-} from "../types/timeline.ts";
+import { type Timestamp, zTimestamp } from "../types/timeline.ts";
 import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { Resolution } from "@/services/timeline.server.ts";
 
-
-
 export async function loader({ request }: LoaderFunctionArgs) {
-
-
   const auth = await authenticateOr401(request);
 
   const url = new URL(request.url);
@@ -37,12 +29,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response("Invalid format", { status: 400 });
   }
 
-  const { items } = await fetchTimelineData(auth.db, params.start, params.end, params.resolution);
+  const result = await fetchTimelineData(
+    auth,
+    params.start,
+    params.end,
+    params.resolution,
+  );
 
-  return Response.json(items);
+  return Response.json(result);
 }
-
-
 
 // export async function loader({ request }: LoaderFunctionArgs) {
 //   const auth = await authenticateOrRedirect(request);
@@ -66,5 +61,5 @@ export async function loader({ request }: LoaderFunctionArgs) {
 //     throw new Response("Invalid format", { status: 400 });
 //   }
 
-//   return  fetchTimelineData(auth.db, params.start, params.end);
+//   return  fetchTimelineData(auth, params.start, params.end);
 // }

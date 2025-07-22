@@ -18,14 +18,22 @@ function mergeRanges(ranges: LoadedRange[]): LoadedRange[] {
     if (merged.length === 0 || merged[merged.length - 1].end < range.start) {
       merged.push({ ...range });
     } else {
-      merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, range.end);
+      merged[merged.length - 1].end = Math.max(
+        merged[merged.length - 1].end,
+        range.end,
+      );
     }
   }
 
   return merged;
 }
 
-function computeMissingRanges(start: Timestamp, end: Timestamp, loaded: LoadedRange[], inFlight: LoadedRange[]): LoadedRange[] {
+function computeMissingRanges(
+  start: Timestamp,
+  end: Timestamp,
+  loaded: LoadedRange[],
+  inFlight: LoadedRange[],
+): LoadedRange[] {
   const allRanges = [...loaded, ...inFlight];
   const missing: LoadedRange[] = [];
   let current = start;
@@ -59,8 +67,16 @@ type AudioCacheStore = {
     range: LoadedRange,
     items: TimelineItem[],
   ) => void;
-  getMissingRanges: (resolution: Resolution, start: Timestamp, end: Timestamp) => LoadedRange[];
-  fetchMissingRanges: (resolution: Resolution, start: Timestamp, end: Timestamp) => void;
+  getMissingRanges: (
+    resolution: Resolution,
+    start: Timestamp,
+    end: Timestamp,
+  ) => LoadedRange[];
+  fetchMissingRanges: (
+    resolution: Resolution,
+    start: Timestamp,
+    end: Timestamp,
+  ) => void;
 };
 
 export const useAudioCache = create<AudioCacheStore>((set, get) => ({
@@ -77,18 +93,20 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
 
     // Combine existing and new items, remove duplicates by id, and sort by id
     const itemMap = new Map<string, TimelineItem>();
-    
+
     // Add existing items first (they have priority)
     for (const item of existing.items) {
       itemMap.set(item.id, item);
     }
-    
+
     // Add new items (will overwrite duplicates)
     for (const item of items) {
       itemMap.set(item.id, item);
     }
-    
-    const sortedItems = Array.from(itemMap.values()).sort((a, b) => a.id.localeCompare(b.id));
+
+    const sortedItems = Array.from(itemMap.values()).sort((a, b) =>
+      a.id.localeCompare(b.id)
+    );
 
     set((state) => ({
       data: {
@@ -124,20 +142,26 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
 
     // Fetch each missing range
     for (const range of missingRanges) {
-      void fetch(`/data/audio/items?start=${range.start}&end=${range.end}&resolution=${resolution}`)
-        .then(res => res.json())
+      void fetch(
+        `/data/audio/items?start=${range.start}&end=${range.end}&resolution=${resolution}`,
+      )
+        .then((res) => res.json())
         .then((data) => {
           const store = get();
-          store.addData(resolution, { start: range.start, end: range.end }, data.map((item: any) => ({
-            start: new Date(item.start),
-            end: new Date(item.end),
-            id: item.id,
-            totals: item.totals,
-          })));
+          store.addData(
+            resolution,
+            { start: range.start, end: range.end },
+            data.map((item: any) => ({
+              start: new Date(item.start),
+              end: new Date(item.end),
+              id: item.id,
+              totals: item.totals,
+            })),
+          );
 
           // Remove from in-flight requests
           const updatedInFlight = store.inFlightRequests[resolution]?.filter(
-            r => !(r.start === range.start && r.end === range.end)
+            (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
 
           set((state) => ({
@@ -148,12 +172,12 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
           }));
         })
         .catch((error) => {
-          console.error('Failed to fetch audio data:', error);
-          
+          console.error("Failed to fetch audio data:", error);
+
           // Remove from in-flight requests on error
           const store = get();
           const updatedInFlight = store.inFlightRequests[resolution]?.filter(
-            r => !(r.start === range.start && r.end === range.end)
+            (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
 
           set((state) => ({
@@ -185,7 +209,9 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
   }, [resolution, start.getTime(), end.getTime()]);
 
   const filteredItems = data[resolution]?.items.filter(
-    (item) => item.end.getTime() >= start.getTime() && item.start.getTime() <= end.getTime()
+    (item) =>
+      item.end.getTime() >= start.getTime() &&
+      item.start.getTime() <= end.getTime(),
   ) ?? [];
 
   return {

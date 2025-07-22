@@ -1,13 +1,9 @@
-import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { AudioPlayer, useDateStore } from "@/components/player.tsx";
-import { PlayPauseButton } from "../modules/audio/PlayPauseButton.tsx";
+import React, { useCallback, useEffect } from "react";
+import { useDateStore } from "../modules/audio/player.tsx";
 import { useTimeline } from "../hooks/useTimeline.ts";
-import GainSlider from "../modules/audio/GainSlider.tsx";
 import { config } from "@/config.ts";
 import { useTimelineRange } from "../stores/timelineRange.ts";
 import _ from "lodash";
-
-
 
 interface Transcript {
   id: string;
@@ -50,7 +46,7 @@ const TimelinePage = () => {
       const form = new FormData();
       form.append("start", start.getTime().toString());
       form.append("end", end.getTime().toString());
-      
+
       const searchParams = new URLSearchParams({
         start: start.getTime().toString(),
         end: end.getTime().toString(),
@@ -60,8 +56,8 @@ const TimelinePage = () => {
     [],
   );
 
-    useEffect(() => {
-      setQueryParams(start, end);
+  useEffect(() => {
+    setQueryParams(start, end);
   }, [start, end]);
 
   const {
@@ -97,9 +93,11 @@ const TimelinePage = () => {
             </>
           )}
         </div>
-        {/* <TranscriptsRow
+        {
+          /* <TranscriptsRow
           transcripts={transcripts}
-        /> */}
+        /> */
+        }
       </div>
     </>
   );

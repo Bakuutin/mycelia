@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useDateStore } from "@/components/player.tsx";
+import { useDateStore } from "./player.tsx";
 
 const GainSlider: React.FC = () => {
   const { volume, setVolume } = useDateStore();

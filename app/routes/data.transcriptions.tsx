@@ -2,6 +2,7 @@ import { LoaderFunctionArgs } from "@remix-run/node";
 import { ObjectId } from "mongodb";
 import _ from "lodash";
 import { authenticateOr401 } from "../lib/auth/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOr401(request);
@@ -20,13 +21,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response(null, { status: 400 });
   }
 
-  const collection = auth.db.collection("transcriptions");
+  const mongoResource = await getMongoResource(auth);
 
-  const data = await collection.find({
-    start: { $gte: startDate, $lte: endDate },
-  }, {
-    sort: { start: 1 },
-    limit: 30,
+  const data = await mongoResource({
+    action: "find",
+    collection: "transcriptions",
+    query: {
+      start: { $gte: startDate, $lte: endDate },
+    },
+    options: {
+      sort: { start: 1 },
+      limit: 30,
+    },
   });
 
   return { transcriptions: data };

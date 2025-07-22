@@ -37,6 +37,7 @@ def split_to_opus_chunks(original, *, quiet=True):
             segment_time=int(CHUNK_MAX_LEN.total_seconds()),
             acodec='libopus',
             audio_bitrate='64k',
+            map_metadata = -1,
         )
         .overwrite_output()  # Allow overwriting existing files
     )

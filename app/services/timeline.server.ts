@@ -4,6 +4,8 @@ import { type LoaderData, type Timestamp } from "../types/timeline.ts";
 import ms from "ms";
 
 import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { Auth } from "@/lib/auth/core.server.ts";
 
 export type Resolution = "5min" | "1hour" | "1day" | "1week";
 
@@ -286,14 +288,13 @@ export async function updateHistogramOptimized(
 
 const day = 1000 * 60 * 60 * 24;
 
-export function getDaysAgo(n: number) {
-  const today = new Date(new Date().toISOString().split("T")[0]);
-  const monthAgo = new Date(today.getTime() - n * 24 * 60 * 60 * 1000);
-  return monthAgo;
+export function getDaysAgo(n: number, since: Date | null = null) {
+  const today = since || new Date(new Date().toISOString().split("T")[0]);
+  return new Date(today.getTime() - n * 24 * 60 * 60 * 1000);
 }
 
 export async function fetchTimelineData(
-  db: any,
+  auth: Auth,
   start: Timestamp,
   end: Timestamp,
   resolution: Resolution,
@@ -304,16 +305,20 @@ export async function fetchTimelineData(
   const originalStart = startDate;
   const originalEnd = endDate;
 
-  
   const binSize = RESOLUTION_TO_MS[resolution];
   const queryStart = new Date(startDate.getTime() - duration - binSize);
   const queryEnd = new Date(endDate.getTime() + duration + binSize);
 
-  const histogramCollection = db.collection(`histogram_${resolution}`);
-  const histogramData = await histogramCollection
-    .find({
+  const mongo = await auth.getResource("tech.mycelia.mongo");
+
+  const histogramData = await mongo({
+    action: "find",
+    collection: `histogram_${resolution}`,
+    query: {
       start: { $gte: queryStart, $lt: queryEnd },
-    }, { sort: { start: 1 } });
+    },
+    options: { sort: { start: 1 } },
+  }) as any[];
 
   const items = histogramData.map((doc: any) => ({
     id: doc._id.toHexString(),
@@ -325,15 +330,20 @@ export async function fetchTimelineData(
     },
   }));
 
-  const transcriptions = await db.collection("transcriptions").find({
-    start: { $lte: queryEnd },
-    end: { $gte: queryStart },
-    segments: {
-      $exists: true,
-      $type: "array",
-      $not: { $size: 0 },
+  const transcriptions = await mongo({
+    action: "find",
+    collection: "transcriptions",
+    query: {
+      start: { $lte: queryEnd },
+      end: { $gte: queryStart },
+      segments: {
+        $exists: true,
+        $type: "array",
+        $not: { $size: 0 },
+      },
     },
-  }, { sort: { start: 1 }, limit: 30 });
+    options: { sort: { start: 1 }, limit: 30 },
+  }) as any[];
 
   const transcripts = [];
 

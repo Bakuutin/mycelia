@@ -19,7 +19,7 @@ function getDaysAgo(n: number) {
 }
 
 function getInitialValuesFromURL() {
-  if (typeof window === 'undefined') {
+  if (typeof window === "undefined") {
     return { start: getDaysAgo(30), end: new Date() };
   }
 
@@ -56,25 +56,26 @@ function getInitialValuesFromURL() {
 }
 
 export const useTimelineRange = create<TimelineRangeStore>((set) => {
-    const { start, end } = getInitialValuesFromURL();
-    
-    return {
-        start,
-        end,
-        
-        setStart: (start: Date) => set({ start }),
-        
-        setEnd: (end: Date) => set({ end }),
-        
-        setRange: (start: Date, end: Date) => set({ start, end }),
-        
-        reset: () => set({ 
-            start: new Date(), 
-            end: new Date() 
-        }),
+  const { start, end } = getInitialValuesFromURL();
 
-        get duration() {
-            return this.end.getTime() - this.start.getTime();
-        },
-    };
-}); 
+  return {
+    start,
+    end,
+
+    setStart: (start: Date) => set({ start }),
+
+    setEnd: (end: Date) => set({ end }),
+
+    setRange: (start: Date, end: Date) => set({ start, end }),
+
+    reset: () =>
+      set({
+        start: new Date(),
+        end: new Date(),
+      }),
+
+    get duration() {
+      return this.end.getTime() - this.start.getTime();
+    },
+  };
+});

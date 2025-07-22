@@ -11,6 +11,8 @@ import os
 from diarization import run_voice_activity_detection
 import time
 
+import platform
+
 from chunking import audio_chunks_collection
 import io
 from pydub import AudioSegment
@@ -37,7 +39,11 @@ def import_new_files():
 
 
 def ingests_missing_sources(limit=None):
-    query = source_files.find({"ingested": False}).sort([('start', DESCENDING)])
+    query = source_files.find({
+        "ingested": False,
+        "path": {"$exists": True},
+        "platform.node": platform.node(),
+    }).sort([('start', DESCENDING)])
     if limit:
         query = query.limit(limit)
     for source in query:

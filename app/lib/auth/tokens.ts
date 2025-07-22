@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer";
-import process from "node:process";
 import mongoose, { Schema, Types } from "mongoose";
 import { createHash, createSecretKey, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
-import { APIKey, Policy } from "./core.server.ts";
+import { APIKey } from "./core.server.ts";
+import { Policy } from "./resources.ts";
 
 const OPEN_PREFIX_LENGTH = 16;
 
@@ -23,7 +23,7 @@ const APIKeyModel = mongoose.models.APIKey ||
   mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
 
 const key = createSecretKey(
-  Buffer.from(process.env.SECRET_KEY as string, "utf-8"),
+  Buffer.from(Deno.env.get("SECRET_KEY") as string, "utf-8"),
 );
 
 function hashApiKey(apiKey: string, salt: Buffer): string {
@@ -77,7 +77,7 @@ export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
   return keyDoc;
 }
 
-export async function exchangeApiKeyForAccessToken(
+async function decodeAccessToken(
   apiKey: string,
   duration: string = "1 day",
 ): Promise<string | null> {
@@ -89,7 +89,7 @@ export async function exchangeApiKeyForAccessToken(
 
   const jwt = await new SignJWT({
     owner: keyDoc.owner,
-    keyId: keyDoc._id!.toString(),
+    principal: keyDoc._id!.toString(),
     policies: JSON.parse(JSON.stringify(keyDoc.policies)),
   })
     .setProtectedHeader({ alg: "HS256" })
@@ -97,4 +97,20 @@ export async function exchangeApiKeyForAccessToken(
     .sign(key);
 
   return jwt;
+}
+
+export async function exchangeApiKeyForAccessToken(
+  token: string,
+  duration: string = "1 day",
+): Promise<{ jwt: string | null; error: string | null }> {
+  if (typeof token !== "string" || token.length === 0) {
+    return { jwt: null, error: "Token is required" };
+  }
+
+  const jwt = await decodeAccessToken(token, duration);
+  if (!jwt) {
+    return { jwt: null, error: "Invalid token" };
+  }
+
+  return { jwt, error: null };
 }

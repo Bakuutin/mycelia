@@ -1,7 +1,7 @@
 import { Layer, LayerComponentProps, Tool } from "@/core.ts";
 import React, { useMemo } from "react";
 
-import { AudioPlayer, useDateStore } from "@/components/player.tsx";
+import { AudioPlayer, useDateStore } from "./player.tsx";
 import { TimelineItems } from "./TimelineItems.tsx";
 import { CursorLine } from "./cursorLine.tsx";
 import { useAudioItems } from "./useAudioItems.ts";
@@ -11,14 +11,14 @@ import GainSlider from "./GainSlider.tsx";
 
 const day = 1000 * 60 * 60 * 24;
 
-
-
 export const AudioPlayerTool: Tool = {
   component: () => {
-    return <>
-      <PlayPauseButton />
-      <AudioPlayer />
-    </>;
+    return (
+      <>
+        <PlayPauseButton />
+        <AudioPlayer />
+      </>
+    );
   },
 };
 
@@ -31,7 +31,6 @@ export const GainTool: Tool = {
 export const AudioLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
-
       const { currentDate, resetDate, setIsPlaying } = useDateStore();
 
       const { start, end } = useTimelineRange();

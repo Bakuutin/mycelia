@@ -1,118 +1,106 @@
-# Mycelia
+# Mycelia [preview version]
 
-Remember everything - A personal timeline and memory management system.
+**Mycelia is your self-hosted AI memory and timeline.**
 
-## About
+Capture ideas, thoughts, and conversations in **voice, screenshots, or text**.
+Ask anything later — _“What did I say about X last May?” Mycelia tells you, in
+your own words.
 
-Mycelia is a powerful application for managing and visualizing your personal
-timeline. It allows you to:
+📍 Local-first · 🔓 Open-source · 📦 Modular · 🛠 Hackable
 
-- Track and organize events on a customizable timeline
-- Import and process various data sources
-- Play back audio recordings with transcript synchronization
-- Manage and search through your personal history
+## Roadmap
 
-The application uses MongoDB for data storage, Redis for queuing and caching,
-and a modern React frontend with Remix and Tailwind CSS.
+**Ready to use**
 
-## Installation
+😐 Ingestion pipeline for audio files
 
-### Install Deno
+😐 Audio chunking
 
-To run this project, you need to have Deno installed. You can install it using
-one of the following methods:
+😐 Speech Detection + Transcription
 
-**For Mac/Linux:**
+😐 Timeline UI for playback & search
 
-```sh
+😐 Transcript-synced playback
+
+😐 Modular system (add your own!)
+
+**In Progress**
+
+🫥 MCP
+
+🫥 Chat with your memory
+
+🫥 Streaming ingestion (replace batch system)
+
+🫥 Full-text & semantic search
+
+🫥 Other modalities (health, geolocation, photos, etc.)
+
+🫥 Summarizations
+
+🫥 Sharing
+
+🫥 Backup Management
+
+🫥 Observability
+
+## 🚀 Quick Start
+
+### 1. Install Deno
+
+```bash
+# Mac/Linux
 curl -fsSL https://deno.land/x/install/install.sh | sh
-```
 
-**For Windows (PowerShell):**
-
-```sh
+# Windows (PowerShell)
 irm https://deno.land/install.ps1 | iex
 ```
 
-**Using Package Managers:**
+### 2. Setup & Run
 
-- **Homebrew (Mac)**: `brew install deno`
-- **Chocolatey (Windows)**: `choco install deno`
-- **Scoop (Windows)**: `scoop install deno`
+```bash
+# Clone the repo
+git clone https://github.com/your-org/mycelia.git
+cd mycelia
 
-For more installation options, visit
-[deno.land](https://deno.land/#installation).
-
-### Dependencies
-
-- **MongoDB** (v8)
-- **Redis** (v7)
-- **Node.js** (v20+)
-
-## Getting Started
-
-```sh
-# Install dependencies
+# Install deno deps
 deno install
 
-# Create docker data directory
+# Start the services
 mkdir .docker
-
-# Start MongoDB and Redis services
 docker compose up -d
 
-# Set up configuration
+# Configure environment (edit your .env accordingly)
 cp .env.example .env
-# Edit `.env`:
-# - For SECRET_KEY: use a random string (32+ characters)
-# - For passwords: use strong random passwords
-# No need for pre-setup, you can create these values on the fly
 
-# Start the development server
+# Start the server
 deno run -A --env cmd.ts serve
-```
-
-## Environment Configuration
-
-Modify the `.env` file with your settings:
-
-```
-MONGO_URL=mongodb://localhost:27017
-DATABASE_NAME=mycelia
-REDIS_PASSWORD=your_redis_password
-SECRET_KEY=your_secret_key
-MONGO_INITDB_ROOT_USERNAME=admin
-MONGO_INITDB_ROOT_PASSWORD=password
 ```
 
 ## CLI Commands
 
-Mycelia provides several CLI commands to manage your data:
-
-```sh
-# Start the development server
+```bash
+# Start the server
 deno run -A --env cmd.ts serve
 
-# Import data files
+# Import data
 deno run -A --env cmd.ts importers run
 
-# Manage timeline data
+# Recalculate timeline
 deno run -A --env cmd.ts timeline recalculate
 
-# Create authentication tokens
+# Generate auth tokens
 deno run -A --env cmd.ts token create
 ```
 
-## Development
+## Contributing
 
-This project uses:
+You’re welcome to fork, build plugins, suggest features, or break things
+(metaphorically, c'mon, it's open source).
 
-- **Remix** for server-side rendering and routing
-- **React** for UI components
-- **Tailwind CSS** for styling
-- **Vite** for frontend development
-- **TypeScript** for type safety
+- Join the [Discord](https://discord.gg/hPfYbpp2am)
+- PRs are welcome
 
 ## License
 
-[MIT License](LICENSE)
+[MIT](./LICENSE)

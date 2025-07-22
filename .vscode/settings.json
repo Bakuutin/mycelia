@@ -1,4 +1,25 @@
 {
   "deno.enable": true,
-  "python.defaultInterpreterPath": "python/.venv/bin/python"
+  "python.defaultInterpreterPath": "python/.venv/bin/python",
+  "cSpell.words": [
+    "flac",
+    "gridfs",
+    "isodate",
+    "probs",
+    "sasl"
+  ],
+  "deno.codeLens.test": true,
+  "deno.codeLens.testArgs": [
+    "--allow-all",
+    "--no-check"
+  ],
+  "deno.envFile": ".env",
+  "deno.testing.args": [
+    "--allow-all",
+    "--no-check",
+    "--env"
+  ],
+  "deno.disablePaths": [
+    ".local/vosk-server"
+  ]
 }

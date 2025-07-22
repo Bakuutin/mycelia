@@ -5,17 +5,16 @@ import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import process, { exit } from "node:process";
 import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
-import { createServer } from "vite";
+import { createServer } from "npm:vite";
 import express from "npm:express";
 import morgan from "npm:morgan";
 
-import {
-  type ServerBuild,
-} from "@remix-run/node";
-import { createRequestHandler } from "@remix-run/express"
+import { type ServerBuild } from "@remix-run/node";
+import { createRequestHandler } from "@remix-run/express";
 
 import { findAndImportFiles } from "@/lib/importers/main.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
+import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import ms from "ms";
 import path from "node:path";
 
@@ -50,14 +49,14 @@ async function startProdServer() {
     express.static(build.assetsBuildDirectory, {
       immutable: true,
       maxAge: "1y",
-    })
+    }),
   );
   app.use(express.static("public", { maxAge: "1h" }));
   app.use(morgan("tiny"));
 
   app.all(
     "*",
-    createRequestHandler({ build, mode: "production" })
+    createRequestHandler({ build, mode: "production" }),
   );
 
   const server = app.listen(3000, () => {
@@ -65,8 +64,8 @@ async function startProdServer() {
   });
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
-    process.once(signal, () => server?.close(console.error)); 
-  }); 
+    process.once(signal, () => server?.close(console.error));
+  });
 }
 
 async function startDevServer() {
@@ -83,7 +82,6 @@ async function startDevServer() {
     process.once(signal, () => server?.close());
   });
 }
-
 
 const root = new Command()
   .name("deno run -A --env cmd.ts")
@@ -124,6 +122,26 @@ const root = new Command()
           .description("Scan fs for new files to import.")
           .action(async () => {
             await findAndImportFiles();
+          }),
+      ),
+  )
+  .command(
+    "audio",
+    new Command()
+      .description("Manage audio processing.")
+      .command(
+        "worker",
+        new Command()
+          .description("Start the audio processing worker.")
+          .action(async () => {
+            console.log("Starting audio processing worker...");
+            await spawnAudioProcessingWorker();
+            console.log("Audio processing worker started successfully!");
+
+            // Keep the process running
+            await new Promise(() => {
+              // This promise never resolves, keeping the worker alive
+            });
           }),
       ),
   )

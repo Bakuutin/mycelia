@@ -62,13 +62,14 @@ const TickLabel: React.FC<{
   segments: React.ReactNode[];
 }> = ({ value, xOffset, segments }) => {
   const [first, ...rest] = segments;
+  const width = 150;
 
   return (
     <g
-      transform={`translate(${xOffset},0)`}
+      transform={`translate(${xOffset - width / 2},0)`}
     >
       <foreignObject
-        width="150px"
+        width={width}
         height="40px"
         className="overflow-visible"
       >

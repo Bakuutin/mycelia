@@ -38,3 +38,6 @@ This is a Deno-based personal timeline and memory management system using Remix,
 - Use interfaces for object shapes, types for unions/primitives
 - Leverage Zod for runtime validation
 - Use proper type imports: `import type { ComponentProps } from 'react'`
+
+ ### Things to avoid
+- Never use comments in the code, make the code self-documenting

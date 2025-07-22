@@ -2,6 +2,7 @@ import { LoaderFunctionArgs } from "@remix-run/node";
 import { ObjectId } from "mongodb";
 import _ from "lodash";
 import { authenticateOr401 } from "../lib/auth/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOr401(request);
@@ -25,19 +26,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
     limit = 10;
   }
 
-  const collection = auth.db.collection("audio_chunks");
+  const mongoResource = await getMongoResource(auth);
 
   const load = async (filter: any) =>
-    collection
-      .find(filter, { sort: { start: 1 }, limit });
+    mongoResource({
+      action: "find",
+      collection: "audio_chunks",
+      query: filter,
+      options: { sort: { start: 1 }, limit },
+    });
 
   let segments: any[] = [];
 
   const filter: any = { start: { $gte: startDate } };
 
   if (lastIdParam) {
-    const prevSegment = await collection.findOne({
-      _id: new ObjectId(lastIdParam),
+    const prevSegment = await mongoResource({
+      action: "findOne",
+      collection: "audio_chunks",
+      query: { _id: new ObjectId(lastIdParam) },
     });
     if (!prevSegment) {
       throw new Response("Invalid lastId parameter", { status: 400 });
