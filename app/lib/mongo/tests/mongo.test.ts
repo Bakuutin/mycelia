@@ -35,7 +35,7 @@ Deno.test(
     const mongo = await getMongoResource(auth);
     const resourceFn = await auth.getResource("tech.mycelia.mongo");
     const result = await mongo({
-      action: "insertOne" as const,
+      action: "insertOne",
       collection: "users",
       doc: { name: "Bob" },
     });
@@ -57,7 +57,7 @@ Deno.test(
     });
     const mongo = await getMongoResource(auth);
     await expect(
-      mongo({ action: "deleteOne" as const, collection: "users", query: {} }),
+      mongo({ action: "deleteOne", collection: "users", query: {} }),
     ).rejects.toHaveProperty("status", 403);
   }),
 );

@@ -23,7 +23,7 @@ Deno.test("constructor: should create auth with default policies", () => {
 
 Deno.test("constructor: should create auth with custom policies", () => {
   const policies = [
-    { resource: "test", action: "read", effect: "allow" as const },
+    { resource: "test", action: "read", effect: "allow" },
   ];
   const auth = new Auth({ principal: "test-user", policies });
   expect(auth.principal).toBe("test-user");

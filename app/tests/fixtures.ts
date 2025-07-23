@@ -1,4 +1,10 @@
-import { Auth, defaultResourceManager,ResourceManager, Policy, signJWT } from "@/lib/auth/index.ts";
+import {
+  Auth,
+  defaultResourceManager,
+  Policy,
+  ResourceManager,
+  signJWT,
+} from "@/lib/auth/index.ts";
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import MongoMemoryServer from "mongodb-memory-server";
@@ -9,9 +15,7 @@ export type Fixture = {
   dependencies?: any[];
   factory?: (...args: any[]) => Promise<any> | any;
   teardown?: (setup: any) => Promise<void> | void;
-  scope?: "session" | "test";
-  autouse?: boolean;
-}
+};
 
 export const testFixtures = new Map<any, Fixture>();
 
@@ -36,11 +40,10 @@ function dropDuplicates<T>(arr: T[]): T[] {
   return [...new Set(arr)];
 }
 
-
 const inMemoryMongo = await MongoMemoryServer.MongoMemoryServer.create();
 
 addEventListener("unload", async () => {
-    await inMemoryMongo?.stop();
+  await inMemoryMongo?.stop();
 });
 
 defineFixture({
@@ -71,8 +74,9 @@ defineFixture({
 defineFixture({
   token: "Admin",
   dependencies: ["AuthFactory"],
-  factory: authFactory => authFactory({
-    principal: "admin",
+  factory: (authFactory) =>
+    authFactory({
+      principal: "admin",
       policies: [
         {
           action: "*",
@@ -87,10 +91,15 @@ defineFixture({
   token: "BearerFactory",
   factory: () => {
     Deno.env.set("SECRET_KEY", new UUID().toString());
-    return async (auth: Auth) => `Bearer ${await signJWT(auth.principal, auth.principal, auth.policies, "1 hour")}`;
+    return async (auth: Auth) =>
+      `Bearer ${await signJWT(
+        auth.principal,
+        auth.principal,
+        auth.policies,
+        "1 hour",
+      )}`;
   },
 });
-
 
 defineFixture({
   token: "Mongo",

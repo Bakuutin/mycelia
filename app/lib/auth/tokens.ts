@@ -73,17 +73,22 @@ export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
   return keyDoc;
 }
 
-export async function signJWT(owner: string, principal: string, policies: Policy[], duration: string) {
+export async function signJWT(
+  owner: string,
+  principal: string,
+  policies: Policy[],
+  duration: string,
+) {
   return new SignJWT({
     owner: principal,
     principal,
     policies: JSON.parse(JSON.stringify(policies)),
   })
-  .setProtectedHeader({ alg: "HS256" })
-  .setExpirationTime(duration)
-  .sign(createSecretKey(
-    Buffer.from(Deno.env.get("SECRET_KEY") as string, "utf-8"),
-  ));
+    .setProtectedHeader({ alg: "HS256" })
+    .setExpirationTime(duration)
+    .sign(createSecretKey(
+      Buffer.from(Deno.env.get("SECRET_KEY") as string, "utf-8"),
+    ));
 }
 
 export async function decodeAccessToken(
@@ -96,7 +101,12 @@ export async function decodeAccessToken(
     return null;
   }
 
-  return signJWT(keyDoc.owner, keyDoc._id!.toString(), keyDoc.policies, duration);
+  return signJWT(
+    keyDoc.owner,
+    keyDoc._id!.toString(),
+    keyDoc.policies,
+    duration,
+  );
 }
 
 export async function exchangeApiKeyForAccessToken(

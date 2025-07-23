@@ -34,7 +34,7 @@ Deno.test(
   withFixtures([
     "Admin",
     "uploadedFile",
-  ], async (auth: Auth, uploadId: ObjectId ) => {
+  ], async (auth: Auth, uploadId: ObjectId) => {
     const fs = await getFsResource(auth);
 
     const download = await fs({
@@ -51,15 +51,18 @@ Deno.test(
   withFixtures([
     "Admin",
     "uploadedFile",
-  ], async (auth: Auth, { uploadId }: { uploadId: ObjectId }) => {
+  ], async (auth: Auth, uploadId: ObjectId) => {
     const fs = await getFsResource(auth);
     const req = {
-      action: "find" as const,
+      action: "find",
       bucket: "test",
       query: {},
     };
     const result = await fs(req);
     expect(Array.isArray(result)).toBe(true);
-    expect(result[0]).toHaveProperty("_id", uploadId);
+    expect(result[0]).toMatchObject({
+      _id: uploadId,
+      metadata: { foo: "bar" },
+    });
   }),
 );

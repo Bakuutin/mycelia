@@ -10,7 +10,7 @@ Deno.test(
   "loader should return empty transcriptions when no parameters",
   withFixtures([
     "Admin",
-    "BearerFactory"
+    "BearerFactory",
   ], async (auth: Auth, bearerFactory) => {
     const request = new Request("http://localhost/data/transcriptions", {
       headers: {
@@ -89,7 +89,7 @@ Deno.test(
   "loader should handle invalid start date",
   withFixtures([
     "Admin",
-    "BearerFactory"
+    "BearerFactory",
   ], async (auth: Auth, bearerFactory) => {
     const request = new Request(
       "http://localhost/data/transcriptions?start=invalid-date&end=2024-01-01T01:00:00.000Z",
@@ -116,7 +116,7 @@ Deno.test(
   "loader should handle invalid end date",
   withFixtures([
     "Admin",
-    "BearerFactory"
+    "BearerFactory",
   ], async (auth: Auth, bearerFactory) => {
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z&end=invalid-date",
@@ -143,7 +143,7 @@ Deno.test(
   "loader should handle missing start parameter",
   withFixtures([
     "Admin",
-    "BearerFactory"
+    "BearerFactory",
   ], async (auth: Auth, bearerFactory) => {
     const request = new Request(
       "http://localhost/data/transcriptions?end=2024-01-01T01:00:00.000Z",
@@ -165,7 +165,7 @@ Deno.test(
   "loader should handle missing end parameter",
   withFixtures([
     "Admin",
-    "BearerFactory"
+    "BearerFactory",
   ], async (auth: Auth, bearerFactory) => {
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z",
