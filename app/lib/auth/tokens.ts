@@ -22,10 +22,6 @@ const apiKeySchema = new Schema<APIKey>({
 const APIKeyModel = mongoose.models.APIKey ||
   mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
 
-const key = createSecretKey(
-  Buffer.from(Deno.env.get("SECRET_KEY") as string, "utf-8"),
-);
-
 function hashApiKey(apiKey: string, salt: Buffer): string {
   return createHash("sha256").update(salt).update(apiKey).digest("base64");
 }
@@ -77,7 +73,20 @@ export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
   return keyDoc;
 }
 
-async function decodeAccessToken(
+export async function signJWT(owner: string, principal: string, policies: Policy[], duration: string) {
+  return new SignJWT({
+    owner: principal,
+    principal,
+    policies: JSON.parse(JSON.stringify(policies)),
+  })
+  .setProtectedHeader({ alg: "HS256" })
+  .setExpirationTime(duration)
+  .sign(createSecretKey(
+    Buffer.from(Deno.env.get("SECRET_KEY") as string, "utf-8"),
+  ));
+}
+
+export async function decodeAccessToken(
   apiKey: string,
   duration: string = "1 day",
 ): Promise<string | null> {
@@ -87,16 +96,7 @@ async function decodeAccessToken(
     return null;
   }
 
-  const jwt = await new SignJWT({
-    owner: keyDoc.owner,
-    principal: keyDoc._id!.toString(),
-    policies: JSON.parse(JSON.stringify(keyDoc.policies)),
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setExpirationTime(duration)
-    .sign(key);
-
-  return jwt;
+  return signJWT(keyDoc.owner, keyDoc._id!.toString(), keyDoc.policies, duration);
 }
 
 export async function exchangeApiKeyForAccessToken(

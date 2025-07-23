@@ -3,7 +3,6 @@ import { createCookie, redirect } from "@remix-run/node";
 import { expandTypedObjects } from "./typed.ts";
 import { permissionDenied } from "./utils.ts";
 import { Types } from "mongoose";
-import { getRootDB } from "../mongo/core.server.ts";
 import {
   defaultResourceManager,
   Policy,
@@ -72,7 +71,7 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
     if (typeof payload === "string") {
       permissionDenied();
     }
-    return new Auth({ ...expandTypedObjects(payload), db: await getRootDB() });
+    return new Auth(expandTypedObjects(payload));
   } catch (error) {
     return null;
   }

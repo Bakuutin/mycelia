@@ -1,10 +1,8 @@
-import { Auth, Policy, ResourceManager } from "@/lib/auth/index.ts";
+import { Auth, defaultResourceManager,ResourceManager, Policy, signJWT } from "@/lib/auth/index.ts";
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import MongoMemoryServer from "mongodb-memory-server";
-import { MongoClient } from "mongodb";
-
-
+import { MongoClient, UUID } from "mongodb";
 
 export type Fixture = {
   token: any;
@@ -38,9 +36,16 @@ function dropDuplicates<T>(arr: T[]): T[] {
   return [...new Set(arr)];
 }
 
+
+const inMemoryMongo = await MongoMemoryServer.MongoMemoryServer.create();
+
+addEventListener("unload", async () => {
+    await inMemoryMongo?.stop();
+});
+
 defineFixture({
   token: ResourceManager,
-  factory: () => new ResourceManager(),
+  factory: () => defaultResourceManager,
 });
 
 defineFixture({
@@ -65,10 +70,9 @@ defineFixture({
 
 defineFixture({
   token: "Admin",
-  dependencies: [ResourceManager],
-  factory: (resourceManager: ResourceManager) => {
-    return new Auth({
-      principal: "admin",
+  dependencies: ["AuthFactory"],
+  factory: authFactory => authFactory({
+    principal: "admin",
       policies: [
         {
           action: "*",
@@ -76,35 +80,41 @@ defineFixture({
           effect: "allow",
         },
       ],
-      resourceManager,
-    });
+    }),
+});
+
+defineFixture({
+  token: "BearerFactory",
+  factory: () => {
+    Deno.env.set("SECRET_KEY", new UUID().toString());
+    return async (auth: Auth) => `Bearer ${await signJWT(auth.principal, auth.principal, auth.policies, "1 hour")}`;
   },
 });
+
 
 defineFixture({
   token: "Mongo",
   dependencies: [ResourceManager],
   factory: async (resourceManager: ResourceManager) => {
     const resource = new MongoResource();
-    const inMemoryMongo = await MongoMemoryServer.MongoMemoryServer.create();
     const mongoUrl = inMemoryMongo.getUri();
     const client = new MongoClient(mongoUrl);
-    const db = client.db("mycelia-test-db");
+    const db = client.db(new UUID().toString());
     const fs = new FsResource();
     resource.getRootDB = async () => db;
     fs.getRootDB = async () => db;
-
     resourceManager.registerResource(resource);
     resourceManager.registerResource(fs);
 
     return {
-      inMemoryMongo,
       client,
+      db,
+      resourceManager,
     };
   },
-  teardown: async ({ inMemoryMongo, client }) => {
-    await inMemoryMongo?.stop();
-    await client?.close();
+  teardown: async ({ client, db }) => {
+    await db.dropDatabase();
+    await client.close();
   },
 });
 
@@ -142,6 +152,7 @@ export function withFixtures(
       for (const fixture of fixtures) {
         await fixture.teardown?.(resolved.get(fixture.token));
       }
+      defaultResourceManager.resources.clear();
     }
   };
 }

@@ -34,7 +34,7 @@ Deno.test(
   withFixtures([
     "Admin",
     "uploadedFile",
-  ], async (auth: Auth, { uploadId }: { uploadId: ObjectId }) => {
+  ], async (auth: Auth, uploadId: ObjectId ) => {
     const fs = await getFsResource(auth);
 
     const download = await fs({
