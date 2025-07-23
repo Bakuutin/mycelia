@@ -82,7 +82,10 @@ export class FsResource implements Resource<FsRequest, FsResponse> {
         return new Promise<Uint8Array>((resolve, reject) => {
           const chunks: Uint8Array[] = [];
           downloadStream.on("data", (chunk) => chunks.push(chunk));
-          downloadStream.on("end", () => resolve(new Uint8Array(Buffer.concat(chunks))));
+          downloadStream.on(
+            "end",
+            () => resolve(new Uint8Array(Buffer.concat(chunks))),
+          );
           downloadStream.on("error", reject);
         });
       }

@@ -2,6 +2,7 @@
   "deno.enable": true,
   "python.defaultInterpreterPath": "python/.venv/bin/python",
   "cSpell.words": [
+    "autouse",
     "flac",
     "gridfs",
     "isodate",

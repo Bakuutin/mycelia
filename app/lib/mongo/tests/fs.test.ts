@@ -29,12 +29,11 @@ Deno.test(
   }),
 );
 
-
 Deno.test(
   "should download a file",
   withFixtures([
-      "Admin",
-      "uploadedFile",
+    "Admin",
+    "uploadedFile",
   ], async (auth: Auth, { uploadId }: { uploadId: ObjectId }) => {
     const fs = await getFsResource(auth);
 
@@ -47,17 +46,20 @@ Deno.test(
   }),
 );
 
-Deno.test("should find files", withFixtures([
-  "Admin",
-  "uploadedFile",
-], async (auth: Auth, { uploadId }: { uploadId: ObjectId }) => {
-  const fs = await getFsResource(auth);
-  const req = {
-    action: "find" as const,
-    bucket: "test",
-    query: {},
-  };
-  const result = await fs(req);
-  expect(Array.isArray(result)).toBe(true);
-  expect(result[0]).toHaveProperty("_id", uploadId);
-}));
+Deno.test(
+  "should find files",
+  withFixtures([
+    "Admin",
+    "uploadedFile",
+  ], async (auth: Auth, { uploadId }: { uploadId: ObjectId }) => {
+    const fs = await getFsResource(auth);
+    const req = {
+      action: "find" as const,
+      bucket: "test",
+      query: {},
+    };
+    const result = await fs(req);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0]).toHaveProperty("_id", uploadId);
+  }),
+);

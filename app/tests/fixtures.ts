@@ -1,26 +1,72 @@
-import { Container, Token } from "@needle-di/core";
-import { Auth, ResourceManager } from "@/lib/auth/index.ts";
+import { Auth, Policy, ResourceManager } from "@/lib/auth/index.ts";
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import MongoMemoryServer from "mongodb-memory-server";
 import { MongoClient } from "mongodb";
 
-export const testFixtures = new Container();
-
-export const SETUP = Symbol("SETUP");
-export const TEARDOWN = Symbol("TEARDOWN");
 
 
-testFixtures.bind({
-  provide: ResourceManager,
-  useFactory: () => {
-    return new ResourceManager();
+export type Fixture = {
+  token: any;
+  dependencies?: any[];
+  factory?: (...args: any[]) => Promise<any> | any;
+  teardown?: (setup: any) => Promise<void> | void;
+  scope?: "session" | "test";
+  autouse?: boolean;
+}
+
+export const testFixtures = new Map<any, Fixture>();
+
+function defineFixture(fixture: Fixture) {
+  testFixtures.set(fixture.token, fixture);
+}
+
+function resolveFixtures(tokens: any[] | undefined): Fixture[] {
+  if (!tokens) {
+    return [];
+  }
+  return tokens.flatMap((token) => {
+    const fixture = testFixtures.get(token);
+    if (!fixture) {
+      throw new Error(`Fixture ${token} not found`);
+    }
+    return [...resolveFixtures(fixture.dependencies), fixture];
+  });
+}
+
+function dropDuplicates<T>(arr: T[]): T[] {
+  return [...new Set(arr)];
+}
+
+defineFixture({
+  token: ResourceManager,
+  factory: () => new ResourceManager(),
+});
+
+defineFixture({
+  token: "AuthFactory",
+  dependencies: [ResourceManager],
+  factory: (resourceManager: ResourceManager) => {
+    return ({
+      principal = "test",
+      policies = [],
+    }: {
+      principal?: string;
+      policies?: Policy[];
+    }) => {
+      return new Auth({
+        principal,
+        policies,
+        resourceManager,
+      });
+    };
   },
 });
 
-testFixtures.bind({
-  provide: "Admin",
-  useFactory: () => {
+defineFixture({
+  token: "Admin",
+  dependencies: [ResourceManager],
+  factory: (resourceManager: ResourceManager) => {
     return new Auth({
       principal: "admin",
       policies: [
@@ -30,100 +76,71 @@ testFixtures.bind({
           effect: "allow",
         },
       ],
-      resourceManager: testFixtures.get(ResourceManager),
+      resourceManager,
     });
   },
 });
 
-testFixtures.bind({
-  provide: FsResource,
-  useFactory: () => {
-    return new FsResource();
-  },
-});
+defineFixture({
+  token: "Mongo",
+  dependencies: [ResourceManager],
+  factory: async (resourceManager: ResourceManager) => {
+    const resource = new MongoResource();
+    const inMemoryMongo = await MongoMemoryServer.MongoMemoryServer.create();
+    const mongoUrl = inMemoryMongo.getUri();
+    const client = new MongoClient(mongoUrl);
+    const db = client.db("mycelia-test-db");
+    const fs = new FsResource();
+    resource.getRootDB = async () => db;
+    fs.getRootDB = async () => db;
 
-testFixtures.bind({
-  provide: "Mongo",
-  useFactory: () => {
-    const utils = {} as Record<string | symbol, any>;
+    resourceManager.registerResource(resource);
+    resourceManager.registerResource(fs);
 
-    utils[SETUP] = async () => {
-        if (utils.resourceManager) {
-            return;
-        }
-    
-
-      const resourceManager = testFixtures.get(ResourceManager);
-      utils.resource = new MongoResource();
-      utils.inMemoryMongo = await MongoMemoryServer.MongoMemoryServer.create();
-      const mongoUrl = utils.inMemoryMongo.getUri();
-      utils.client = new MongoClient(mongoUrl);
-      utils.db = utils.client.db("mycelia-test-db");
-      utils.fs = new FsResource();
-      utils.resource.getRootDB = async () => utils.db;
-      utils.fs.getRootDB = async () => utils.db;
-
-      resourceManager.registerResource(utils.resource);
-      resourceManager.registerResource(utils.fs);
-    }
-
-    utils[TEARDOWN] = async () => {
-        await utils.inMemoryMongo?.stop();
-        await utils.client?.close();
+    return {
+      inMemoryMongo,
+      client,
     };
-
-    return utils;
+  },
+  teardown: async ({ inMemoryMongo, client }) => {
+    await inMemoryMongo?.stop();
+    await client?.close();
   },
 });
 
-
-
-testFixtures.bind({
-    provide: "uploadedFile",
-    useFactory: () => {
-        const utils = {} as Record<string | symbol, any>;
-        utils[SETUP] = async () => {
-            const mongo = testFixtures.get("Mongo") as any;
-            const auth = testFixtures.get("Admin") as Auth;
-            await mongo[SETUP]();
-            
-            const fs = await getFsResource(auth);
-            utils.uploadId = await fs({
-                action: "upload",
-                bucket: "test",
-                filename: "file.bin",
-                data: new Uint8Array([1, 2, 3]),
-                metadata: { foo: "bar" },
-            });
-        }
-        utils[TEARDOWN] = async () => {
-            const mongo = testFixtures.get("Mongo") as any;
-            await mongo[TEARDOWN]();
-        }
-        return utils;
-    },
+defineFixture({
+  token: "uploadedFile",
+  dependencies: ["Admin", "Mongo"],
+  factory: async (auth: Auth) => {
+    const fs = await getFsResource(auth);
+    return fs({
+      action: "upload",
+      bucket: "test",
+      filename: "file.bin",
+      data: new Uint8Array([1, 2, 3]),
+      metadata: { foo: "bar" },
+    });
+  },
 });
-
-
 
 export function withFixtures(
-  fixtures: Token<any>[],
+  dependencies: any[],
   testFn: (...args: any[]) => Promise<void>,
 ) {
   return async () => {
-    const args = fixtures.map((fixture) => testFixtures.get(fixture));
+    const resolved = new Map<any, any>();
+    const fixtures = dropDuplicates(resolveFixtures(dependencies));
+    for (const fixture of fixtures) {
+      const args = fixture.dependencies?.map((dep) => resolved.get(dep)) ?? [];
+      resolved.set(fixture.token, await fixture.factory?.(...args));
+    }
+
     try {
-      for (const arg of args) {
-        if (arg[SETUP]) {
-          await arg[SETUP]();
-        }
-      }
+      const args = dependencies.map((dep) => resolved.get(dep));
       await testFn(...args);
     } finally {
-      for (const arg of args) {
-        if (arg[TEARDOWN]) {
-          await arg[TEARDOWN]();
-        }
+      for (const fixture of fixtures) {
+        await fixture.teardown?.(resolved.get(fixture.token));
       }
     }
   };

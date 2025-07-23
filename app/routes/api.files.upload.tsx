@@ -67,7 +67,6 @@ export async function uploadToGridFS(
 
 export async function action({ request }: ActionFunctionArgs) {
   const auth = await authenticateOr401(request);
-  // auth.hasAccessOr403("files", "upload");
   const { file, data } = await validateAndParseFormData(request);
 
   const fileId = await uploadToGridFS(auth, file, data);
