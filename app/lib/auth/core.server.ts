@@ -2,7 +2,8 @@ import { jwtVerify } from "jose";
 import { createCookie, redirect } from "@remix-run/node";
 import { expandTypedObjects } from "./typed.ts";
 import { permissionDenied } from "./utils.ts";
-import { Types } from "mongoose";
+import { ObjectId } from "mongodb";
+
 import {
   defaultResourceManager,
   Policy,
@@ -24,7 +25,7 @@ export interface APIKey {
   createdAt: Date;
   isActive: boolean;
   policies: Policy[];
-  _id?: Types.ObjectId;
+  _id?: ObjectId;
 }
 
 class AccessLogger {

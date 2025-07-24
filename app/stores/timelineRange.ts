@@ -1,4 +1,22 @@
 import { create } from "zustand";
+import { z } from "zod";
+
+const zTimelineRangeParams = z.object({
+  start: z.string().transform((val: string) => {
+    const startTime = parseInt(val);
+    if (isNaN(startTime)) {
+      throw new Error("Invalid start parameter");
+    }
+    return new Date(startTime);
+  }).optional(),
+  end: z.string().transform((val: string) => {
+    const endTime = parseInt(val);
+    if (isNaN(endTime)) {
+      throw new Error("Invalid end parameter");
+    }
+    return new Date(endTime);
+  }).optional(),
+});
 
 export interface TimelineRangeStore {
   start: Date;
@@ -27,35 +45,22 @@ function getInitialValuesFromURL() {
   const startParam = urlParams.get("start");
   const endParam = urlParams.get("end");
 
-  let start: Date;
-  let end: Date;
+  try {
+    const params = zTimelineRangeParams.parse({
+      start: startParam,
+      end: endParam,
+    });
 
-  if (startParam) {
-    const startTime = parseInt(startParam);
-    if (!isNaN(startTime)) {
-      start = new Date(startTime);
-    } else {
-      start = getDaysAgo(30);
-    }
-  } else {
-    start = getDaysAgo(30);
+    return {
+      start: params.start || getDaysAgo(30),
+      end: params.end || new Date(),
+    };
+  } catch {
+    return { start: getDaysAgo(30), end: new Date() };
   }
-
-  if (endParam) {
-    const endTime = parseInt(endParam);
-    if (!isNaN(endTime)) {
-      end = new Date(endTime);
-    } else {
-      end = new Date();
-    }
-  } else {
-    end = new Date();
-  }
-
-  return { start, end };
 }
 
-export const useTimelineRange = create<TimelineRangeStore>((set) => {
+export const useTimelineRange = create<TimelineRangeStore>((set: any) => {
   const { start, end } = getInitialValuesFromURL();
 
   return {

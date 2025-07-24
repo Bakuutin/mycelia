@@ -1,5 +1,4 @@
 import { Db, MongoClient } from "mongodb";
-import mongoose from "mongoose";
 
 import { z } from "zod";
 import { Resource } from "@/lib/auth/resources.ts";
@@ -15,13 +14,6 @@ const client = new MongoClient(Deno.env.get("MONGO_URL") as string);
 export const getRootDB = async (): Promise<Db> => {
   await client.connect();
   return client.db(Deno.env.get("DATABASE_NAME"));
-};
-
-export const ensureDbConnected = async () => {
-  await getRootDB();
-  await mongoose.connect(Deno.env.get("MONGO_URL") as string, {
-    dbName: Deno.env.get("DATABASE_NAME"),
-  });
 };
 
 export function sift(query: Filter<unknown>): (item: unknown) => boolean {

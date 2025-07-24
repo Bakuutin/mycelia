@@ -3,18 +3,6 @@
 ## Project Overview
 This is a Deno-based personal timeline and memory management system using Remix, React, TypeScript, and Tailwind CSS. The application tracks events, manages timelines, and provides data visualization capabilities.
 
-## Technology Stack
-- **Runtime**: Deno
-- **Framework**: Remix (React-based full-stack framework)
-- **Frontend**: React 18, TypeScript, Tailwind CSS 4
-- **Backend**: Deno with Express
-- **Database**: MongoDB with Mongoose ODM
-- **Cache/Queue**: Redis with BullMQ
-- **Build Tool**: Vite
-- **UI Components**: Radix UI primitives with custom styling
-
-## Code Organization
-
 ### Directory Structure
 - `app/` - Main application code (Remix routes, components, services)
 - `app/routes/` - Remix route components
@@ -38,6 +26,7 @@ This is a Deno-based personal timeline and memory management system using Remix,
 - Use interfaces for object shapes, types for unions/primitives
 - Leverage Zod for runtime validation
 - Use proper type imports: `import type { ComponentProps } from 'react'`
+- Use descriptive variable and function names
 
  ### Things to avoid
-- Never use comments in the code, make the code self-documenting
+- Never use comments in the code, make the code self-documenting by using descriptive variable and function names

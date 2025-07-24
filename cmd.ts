@@ -2,9 +2,9 @@ import { Command } from "@cliffy/command";
 import { Secret } from "@cliffy/prompt";
 import { CompletionsCommand } from "@cliffy/command/completions";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
-import { ensureDbConnected } from "@/lib/mongo/core.server.ts";
 import process, { exit } from "node:process";
-import { Policy, verifyToken } from "@/lib/auth/core.server.ts";
+import { verifyToken } from "@/lib/auth/core.server.ts";
+import { Policy } from "@/lib/auth/resources.ts";
 import { createServer } from "npm:vite";
 import express from "npm:express";
 import morgan from "npm:morgan";
@@ -12,7 +12,6 @@ import morgan from "npm:morgan";
 import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
 
-import { findAndImportFiles } from "@/lib/importers/main.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
 import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import ms from "ms";
@@ -34,8 +33,6 @@ function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
     );
   }
 }
-
-await ensureDbConnected();
 
 async function startProdServer() {
   const app = express();
@@ -109,19 +106,6 @@ const root = new Command()
               await updateAllHistogram(startDate, endDate);
             }
             console.log("Histogram update complete!");
-          }),
-      ),
-  )
-  .command(
-    "importers",
-    new Command()
-      .description("Manage importers.")
-      .command(
-        "run",
-        new Command()
-          .description("Scan fs for new files to import.")
-          .action(async () => {
-            await findAndImportFiles();
           }),
       ),
   )

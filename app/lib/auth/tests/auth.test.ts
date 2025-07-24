@@ -326,7 +326,7 @@ Deno.test("getResource: should deny access when some actions are not covered by 
 });
 
 Deno.test("getResource: should apply multiple modifiers in correct order", async () => {
-  let callOrder: string[] = [];
+  const callOrder: string[] = [];
   const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",

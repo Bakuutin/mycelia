@@ -1,26 +1,27 @@
 import { Buffer } from "node:buffer";
-import mongoose, { Schema, Types } from "mongoose";
 import { createHash, createSecretKey, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
 import { APIKey } from "./core.server.ts";
 import { Policy } from "./resources.ts";
+import { z } from "zod";
+import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { ObjectId } from "mongodb";
 
 const OPEN_PREFIX_LENGTH = 16;
 
-const apiKeySchema = new Schema<APIKey>({
-  hashedKey: { type: String, required: true },
-  salt: { type: String, required: true },
-  owner: { type: String, required: true },
-  name: { type: String, required: true },
-  policies: { type: [Object], required: true },
-
-  openPrefix: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now },
-  isActive: { type: Boolean, default: true },
+const apiKeySchema = z.object({
+  _id: z.instanceof(ObjectId).optional(),
+  hashedKey: z.string(),
+  salt: z.string(),
+  owner: z.string(),
+  name: z.string(),
+  policies: z.array(z.any()),
+  openPrefix: z.string(),
+  createdAt: z.date(),
+  isActive: z.boolean(),
 });
 
-const APIKeyModel = mongoose.models.APIKey ||
-  mongoose.model<APIKey>("APIKey", apiKeySchema, "api_keys");
+type APIKeyDocument = z.infer<typeof apiKeySchema>;
 
 function hashApiKey(apiKey: string, salt: Buffer): string {
   return createHash("sha256").update(salt).update(apiKey).digest("base64");
@@ -35,7 +36,10 @@ export async function generateApiKey(
   const salt = randomBytes(32);
   const hashedKey = hashApiKey(apiKey, salt);
 
-  const newApiKey = new APIKeyModel({
+  const db = await getRootDB();
+  const collection = db.collection("api_keys");
+
+  const newApiKey: Omit<APIKeyDocument, "_id"> = {
     hashedKey,
     salt: salt.toString("base64"),
     owner,
@@ -44,17 +48,19 @@ export async function generateApiKey(
     openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
     createdAt: new Date(),
     isActive: true,
-  });
+  };
 
-  await newApiKey.save();
-
-  console.log(newApiKey._id);
+  const result = await collection.insertOne(newApiKey);
+  console.log(result.insertedId);
 
   return apiKey;
 }
 
 export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
-  const keyDoc = await APIKeyModel.findOne({
+  const db = await getRootDB();
+  const collection = db.collection("api_keys");
+
+  const keyDoc = await collection.findOne({
     openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
     isActive: true,
   });
@@ -70,7 +76,7 @@ export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
     return null;
   }
 
-  return keyDoc;
+  return keyDoc as APIKey;
 }
 
 export async function signJWT(
