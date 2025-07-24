@@ -8,6 +8,7 @@ import {
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
+import { getAvailablePort } from "@std/net/get-available-port";
 import { MongoClient, UUID } from "mongodb";
 import { KafkaResource } from "@/lib/kafka/index.ts";
 import RequestQueue from "npm:kafkajs/src/network/requestQueue/index.js";
@@ -54,10 +55,11 @@ const mongoContainer = await new GenericContainer("mongo:8.0")
   .start();
 
 console.log("Starting kafka container");
+const kafkaPort = getAvailablePort();
 const kafkaContainer = await new GenericContainer("bitnami/kafka:latest")
     .withExposedPorts({
       container: 9992,
-      host: 9992,
+      host: kafkaPort,
     })
     .withEnvironment({
       KAFKA_CFG_NODE_ID: "0",
@@ -66,7 +68,7 @@ const kafkaContainer = await new GenericContainer("bitnami/kafka:latest")
       KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT",
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@localhost:9093",
       KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:9992",
-      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,HOST://localhost:9992",
+      KAFKA_CFG_ADVERTISED_LISTENERS: `PLAINTEXT://:9092,CONTROLLER://:9093,HOST://localhost:${kafkaPort}`,
     })
     .start();
 
@@ -171,7 +173,7 @@ defineFixture({
   factory: async (resourceManager: ResourceManager) => {
     const resource = new KafkaResource({
       clientId: "mycelia-test",
-      brokers: ["localhost:9992"],
+      brokers: [`localhost:${kafkaPort}`],
       enforceRequestTimeout: false,
     });
     resourceManager.registerResource(resource);
