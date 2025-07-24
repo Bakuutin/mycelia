@@ -53,12 +53,11 @@ Deno.test(
     "uploadedFile",
   ], async (auth: Auth, uploadId: ObjectId) => {
     const fs = await getFsResource(auth);
-    const req = {
+    const result = await fs({
       action: "find",
       bucket: "test",
       query: {},
-    };
-    const result = await fs(req);
+    });
     expect(Array.isArray(result)).toBe(true);
     expect(result[0]).toMatchObject({
       _id: uploadId,

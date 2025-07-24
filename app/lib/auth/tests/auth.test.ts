@@ -2,7 +2,7 @@ import { expect, fn } from "@std/expect";
 import { z } from "zod";
 import { Auth } from "../core.server.ts";
 import { accessLogger } from "../core.server.ts";
-import { Resource, ResourceManager } from "../resources.ts";
+import { Policy, Resource, ResourceManager } from "../resources.ts";
 
 function setupAuth(policies?: any[]) {
   const resourceManager = new ResourceManager();
@@ -22,7 +22,7 @@ Deno.test("constructor: should create auth with default policies", () => {
 });
 
 Deno.test("constructor: should create auth with custom policies", () => {
-  const policies = [
+  const policies: Policy[] = [
     { resource: "test", action: "read", effect: "allow" },
   ];
   const auth = new Auth({ principal: "test-user", policies });
