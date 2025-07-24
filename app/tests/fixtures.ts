@@ -7,8 +7,11 @@ import {
 } from "@/lib/auth/index.ts";
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
-import MongoMemoryServer from "mongodb-memory-server";
+import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
+import { KafkaResource } from "@/lib/kafka/index.ts";
+import RequestQueue from "npm:kafkajs/src/network/requestQueue/index.js";
+
 
 export type Fixture = {
   token: any;
@@ -40,10 +43,39 @@ function dropDuplicates<T>(arr: T[]): T[] {
   return [...new Set(arr)];
 }
 
-const inMemoryMongo = await MongoMemoryServer.MongoMemoryServer.create();
+console.log("Starting redis container");
+const redisContainer = await new GenericContainer("redis")
+  .withExposedPorts(6379)
+  .start();
+
+console.log("Starting mongo container");
+const mongoContainer = await new GenericContainer("mongo:8.0")
+  .withExposedPorts(27017)
+  .start();
+
+console.log("Starting kafka container");
+const kafkaContainer = await new GenericContainer("bitnami/kafka:latest")
+    .withExposedPorts({
+      container: 9992,
+      host: 9992,
+    })
+    .withEnvironment({
+      KAFKA_CFG_NODE_ID: "0",
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker",
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER",
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT",
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@localhost:9093",
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:9992",
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,HOST://localhost:9992",
+    })
+    .start();
+
+RequestQueue.prototype.scheduleCheckPendingRequests = () => {}
 
 addEventListener("unload", async () => {
-  await inMemoryMongo?.stop();
+  await redisContainer.stop();
+  await mongoContainer.stop();
+  await kafkaContainer.stop();
 });
 
 defineFixture({
@@ -106,24 +138,43 @@ defineFixture({
   dependencies: [ResourceManager],
   factory: async (resourceManager: ResourceManager) => {
     const resource = new MongoResource();
-    const mongoUrl = inMemoryMongo.getUri();
-    const client = new MongoClient(mongoUrl);
-    const db = client.db(new UUID().toString());
+    const client = new MongoClient(
+      `mongodb://${mongoContainer.getHost()}:${
+        mongoContainer.getMappedPort(27017)
+      }`,
+      {
+        timeoutMS: 1000,
+      },
+    );
+    await client.connect();
+    const isolatedDB = client.db(new UUID().toString());
     const fs = new FsResource();
-    resource.getRootDB = async () => db;
-    fs.getRootDB = async () => db;
+    resource.getRootDB = async () => isolatedDB;
+    fs.getRootDB = async () => isolatedDB;
     resourceManager.registerResource(resource);
     resourceManager.registerResource(fs);
 
     return {
+      db: isolatedDB,
       client,
-      db,
-      resourceManager,
     };
   },
   teardown: async ({ client, db }) => {
     await db.dropDatabase();
     await client.close();
+  },
+});
+
+defineFixture({
+  token: "Kafka",
+  dependencies: [ResourceManager],
+  factory: async (resourceManager: ResourceManager) => {
+    const resource = new KafkaResource({
+      clientId: "mycelia-test",
+      brokers: ["localhost:9992"],
+      enforceRequestTimeout: false,
+    });
+    resourceManager.registerResource(resource);
   },
 });
 
@@ -141,6 +192,8 @@ defineFixture({
     });
   },
 });
+
+console.log("All fixtures defined");
 
 export function withFixtures(
   dependencies: any[],

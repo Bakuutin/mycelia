@@ -4,7 +4,6 @@ import { Auth } from "../auth/index.ts";
 import { Db, GridFSBucket, MongoClient, ObjectId } from "mongodb";
 import { Buffer } from "node:buffer";
 
-
 export const getRootDB = async (): Promise<Db> => {
   const client = new MongoClient(Deno.env.get("MONGO_URL") as string);
   await client.connect();

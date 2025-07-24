@@ -9,9 +9,12 @@ import createDefaultQueryTester from "sift";
 import { Filter } from "mongodb";
 import { Auth } from "../auth/index.ts";
 
-const client = new MongoClient(Deno.env.get("MONGO_URL") as string);
+let client: MongoClient | null = null;
 
 export const getRootDB = async (): Promise<Db> => {
+  if (!client) {
+    client = new MongoClient(Deno.env.get("MONGO_URL") as string);
+  }
   await client.connect();
   return client.db(Deno.env.get("DATABASE_NAME"));
 };

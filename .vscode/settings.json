@@ -3,9 +3,13 @@
   "python.defaultInterpreterPath": "python/.venv/bin/python",
   "cSpell.words": [
     "autouse",
+    "bitnami",
+    "confluentinc",
     "flac",
     "gridfs",
     "isodate",
+    "Partitioner",
+    "Partitioners",
     "probs",
     "sasl"
   ],

@@ -1,6 +1,6 @@
 services:
   redis:
-    image: bitnami/redis:latest
+    image: bitnami/redis:8.0
     ports:
       - "6379:6379"
     volumes:

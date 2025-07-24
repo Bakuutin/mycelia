@@ -48,7 +48,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const startDate = queryParams.start;
   const endDate = queryParams.end;
-  
+
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
     throw new Response(null, { status: 400 });
   }

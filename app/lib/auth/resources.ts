@@ -120,13 +120,18 @@ export class ResourceManager {
           unmatchedActions.delete(action);
 
           if (policy.effect === "deny") {
-            permissionDenied();
+            permissionDenied({
+              policy,
+              actions: [action],
+            });
           }
         }
       }
 
       if (unmatchedActions.size > 0) {
-        permissionDenied();
+        permissionDenied({
+          actions: [...unmatchedActions],
+        });
       }
 
       let finalUse = resource.use.bind(resource);
