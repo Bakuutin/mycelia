@@ -82,4 +82,4 @@ export async function consumeMessages(
       await handler(consumerMessage);
     },
   });
-}
+} 
