@@ -1,10 +1,8 @@
-import { expect, fn } from "@std/expect";
+import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { Policy } from "@/lib/auth/resources.ts";
-import { getMongoResource, MongoResource } from "@/lib/mongo/core.server.ts";
-import { ObjectId } from "mongodb";
-import { loader as transcriptionsLoader } from "./data.transcriptions.tsx";
-import { withFixtures } from "@/tests/fixtures.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { loader as transcriptionsLoader } from "../routes/data.transcriptions.tsx";
+import { withFixtures } from "@/tests/fixtures.server.ts"
 
 Deno.test(
   "loader should return empty transcriptions when no parameters",

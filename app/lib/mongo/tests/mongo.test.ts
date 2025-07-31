@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "../core.server.ts";
-import { withFixtures } from "@/tests/fixtures.ts";
+import { withFixtures } from "@/tests/fixtures.server.ts"
 import { ObjectId } from "mongodb";
 
 Deno.test(

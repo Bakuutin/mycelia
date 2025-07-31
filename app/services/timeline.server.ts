@@ -6,6 +6,7 @@ import ms from "ms";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
+import { defaultResourceManager } from "../lib/auth/resources.ts";
 
 export type Resolution = "5min" | "1hour" | "1day" | "1week";
 

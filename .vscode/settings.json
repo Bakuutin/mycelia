@@ -6,6 +6,7 @@
     "bitnami",
     "confluentinc",
     "flac",
+    "formdata",
     "gridfs",
     "isodate",
     "Partitioner",

@@ -7,7 +7,6 @@ import { ObjectId } from "mongodb";
 import {
   defaultResourceManager,
   Policy,
-  ResourceManager,
   ResourcePath,
 } from "./resources.ts";
 
@@ -45,21 +44,18 @@ export const accessLogger = new AccessLogger();
 export class Auth {
   policies: Policy[];
   principal: string;
-  resourceManager: ResourceManager;
   constructor(options: {
     policies?: Policy[];
     principal: string;
-    resourceManager?: ResourceManager;
   }) {
     this.policies = options.policies || [];
     this.principal = options.principal;
-    this.resourceManager = options.resourceManager || defaultResourceManager;
   }
 
   getResource<Input, Output>(
     code: string,
   ): Promise<(input: Input) => Promise<Output>> {
-    return this.resourceManager.getResource(code, this);
+    return defaultResourceManager.getResource(code, this);
   }
 }
 

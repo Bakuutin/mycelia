@@ -4,7 +4,7 @@ import { CompletionsCommand } from "@cliffy/command/completions";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
-import { Policy } from "@/lib/auth/resources.ts";
+import { defaultResourceManager, Policy } from "@/lib/auth/resources.ts";
 import { createServer } from "npm:vite";
 import express from "npm:express";
 import morgan from "npm:morgan";
@@ -16,6 +16,9 @@ import { updateAllHistogram } from "@/services/timeline.server.ts";
 import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import ms from "ms";
 import path from "node:path";
+import { KafkaResource } from "@/lib/kafka/index.ts";
+import { MongoResource } from "@/lib/mongo/core.server.ts";
+import { FsResource } from "@/lib/mongo/fs.server.ts";
 
 function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
   if (!expr) return undefined;
@@ -33,6 +36,9 @@ function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
     );
   }
 }
+
+
+
 
 async function startProdServer() {
   const app = express();
@@ -216,6 +222,9 @@ const root = new Command()
       ),
   );
 
-root.parse().then(() => {
+async function main() {
+  await root.parse();
   exit(0);
-});
+}
+
+main();

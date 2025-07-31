@@ -1,17 +1,15 @@
 import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { ResourceManager } from "@/lib/auth/resources.ts";
-import { withFixtures } from "./fixtures.ts";
+import { withFixtures } from "@/tests/fixtures.server.ts"
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 
 Deno.test(
   "fixtures are available",
   withFixtures([
     "Admin",
-    ResourceManager,
-  ], async (admin: Auth, resourceManager: ResourceManager) => {
+  ], async (admin: Auth) => {
     expect(admin.principal).toBe("admin");
-    expect(admin.resourceManager).toBe(resourceManager);
   }),
 );
 

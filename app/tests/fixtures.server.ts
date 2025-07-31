@@ -8,10 +8,9 @@ import {
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
-import { getAvailablePort } from "@std/net/get-available-port";
 import { MongoClient, UUID } from "mongodb";
 import { KafkaResource } from "@/lib/kafka/index.ts";
-import RequestQueue from "npm:kafkajs/src/network/requestQueue/index.js";
+import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
 
 
 export type Fixture = {
@@ -47,29 +46,33 @@ function dropDuplicates<T>(arr: T[]): T[] {
 console.log("Starting redis container");
 const redisContainer = await new GenericContainer("redis")
   .withExposedPorts(6379)
+  .withReuse()
   .start();
 
 console.log("Starting mongo container");
 const mongoContainer = await new GenericContainer("mongo:8.0")
   .withExposedPorts(27017)
+  .withReuse()
   .start();
 
 console.log("Starting kafka container");
-const kafkaPort = getAvailablePort();
+const kafkaPort = 9992;
 const kafkaContainer = await new GenericContainer("bitnami/kafka:latest")
     .withExposedPorts({
-      container: 9992,
+      container: 9092,
       host: kafkaPort,
     })
     .withEnvironment({
       KAFKA_CFG_NODE_ID: "0",
       KAFKA_CFG_PROCESS_ROLES: "controller,broker",
       KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER",
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT",
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@localhost:9093",
-      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:9992",
-      KAFKA_CFG_ADVERTISED_LISTENERS: `PLAINTEXT://:9092,CONTROLLER://:9093,HOST://localhost:${kafkaPort}`,
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093",
+      KAFKA_CFG_ADVERTISED_LISTENERS: `PLAINTEXT://localhost:${kafkaPort},CONTROLLER://:9093`,
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true",
     })
+    .withReuse()
     .start();
 
 RequestQueue.prototype.scheduleCheckPendingRequests = () => {}
@@ -87,8 +90,7 @@ defineFixture({
 
 defineFixture({
   token: "AuthFactory",
-  dependencies: [ResourceManager],
-  factory: (resourceManager: ResourceManager) => {
+  factory: () => {
     return ({
       principal = "test",
       policies = [],
@@ -99,7 +101,6 @@ defineFixture({
       return new Auth({
         principal,
         policies,
-        resourceManager,
       });
     };
   },
@@ -137,8 +138,7 @@ defineFixture({
 
 defineFixture({
   token: "Mongo",
-  dependencies: [ResourceManager],
-  factory: async (resourceManager: ResourceManager) => {
+  factory: async () => {
     const resource = new MongoResource();
     const client = new MongoClient(
       `mongodb://${mongoContainer.getHost()}:${
@@ -153,8 +153,8 @@ defineFixture({
     const fs = new FsResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
-    resourceManager.registerResource(resource);
-    resourceManager.registerResource(fs);
+    defaultResourceManager.registerResource(resource);
+    defaultResourceManager.registerResource(fs);
 
     return {
       db: isolatedDB,
@@ -169,14 +169,36 @@ defineFixture({
 
 defineFixture({
   token: "Kafka",
-  dependencies: [ResourceManager],
-  factory: async (resourceManager: ResourceManager) => {
+  factory: async () => {
     const resource = new KafkaResource({
       clientId: "mycelia-test",
       brokers: [`localhost:${kafkaPort}`],
       enforceRequestTimeout: false,
     });
-    resourceManager.registerResource(resource);
+    defaultResourceManager.registerResource(resource);
+    
+    const admin = resource.kafka.admin();
+    return {
+      resource,
+      admin,
+    };
+  },
+  teardown: async ({ admin }) => {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await admin.connect();
+      
+      const allTopics = await admin.listTopics();
+      const userTopics = allTopics.filter((t: string) => !t.startsWith('__'));
+      
+      if (userTopics.length > 0) {
+        await admin.deleteTopics({ topics: userTopics });
+      }
+      
+      await admin.disconnect();
+    } catch (error) {
+      console.error("Error during Kafka teardown:", error);
+    }
   },
 });
 

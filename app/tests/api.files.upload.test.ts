@@ -6,8 +6,8 @@ import {
   type UploadData,
   uploadToGridFS,
   validateAndParseFormData,
-} from "./api.files.upload.tsx";
-import { withFixtures } from "@/tests/fixtures.ts";
+} from "../routes/api.files.upload.tsx";
+import { withFixtures } from "@/tests/fixtures.server.ts"
 
 Deno.test(
   "validateAndParseFormData should parse valid form data",

@@ -1,13 +1,11 @@
 import { z } from "zod";
 import { Resource } from "@/lib/auth/resources.ts";
 import {
-  Consumer,
   Kafka,
   KafkaConfig,
-  Producer,
   SASLOptions,
   Partitioners,
-} from "npm:kafkajs";
+} from "kafkajs";
 
 import { Auth } from "@/lib/auth/index.ts";
 

@@ -93,7 +93,10 @@ export class ResourceManager {
     );
 
     if (!resource) {
-      permissionDenied();
+      permissionDenied({
+        message: `Resource ${code} not found`,
+        availableResources: Array.from(this.resources.keys()),
+      });
     }
 
     return async (input: Input): Promise<Output> => {
@@ -174,11 +177,3 @@ export class ResourceManager {
 }
 
 export const defaultResourceManager = new ResourceManager();
-
-export function resourceAlias<T extends Resource<any, any>>(
-  resourceClass: T | (new () => T),
-) {
-  return (auth: Auth): T => {
-    return auth.resourceManager.registerResource(resourceClass) as T;
-  };
-}

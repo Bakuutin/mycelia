@@ -19,12 +19,9 @@
     "@std/net": "jsr:@std/net@^1.0.4",
     "@std/testing": "jsr:@std/testing@^1.0.14",
     "@std/uuid": "jsr:@std/uuid@^1.0.5",
-    "@zaubrik/djwt": "jsr:@zaubrik/djwt@^3.0.2",
     "ms": "npm:ms",
     "react": "npm:react@^18.3.1",
     "bullmq": "npm:bullmq@^5.1.1",
-    "@aws-sdk/client-s3": "npm:@aws-sdk/client-s3@^3.540.0",
-    "@aws-sdk/s3-request-presigner": "npm:@aws-sdk/s3-request-presigner@^3.540.0",
     "formdata-node": "npm:formdata-node@^6.0.0"
   },
   "compilerOptions": {

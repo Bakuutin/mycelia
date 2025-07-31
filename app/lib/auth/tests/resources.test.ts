@@ -1,10 +1,9 @@
 import { expect, fn } from "@std/expect";
 import { z } from "zod";
 import {
-  MiddlewareFunction,
   Policy,
   Resource,
-  ResourceAccessModifier,
+  defaultResourceManager,
   ResourceManager,
 } from "../resources.ts";
 import { Auth } from "../core.server.ts";
@@ -14,14 +13,12 @@ const accessLogger = {
 };
 
 function setupManagerAndAuth(policies?: Policy[]) {
-  const manager = new ResourceManager();
   const auth = new Auth({
     principal: "test-user",
     policies: policies ?? [],
-    resourceManager: manager,
   });
   accessLogger.log = fn(() => {}) as any;
-  return { manager, auth };
+  return { auth };
 }
 
 Deno.test("should register a resource and evaluate access with custom auth policy", async () => {
@@ -54,8 +51,7 @@ Deno.test("should register a resource and evaluate access with custom auth polic
       actions: ["read"],
     }],
   };
-  const manager = new ResourceManager();
-  manager.registerResource(userResource);
+  defaultResourceManager.registerResource(userResource);
   const customAuth = new Auth({
     principal: "reader",
     policies: [
@@ -75,7 +71,7 @@ Deno.test("should register a resource and evaluate access with custom auth polic
 });
 
 Deno.test("ResourceManager edge cases: denies access if policy effect is deny", async () => {
-  const { manager, auth } = setupManagerAndAuth([
+  const { auth } = setupManagerAndAuth([
     { resource: "test", action: "read", effect: "deny" },
   ]);
   const inputSchema = z.object({ id: z.number() });
@@ -89,13 +85,13 @@ Deno.test("ResourceManager edge cases: denies access if policy effect is deny", 
       input: { id: number },
     ) => [{ path: "test", actions: ["read"] }],
   };
-  manager.registerResource(baseResource);
-  const fn = await manager.getResource("test", auth);
+  defaultResourceManager.registerResource(baseResource);
+  const fn = await auth.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("ResourceManager edge cases: denies access if no matching policy", async () => {
-  const { manager, auth } = setupManagerAndAuth([
+  const { auth } = setupManagerAndAuth([
     { resource: "other", action: "read", effect: "allow" },
   ]);
   const inputSchema = z.object({ id: z.number() });
@@ -109,23 +105,25 @@ Deno.test("ResourceManager edge cases: denies access if no matching policy", asy
       input: { id: number },
     ) => [{ path: "test", actions: ["read"] }],
   };
-  manager.registerResource(baseResource);
-  const fn = await manager.getResource("test", auth);
+  defaultResourceManager.registerResource(baseResource);
+  const fn = await auth.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("ResourceManager edge cases: denies access if resource is not registered", async () => {
-  const { manager, auth } = setupManagerAndAuth([
+  const resourceManager = new ResourceManager();
+  const { auth } = setupManagerAndAuth([
     { resource: "test", action: "read", effect: "allow" },
   ]);
-  await expect(manager.getResource("test", auth)).rejects.toHaveProperty(
+  await expect(resourceManager.getResource("test", auth)).rejects.toHaveProperty(
     "status",
     403,
   );
 });
 
 Deno.test("ResourceManager edge cases: calls modifier if modify policy present and schema passes", async () => {
-  const { manager, auth } = setupManagerAndAuth([
+  const resourceManager = new ResourceManager();
+  const { auth } = setupManagerAndAuth([
     {
       resource: "test",
       action: "read",
@@ -151,14 +149,14 @@ Deno.test("ResourceManager edge cases: calls modifier if modify policy present a
     use = async (input: { id: number }) => ({ id: input.id });
     extractActions = () => [{ path: "test", actions: ["read"] }];
   }
-  manager.registerResource(new TestResource());
-  const fn = await manager.getResource("test", auth);
+  resourceManager.registerResource(new TestResource());
+  const fn = await resourceManager.getResource("test", auth);
   const result = await fn({ id: 2 });
   expect(result).toEqual({ id: 2, foo: "bar" });
 });
 
 Deno.test("ResourceManager edge cases: denies access if modify policy present but modifier missing", async () => {
-  const { manager, auth } = setupManagerAndAuth([
+  const { auth } = setupManagerAndAuth([
     {
       resource: "test",
       action: "read",
@@ -177,13 +175,13 @@ Deno.test("ResourceManager edge cases: denies access if modify policy present bu
       input: { id: number },
     ) => [{ path: "test", actions: ["read"] }],
   };
-  manager.registerResource(baseResource);
-  const fn = await manager.getResource("test", auth);
+  defaultResourceManager.registerResource(baseResource);
+  const fn = await auth.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("ResourceManager edge cases: denies access if modify policy present but schema fails", async () => {
-  const { manager, auth } = setupManagerAndAuth([
+  const { auth } = setupManagerAndAuth([
     {
       resource: "test",
       action: "read",
@@ -215,34 +213,32 @@ Deno.test("ResourceManager edge cases: denies access if modify policy present bu
       input: { id: number },
     ) => [{ path: "test", actions: ["read"] }],
   };
-  manager.registerResource(baseResource);
-  const fn = await manager.getResource("test", auth);
+    defaultResourceManager.registerResource(baseResource);
+  const fn = await auth.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("ResourceManager edge cases: matchPolicy returns true for matching resource and action", () => {
-  const manager = new ResourceManager();
   const policy = {
     resource: "foo*",
     action: "rea*",
     effect: "allow",
   } as Policy;
-  expect(manager.matchPolicy(policy, "foobar", "read")).toBe(true);
+  expect(defaultResourceManager.matchPolicy(policy, "foobar", "read")).toBe(true);
 });
 
 Deno.test("ResourceManager edge cases: matchPolicy returns false for non-matching resource or action", () => {
-  const manager = new ResourceManager();
   const policy = {
     resource: "foo*",
     action: "rea*",
     effect: "allow",
   } as Policy;
-  expect(manager.matchPolicy(policy, "bar", "read")).toBe(false);
-  expect(manager.matchPolicy(policy, "foobar", "write")).toBe(false);
+  expect(defaultResourceManager.matchPolicy(policy, "bar", "read")).toBe(false);
+  expect(defaultResourceManager.matchPolicy(policy, "foobar", "write")).toBe(false);
 });
 
 Deno.test("ResourceManager edge cases: calls all modifiers", async () => {
-  const manager = new ResourceManager();
+  const resourceManager = new ResourceManager();
   let sharedCallCount = 0;
   let privateCallCount = 0;
   const resource: Resource<any, any> = {
@@ -276,7 +272,7 @@ Deno.test("ResourceManager edge cases: calls all modifiers", async () => {
       input: { id: number },
     ) => [{ path: ["users", input.id.toString()], actions: ["read"] }],
   };
-  manager.registerResource(resource);
+  resourceManager.registerResource(resource);
   const auth = {
     principal: "user",
     policies: [{
@@ -291,7 +287,7 @@ Deno.test("ResourceManager edge cases: calls all modifiers", async () => {
       middleware: { code: "private" },
     }],
   } as any;
-  const fnResource = await manager.getResource("users", auth);
+  const fnResource = await resourceManager.getResource("users", auth);
   const result = await fnResource({ id: 2 });
   expect(result).toEqual({ id: 2, foo: "default" });
   expect(sharedCallCount).toBe(1);

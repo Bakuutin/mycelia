@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getKafkaResource } from "../index.ts";
-import { withFixtures } from "@/tests/fixtures.ts";
+import { withFixtures } from "@/tests/fixtures.server.ts"
 
 Deno.test(
   "should allow produce message",
@@ -29,6 +29,17 @@ Deno.test(
     "Kafka",
   ], async (auth: Auth) => {
     const kafka = await getKafkaResource(auth);
+
+    await kafka({
+      action: "produce",
+      topic: "test-topic",
+      messages: [{
+        key: "test-key",
+        value: "test-value",
+        headers: { "test-header": "test-value" },
+      }],
+    });
+
     const messages: any[] = [];
 
     const result = await kafka({
@@ -194,6 +205,16 @@ Deno.test(
       ],
     });
     const kafka = await getKafkaResource(auth);
+
+    await kafka({
+      action: "produce",
+      topic: "test-topic",
+      messages: [{
+        key: "test-key",
+        value: "test-value",
+      }],
+    });
+    
     const result = await kafka({
       action: "consume",
       groupId: "allowed-group",

@@ -2,17 +2,15 @@ import { expect, fn } from "@std/expect";
 import { z } from "zod";
 import { Auth } from "../core.server.ts";
 import { accessLogger } from "../core.server.ts";
-import { Policy, Resource, ResourceManager } from "../resources.ts";
+import { Policy, Resource, ResourceManager, defaultResourceManager } from "../resources.ts";
 
 function setupAuth(policies?: any[]) {
-  const resourceManager = new ResourceManager();
   const auth = new Auth({
     principal: "test-user",
     policies: policies ?? [],
-    resourceManager,
   });
   accessLogger.log = fn(() => {}) as any;
-  return { auth, resourceManager };
+  return { auth };
 }
 
 Deno.test("constructor: should create auth with default policies", () => {
@@ -31,7 +29,7 @@ Deno.test("constructor: should create auth with custom policies", () => {
 });
 
 Deno.test("getResource: should get a resource function when resource is registered", async () => {
-  const { auth, resourceManager } = setupAuth();
+  const { auth } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "test",
     schemas: {
@@ -44,7 +42,7 @@ Deno.test("getResource: should get a resource function when resource is register
       input: { id: number },
     ) => [{ path: "test", actions: ["read"] }],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const resourceFn = await auth.getResource("test");
   expect(typeof resourceFn).toBe("function");
 });
@@ -58,7 +56,7 @@ Deno.test("getResource: should throw when resource is not registered", async () 
 });
 
 Deno.test("getResource: should allow access when policy matches", async () => {
-  const { auth, resourceManager } = setupAuth();
+  const { auth } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -71,11 +69,10 @@ Deno.test("getResource: should allow access when policy matches", async () => {
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const authWithPolicy = new Auth({
     principal: "test-user",
     policies: [{ resource: "users", action: "read", effect: "allow" }],
-    resourceManager,
   });
   const resourceFn = await authWithPolicy.getResource("users");
   const result = await resourceFn({ id: 123 });
@@ -83,7 +80,6 @@ Deno.test("getResource: should allow access when policy matches", async () => {
 });
 
 Deno.test("getResource: should deny access when policy effect is deny", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -96,18 +92,16 @@ Deno.test("getResource: should deny access when policy effect is deny", async ()
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [{ resource: "users", action: "read", effect: "deny" }],
-    resourceManager,
   });
   const resourceFn = await auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("getResource: should deny access when no matching policy", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -120,18 +114,17 @@ Deno.test("getResource: should deny access when no matching policy", async () =>
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [{ resource: "other", action: "read", effect: "allow" }],
-    resourceManager,
   });
   const resourceFn = await auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("getResource: should apply middleware when modify policy is present", async () => {
-  const { resourceManager } = setupAuth();
+  const resourceManager = new ResourceManager();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -164,15 +157,13 @@ Deno.test("getResource: should apply middleware when modify policy is present", 
       effect: "modify",
       middleware: { code: "addFlag", arg: { flag: "test-flag" } },
     }],
-    resourceManager,
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = await resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123, modified: true, flag: "test-flag" });
 });
 
 Deno.test("getResource: should deny access when modify policy present but modifier missing", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -185,7 +176,7 @@ Deno.test("getResource: should deny access when modify policy present but modifi
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [{
@@ -194,14 +185,12 @@ Deno.test("getResource: should deny access when modify policy present but modifi
       effect: "modify",
       middleware: { code: "missing", arg: {} },
     }],
-    resourceManager,
   });
   const resourceFn = await auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("getResource: should deny access when modify policy present but schema fails", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -222,7 +211,7 @@ Deno.test("getResource: should deny access when modify policy present but schema
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [{
@@ -231,14 +220,12 @@ Deno.test("getResource: should deny access when modify policy present but schema
       effect: "modify",
       middleware: { code: "addFlag", arg: { invalid: "data" } },
     }],
-    resourceManager,
   });
   const resourceFn = await auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("getResource: should handle multiple actions from extractActions", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -253,14 +240,13 @@ Deno.test("getResource: should handle multiple actions from extractActions", asy
       { path: "users", actions: ["read", "write"] },
     ],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [
       { resource: "users", action: "read", effect: "allow" },
       { resource: "users", action: "write", effect: "allow" },
     ],
-    resourceManager,
   });
   const resourceFn = await auth.getResource("users");
   const result = await resourceFn({ id: 123 });
@@ -268,7 +254,6 @@ Deno.test("getResource: should handle multiple actions from extractActions", asy
 });
 
 Deno.test("getResource: should handle multiple action groups from extractActions", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -284,14 +269,13 @@ Deno.test("getResource: should handle multiple action groups from extractActions
       { path: "users/profile", actions: ["read"] },
     ],
   };
-  resourceManager.registerResource(testResource);
+  defaultResourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [
       { resource: "users", action: "read", effect: "allow" },
       { resource: "users/profile", action: "read", effect: "allow" },
     ],
-    resourceManager,
   });
   const resourceFn = await auth.getResource("users");
   const result = await resourceFn({ id: 123 });
@@ -299,7 +283,7 @@ Deno.test("getResource: should handle multiple action groups from extractActions
 });
 
 Deno.test("getResource: should deny access when some actions are not covered by policies", async () => {
-  const { resourceManager } = setupAuth();
+  const resourceManager = new ResourceManager();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -319,15 +303,13 @@ Deno.test("getResource: should deny access when some actions are not covered by 
       { resource: "users", action: "read", effect: "allow" },
       // Missing write policy
     ],
-    resourceManager,
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = await resourceManager.getResource("users", auth);
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 });
 
 Deno.test("getResource: should apply multiple modifiers in correct order", async () => {
   const callOrder: string[] = [];
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -358,6 +340,7 @@ Deno.test("getResource: should apply multiple modifiers in correct order", async
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
+  const resourceManager = new ResourceManager();
   resourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
@@ -375,9 +358,8 @@ Deno.test("getResource: should apply multiple modifiers in correct order", async
         middleware: { code: "second" },
       },
     ],
-    resourceManager,
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = await resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({
     id: 123,
@@ -387,7 +369,6 @@ Deno.test("getResource: should apply multiple modifiers in correct order", async
 });
 
 Deno.test("getResource: should handle wildcard resource patterns", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -400,19 +381,18 @@ Deno.test("getResource: should handle wildcard resource patterns", async () => {
       input: { id: number },
     ) => [{ path: "users/123", actions: ["read"] }],
   };
+  const resourceManager = new ResourceManager();
   resourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [{ resource: "users/*", action: "read", effect: "allow" }],
-    resourceManager,
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = await resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 });
 
 Deno.test("getResource: should handle wildcard action patterns", async () => {
-  const { resourceManager } = setupAuth();
   const testResource: Resource<any, any> = {
     code: "users",
     schemas: {
@@ -425,13 +405,13 @@ Deno.test("getResource: should handle wildcard action patterns", async () => {
       input: { id: number },
     ) => [{ path: "users", actions: ["read"] }],
   };
+  const resourceManager = new ResourceManager();
   resourceManager.registerResource(testResource);
   const auth = new Auth({
     principal: "test-user",
     policies: [{ resource: "users", action: "rea*", effect: "allow" }],
-    resourceManager,
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = await resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 });

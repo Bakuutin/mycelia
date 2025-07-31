@@ -151,7 +151,7 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
           store.addData(
             resolution,
             { start: range.start, end: range.end },
-            data.map((item: any) => ({
+            data.items.map((item: any) => ({
               start: new Date(item.start),
               end: new Date(item.end),
               id: item.id,

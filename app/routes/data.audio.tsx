@@ -7,7 +7,7 @@ import { z } from "zod";
 
 const zAudioQueryParams = z.object({
   start: z.string().transform((val: string) => new Date(val)),
-  lastId: z.string().optional(),
+  lastId: z.string().optional().nullable(),
   limit: z.string().transform((val: string) => parseInt(val, 10)).optional(),
 });
 
