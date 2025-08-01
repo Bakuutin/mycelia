@@ -3,6 +3,7 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "../auth/index.ts";
 import { Db, GridFSBucket, MongoClient, ObjectId } from "mongodb";
 import { Buffer } from "node:buffer";
+import crypto from "node:crypto";
 
 export const getRootDB = async (): Promise<Db> => {
   const client = new MongoClient(Deno.env.get("MONGO_URL") as string);
@@ -111,4 +112,32 @@ export async function getFsResource(
   auth: Auth,
 ): Promise<(input: FsRequest) => Promise<FsResponse>> {
   return auth.getResource("tech.mycelia.fs");
+}
+
+
+export function getFileExtension(filename: string): string {
+  const ext = filename.split(".").pop();
+  return (ext && /^[a-zA-Z0-9]+$/.test(ext)) ? ext : "";
+}
+
+
+export async function uploadToGridFS(
+  auth: Auth,
+  file: File,
+  bucket: string,
+  metadata: Record<string, any>,
+): Promise<ObjectId> {
+  const fsResource = await getFsResource(auth);
+  return await fsResource({
+    action: "upload",
+    bucket,
+    filename: `${crypto.randomUUID()}/${file.name}`,
+    data: new Uint8Array(await file.arrayBuffer()),
+    metadata: {
+      ...metadata,
+      extension: getFileExtension(file.name),
+      uploaded_by: auth.principal,
+      uploaded_at: new Date(),
+    },
+  });
 }

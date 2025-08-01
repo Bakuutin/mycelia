@@ -45,6 +45,7 @@
     "npm:@radix-ui/react-tooltip@^1.1.8": "1.2.7_@types+react@18.3.23_@types+react-dom@18.3.7__@types+react@18.3.23_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@react-router/dev@^7.4.0": "7.7.0_react-router@7.7.0__react@18.3.1__react-dom@18.3.1___react@18.3.1_typescript@5.8.3_vite@6.3.5__@types+node@24.1.0__tsx@4.20.3__picomatch@4.0.3_@babel+core@7.28.0_react@18.3.1_react-dom@18.3.1__react@18.3.1_@types+node@24.1.0_tsx@4.20.3",
     "npm:@remix-run/deno@^2.16.2": "2.16.8_typescript@5.8.3",
+    "npm:@remix-run/dev@*": "2.16.8_@remix-run+react@2.16.8__react@18.3.1__react-dom@18.3.1___react@18.3.1__typescript@5.8.3_@remix-run+serve@2.16.8__express@4.21.2__typescript@5.8.3_typescript@5.8.3_vite@6.3.5__@types+node@24.1.0__tsx@4.20.3__picomatch@4.0.3_@babel+core@7.28.0_react@18.3.1_react-dom@18.3.1__react@18.3.1_esbuild@0.17.6_postcss@8.5.6_@types+node@24.1.0_tsx@4.20.3",
     "npm:@remix-run/dev@^2.16.8": "2.16.8_@remix-run+react@2.16.8__react@18.3.1__react-dom@18.3.1___react@18.3.1__typescript@5.8.3_@remix-run+serve@2.16.8__express@4.21.2__typescript@5.8.3_typescript@5.8.3_vite@6.3.5__@types+node@24.1.0__tsx@4.20.3__picomatch@4.0.3_@babel+core@7.28.0_react@18.3.1_react-dom@18.3.1__react@18.3.1_esbuild@0.17.6_postcss@8.5.6_@types+node@24.1.0_tsx@4.20.3",
     "npm:@remix-run/express@^2.16.8": "2.16.8_express@4.21.2_typescript@5.8.3",
     "npm:@remix-run/node@^2.16.5": "2.16.8_typescript@5.8.3",
