@@ -3,7 +3,6 @@ import { type LoaderData, type Timestamp } from "../types/timeline.ts";
 
 import ms from "ms";
 
-import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { defaultResourceManager } from "../lib/auth/resources.ts";
@@ -58,13 +57,13 @@ const TARGET_COLLECTIONS: Record<string, AggregationConfig> = {
 };
 
 export async function updateHistogram(
+  auth: Auth,
   start: Date,
   end: Date,
   resolution: Resolution,
 ): Promise<void> {
-  const db = await getRootDB();
+  const mongo = await getMongoResource(auth);
   const binSize = RESOLUTION_TO_MS[resolution];
-  const histogramCollection = db.collection(`histogram_${resolution}`);
 
   start = new Date(Math.floor(start.getTime() / binSize) * binSize);
   end = new Date(Math.ceil(end.getTime() / binSize) * binSize);
@@ -78,6 +77,7 @@ export async function updateHistogram(
     );
     for (let i = 0; i < steps; i++) {
       await updateHistogramOptimized(
+        auth,
         new Date(start.getTime() + i * BATCH_SIZE),
         new Date(start.getTime() + (i + 1) * BATCH_SIZE),
         resolution,
@@ -91,8 +91,6 @@ export async function updateHistogram(
       TARGET_COLLECTIONS,
     )
   ) {
-    const sourceCollection = db.collection(sourceCollectionName);
-
     const pipeline = [
       {
         $match: {
@@ -119,9 +117,13 @@ export async function updateHistogram(
       },
     ];
 
-    const results = await sourceCollection.aggregate(pipeline).toArray();
+    const results = await mongo({
+      action: "aggregate",
+      collection: sourceCollectionName,
+      pipeline,
+    });
 
-    const ops = results.map(({ _id: binStart, ...aggr }) => ({
+    const ops = results.map(({ _id: binStart, ...aggr }: any) => ({
       updateOne: {
         filter: { start: binStart },
         update: {
@@ -137,25 +139,28 @@ export async function updateHistogram(
     }));
 
     for (let i = 0; i < ops.length; i += 500) {
-      await histogramCollection.bulkWrite(ops.slice(i, i + 500), {
-        ordered: false,
+      await mongo({
+        action: "bulkWrite",
+        collection: `histogram_${resolution}`,
+        operations: ops.slice(i, i + 500),
+        options: { ordered: false },
       });
     }
   }
 }
 
 export async function updateHistogramOptimized(
+  auth: Auth,
   start: Date,
   end: Date,
   resolution: Resolution,
 ): Promise<void> {
   if (resolution === LOWEST_RESOLUTION) {
-    return updateHistogram(start, end, resolution);
+    return updateHistogram(auth, start, end, resolution);
   }
 
-  const db = await getRootDB();
+  const mongo = await getMongoResource(auth);
   const binSize = RESOLUTION_TO_MS[resolution];
-  const histogramCollection = db.collection(`histogram_${resolution}`);
 
   // Floor start and ceil end to nearest resolution point
   start = new Date(Math.floor(start.getTime() / binSize) * binSize);
@@ -166,16 +171,13 @@ export async function updateHistogramOptimized(
   // Get the next lower resolution
   const currentIndex = RESOLUTION_ORDER.indexOf(resolution);
   const lowerResolution = RESOLUTION_ORDER[currentIndex - 1];
-  const lowerHistogramCollection = db.collection(
-    `histogram_${lowerResolution}`,
-  );
 
   // Query the lower resolution data
-  const lowerData = await lowerHistogramCollection
-    .find({
-      start: { $gte: start, $lt: end },
-    })
-    .toArray();
+  const lowerData = await mongo({
+    action: "find",
+    collection: `histogram_${lowerResolution}`,
+    query: { start: { $gte: start, $lt: end } },
+  });
 
   // Aggregate the lower resolution data into the current resolution
   const aggregatedData = new Map<
@@ -283,7 +285,11 @@ export async function updateHistogramOptimized(
   });
 
   for (let i = 0; i < ops.length; i += 1000) {
-    await histogramCollection.bulkWrite(ops.slice(i, i + 1000));
+    await mongo({
+      action: "bulkWrite",
+      collection: `histogram_${resolution}`,
+      operations: ops.slice(i, i + 1000),
+    });
   }
 }
 
@@ -372,22 +378,23 @@ export async function fetchTimelineData(
 }
 
 export async function updateAllHistogram(
+  auth: Auth,
   start?: Date,
   end?: Date,
 ): Promise<void> {
-  const db = await getRootDB();
+  const mongo = await getMongoResource(auth);
 
   let earliestStart: Date | null = null;
   let latestStart: Date | null = null;
 
   if (!start || !end) {
     for (const collectionName of Object.keys(TARGET_COLLECTIONS)) {
-      const collection = db.collection(collectionName);
-
-      const firstDoc = await collection.find({}, {
-        sort: { start: 1 },
-        limit: 1,
-      }).toArray();
+      const firstDoc = await mongo({
+        action: "find",
+        collection: collectionName,
+        query: {},
+        options: { sort: { start: 1 }, limit: 1 },
+      });
       if (
         firstDoc.length > 0 &&
         (!earliestStart || firstDoc[0].start < earliestStart)
@@ -395,10 +402,12 @@ export async function updateAllHistogram(
         earliestStart = firstDoc[0].start;
       }
 
-      const lastDoc = await collection.find({}, {
-        sort: { start: -1 },
-        limit: 1,
-      }).toArray();
+      const lastDoc = await mongo({
+        action: "find",
+        collection: collectionName,
+        query: {},
+        options: { sort: { start: -1 }, limit: 1 },
+      });
       if (
         lastDoc.length > 0 && (!latestStart || lastDoc[0].start > latestStart)
       ) {
@@ -410,31 +419,41 @@ export async function updateAllHistogram(
       throw new Error("No data found in target collections");
     }
 
-    start = earliestStart;
-    end = latestStart;
+    if (!start) {
+      start = earliestStart;
+    }
+    if (!end) {
+      end = latestStart;
+    }
   }
 
   console.log("Updating all histograms", start, end);
 
   for (const resolution of RESOLUTION_ORDER) {
-    await updateHistogramOptimized(start, end, resolution);
+    await updateHistogramOptimized(auth, start, end, resolution);
   }
 }
 
-export async function ensureHistogramIndex(): Promise<void> {
-  const db = await getRootDB();
+export async function ensureHistogramIndex(auth: Auth): Promise<void> {
+  const mongo = await getMongoResource(auth);
 
   for (const resolution of RESOLUTION_ORDER) {
-    const collection = db.collection(`histogram_${resolution}`);
-    const indexes = await collection.indexes();
+    const indexes = await mongo({
+      action: "listIndexes",
+      collection: `histogram_${resolution}`,
+    });
 
-    const hasStartIndex = indexes.some((index) =>
+    const hasStartIndex = indexes.some((index: any) =>
       index.key && index.key.start === 1
     );
 
     if (!hasStartIndex) {
       console.log(`Creating index on start field for histogram_${resolution}`);
-      await collection.createIndex({ start: 1 });
+      await mongo({
+        action: "createIndex",
+        collection: `histogram_${resolution}`,
+        index: { start: 1 },
+      });
     }
   }
 }

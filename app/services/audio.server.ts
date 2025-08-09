@@ -1,11 +1,8 @@
 import { GridFSBucket, ObjectId } from "mongodb";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
-import { Buffer } from "node:buffer";
 
 import { z } from "zod";
 import { Queue, Worker } from "bullmq";
 import { redis } from "@/lib/redis.ts";
-import { Auth } from "@/lib/auth/core.server.ts";
 
 export function getFileExtension(filename: string): string {
   const ext = filename.split(".").pop();

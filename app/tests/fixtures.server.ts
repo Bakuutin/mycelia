@@ -148,17 +148,21 @@ defineFixture({
 defineFixture({
   token: "Mongo",
   factory: async () => {
+    const mongoUri = `mongodb://${mongoContainer.getHost()}:${
+      mongoContainer.getMappedPort(27017)
+    }`;
+    const databaseName = new UUID().toString();
+    Deno.env.set("MONGO_URL", "SHOULD_NOT_BE_USED");
+    Deno.env.set("DATABASE_NAME", databaseName);
     const resource = new MongoResource();
     const client = new MongoClient(
-      `mongodb://${mongoContainer.getHost()}:${
-        mongoContainer.getMappedPort(27017)
-      }`,
+      mongoUri,
       {
         timeoutMS: 1000,
       },
     );
     await client.connect();
-    const isolatedDB = client.db(new UUID().toString());
+    const isolatedDB = client.db(databaseName);
     const fs = new FsResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;

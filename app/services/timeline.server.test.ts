@@ -7,6 +7,7 @@ import {
   fetchTimelineData,
   getDaysAgo,
   type Resolution,
+  updateHistogram,
 } from "./timeline.server.ts";
 import { type Timestamp } from "@/types/timeline.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
@@ -204,5 +205,51 @@ Deno.test(
       new Date("2024-01-01T00:00:05.000Z").getTime(),
     );
     expect(secondSegment.no_speech_prob).toBe(0.05);
+  }),
+);
+
+Deno.test(
+  "updateHistogram should process audio_chunks data correctly",
+  withFixtures(["Admin", "Mongo"], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+
+    const startTime = new Date("2024-01-01T00:00:00.000Z");
+    const endTime = new Date("2024-01-01T01:00:00.000Z");
+
+    await mongo({
+      action: "insertMany",
+      collection: "audio_chunks",
+      docs: [
+        {
+          start: new Date("2024-01-01T00:10:00.000Z"),
+          vad: { prob: 0.8, has_speech: true },
+        },
+        {
+          start: new Date("2024-01-01T00:20:00.000Z"),
+          vad: { prob: 0.6, has_speech: true },
+        },
+        {
+          start: new Date("2024-01-01T00:30:00.000Z"),
+          vad: { prob: 0.3, has_speech: false },
+        },
+      ],
+    });
+
+    await updateHistogram(auth, startTime, endTime, "5min");
+
+    const histogramData = await mongo({
+      action: "find",
+      collection: "histogram_5min",
+      query: {
+        start: { $gte: startTime, $lte: endTime },
+      },
+    });
+
+    expect(histogramData.length).toBeGreaterThan(0);
+
+    const hasAudioData = histogramData.some((doc: any) =>
+      doc.totals?.audio_chunks?.count > 0
+    );
+    expect(hasAudioData).toBe(true);
   }),
 );

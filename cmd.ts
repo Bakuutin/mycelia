@@ -12,13 +12,31 @@ import morgan from "npm:morgan";
 import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
 
-import { updateAllHistogram } from "@/services/timeline.server.ts";
 import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import ms from "ms";
 import path from "node:path";
-import { KafkaResource } from "@/lib/kafka/index.ts";
-import { MongoResource } from "@/lib/mongo/core.server.ts";
-import { FsResource } from "@/lib/mongo/fs.server.ts";
+import { Auth } from "@/lib/auth/core.server.ts";
+import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
+import { setupResources, createAdminMCPServer, listAvailableMCPTools } from "@/lib/resources/registry.ts";
+import { createMCPClient } from "@/lib/mcp/client.ts";
+
+async function setup() {
+  // Load resources from configuration
+  // You can specify a custom config path via MYCELIA_RESOURCE_CONFIG env var
+  const configPath = Deno.env.get("MYCELIA_RESOURCE_CONFIG");
+  await setupResources(configPath);
+}
+
+function createAdminAuth(): Auth {
+  return new Auth({
+    principal: "admin",
+    policies: [{
+      action: "*",
+      resource: "**",
+      effect: "allow",
+    }],
+  });
+}
 
 function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
   if (!expr) return undefined;
@@ -99,14 +117,95 @@ const root = new Command()
           .arguments("[start:string] [end:string]")
           .action(async ({ all }, start, end) => {
             console.log("Updating histograms...");
-            if (all) {
-              await updateAllHistogram();
-            } else {
-              const startDate = parseDateOrRelativeTime(start);
-              const endDate = end ? parseDateOrRelativeTime(end) : new Date();
-              await updateAllHistogram(startDate, endDate);
-            }
+            const auth = createAdminAuth();
+
+            const timeline = await getTimelineResource(auth);
+
+            const startDate = start
+              ? parseDateOrRelativeTime(start)
+              : undefined;
+            const endDate = end
+              ? parseDateOrRelativeTime(end)
+              : (startDate ? new Date() : undefined);
+
+            await timeline({
+              action: "recalculate",
+              all,
+              start: startDate,
+              end: endDate,
+            });
+
             console.log("Histogram update complete!");
+          }),
+      ),
+  )
+  .command(
+    "mcp",
+    new Command()
+      .description("MCP (Model Context Protocol) interface.")
+      .command(
+        "list",
+        new Command()
+          .description("List available MCP tools.")
+          .action(async () => {
+            const tools = await listAvailableMCPTools();
+            console.log("Available MCP tools:");
+            for (const tool of tools) {
+              console.log(`  - ${tool}`);
+            }
+          }),
+      )
+      .command(
+        "call",
+        new Command()
+          .description("Call an MCP tool.")
+          .arguments("<tool:string> [args:string]")
+          .action(async (_, tool, argsJson) => {
+            try {
+              const server = createAdminMCPServer();
+              const client = createMCPClient(server);
+              
+              const args = argsJson ? JSON.parse(argsJson) : {};
+              const result = await client.callTool(tool, args);
+              
+              console.log("Result:");
+              for (const content of result.content) {
+                if (content.type === "text") {
+                  console.log(content.text);
+                }
+              }
+              
+              if (result.isError) {
+                exit(1);
+              }
+            } catch (error) {
+              console.error("MCP call failed:", error.message);
+              exit(1);
+            }
+          }),
+      )
+      .command(
+        "server",
+        new Command()
+          .description("Start MCP server over HTTP.")
+          .option("-p, --port <port:number>", "Port to serve on.", {
+            default: 3001,
+          })
+          .action(async ({ port }) => {
+            const server = createAdminMCPServer();
+            
+            console.log(`Starting MCP server on port ${port}...`);
+            
+            Deno.serve({
+              port,
+              handler: (req) => server.handleHTTPRequest(req),
+            });
+            
+            console.log(`MCP server running at http://localhost:${port}`);
+            console.log("Send POST requests with JSON-RPC 2.0 format");
+            
+            // Keep the server running
+            await new Promise(() => {});
           }),
       ),
   )
@@ -215,6 +314,7 @@ const root = new Command()
   );
 
 async function main() {
+  await setup();
   await root.parse();
   exit(0);
 }

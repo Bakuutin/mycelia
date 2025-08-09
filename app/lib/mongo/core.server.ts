@@ -71,6 +71,34 @@ const deleteSchema = z.object({
   query: z.record(z.string(), z.any()),
 });
 
+const aggregateSchema = z.object({
+  action: z.literal("aggregate"),
+  collection: z.string(),
+  pipeline: z.array(z.record(z.string(), z.any())),
+  options: z.record(z.string(), z.any()).optional(),
+});
+
+const bulkWriteSchema = z.object({
+  action: z.literal("bulkWrite"),
+  collection: z.string(),
+  operations: z.array(z.record(z.string(), z.any())),
+  options: z.object({
+    ordered: z.boolean().optional(),
+  }).optional(),
+});
+
+const createIndexSchema = z.object({
+  action: z.literal("createIndex"),
+  collection: z.string(),
+  index: z.record(z.string(), z.any()),
+  options: z.record(z.string(), z.any()).optional(),
+});
+
+const listIndexesSchema = z.object({
+  action: z.literal("listIndexes"),
+  collection: z.string(),
+});
+
 const mongoRequestSchema = z.discriminatedUnion("action", [
   findSchema,
   insertOneSchema,
@@ -78,6 +106,10 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
   updateSchema,
   deleteSchema,
   countSchema,
+  aggregateSchema,
+  bulkWriteSchema,
+  createIndexSchema,
+  listIndexesSchema,
 ]);
 
 type MongoRequest = z.infer<typeof mongoRequestSchema>;
@@ -93,6 +125,10 @@ const actionMap = {
   updateMany: "update",
   deleteOne: "delete",
   deleteMany: "delete",
+  aggregate: "read",
+  bulkWrite: "write",
+  createIndex: "write",
+  listIndexes: "read",
 } satisfies { [K in MongoRequest["action"]]: string };
 
 export class MongoResource implements Resource<MongoRequest, MongoResponse> {
@@ -126,6 +162,17 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
         return collection.deleteMany(input.query);
       case "count":
         return collection.countDocuments(input.query);
+      case "aggregate":
+        return collection.aggregate(input.pipeline, input.options).toArray();
+      case "bulkWrite":
+        return collection.bulkWrite(input.operations as any, input.options);
+      case "createIndex":
+        return collection.createIndex(input.index, input.options);
+      case "listIndexes":
+        if (!(await db.listCollections({ name: input.collection }).hasNext())) {
+          return [];
+        }
+        return collection.indexes();
       default:
         throw new Error("Unknown action");
     }
@@ -175,18 +222,24 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
           return next(input, auth);
         }
 
-        const query = {
-          $and: [
-            input.query,
-            arg.filter,
-          ],
-        };
+        if ("query" in input) {
+          const query = {
+            $and: [
+              input.query,
+              arg.filter,
+            ],
+          };
 
-        const result = await next({
-          ...input,
-          query,
-        }, auth);
-        return result;
+          const result = await next({
+            ...input,
+            query,
+          }, auth);
+          return result;
+        } else {
+          // For actions without query (like aggregate), just pass through
+          const result = await next(input, auth);
+          return result;
+        }
       },
     },
   };

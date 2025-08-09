@@ -38,28 +38,3 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return Response.json(result);
 }
-
-// export async function loader({ request }: LoaderFunctionArgs) {
-//   const auth = await authenticateOrRedirect(request);
-
-//   const url = new URL(request.url);
-//   let params;
-//   try {
-//     const startParam = url.searchParams.get("start");
-//     const endParam = url.searchParams.get("end");
-
-//     params = {
-//       start: startParam
-//         ? zTimestamp.parse(startParam)
-//         : BigInt(getDaysAgo(30).getTime()) as Timestamp,
-//       end: endParam
-//         ? zTimestamp.parse(endParam)
-//         : BigInt(getDaysAgo(-1).getTime()) as Timestamp,
-//     };
-//   } catch (error) {
-//     console.error(error);
-//     throw new Response("Invalid format", { status: 400 });
-//   }
-
-//   return  fetchTimelineData(auth, params.start, params.end);
-// }
