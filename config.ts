@@ -29,7 +29,7 @@ export const resources: ResourceRegistryConfig = {
       enabled: true,
     },
     {
-      module: "@/lib/mongo/fs.server.ts", 
+      module: "@/lib/mongo/fs.server.ts",
       export: "FsResource",
       enabled: true,
     },
@@ -51,7 +51,7 @@ export const resources: ResourceRegistryConfig = {
     // Add custom resources here:
     // {
     //   module: "./my-custom-resource.ts",
-    //   export: "MyCustomResource", 
+    //   export: "MyCustomResource",
     //   enabled: true,
     //   args: ["constructor", "arguments"],
     // },

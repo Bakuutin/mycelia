@@ -1,6 +1,9 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
-import { MyceliaResourceMCPServer, createMCPServerFromResourceManager } from "@/lib/mcp/server.ts";
+import {
+  createMCPServerFromResourceManager,
+  MyceliaResourceMCPServer,
+} from "@/lib/mcp/server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 
 export interface ResourceEntry {
@@ -29,13 +32,13 @@ export const DEFAULT_RESOURCE_CONFIG: ResourceRegistryConfig = {
       enabled: true,
     },
     {
-      module: "@/lib/mongo/fs.server.ts", 
+      module: "@/lib/mongo/fs.server.ts",
       export: "FsResource",
       enabled: true,
     },
     {
       module: "@/lib/kafka/index.ts",
-      export: "KafkaResource", 
+      export: "KafkaResource",
       enabled: true,
     },
     {
@@ -52,35 +55,43 @@ export const DEFAULT_RESOURCE_CONFIG: ResourceRegistryConfig = {
   customModules: [],
 };
 
-export async function loadResourceConfig(configPath?: string): Promise<ResourceRegistryConfig> {
-  // Default to config.ts if no path specified  
+export async function loadResourceConfig(
+  configPath?: string,
+): Promise<ResourceRegistryConfig> {
+  // Default to config.ts if no path specified
   const configToLoad = configPath || "./config.ts";
 
   try {
     const config = await import(configToLoad);
     // Look for resources config in the imported config
-    const resourceConfig = config.resources || config.resourceConfig || config.default?.resources;
-    
+    const resourceConfig = config.resources || config.resourceConfig ||
+      config.default?.resources;
+
     if (resourceConfig) {
       return {
         ...DEFAULT_RESOURCE_CONFIG,
         ...resourceConfig,
       };
     }
-    
+
     // If no resources config found, use defaults
     return DEFAULT_RESOURCE_CONFIG;
   } catch (error) {
     if (configPath) {
       // If a specific config was requested but failed, warn and use defaults
-      console.warn(`Failed to load resource config from ${configPath}, using defaults:`, error);
+      console.warn(
+        `Failed to load resource config from ${configPath}, using defaults:`,
+        error,
+      );
     }
     // If config.ts doesn't exist or doesn't have resources, use defaults silently
     return DEFAULT_RESOURCE_CONFIG;
   }
 }
 
-export async function registerResourcesFromConfig(config: ResourceRegistryConfig): Promise<void> {
+export async function registerResourcesFromConfig(
+  config: ResourceRegistryConfig,
+): Promise<void> {
   // Register main resources
   for (const entry of config.resources) {
     if (entry.enabled === false) {
@@ -90,18 +101,24 @@ export async function registerResourcesFromConfig(config: ResourceRegistryConfig
     try {
       const module = await import(entry.module);
       const ResourceClass = module[entry.export || "default"];
-      
+
       if (!ResourceClass) {
-        console.warn(`Resource class '${entry.export || "default"}' not found in module '${entry.module}'`);
+        console.warn(
+          `Resource class '${
+            entry.export || "default"
+          }' not found in module '${entry.module}'`,
+        );
         continue;
       }
 
-      const resourceInstance = entry.args 
+      const resourceInstance = entry.args
         ? new ResourceClass(...entry.args)
         : new ResourceClass();
 
       defaultResourceManager.registerResource(resourceInstance);
-      console.log(`Registered resource: ${resourceInstance.code || ResourceClass.name}`);
+      console.log(
+        `Registered resource: ${resourceInstance.code || ResourceClass.name}`,
+      );
     } catch (error) {
       console.error(`Failed to load resource from ${entry.module}:`, error);
     }
@@ -112,16 +129,21 @@ export async function registerResourcesFromConfig(config: ResourceRegistryConfig
     for (const modulePath of config.customModules) {
       try {
         const customModule = await import(modulePath);
-        
+
         // Custom modules can export a `registerResources` function
         if (typeof customModule.registerResources === "function") {
           await customModule.registerResources(defaultResourceManager);
           console.log(`Loaded custom module: ${modulePath}`);
-        } else if (customModule.default && typeof customModule.default.registerResources === "function") {
+        } else if (
+          customModule.default &&
+          typeof customModule.default.registerResources === "function"
+        ) {
           await customModule.default.registerResources(defaultResourceManager);
           console.log(`Loaded custom module: ${modulePath}`);
         } else {
-          console.warn(`Custom module ${modulePath} does not export 'registerResources' function`);
+          console.warn(
+            `Custom module ${modulePath} does not export 'registerResources' function`,
+          );
         }
       } catch (error) {
         console.error(`Failed to load custom module ${modulePath}:`, error);
@@ -150,7 +172,7 @@ export function createAdminMCPServer(): MyceliaResourceMCPServer {
       effect: "allow",
     }],
   });
-  
+
   return createMCPServer(adminAuth);
 }
 
@@ -158,5 +180,5 @@ export function createAdminMCPServer(): MyceliaResourceMCPServer {
 export async function listAvailableMCPTools(): Promise<string[]> {
   const server = createAdminMCPServer();
   const tools = await server.listTools();
-  return tools.map(tool => tool.name);
+  return tools.map((tool) => tool.name);
 }

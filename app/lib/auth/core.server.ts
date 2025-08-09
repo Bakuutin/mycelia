@@ -106,17 +106,8 @@ export const authenticateOr401 = async (request: Request): Promise<Auth> => {
 };
 
 export const getServerAuth = async (): Promise<Auth> => {
-  const token = Deno.env.get("MYCELIA_TOKEN");
-  if (!token) {
-    throw new Error(
-      "MYCELIA_TOKEN environment variable is required for server operations",
-    );
-  }
-
-  const auth = await verifyToken(token);
-  if (!auth) {
-    throw new Error("Invalid MYCELIA_TOKEN - server authentication failed");
-  }
-
-  return auth;
+  return new Auth({
+    principal: "server",
+    policies: [{ resource: "**", action: "*", effect: "allow" }],
+  });
 };

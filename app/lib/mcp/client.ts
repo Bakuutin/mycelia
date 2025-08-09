@@ -1,4 +1,9 @@
-import { Tool, CallToolResult, JSONRPCRequest, JSONRPCResponse } from "npm:@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolResult,
+  JSONRPCRequest,
+  JSONRPCResponse,
+  Tool,
+} from "npm:@modelcontextprotocol/sdk/types.js";
 
 // Client interface for MCP tools
 export interface MCPClient {
@@ -20,7 +25,10 @@ export class HTTPMCPClient implements MCPClient {
     // For HTTP client, no persistent connection to close
   }
 
-  private async makeRequest(method: string, params?: Record<string, any>): Promise<any> {
+  private async makeRequest(
+    method: string,
+    params?: Record<string, any>,
+  ): Promise<any> {
     const request: JSONRPCRequest = {
       jsonrpc: "2.0",
       id: Math.random().toString(36).substr(2, 9),
@@ -43,7 +51,9 @@ export class HTTPMCPClient implements MCPClient {
     const mcpResponse: JSONRPCResponse = await response.json();
 
     if (mcpResponse.error) {
-      throw new Error(`MCP Error ${mcpResponse.error.code}: ${mcpResponse.error.message}`);
+      throw new Error(
+        `MCP Error ${mcpResponse.error.code}: ${mcpResponse.error.message}`,
+      );
     }
 
     return mcpResponse.result;
@@ -53,14 +63,21 @@ export class HTTPMCPClient implements MCPClient {
     return this.makeRequest("tools/list");
   }
 
-  async callTool(name: string, args?: Record<string, any>): Promise<CallToolResult> {
+  async callTool(
+    name: string,
+    args?: Record<string, any>,
+  ): Promise<CallToolResult> {
     return this.makeRequest("tools/call", { name, arguments: args });
   }
 }
 
 // In-process MCP client (for same-process usage)
 export class InProcessMCPClient implements MCPClient {
-  constructor(private server: { handleRequest(req: JSONRPCRequest): Promise<JSONRPCResponse> }) {}
+  constructor(
+    private server: {
+      handleRequest(req: JSONRPCRequest): Promise<JSONRPCResponse>;
+    },
+  ) {}
 
   async connect(): Promise<void> {
     // No connection needed for in-process
@@ -70,7 +87,10 @@ export class InProcessMCPClient implements MCPClient {
     // No connection to close
   }
 
-  private async makeRequest(method: string, params?: Record<string, any>): Promise<any> {
+  private async makeRequest(
+    method: string,
+    params?: Record<string, any>,
+  ): Promise<any> {
     const request: JSONRPCRequest = {
       jsonrpc: "2.0",
       id: Math.random().toString(36).substr(2, 9),
@@ -81,7 +101,9 @@ export class InProcessMCPClient implements MCPClient {
     const response = await this.server.handleRequest(request);
 
     if (response.error) {
-      throw new Error(`MCP Error ${response.error.code}: ${response.error.message}`);
+      throw new Error(
+        `MCP Error ${response.error.code}: ${response.error.message}`,
+      );
     }
 
     return response.result;
@@ -91,14 +113,19 @@ export class InProcessMCPClient implements MCPClient {
     return this.makeRequest("tools/list");
   }
 
-  async callTool(name: string, args?: Record<string, any>): Promise<CallToolResult> {
+  async callTool(
+    name: string,
+    args?: Record<string, any>,
+  ): Promise<CallToolResult> {
     return this.makeRequest("tools/call", { name, arguments: args });
   }
 }
 
 // Utility function to create a client
 export function createMCPClient(
-  serverUrlOrInstance: string | { handleRequest(req: JSONRPCRequest): Promise<JSONRPCResponse> }
+  serverUrlOrInstance: string | {
+    handleRequest(req: JSONRPCRequest): Promise<JSONRPCResponse>;
+  },
 ): MCPClient {
   if (typeof serverUrlOrInstance === "string") {
     return new HTTPMCPClient(serverUrlOrInstance);

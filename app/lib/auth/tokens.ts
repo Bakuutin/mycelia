@@ -1,10 +1,10 @@
 import { Buffer } from "node:buffer";
 import { createHash, createSecretKey, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
-import { APIKey } from "./core.server.ts";
+import { APIKey, getServerAuth } from "./core.server.ts";
 import { Policy } from "./resources.ts";
 import { z } from "zod";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { ObjectId } from "mongodb";
 
 const OPEN_PREFIX_LENGTH = 16;
@@ -36,8 +36,8 @@ export async function generateApiKey(
   const salt = randomBytes(32);
   const hashedKey = hashApiKey(apiKey, salt);
 
-  const db = await getRootDB();
-  const collection = db.collection("api_keys");
+  const auth = await getServerAuth();
+  const mongo = await getMongoResource(auth);
 
   const newApiKey: Omit<APIKeyDocument, "_id"> = {
     hashedKey,
@@ -50,19 +50,27 @@ export async function generateApiKey(
     isActive: true,
   };
 
-  const result = await collection.insertOne(newApiKey);
+  const result = await mongo({
+    action: "insertOne",
+    collection: "api_keys",
+    doc: newApiKey,
+  });
   console.log(result.insertedId);
 
   return apiKey;
 }
 
 export async function verifyApiKey(apiKey: string): Promise<APIKey | null> {
-  const db = await getRootDB();
-  const collection = db.collection("api_keys");
+  const auth = await getServerAuth();
+  const mongo = await getMongoResource(auth);
 
-  const keyDoc = await collection.findOne({
-    openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
-    isActive: true,
+  const keyDoc = await mongo({
+    action: "findOne",
+    collection: "api_keys",
+    query: {
+      openPrefix: apiKey.slice(0, OPEN_PREFIX_LENGTH),
+      isActive: true,
+    },
   });
 
   if (!keyDoc) {

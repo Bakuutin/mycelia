@@ -3,6 +3,15 @@ import { minimatch } from "minimatch";
 import { type Auth } from "./core.server.ts";
 import { permissionDenied } from "./utils.ts";
 
+let resourceDeprecationWarned = false;
+function warnResourceDeprecated() {
+  if (resourceDeprecationWarned) return;
+  resourceDeprecationWarned = true;
+  console.warn(
+    "Deprecated: Resource and ResourceManager are deprecated. Prefer MCP Tool and ToolRegistry.",
+  );
+}
+
 export type Rule = string & { __brand: "Rule" } | string;
 export type Code = string & { __brand: "Code" } | string;
 export type ResourcePath = string | string[];
@@ -62,6 +71,7 @@ export class ResourceManager {
   resources: Map<string, Resource<any, any>>;
 
   constructor() {
+    warnResourceDeprecated();
     this.resources = new Map();
   }
 
@@ -88,6 +98,7 @@ export class ResourceManager {
     code: Code,
     auth: Auth,
   ): Promise<(input: Input) => Promise<Output>> {
+    warnResourceDeprecated();
     const resource: Resource<Input, Output> | undefined = this.resources.get(
       code,
     );

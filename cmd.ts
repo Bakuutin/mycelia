@@ -17,7 +17,11 @@ import ms from "ms";
 import path from "node:path";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
-import { setupResources, createAdminMCPServer, listAvailableMCPTools } from "@/lib/resources/registry.ts";
+import {
+  createAdminMCPServer,
+  listAvailableMCPTools,
+  setupResources,
+} from "@/lib/resources/registry.ts";
 import { createMCPClient } from "@/lib/mcp/client.ts";
 
 async function setup() {
@@ -164,17 +168,17 @@ const root = new Command()
             try {
               const server = createAdminMCPServer();
               const client = createMCPClient(server);
-              
+
               const args = argsJson ? JSON.parse(argsJson) : {};
               const result = await client.callTool(tool, args);
-              
+
               console.log("Result:");
               for (const content of result.content) {
                 if (content.type === "text") {
                   console.log(content.text);
                 }
               }
-              
+
               if (result.isError) {
                 exit(1);
               }
@@ -193,17 +197,17 @@ const root = new Command()
           })
           .action(async ({ port }) => {
             const server = createAdminMCPServer();
-            
+
             console.log(`Starting MCP server on port ${port}...`);
-            
+
             Deno.serve({
               port,
               handler: (req) => server.handleHTTPRequest(req),
             });
-            
+
             console.log(`MCP server running at http://localhost:${port}`);
             console.log("Send POST requests with JSON-RPC 2.0 format");
-            
+
             // Keep the server running
             await new Promise(() => {});
           }),

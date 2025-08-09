@@ -247,6 +247,16 @@ defineFixture({
   },
 });
 
+defineFixture({
+  token: "TestApiKey",
+  dependencies: ["Mongo", "ServerAuth"],
+  factory: async () => {
+    const { generateApiKey } = await import("@/lib/auth/tokens.ts");
+    const policies = [{ resource: "*", action: "*", effect: "allow" as const }];
+    return await generateApiKey("test-owner", "test-key", policies);
+  },
+});
+
 console.log("All fixtures defined");
 
 export function withFixtures(

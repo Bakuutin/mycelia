@@ -11,7 +11,7 @@ function parseDateOrRelativeTime(expr: string | Date): Date {
   if (expr instanceof Date) {
     return expr;
   }
-  
+
   try {
     const relativeMs = ms(expr);
     if (relativeMs) {

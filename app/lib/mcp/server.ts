@@ -1,7 +1,13 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { Tool, CallToolResult, JSONRPCRequest, JSONRPCResponse, TextContent } from "npm:@modelcontextprotocol/sdk/types.js";
-import { resourceToMCPTool, handleResourceToolCall } from "./adapter.ts";
+import {
+  CallToolResult,
+  JSONRPCRequest,
+  JSONRPCResponse,
+  TextContent,
+  Tool,
+} from "npm:@modelcontextprotocol/sdk/types.js";
+import { handleResourceToolCall, resourceToMCPTool } from "./adapter.ts";
 
 // Server interface for MCP
 export interface MCPServer {
@@ -13,7 +19,7 @@ export interface MCPServer {
 
 export class MyceliaResourceMCPServer implements MCPServer {
   private resources: Map<string, Resource<any, any>>;
-  
+
   constructor(
     resources: Resource<any, any>[],
     private auth: Auth,
@@ -26,17 +32,20 @@ export class MyceliaResourceMCPServer implements MCPServer {
 
   async listTools(): Promise<Tool[]> {
     const tools: Tool[] = [];
-    
+
     for (const resource of this.resources.values()) {
       tools.push(resourceToMCPTool(resource));
     }
-    
+
     return tools;
   }
 
-  async callTool(name: string, args?: Record<string, any>): Promise<CallToolResult> {
+  async callTool(
+    name: string,
+    args?: Record<string, any>,
+  ): Promise<CallToolResult> {
     const resource = this.resources.get(name);
-    
+
     if (!resource) {
       const textContent: TextContent = {
         type: "text",
@@ -47,7 +56,7 @@ export class MyceliaResourceMCPServer implements MCPServer {
         isError: true,
       };
     }
-    
+
     return handleResourceToolCall(resource, this.auth, args);
   }
 
@@ -55,26 +64,26 @@ export class MyceliaResourceMCPServer implements MCPServer {
   async handleRequest(request: JSONRPCRequest): Promise<JSONRPCResponse> {
     try {
       let result: any;
-      
+
       switch (request.method) {
         case "tools/list":
           result = await this.listTools();
           break;
-          
+
         case "tools/call":
           if (!request.params?.name) {
             throw new Error("Tool name is required");
           }
           result = await this.callTool(
             request.params.name,
-            request.params.arguments || {}
+            request.params.arguments || {},
           );
           break;
-          
+
         default:
           throw new Error(`Unknown method: ${request.method}`);
       }
-      
+
       return {
         jsonrpc: "2.0",
         id: request.id,
@@ -82,7 +91,7 @@ export class MyceliaResourceMCPServer implements MCPServer {
       };
     } catch (error) {
       return {
-        jsonrpc: "2.0", 
+        jsonrpc: "2.0",
         id: request.id,
         error: {
           code: -32603, // Internal error
@@ -91,17 +100,17 @@ export class MyceliaResourceMCPServer implements MCPServer {
       };
     }
   }
-  
+
   // HTTP handler for MCP over HTTP
   async handleHTTPRequest(httpRequest: Request): Promise<Response> {
     if (httpRequest.method !== "POST") {
       return new Response("Method not allowed", { status: 405 });
     }
-    
+
     try {
       const mcpRequest: JSONRPCRequest = await httpRequest.json();
       const mcpResponse = await this.handleRequest(mcpRequest);
-      
+
       return new Response(JSON.stringify(mcpResponse), {
         status: 200,
         headers: {
@@ -109,19 +118,22 @@ export class MyceliaResourceMCPServer implements MCPServer {
         },
       });
     } catch (error) {
-      return new Response(JSON.stringify({
-        jsonrpc: "2.0",
-        id: null,
-        error: {
-          code: -32700, // Parse error
-          message: "Invalid JSON",
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32700, // Parse error
+            message: "Invalid JSON",
+          },
+        }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
         },
-      }), {
-        status: 400,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      );
     }
   }
 }
@@ -144,10 +156,10 @@ export async function createMCPServerWithAuth(
     principal,
     policies: [{
       action: "*",
-      resource: "**", 
+      resource: "**",
       effect: "allow",
     }],
   });
-  
+
   return createMCPServerFromResourceManager(resourceManager, auth);
 }

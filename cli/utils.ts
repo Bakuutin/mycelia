@@ -20,18 +20,26 @@ export function parseDateOrRelativeTime(
 
 export async function getJWT(config: CliConfig) {
   const response = await fetch(
-    getUrl("/api/login"),
+    getUrl("/oauth/token"),
     {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify({ token: config.token }),
+      body: `grant_type=client_credentials&client_secret=${config.token}`,
     },
   );
-  const { jwt, error } = await response.json();
+
+  if (!response.ok) {
+    const errorBody = await response.json();
+    throw new Error(
+      `Authentication failed: ${errorBody.error || "Unknown error"}`,
+    );
+  }
+
+  const { access_token, error } = await response.json();
   if (error) {
     throw new Error(`Authentication failed: ${error}`);
   }
-  return jwt;
+  return access_token;
 }
