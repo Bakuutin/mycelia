@@ -4,6 +4,7 @@ import { CompletionsCommand } from "@cliffy/command/completions";
 import process from "node:process";
 import { handleLogin } from "./cli/auth.ts";
 import { handleAudioImport, handleMicrophoneStream } from "./cli/audio.ts";
+import { handleMCPListTools, handleMCPCallTool } from "./cli/mcp.ts";
 import { getConfig } from "./cli/config.ts";
 
 const root = new Command()
@@ -87,6 +88,39 @@ const root = new Command()
                 options.metadata,
                 options.device,
               );
+            },
+          ),
+      ),
+  )
+  .command(
+    "mcp",
+    new Command()
+      .description("MCP (Model Context Protocol) commands")
+      .command(
+        "list",
+        new Command()
+          .description("List available MCP tools")
+          .action(async () => {
+            const config = getConfig();
+            await handleMCPListTools(config);
+          }),
+      )
+      .command(
+        "call",
+        new Command()
+          .description("Call an MCP tool")
+          .arguments("<tool:string>")
+          .option(
+            "-a, --args <args>",
+            "Tool arguments as JSON string",
+          )
+          .action(
+            async (
+              options: { args?: string },
+              tool: string,
+            ) => {
+              const config = getConfig();
+              await handleMCPCallTool(config, tool, options.args);
             },
           ),
       ),

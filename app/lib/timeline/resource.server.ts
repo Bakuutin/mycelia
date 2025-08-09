@@ -5,6 +5,8 @@ import { Auth } from "@/lib/auth/core.server.ts";
 import {
   ensureHistogramIndex,
   updateAllHistogram,
+  invalidateHistogram,
+  type Resolution,
 } from "@/services/timeline.server.ts";
 
 function parseDateOrRelativeTime(expr: string | Date): Date {
@@ -40,9 +42,17 @@ const ensureIndexSchema = z.object({
   action: z.literal("ensureIndex"),
 });
 
+const invalidateSchema = z.object({
+  action: z.literal("invalidate"),
+  start: dateOrRelativeTimeSchema.optional(),
+  end: dateOrRelativeTimeSchema.optional(),
+  resolution: z.enum(["5min", "1hour", "1day", "1week"]).optional(),
+});
+
 const timelineRequestSchema = z.discriminatedUnion("action", [
   recalculateSchema,
   ensureIndexSchema,
+  invalidateSchema,
 ]);
 
 type TimelineRequest = z.input<typeof timelineRequestSchema>;
@@ -51,6 +61,7 @@ type TimelineResponse = any;
 export class TimelineResource
   implements Resource<TimelineRequest, TimelineResponse> {
   code = "tech.mycelia.timeline";
+  description = "Timeline management operations for recalculating histograms, ensuring proper indexing, and invalidating cached histogram data";
   schemas = {
     request: timelineRequestSchema,
     response: z.any(),
@@ -76,6 +87,17 @@ export class TimelineResource
       case "ensureIndex":
         await ensureHistogramIndex(auth);
         return { success: true };
+      case "invalidate": {
+        const parsedStart = input.start !== undefined
+          ? parseDateOrRelativeTime(input.start)
+          : undefined;
+        const parsedEnd = input.end !== undefined
+          ? parseDateOrRelativeTime(input.end)
+          : undefined;
+
+        await invalidateHistogram(auth, parsedStart, parsedEnd, input.resolution);
+        return { success: true };
+      }
       default:
         throw new Error("Unknown timeline action");
     }

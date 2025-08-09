@@ -457,3 +457,34 @@ export async function ensureHistogramIndex(auth: Auth): Promise<void> {
     }
   }
 }
+
+export async function invalidateHistogram(
+  auth: Auth,
+  start?: Date,
+  end?: Date,
+  resolution?: Resolution,
+): Promise<void> {
+  const mongo = await getMongoResource(auth);
+  const resolutions = resolution ? [resolution] : RESOLUTION_ORDER;
+
+  for (const res of resolutions) {
+    const query: Record<string, any> = {};
+    
+    if (start || end) {
+      query.start = {};
+      if (start) query.start.$gte = start;
+      if (end) query.start.$lt = end;
+    }
+
+    console.log(`Invalidating histogram_${res}`, query);
+    
+    const result = await mongo({
+      action: "updateMany",
+      collection: `histogram_${res}`,
+      query,
+      update: { $set: { stale: true } },
+    });
+
+    console.log(`Marked ${result.modifiedCount} documents as stale in histogram_${res}`);
+  }
+}

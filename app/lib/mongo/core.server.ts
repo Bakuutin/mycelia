@@ -133,6 +133,7 @@ const actionMap = {
 
 export class MongoResource implements Resource<MongoRequest, MongoResponse> {
   code = "tech.mycelia.mongo";
+  description = "MongoDB database operations including CRUD operations, aggregation, indexing, and bulk operations with query filtering and permission controls";
   schemas = {
     request: mongoRequestSchema,
     response: z.any(),

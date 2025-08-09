@@ -47,6 +47,7 @@ type FsResponse = any;
 
 export class FsResource implements Resource<FsRequest, FsResponse> {
   code = "tech.mycelia.fs";
+  description = "GridFS file storage operations for uploading, downloading, and querying files in MongoDB with metadata support";
   schemas = {
     request: fsRequestSchema,
     response: z.any(),

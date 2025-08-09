@@ -4,7 +4,7 @@ import { CompletionsCommand } from "@cliffy/command/completions";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
-import { defaultResourceManager, Policy } from "@/lib/auth/resources.ts";
+import { type Policy } from "@/lib/auth/resources.ts";
 import { createServer } from "npm:vite";
 import express from "npm:express";
 import morgan from "npm:morgan";
@@ -13,16 +13,10 @@ import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
 
 import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
-import ms from "ms";
 import path from "node:path";
-import { Auth } from "@/lib/auth/core.server.ts";
-import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
 import {
-  createAdminMCPServer,
-  listAvailableMCPTools,
   setupResources,
 } from "@/lib/resources/registry.ts";
-import { createMCPClient } from "@/lib/mcp/client.ts";
 
 async function setup() {
   // Load resources from configuration
@@ -31,31 +25,6 @@ async function setup() {
   await setupResources(configPath);
 }
 
-function createAdminAuth(): Auth {
-  return new Auth({
-    principal: "admin",
-    policies: [{
-      action: "*",
-      resource: "**",
-      effect: "allow",
-    }],
-  });
-}
-
-function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
-  if (!expr) return undefined;
-  try {
-    const relativeMs = ms(expr);
-    if (relativeMs) {
-      return new Date(Date.now() - relativeMs);
-    }
-    return new Date(expr);
-  } catch {
-    throw new Error(
-      `Invalid time expression: ${expr}. Use format like "5d" or "10m" or an ISO date`,
-    );
-  }
-}
 
 async function startProdServer() {
   const app = express();
@@ -110,110 +79,6 @@ const root = new Command()
   })
   .command("completions", new CompletionsCommand())
   .command(
-    "timeline",
-    new Command()
-      .description("Manage timeline data.")
-      .command(
-        "recalculate",
-        new Command()
-          .description("Update histogram resolutions.")
-          .option("-a, --all", "Update all resolutions", { default: false })
-          .arguments("[start:string] [end:string]")
-          .action(async ({ all }, start, end) => {
-            console.log("Updating histograms...");
-            const auth = createAdminAuth();
-
-            const timeline = await getTimelineResource(auth);
-
-            const startDate = start
-              ? parseDateOrRelativeTime(start)
-              : undefined;
-            const endDate = end
-              ? parseDateOrRelativeTime(end)
-              : (startDate ? new Date() : undefined);
-
-            await timeline({
-              action: "recalculate",
-              all,
-              start: startDate,
-              end: endDate,
-            });
-
-            console.log("Histogram update complete!");
-          }),
-      ),
-  )
-  .command(
-    "mcp",
-    new Command()
-      .description("MCP (Model Context Protocol) interface.")
-      .command(
-        "list",
-        new Command()
-          .description("List available MCP tools.")
-          .action(async () => {
-            const tools = await listAvailableMCPTools();
-            console.log("Available MCP tools:");
-            for (const tool of tools) {
-              console.log(`  - ${tool}`);
-            }
-          }),
-      )
-      .command(
-        "call",
-        new Command()
-          .description("Call an MCP tool.")
-          .arguments("<tool:string> [args:string]")
-          .action(async (_, tool, argsJson) => {
-            try {
-              const server = createAdminMCPServer();
-              const client = createMCPClient(server);
-
-              const args = argsJson ? JSON.parse(argsJson) : {};
-              const result = await client.callTool(tool, args);
-
-              console.log("Result:");
-              for (const content of result.content) {
-                if (content.type === "text") {
-                  console.log(content.text);
-                }
-              }
-
-              if (result.isError) {
-                exit(1);
-              }
-            } catch (error) {
-              console.error("MCP call failed:", error.message);
-              exit(1);
-            }
-          }),
-      )
-      .command(
-        "server",
-        new Command()
-          .description("Start MCP server over HTTP.")
-          .option("-p, --port <port:number>", "Port to serve on.", {
-            default: 3001,
-          })
-          .action(async ({ port }) => {
-            const server = createAdminMCPServer();
-
-            console.log(`Starting MCP server on port ${port}...`);
-
-            Deno.serve({
-              port,
-              handler: (req) => server.handleHTTPRequest(req),
-            });
-
-            console.log(`MCP server running at http://localhost:${port}`);
-            console.log("Send POST requests with JSON-RPC 2.0 format");
-
-            // Keep the server running
-            await new Promise(() => {});
-          }),
-      ),
-  )
-  .command(
     "audio",
     new Command()
       .description("Manage audio processing.")
@@ -242,7 +107,7 @@ const root = new Command()
         default: "0.0.0.0",
       })
       .option("--prod", "Serve in production mode", { default: false })
-      .action(async ({ port, host, prod }) => {
+      .action(async ({ prod }) => {
         try {
           if (prod) {
             await startProdServer();

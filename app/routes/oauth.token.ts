@@ -20,7 +20,7 @@ export async function action({ request }: ActionFunctionArgs) {
   });
 
   if (!parsed.success) {
-    return oauthErrorJson("invalid_request", 400);
+    return oauthErrorJson(parsed.error.flatten().fieldErrors, 400);
   }
 
   const keyDoc = await verifyApiKey(creds.clientSecret);

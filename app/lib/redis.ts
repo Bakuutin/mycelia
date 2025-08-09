@@ -69,9 +69,13 @@ type RedisResponse = any;
 
 export class RedisResource implements Resource<RedisRequest, RedisResponse> {
   code = "tech.mycelia.redis";
-  schemas = {
-    request: redisRequestSchema,
-    response: z.any(),
+  description = "Redis caching operations including key-value storage, hash operations, and TTL management with automatic expiration";
+  schemas: {
+    request: z.ZodType<RedisRequest>,
+    response: z.ZodType<RedisResponse>,
+  } = {
+    request: redisRequestSchema as z.ZodType<RedisRequest>,
+    response: z.any() as z.ZodType<RedisResponse>,
   };
 
   async use(input: RedisRequest): Promise<RedisResponse> {
@@ -83,9 +87,10 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
       case "del":
         return redis.del(...input.keys);
       case "hset":
-        const result = await redis.hset(input.key, input.field, input.value);
-        await redis.expire(input.key, input.ttlSeconds);
-        return result;
+        return await redis.pipeline()
+          .hset(input.key, input.field, input.value)
+          .expire(input.key, input.ttlSeconds)
+          .exec();
       case "hget":
         return redis.hget(input.key, input.field);
       case "hgetall":
@@ -96,21 +101,12 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
   }
 
   extractActions(input: RedisRequest) {
-    const actionMap = {
-      set: "write",
-      get: "read",
-      del: "delete",
-      hset: "write",
-      hget: "read",
-      hgetall: "read",
-    };
+    const keys = input.action === "del" ? input.keys : [input.key];
 
-    return [
-      {
-        path: ["cache", input.key],
-        actions: [actionMap[input.action]],
-      },
-    ];
+    return keys.map(key => ({
+      path: [key],
+      actions: [input.action]
+    }));
   }
 }
 

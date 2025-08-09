@@ -1,6 +1,7 @@
 export interface CliConfig {
   url: string;
   token: string;
+  clientId: string;
 }
 
 export function getConfig(): CliConfig {
@@ -14,7 +15,12 @@ export function getConfig(): CliConfig {
     throw new Error("MYCELIA_TOKEN is not set");
   }
 
-  return { url, token };
+  const clientId = Deno.env.get("MYCELIA_CLIENT_ID");
+  if (!clientId) {
+    throw new Error("MYCELIA_CLIENT_ID is not set");
+  }
+
+  return { url, token, clientId };
 }
 
 export function getUrl(path: string): string {

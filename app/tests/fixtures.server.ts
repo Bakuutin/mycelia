@@ -10,6 +10,7 @@ import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
 import { KafkaResource } from "@/lib/kafka/index.ts";
+import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
 
 export type Fixture = {
@@ -164,10 +165,12 @@ defineFixture({
     await client.connect();
     const isolatedDB = client.db(databaseName);
     const fs = new FsResource();
+    const timeline = new TimelineResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
     defaultResourceManager.registerResource(resource);
     defaultResourceManager.registerResource(fs);
+    defaultResourceManager.registerResource(timeline);
 
     return {
       db: isolatedDB,

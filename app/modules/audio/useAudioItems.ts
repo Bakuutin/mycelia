@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import { useCallback, useEffect } from "react";
 import _ from "lodash";
+import type { TimelineItem } from "@/types/timeline.ts";
 
 type Resolution = "5min" | "1hour" | "1day" | "1week";
 
 type Timestamp = number;
 
-export type TimelineItem = { start: Date; end: Date; [key: string]: any };
+// removed local TimelineItem type
 
 type LoadedRange = { start: Timestamp; end: Timestamp };
 
@@ -156,6 +157,7 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
               end: new Date(item.end),
               id: item.id,
               totals: item.totals,
+              stale: item.stale,
             })),
           );
 

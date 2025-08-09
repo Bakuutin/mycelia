@@ -19,6 +19,13 @@ const getFill = (item: TimelineItem) => {
   return colorScale(Math.log(density));
 };
 
+const getPattern = (item: TimelineItem) => {
+  if (item.stale) {
+    return "url(#stale-stripes)";
+  }
+  return getFill(item);
+};
+
 export const TimelineItems = ({
   items,
   scale,
@@ -28,6 +35,12 @@ export const TimelineItems = ({
 
   return (
     <g>
+      <defs>
+        <pattern id="stale-stripes" patternUnits="userSpaceOnUse" width="4" height="4">
+          <rect width="4" height="4" fill="pink" opacity="0.7" />
+          <path d="M-1,1 l2,-2 M0,4 l4,-4 M3,5 l2,-2" stroke="rgba(255,20,147,0.8)" strokeWidth="0.5" />
+        </pattern>
+      </defs>
       {items.map((item) => {
         const startX = newScale(item.start);
         const endX = newScale(item.end);
@@ -39,7 +52,7 @@ export const TimelineItems = ({
             x={startX}
             width={width}
             height={20}
-            fill={getFill(item)}
+            fill={getPattern(item)}
             className="timeline-item"
           />
         );

@@ -2,10 +2,9 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import {
   CallToolResult,
-  TextContent,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { zodToJsonSchema } from "npm:zod-to-json-schema";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 function buildMCPInputSchema(schema: any): Tool["inputSchema"] {
   const json = zodToJsonSchema(schema) as Record<string, unknown>;
@@ -20,8 +19,9 @@ export function resourceToMCPTool<Input, Output>(
 ): Tool {
   return {
     name: resource.code,
-    description: `Resource: ${resource.code}`,
+    description: resource.description,
     inputSchema: buildMCPInputSchema(resource.schemas.request),
+    outputSchema: buildMCPInputSchema(resource.schemas.response),
   };
 }
 
@@ -33,21 +33,17 @@ export async function handleResourceToolCall<Input, Output>(
   try {
     const parsedInput = resource.schemas.request.parse(args);
     const result = await resource.use(parsedInput, auth);
-    const textContent: TextContent = {
-      type: "text",
-      text: JSON.stringify(result, null, 2),
-    };
     return {
-      content: [textContent],
+      content: [],
+      structuredContent: result as any,
       isError: false,
     };
   } catch (error) {
-    const textContent: TextContent = {
-      type: "text",
-      text: `Error: ${(error as Error).message}`,
-    };
     return {
-      content: [textContent],
+      content: [{
+        type: "text",
+        text: `Error: ${(error as Error).message}`,
+      }],
       isError: true,
     };
   }

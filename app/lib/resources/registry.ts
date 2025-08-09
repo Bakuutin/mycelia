@@ -1,9 +1,10 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import {
-  createMCPServerFromResourceManager,
-  MyceliaResourceMCPServer,
-} from "@/lib/mcp/server.ts";
+  getMCPServer,
+  handleMCPRequest,
+} from "../mcp/mcp.server.ts";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Auth } from "@/lib/auth/core.server.ts";
 
 export interface ResourceEntry {
@@ -19,8 +20,6 @@ export interface ResourceEntry {
 
 export interface ResourceRegistryConfig {
   resources: ResourceEntry[];
-  // Custom modules that provide additional resources
-  customModules?: string[];
 }
 
 // Default resource configuration
@@ -103,12 +102,11 @@ export async function registerResourcesFromConfig(
       const ResourceClass = module[entry.export || "default"];
 
       if (!ResourceClass) {
-        console.warn(
+        throw new Error(
           `Resource class '${
             entry.export || "default"
           }' not found in module '${entry.module}'`,
         );
-        continue;
       }
 
       const resourceInstance = entry.args
@@ -116,9 +114,11 @@ export async function registerResourcesFromConfig(
         : new ResourceClass();
 
       defaultResourceManager.registerResource(resourceInstance);
+      
       console.log(
         `Registered resource: ${resourceInstance.code || ResourceClass.name}`,
       );
+      console.log(`Resources: ${defaultResourceManager.resources.size}`);
     } catch (error) {
       console.error(`Failed to load resource from ${entry.module}:`, error);
     }
@@ -157,28 +157,9 @@ export async function setupResources(configPath?: string): Promise<void> {
   await registerResourcesFromConfig(config);
 }
 
-// Create MCP server for all registered resources
-export function createMCPServer(auth: Auth): MyceliaResourceMCPServer {
-  return createMCPServerFromResourceManager(defaultResourceManager, auth);
+export function createMCPServer(auth: Auth): McpServer {
+  return getMCPServer(auth, defaultResourceManager);
 }
 
-// Create admin MCP server (for CLI usage)
-export function createAdminMCPServer(): MyceliaResourceMCPServer {
-  const adminAuth = new Auth({
-    principal: "admin",
-    policies: [{
-      action: "*",
-      resource: "**",
-      effect: "allow",
-    }],
-  });
+export { handleMCPRequest };
 
-  return createMCPServer(adminAuth);
-}
-
-// Get list of all available MCP tools
-export async function listAvailableMCPTools(): Promise<string[]> {
-  const server = createAdminMCPServer();
-  const tools = await server.listTools();
-  return tools.map((tool) => tool.name);
-}

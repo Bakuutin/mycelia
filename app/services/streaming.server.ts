@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
+import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
 
 export interface AudioChunk {
   _id?: ObjectId;
@@ -201,6 +202,25 @@ export async function processAudioFile(
   }
 }
 
+export async function invalidateTimelineForData(
+  auth: any,
+  startTime: Date,
+  endTime?: Date,
+): Promise<void> {
+  try {
+    const timeline = await getTimelineResource(auth);
+    const invalidateEnd = endTime || new Date(startTime.getTime() + 60000);
+    await timeline({
+      action: "invalidate",
+      start: startTime,
+      end: invalidateEnd,
+    });
+    console.log(`Timeline invalidated for range: ${startTime.toISOString()} - ${invalidateEnd.toISOString()}`);
+  } catch (error) {
+    console.warn(`Timeline invalidation failed: ${error}`);
+  }
+}
+
 export async function createAudioChunk(
   audioData: Uint8Array,
   startTime: Date,
@@ -232,6 +252,8 @@ export async function createAudioChunk(
       sourceFileId ? `, source_file_id: ${sourceFileId}` : ""
     }`,
   );
+
+  await invalidateTimelineForData(auth, startTime);
   return result.insertedId;
 }
 
@@ -247,4 +269,48 @@ export async function getSessionChunks(
     query: { session_id: sessionId },
     options: { sort: { index: 1 } },
   }) as AudioChunk[];
+}
+
+export async function insertTranscriptionWithInvalidation(
+  transcriptionData: any,
+  startTime: Date,
+  endTime?: Date,
+): Promise<ObjectId> {
+  const auth = await getServerAuth();
+  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+
+  const result = await mongoResource({
+    action: "insertOne",
+    collection: "transcriptions",
+    doc: transcriptionData,
+  }) as { insertedId: ObjectId };
+
+  console.log(
+    `Transcription created: ${result.insertedId}, start: ${startTime.toISOString()}`,
+  );
+
+  await invalidateTimelineForData(auth, startTime, endTime);
+  return result.insertedId;
+}
+
+export async function insertDiarizationWithInvalidation(
+  diarizationData: any,
+  startTime: Date,
+  endTime?: Date,
+): Promise<ObjectId> {
+  const auth = await getServerAuth();
+  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+
+  const result = await mongoResource({
+    action: "insertOne",
+    collection: "diarizations",
+    doc: diarizationData,
+  }) as { insertedId: ObjectId };
+
+  console.log(
+    `Diarization created: ${result.insertedId}, start: ${startTime.toISOString()}`,
+  );
+
+  await invalidateTimelineForData(auth, startTime, endTime);
+  return result.insertedId;
 }

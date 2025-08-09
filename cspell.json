@@ -107,9 +107,11 @@
   "ignorePaths": [
     "node_modules/**",
     "build/**",
+    "coverage/**",
     "**/*.lock",
     "**/*.log",
     ".git/**",
+    "cspell.json",
     "python/.venv/**",
     "*.local",
     "*.local.*"
@@ -155,7 +157,10 @@
         "redlock",
         "testcontainers",
         "zoomable",
-        "svgs"
+        "svgs",
+        "hset",
+        "hget",
+        "hgetall"
       ]
     }
   ]

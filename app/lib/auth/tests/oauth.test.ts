@@ -165,14 +165,13 @@ Deno.test("tokenRequestSchema: should validate valid token request", () => {
   const validRequest = {
     grant_type: "client_credentials" as const,
     client_secret: "test_secret",
+    client_id: "test_id",
   };
 
   const result = tokenRequestSchema.safeParse(validRequest);
 
   expect(result.success).toBe(true);
-  if (result.success) {
-    expect(result.data).toEqual(validRequest);
-  }
+  expect(result.data).toEqual(validRequest);
 });
 
 Deno.test("tokenRequestSchema: should reject invalid grant type", () => {

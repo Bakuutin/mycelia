@@ -26,14 +26,14 @@ export async function getJWT(config: CliConfig) {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: `grant_type=client_credentials&client_secret=${config.token}`,
+      body: `grant_type=client_credentials&client_id=${config.clientId}&client_secret=${config.token}`,
     },
   );
 
   if (!response.ok) {
     const errorBody = await response.json();
     throw new Error(
-      `Authentication failed: ${errorBody.error || "Unknown error"}`,
+      `Authentication failed: ${JSON.stringify(errorBody) || "Unknown error"}`,
     );
   }
 

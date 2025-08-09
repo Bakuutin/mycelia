@@ -63,8 +63,13 @@ export async function extractClientCredentials(
   return { clientId, clientSecret, grantType, scope };
 }
 
-export function oauthErrorJson(error: string, status = 400): Response {
-  return Response.json({ error }, { status });
+export type ErrorDetail = string | ErrorDetail[] | { [key: string]: ErrorDetail };
+
+export function oauthErrorJson(
+  detail: ErrorDetail,
+  status = 400,
+): Response {
+  return Response.json({ error: detail }, { status });
 }
 
 export const authorizationServerMetadataSchema = z.object({
