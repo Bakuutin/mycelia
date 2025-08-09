@@ -6,12 +6,10 @@ export function parseDateOrRelativeTime(
 ): Date | undefined {
   if (!expr) return undefined;
   try {
-    // Try parsing as a relative time first
     const relativeMs = ms(expr);
     if (relativeMs) {
       return new Date(Date.now() - relativeMs);
     }
-    // If not a relative time, try parsing as an absolute date
     return new Date(expr);
   } catch {
     throw new Error(

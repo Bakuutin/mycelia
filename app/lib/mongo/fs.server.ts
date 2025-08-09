@@ -114,12 +114,10 @@ export async function getFsResource(
   return auth.getResource("tech.mycelia.fs");
 }
 
-
 export function getFileExtension(filename: string): string {
   const ext = filename.split(".").pop();
   return (ext && /^[a-zA-Z0-9]+$/.test(ext)) ? ext : "";
 }
-
 
 export async function uploadToGridFS(
   auth: Auth,

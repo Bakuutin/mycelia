@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { loader as transcriptionsLoader } from "../routes/data.transcriptions.tsx";
-import { withFixtures } from "@/tests/fixtures.server.ts"
+import { withFixtures } from "@/tests/fixtures.server.ts";
 
 Deno.test(
   "loader should return empty transcriptions when no parameters",

@@ -4,11 +4,7 @@ import { expandTypedObjects } from "./typed.ts";
 import { permissionDenied } from "./utils.ts";
 import { ObjectId } from "mongodb";
 
-import {
-  defaultResourceManager,
-  Policy,
-  ResourcePath,
-} from "./resources.ts";
+import { defaultResourceManager, Policy, ResourcePath } from "./resources.ts";
 
 export const authCookie = createCookie("token", {
   path: "/",
@@ -104,6 +100,22 @@ export const authenticateOr401 = async (request: Request): Promise<Auth> => {
 
   if (!auth) {
     throw new Response("Token is missing or invalid", { status: 401 });
+  }
+
+  return auth;
+};
+
+export const getServerAuth = async (): Promise<Auth> => {
+  const token = Deno.env.get("MYCELIA_TOKEN");
+  if (!token) {
+    throw new Error(
+      "MYCELIA_TOKEN environment variable is required for server operations",
+    );
+  }
+
+  const auth = await verifyToken(token);
+  if (!auth) {
+    throw new Error("Invalid MYCELIA_TOKEN - server authentication failed");
   }
 
   return auth;

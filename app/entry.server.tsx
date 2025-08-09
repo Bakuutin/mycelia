@@ -8,10 +8,9 @@ import { KafkaResource } from "./lib/kafka/index.ts";
 import { MongoResource } from "./lib/mongo/core.server.ts";
 import { FsResource } from "./lib/mongo/fs.server.ts";
 
-
-defaultResourceManager.registerResource(KafkaResource)
-defaultResourceManager.registerResource(MongoResource)
-defaultResourceManager.registerResource(FsResource)
+defaultResourceManager.registerResource(KafkaResource);
+defaultResourceManager.registerResource(MongoResource);
+defaultResourceManager.registerResource(FsResource);
 
 export default async function handleRequest(
   request: Request,

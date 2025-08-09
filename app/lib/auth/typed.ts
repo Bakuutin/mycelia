@@ -30,12 +30,6 @@ const converters: ConverterRegistry = {
   },
 };
 
-/**
- * Recursively converts {type: xxx, xxx: value} objects to instances of the given type.
- *
- * @param data - The data to process.
- * @returns The processed data.
- */
 export function expandTypedObjects(data: any): any {
   if (data === null || data === undefined || typeof data !== "object") {
     return data;

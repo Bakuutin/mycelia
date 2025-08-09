@@ -23,12 +23,10 @@ import { FsResource } from "@/lib/mongo/fs.server.ts";
 function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
   if (!expr) return undefined;
   try {
-    // Try parsing as a relative time first
     const relativeMs = ms(expr);
     if (relativeMs) {
       return new Date(Date.now() - relativeMs);
     }
-    // If not a relative time, try parsing as an absolute date
     return new Date(expr);
   } catch {
     throw new Error(
@@ -36,9 +34,6 @@ function parseDateOrRelativeTime(expr: string | undefined): Date | undefined {
     );
   }
 }
-
-
-
 
 async function startProdServer() {
   const app = express();
@@ -128,9 +123,7 @@ const root = new Command()
             await spawnAudioProcessingWorker();
             console.log("Audio processing worker started successfully!");
 
-            // Keep the process running
             await new Promise(() => {
-              // This promise never resolves, keeping the worker alive
             });
           }),
       ),
@@ -209,7 +202,6 @@ const root = new Command()
               console.log(`Policies: ${JSON.stringify(doc.policies)}`);
               console.log(`Created at: ${doc.createdAt}`);
             } else {
-              // assume it's a JWT
               const doc = await verifyToken(token);
               if (!doc) {
                 console.log("Invalid token");

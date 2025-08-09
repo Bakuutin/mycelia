@@ -93,11 +93,6 @@ const TimelinePage = () => {
             </>
           )}
         </div>
-        {
-          /* <TranscriptsRow
-          transcripts={transcripts}
-        /> */
-        }
       </div>
     </>
   );

@@ -13,7 +13,6 @@ const uploadSchema = z.object({
 
 export type UploadData = z.infer<typeof uploadSchema>;
 
-
 export async function action({ request }: ActionFunctionArgs) {
   const auth = await authenticateOr401(request);
   const formData = await request.formData();
@@ -37,7 +36,12 @@ export async function action({ request }: ActionFunctionArgs) {
   const data = uploadSchema.parse({
     metadata,
   });
-  const fileId = await uploadToGridFS(auth, file, uploadBucketName, data.metadata || {});
+  const fileId = await uploadToGridFS(
+    auth,
+    file,
+    uploadBucketName,
+    data.metadata || {},
+  );
 
   return Response.json({
     success: true,

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getKafkaResource } from "../index.ts";
-import { withFixtures } from "@/tests/fixtures.server.ts"
+import { withFixtures } from "@/tests/fixtures.server.ts";
 
 Deno.test(
   "should allow produce message",
@@ -214,7 +214,7 @@ Deno.test(
         value: "test-value",
       }],
     });
-    
+
     const result = await kafka({
       action: "consume",
       groupId: "allowed-group",

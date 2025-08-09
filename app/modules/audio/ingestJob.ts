@@ -10,7 +10,6 @@ import { redlock } from "@/lib/redis.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
 
-
 export type SourceFile = {
   _id: ObjectId;
   start: Date;
@@ -82,7 +81,7 @@ export async function createSourceFileDocuments(auth: Auth) {
       },
     },
   });
-  const {insertedIds} = await mongoResource({
+  const { insertedIds } = await mongoResource({
     action: "insertMany",
     collection: "source_files",
     docs: files.map((file) => createSourceFileDocument(auth, file)),

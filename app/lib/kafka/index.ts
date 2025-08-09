@@ -1,11 +1,6 @@
 import { z } from "zod";
 import { Resource } from "@/lib/auth/resources.ts";
-import {
-  Kafka,
-  KafkaConfig,
-  SASLOptions,
-  Partitioners,
-} from "kafkajs";
+import { Kafka, KafkaConfig, Partitioners, SASLOptions } from "kafkajs";
 
 import { Auth } from "@/lib/auth/index.ts";
 
@@ -102,7 +97,7 @@ export class KafkaResource implements Resource<KafkaRequest, KafkaResponse> {
         messages: input.messages,
       });
     } finally {
-      await producer.transaction.name
+      await producer.transaction.name;
       await producer.disconnect();
     }
   }
@@ -143,7 +138,7 @@ export class KafkaResource implements Resource<KafkaRequest, KafkaResponse> {
         return await this.produce(input);
       case "consume":
         return await this.consume(input);
-      }
+    }
   }
 
   extractActions(input: KafkaRequest) {

@@ -17,10 +17,8 @@ export function useTimeline() {
   });
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
 
-  // Use the timeline range store
   const { start, end, setRange } = useTimelineRange();
 
-  // Resize observer for width
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver(([{ contentRect }]) => {
@@ -30,7 +28,6 @@ export function useTimeline() {
     return () => ro.disconnect();
   }, [containerRef]);
 
-  // Base time scale
   const timeScale = useMemo(() =>
     d3.scaleTime()
       .domain([start, end])
@@ -74,15 +71,12 @@ export function useTimeline() {
     dimensions.height,
   ]);
 
-  // Attach zoom once
   useEffect(() => {
     const svgs = d3.selectAll<SVGSVGElement, unknown>(".zoomable");
 
     svgs.each(function () {
       const svg = d3.select(this);
-      // attach zoom
       svg.call(zoomBehavior as any);
-      // initialize internal state
       svg.property("__zoom", transform);
     });
 

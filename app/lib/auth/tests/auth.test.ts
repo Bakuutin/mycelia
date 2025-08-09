@@ -2,7 +2,12 @@ import { expect, fn } from "@std/expect";
 import { z } from "zod";
 import { Auth } from "../core.server.ts";
 import { accessLogger } from "../core.server.ts";
-import { Policy, Resource, ResourceManager, defaultResourceManager } from "../resources.ts";
+import {
+  defaultResourceManager,
+  Policy,
+  Resource,
+  ResourceManager,
+} from "../resources.ts";
 
 function setupAuth(policies?: any[]) {
   const auth = new Auth({
@@ -36,7 +41,6 @@ Deno.test("getResource: should get a resource function when resource is register
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -63,7 +67,6 @@ Deno.test("getResource: should allow access when policy matches", async () => {
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -86,7 +89,6 @@ Deno.test("getResource: should deny access when policy effect is deny", async ()
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -108,7 +110,6 @@ Deno.test("getResource: should deny access when no matching policy", async () =>
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -170,7 +171,6 @@ Deno.test("getResource: should deny access when modify policy present but modifi
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -232,7 +232,6 @@ Deno.test("getResource: should handle multiple actions from extractActions", asy
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -260,7 +259,6 @@ Deno.test("getResource: should handle multiple action groups from extractActions
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -290,7 +288,6 @@ Deno.test("getResource: should deny access when some actions are not covered by 
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (input: { id: number }) => [
       { path: "users", actions: ["read", "write"] },
@@ -375,7 +372,6 @@ Deno.test("getResource: should handle wildcard resource patterns", async () => {
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -399,7 +395,6 @@ Deno.test("getResource: should handle wildcard action patterns", async () => {
       request: z.object({ id: z.number() }),
       response: z.object({ id: z.string() }),
     },
-    modifiers: {},
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
       input: { id: number },

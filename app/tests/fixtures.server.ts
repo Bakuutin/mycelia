@@ -12,7 +12,6 @@ import { MongoClient, UUID } from "mongodb";
 import { KafkaResource } from "@/lib/kafka/index.ts";
 import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
 
-
 export type Fixture = {
   token: any;
   dependencies?: any[];
@@ -58,24 +57,28 @@ const mongoContainer = await new GenericContainer("mongo:8.0")
 console.log("Starting kafka container");
 const kafkaPort = 9992;
 const kafkaContainer = await new GenericContainer("bitnami/kafka:latest")
-    .withExposedPorts({
-      container: 9092,
-      host: kafkaPort,
-    })
-    .withEnvironment({
-      KAFKA_CFG_NODE_ID: "0",
-      KAFKA_CFG_PROCESS_ROLES: "controller,broker",
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER",
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@localhost:9093",
-      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093",
-      KAFKA_CFG_ADVERTISED_LISTENERS: `PLAINTEXT://localhost:${kafkaPort},CONTROLLER://:9093`,
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true",
-    })
-    .withReuse()
-    .start();
+  .withExposedPorts({
+    container: 9092,
+    host: kafkaPort,
+  })
+  .withEnvironment({
+    KAFKA_CFG_NODE_ID: "0",
+    KAFKA_CFG_PROCESS_ROLES: "controller,broker",
+    KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER",
+    KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP:
+      "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+    KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@localhost:9093",
+    KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093",
+    KAFKA_CFG_ADVERTISED_LISTENERS:
+      `PLAINTEXT://localhost:${kafkaPort},CONTROLLER://:9093`,
+    KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true",
+  })
+  .withReuse()
+  .start();
 
-RequestQueue.prototype.scheduleCheckPendingRequests = () => {}
+RequestQueue.prototype.scheduleCheckPendingRequests = () => {};
+
+const sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
 
 addEventListener("unload", async () => {
   await redisContainer.stop();
@@ -86,6 +89,12 @@ addEventListener("unload", async () => {
 defineFixture({
   token: ResourceManager,
   factory: () => defaultResourceManager,
+});
+
+defineFixture({
+  token: "SampleAudioFile",
+  factory: () =>
+    new File([sampleAudioFile], "sample.wav", { type: "audio/wav" }),
 });
 
 defineFixture({
@@ -176,7 +185,7 @@ defineFixture({
       enforceRequestTimeout: false,
     });
     defaultResourceManager.registerResource(resource);
-    
+
     const admin = resource.kafka.admin();
     return {
       resource,
@@ -187,14 +196,14 @@ defineFixture({
     try {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await admin.connect();
-      
+
       const allTopics = await admin.listTopics();
-      const userTopics = allTopics.filter((t: string) => !t.startsWith('__'));
-      
+      const userTopics = allTopics.filter((t: string) => !t.startsWith("__"));
+
       if (userTopics.length > 0) {
         await admin.deleteTopics({ topics: userTopics });
       }
-      
+
       await admin.disconnect();
     } catch (error) {
       console.error("Error during Kafka teardown:", error);
@@ -214,6 +223,23 @@ defineFixture({
       data: new Uint8Array([1, 2, 3]),
       metadata: { foo: "bar" },
     });
+  },
+});
+
+defineFixture({
+  token: "ServerAuth",
+  dependencies: ["Admin", "BearerFactory"],
+  factory: async (
+    auth: Auth,
+    bearerFactory: (auth: Auth) => Promise<string>,
+  ) => {
+    const bearerToken = await bearerFactory(auth);
+    const token = bearerToken.replace("Bearer ", "");
+    Deno.env.set("MYCELIA_TOKEN", token);
+    return auth;
+  },
+  teardown: () => {
+    Deno.env.delete("MYCELIA_TOKEN");
   },
 });
 

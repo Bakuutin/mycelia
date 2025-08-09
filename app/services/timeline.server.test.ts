@@ -9,7 +9,7 @@ import {
   type Resolution,
 } from "./timeline.server.ts";
 import { type Timestamp } from "@/types/timeline.ts";
-import { withFixtures } from "@/tests/fixtures.server.ts"
+import { withFixtures } from "@/tests/fixtures.server.ts";
 
 Deno.test(
   "fetchTimelineData should return correct structure",

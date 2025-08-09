@@ -27,7 +27,6 @@ const formatDuration = (ms: number): React.ReactNode[] => {
     return ["0"];
   }
 
-  // Find all non-zero units using modulo
   SI_PREFIXES.forEach((prefix) => {
     const value = remaining / prefix.value;
     if (value >= 1) {
@@ -60,7 +59,6 @@ const generateTicks = (start: number, end: number, width: number) => {
     current += step;
   }
 
-  // Skip first tick if it's too close to the start
   if (ticks.length > 0) {
     const firstTickOffset = (ticks[0] - start) / range * width;
     if (firstTickOffset < 100) {

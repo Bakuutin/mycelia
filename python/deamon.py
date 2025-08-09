@@ -22,7 +22,7 @@ from datetime import timedelta
 import settings
 
 
-logger = logging.getLogger('deamon')
+logger = logging.getLogger('daemon')
 
 
 

@@ -1,9 +1,9 @@
 import { expect, fn } from "@std/expect";
 import { z } from "zod";
 import {
+  defaultResourceManager,
   Policy,
   Resource,
-  defaultResourceManager,
   ResourceManager,
 } from "../resources.ts";
 import { Auth } from "../core.server.ts";
@@ -38,7 +38,6 @@ Deno.test("should register a resource and evaluate access with custom auth polic
       request: inputSchema,
       response: outputSchema,
     },
-    modifiers: {},
     use: async (input: UserInput) => {
       return {
         id: input.id,
@@ -79,7 +78,6 @@ Deno.test("ResourceManager edge cases: denies access if policy effect is deny", 
   const baseResource: Resource<any, any> = {
     code: "test",
     schemas: { request: inputSchema, response: outputSchema },
-    modifiers: {},
     use: async (input) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -99,7 +97,6 @@ Deno.test("ResourceManager edge cases: denies access if no matching policy", asy
   const baseResource: Resource<any, any> = {
     code: "test",
     schemas: { request: inputSchema, response: outputSchema },
-    modifiers: {},
     use: async (input) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -115,10 +112,11 @@ Deno.test("ResourceManager edge cases: denies access if resource is not register
   const { auth } = setupManagerAndAuth([
     { resource: "test", action: "read", effect: "allow" },
   ]);
-  await expect(resourceManager.getResource("test", auth)).rejects.toHaveProperty(
-    "status",
-    403,
-  );
+  await expect(resourceManager.getResource("test", auth)).rejects
+    .toHaveProperty(
+      "status",
+      403,
+    );
 });
 
 Deno.test("ResourceManager edge cases: calls modifier if modify policy present and schema passes", async () => {
@@ -169,7 +167,6 @@ Deno.test("ResourceManager edge cases: denies access if modify policy present bu
   const baseResource: Resource<any, any> = {
     code: "test",
     schemas: { request: inputSchema, response: outputSchema },
-    modifiers: {},
     use: async (input) => ({ id: input.id }),
     extractActions: (
       input: { id: number },
@@ -213,7 +210,7 @@ Deno.test("ResourceManager edge cases: denies access if modify policy present bu
       input: { id: number },
     ) => [{ path: "test", actions: ["read"] }],
   };
-    defaultResourceManager.registerResource(baseResource);
+  defaultResourceManager.registerResource(baseResource);
   const fn = await auth.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 });
@@ -224,7 +221,9 @@ Deno.test("ResourceManager edge cases: matchPolicy returns true for matching res
     action: "rea*",
     effect: "allow",
   } as Policy;
-  expect(defaultResourceManager.matchPolicy(policy, "foobar", "read")).toBe(true);
+  expect(defaultResourceManager.matchPolicy(policy, "foobar", "read")).toBe(
+    true,
+  );
 });
 
 Deno.test("ResourceManager edge cases: matchPolicy returns false for non-matching resource or action", () => {
@@ -234,7 +233,9 @@ Deno.test("ResourceManager edge cases: matchPolicy returns false for non-matchin
     effect: "allow",
   } as Policy;
   expect(defaultResourceManager.matchPolicy(policy, "bar", "read")).toBe(false);
-  expect(defaultResourceManager.matchPolicy(policy, "foobar", "write")).toBe(false);
+  expect(defaultResourceManager.matchPolicy(policy, "foobar", "write")).toBe(
+    false,
+  );
 });
 
 Deno.test("ResourceManager edge cases: calls all modifiers", async () => {

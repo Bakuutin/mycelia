@@ -29,7 +29,7 @@ def wav_to_array(source: io.BytesIO) -> np.ndarray:
         raise ValueError("Unsupported sample width")
         
     # Normalize to float between -1.0 and 1.0
-    return data.astype(np.float32) / np.iinfo(data.dtype).max
+    return data.astype(np.float32) / np.info(data.dtype).max
 
 def read_codec(source: bytes, codec: str = "opus", sample_rate: int = sample_rate) -> np.ndarray:
     process: subprocess.Popen = (
