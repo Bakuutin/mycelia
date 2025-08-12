@@ -3,6 +3,7 @@ import { action as tokenAction } from "@/routes/oauth.token.ts";
 import { loader as authServerLoader } from "@/routes/[.]well-known.oauth-authorization-server.ts";
 import { loader as protectedResourceLoader } from "@/routes/[.]well-known.oauth-protected-resource.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
+import { verifyApiKey } from "@/lib/auth/tokens.ts";
 
 const testOrigin = "http://localhost:3000";
 
@@ -163,7 +164,6 @@ Deno.test(
 Deno.test(
   "OAuth Token action: should issue token for valid client_secret via form data",
   withFixtures(["TestApiKey", "Mongo"], async (apiKey: string) => {
-    const { verifyApiKey } = await import("@/lib/auth/tokens.ts");
     const doc = await verifyApiKey(apiKey);
     const clientId = doc!._id!.toString();
 
@@ -193,7 +193,6 @@ Deno.test(
 Deno.test(
   "OAuth Token action: should issue token for valid client_secret via Basic auth",
   withFixtures(["TestApiKey", "Mongo"], async (apiKey: string) => {
-    const { verifyApiKey } = await import("@/lib/auth/tokens.ts");
     const doc = await verifyApiKey(apiKey);
     const clientId = doc!._id!.toString();
 
@@ -223,7 +222,6 @@ Deno.test(
 Deno.test(
   "OAuth Token action: should issue token for valid client_secret via JSON",
   withFixtures(["TestApiKey", "Mongo"], async (apiKey: string) => {
-    const { verifyApiKey } = await import("@/lib/auth/tokens.ts");
     const doc = await verifyApiKey(apiKey);
     const clientId = doc!._id!.toString();
 
@@ -254,7 +252,6 @@ Deno.test(
 Deno.test(
   "OAuth Token action: should prefer body over Basic auth for client credentials",
   withFixtures(["TestApiKey", "Mongo"], async (validApiKey: string) => {
-    const { verifyApiKey } = await import("@/lib/auth/tokens.ts");
     const doc = await verifyApiKey(validApiKey);
     const clientId = doc!._id!.toString();
 
@@ -282,7 +279,6 @@ Deno.test(
 Deno.test(
   "OAuth Token action: should require client_id to equal principal when provided",
   withFixtures(["TestApiKey", "Mongo"], async (apiKey: string) => {
-    const { verifyApiKey } = await import("@/lib/auth/tokens.ts");
     const doc = await verifyApiKey(apiKey);
 
     const validClientId = doc!._id!.toString();

@@ -20,17 +20,15 @@ function createMockActionArgs(request: Request) {
 
 Deno.test(
   "MCP route loader: should return info when authenticated",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const response = await loader(
-      createMockLoaderArgs("http://localhost:3000/mcp", {
-        "Authorization": `Bearer ${token}`,
-      }),
+      createMockLoaderArgs("http://localhost:3000/mcp", headers),
     );
     const data = await response.json();
 
     expect(data.message).toBe("MCP endpoint - Use POST to call MCP tools");
     expect(data.authenticated).toBe(true);
-    expect(data.principal).toBe("test-owner");
+    expect(data.principal).toBe("admin");
   }),
 );
 
@@ -49,12 +47,10 @@ Deno.test(
 
 Deno.test(
   "MCP route action: should reject GET requests",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const request = new Request("http://localhost:3000/mcp", {
       method: "GET",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-      },
+      headers: headers,
     });
 
     const response = await action(createMockActionArgs(request));
@@ -86,11 +82,11 @@ Deno.test(
 
 Deno.test(
   "MCP route action: should require tool parameter",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const request = new Request("http://localhost:3000/mcp", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${token}`,
+        ...headers,
         "Content-Type": "application/json",
         "MCP-Protocol-Version": "2024-11-05",
       },
@@ -113,11 +109,11 @@ Deno.test(
 
 Deno.test(
   "MCP route action: should call MCP tool with valid request",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const request = new Request("http://localhost:3000/mcp", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${token}`,
+        ...headers,
         "Content-Type": "application/json",
         "MCP-Protocol-Version": "2024-11-05",
       },

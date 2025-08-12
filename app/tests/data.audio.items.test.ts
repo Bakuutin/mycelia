@@ -12,7 +12,7 @@ function createMockLoaderArgs(url: string, headers?: HeadersInit) {
 
 Deno.test(
   "Data audio items loader: should return audio items when authenticated",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const url = new URL("http://localhost:3000/data/audio/items");
     url.searchParams.set(
       "start",
@@ -24,9 +24,7 @@ Deno.test(
     );
 
     const response = await loader(
-      createMockLoaderArgs(url.toString(), {
-        "Authorization": `Bearer ${token}`,
-      }),
+      createMockLoaderArgs(url.toString(), headers),
     );
     const data = await response.json();
 
@@ -54,11 +52,9 @@ Deno.test(
 
 Deno.test(
   "Data audio items loader: should handle missing date parameters",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const response = await loader(
-      createMockLoaderArgs("http://localhost:3000/data/audio/items", {
-        "Authorization": `Bearer ${token}`,
-      }),
+      createMockLoaderArgs("http://localhost:3000/data/audio/items", headers),
     );
     const data = await response.json();
 
@@ -69,15 +65,13 @@ Deno.test(
 
 Deno.test(
   "Data audio items loader: should handle invalid date parameters",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const url = new URL("http://localhost:3000/data/audio/items");
     url.searchParams.set("start", "invalid-date");
 
     try {
       await loader(
-        createMockLoaderArgs(url.toString(), {
-          "Authorization": `Bearer ${token}`,
-        }),
+        createMockLoaderArgs(url.toString(), headers),
       );
       expect(false).toBe(true); // Should not reach here
     } catch (error) {
@@ -89,14 +83,12 @@ Deno.test(
 
 Deno.test(
   "Data audio items loader: should limit results",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const url = new URL("http://localhost:3000/data/audio/items");
     url.searchParams.set("limit", "5");
 
     const response = await loader(
-      createMockLoaderArgs(url.toString(), {
-        "Authorization": `Bearer ${token}`,
-      }),
+      createMockLoaderArgs(url.toString(), headers),
     );
     const data = await response.json();
 

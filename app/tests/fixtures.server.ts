@@ -12,6 +12,7 @@ import { MongoClient, UUID } from "mongodb";
 import { KafkaResource } from "@/lib/kafka/index.ts";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
+import { generateApiKey } from "@/lib/auth/tokens.ts";
 
 export type Fixture = {
   token: any;
@@ -253,14 +254,24 @@ defineFixture({
 defineFixture({
   token: "TestApiKey",
   dependencies: ["Mongo", "ServerAuth"],
-  factory: async () => {
-    const { generateApiKey } = await import("@/lib/auth/tokens.ts");
+  factory: async (auth: Auth) => {
     const policies = [{
       resource: "**",
       action: "*",
       effect: "allow" as const,
     }];
     return await generateApiKey("test-owner", "test-key", policies);
+  },
+});
+
+
+defineFixture({
+  token: "AdminAuthHeaders",
+  dependencies: ["Admin", "BearerFactory"],
+  factory: async (auth: Auth, bearerFactory: (auth: Auth) => Promise<string>) => {
+    return {
+      "Authorization":  await bearerFactory(auth),
+    };
   },
 });
 

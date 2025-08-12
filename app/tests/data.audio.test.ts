@@ -12,14 +12,12 @@ function createMockLoaderArgs(url: string, headers?: HeadersInit) {
 
 Deno.test(
   "Data audio loader: should return segments when authenticated",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const url = new URL("http://localhost:3000/data/audio");
     url.searchParams.set("start", "2024-01-01T00:00:00.000Z");
 
     const data = await loader(
-      createMockLoaderArgs(url.toString(), {
-        "Authorization": `Bearer ${token}`,
-      }),
+      createMockLoaderArgs(url.toString(), headers),
     );
 
     expect(data).toHaveProperty("segments");
@@ -42,12 +40,10 @@ Deno.test(
 
 Deno.test(
   "Data audio loader: should handle missing start parameter",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     try {
       await loader(
-        createMockLoaderArgs("http://localhost:3000/data/audio", {
-          "Authorization": `Bearer ${token}`,
-        }),
+        createMockLoaderArgs("http://localhost:3000/data/audio", headers),
       );
       expect(false).toBe(true); // Should not reach here - start is required
     } catch (error) {
@@ -59,15 +55,13 @@ Deno.test(
 
 Deno.test(
   "Data audio loader: should handle invalid date parameters",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const url = new URL("http://localhost:3000/data/audio");
     url.searchParams.set("start", "invalid-date");
 
     try {
       await loader(
-        createMockLoaderArgs(url.toString(), {
-          "Authorization": `Bearer ${token}`,
-        }),
+        createMockLoaderArgs(url.toString(), headers),
       );
       expect(false).toBe(true); // Should not reach here
     } catch (error) {

@@ -7,13 +7,10 @@ import { withFixtures } from "@/tests/fixtures.server.ts";
 Deno.test(
   "loader should return empty transcriptions when no parameters",
   withFixtures([
-    "Admin",
-    "BearerFactory",
-  ], async (auth: Auth, bearerFactory) => {
+    "AdminAuthHeaders",
+  ], async (headers) => {
     const request = new Request("http://localhost/data/transcriptions", {
-      headers: {
-        "Authorization": await bearerFactory(auth),
-      },
+      headers,
     });
 
     const result = await transcriptionsLoader(
@@ -27,9 +24,9 @@ Deno.test(
   "loader should return transcriptions for valid date range",
   withFixtures([
     "Admin",
-    "BearerFactory",
+    "AdminAuthHeaders",
     "Mongo",
-  ], async (auth: Auth, bearerFactory) => {
+  ], async (auth: Auth, authHeaders) => {
     const mongo = await getMongoResource(auth);
     await mongo({
       action: "insertOne",
@@ -59,9 +56,7 @@ Deno.test(
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z&end=2024-01-01T01:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -87,14 +82,12 @@ Deno.test(
   "loader should handle invalid start date",
   withFixtures([
     "Admin",
-    "BearerFactory",
-  ], async (auth: Auth, bearerFactory) => {
+    "AdminAuthHeaders",
+  ], async (auth: Auth, authHeaders) => {
     const request = new Request(
       "http://localhost/data/transcriptions?start=invalid-date&end=2024-01-01T01:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -114,14 +107,12 @@ Deno.test(
   "loader should handle invalid end date",
   withFixtures([
     "Admin",
-    "BearerFactory",
-  ], async (auth: Auth, bearerFactory) => {
+    "AdminAuthHeaders",
+  ], async (auth: Auth, authHeaders) => {
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z&end=invalid-date",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -141,14 +132,12 @@ Deno.test(
   "loader should handle missing start parameter",
   withFixtures([
     "Admin",
-    "BearerFactory",
-  ], async (auth: Auth, bearerFactory) => {
+    "AdminAuthHeaders",
+  ], async (auth: Auth, authHeaders) => {
     const request = new Request(
       "http://localhost/data/transcriptions?end=2024-01-01T01:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -163,14 +152,12 @@ Deno.test(
   "loader should handle missing end parameter",
   withFixtures([
     "Admin",
-    "BearerFactory",
-  ], async (auth: Auth, bearerFactory) => {
+    "AdminAuthHeaders",
+  ], async (auth: Auth, authHeaders) => {
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -185,9 +172,9 @@ Deno.test(
   "loader should limit results to 30 transcriptions",
   withFixtures([
     "Admin",
-    "BearerFactory",
+    "AdminAuthHeaders",
     "Mongo",
-  ], async (auth: Auth, bearerFactory) => {
+  ], async (auth: Auth, authHeaders) => {
     const mongo = await getMongoResource(auth);
 
     // Insert 35 transcriptions
@@ -219,9 +206,7 @@ Deno.test(
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z&end=2024-01-01T01:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -239,9 +224,9 @@ Deno.test(
   "loader should sort transcriptions by start time",
   withFixtures([
     "Admin",
-    "BearerFactory",
+    "AdminAuthHeaders",
     "Mongo",
-  ], async (auth: Auth, bearerFactory) => {
+  ], async (auth: Auth, authHeaders) => {
     const mongo = await getMongoResource(auth);
 
     // Insert transcriptions in reverse order
@@ -286,9 +271,7 @@ Deno.test(
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z&end=2024-01-01T01:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 
@@ -311,9 +294,9 @@ Deno.test(
   "loader should handle transcriptions with no segments",
   withFixtures([
     "Admin",
-    "BearerFactory",
+    "AdminAuthHeaders",
     "Mongo",
-  ], async (auth: Auth, bearerFactory) => {
+  ], async (auth: Auth, authHeaders) => {
     const mongo = await getMongoResource(auth);
 
     // Insert transcription with segments
@@ -352,9 +335,7 @@ Deno.test(
     const request = new Request(
       "http://localhost/data/transcriptions?start=2024-01-01T00:00:00.000Z&end=2024-01-01T01:00:00.000Z",
       {
-        headers: {
-          "Authorization": await bearerFactory(auth),
-        },
+        headers: authHeaders
       },
     );
 

@@ -1,3 +1,5 @@
+import { Resource } from "./lib/auth/resources.ts";
+
 export interface LayerComponentProps {
   scale: d3.ScaleTime<number, number>;
   transform: d3.ZoomTransform;
@@ -16,4 +18,5 @@ export type Tool = {
 export type Config = {
   layers: Layer[];
   tools: Tool[];
+  resources: Resource<any, any>[];
 };

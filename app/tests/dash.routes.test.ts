@@ -12,16 +12,14 @@ function createMockLoaderArgs(url: string, headers?: HeadersInit) {
 
 Deno.test(
   "Dash layout loader: should return auth data when authenticated",
-  withFixtures(["TestApiKey"], async (token: string) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const data = await dashLoader(
-      createMockLoaderArgs("http://localhost:3000/", {
-        "Authorization": `Bearer ${token}`,
-      }),
+      createMockLoaderArgs("http://localhost:3000/", headers),
     );
 
     expect(data).toHaveProperty("auth");
     expect(data.auth).toHaveProperty("principal");
-    expect(data.auth.principal).toBe("test-owner");
+    expect(data.auth.principal).toBe("admin");
   }),
 );
 
