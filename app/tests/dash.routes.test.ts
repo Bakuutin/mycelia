@@ -13,12 +13,11 @@ function createMockLoaderArgs(url: string, headers?: HeadersInit) {
 Deno.test(
   "Dash layout loader: should return auth data when authenticated",
   withFixtures(["TestApiKey"], async (token: string) => {
-    const response = await dashLoader(
+    const data = await dashLoader(
       createMockLoaderArgs("http://localhost:3000/", {
         "Authorization": `Bearer ${token}`,
       }),
     );
-    const data = await response.json();
 
     expect(data).toHaveProperty("auth");
     expect(data.auth).toHaveProperty("principal");
@@ -29,15 +28,15 @@ Deno.test(
 Deno.test(
   "Dash layout loader: should redirect when not authenticated",
   withFixtures([], async () => {
-    const response = await dashLoader(
-      createMockLoaderArgs("http://localhost:3000/"),
-    );
-    
-    // Should redirect to login
-    expect(response.status).toBe(302);
-    expect(response.headers.get("Location")).toContain("/login");
+    try {
+      await dashLoader(
+        createMockLoaderArgs("http://localhost:3000/"),
+      );
+      expect(false).toBe(true); // Should not reach here
+    } catch (response: any) {
+      // Should redirect to login
+      expect(response.status).toBe(302);
+      expect(response.headers.get("Location")).toContain("/login");
+    }
   }),
 );
-
-
-

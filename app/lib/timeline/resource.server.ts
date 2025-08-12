@@ -4,9 +4,9 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import {
   ensureHistogramIndex,
-  updateAllHistogram,
   invalidateHistogram,
   type Resolution,
+  updateAllHistogram,
 } from "@/services/timeline.server.ts";
 
 function parseDateOrRelativeTime(expr: string | Date): Date {
@@ -61,7 +61,8 @@ type TimelineResponse = any;
 export class TimelineResource
   implements Resource<TimelineRequest, TimelineResponse> {
   code = "tech.mycelia.timeline";
-  description = "Timeline management operations for recalculating histograms, ensuring proper indexing, and invalidating cached histogram data";
+  description =
+    "Timeline management operations for recalculating histograms, ensuring proper indexing, and invalidating cached histogram data";
   schemas = {
     request: timelineRequestSchema,
     response: z.any(),
@@ -95,7 +96,12 @@ export class TimelineResource
           ? parseDateOrRelativeTime(input.end)
           : undefined;
 
-        await invalidateHistogram(auth, parsedStart, parsedEnd, input.resolution);
+        await invalidateHistogram(
+          auth,
+          parsedStart,
+          parsedEnd,
+          input.resolution,
+        );
         return { success: true };
       }
       default:

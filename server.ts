@@ -1,3 +1,4 @@
+import "@/lib/telemetry.ts";
 import { Command } from "@cliffy/command";
 import { Secret } from "@cliffy/prompt";
 import { CompletionsCommand } from "@cliffy/command/completions";
@@ -12,19 +13,15 @@ import morgan from "npm:morgan";
 import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
 
+import { meter, requestCounter, tracer } from "@/lib/telemetry.ts";
 import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import path from "node:path";
-import {
-  setupResources,
-} from "@/lib/resources/registry.ts";
+import { setupResources } from "@/lib/resources/registry.ts";
+import { shutdownTelemetry } from "@/lib/telemetry.ts";
 
 async function setup() {
-  // Load resources from configuration
-  // You can specify a custom config path via MYCELIA_RESOURCE_CONFIG env var
-  const configPath = Deno.env.get("MYCELIA_RESOURCE_CONFIG");
-  await setupResources(configPath);
+  await setupResources();
 }
-
 
 async function startProdServer() {
   const app = express();
@@ -43,6 +40,11 @@ async function startProdServer() {
   app.use(express.static("public", { maxAge: "1h" }));
   app.use(morgan("tiny"));
 
+  app.use((req: Request, _res: Response, next: () => void) => {
+    requestCounter.add(1, { method: req.method, route: new URL(req.url).pathname });
+    next();
+  });
+
   app.all(
     "*",
     createRequestHandler({ build, mode: "production" }),
@@ -53,7 +55,11 @@ async function startProdServer() {
   });
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
-    process.once(signal, () => server?.close(console.error));
+    process.once(signal, async () => {
+      console.log(`Received shutdown signal: ${signal}`);
+      server?.close(console.error);
+      await shutdownTelemetry();
+    });
   });
 }
 
@@ -68,7 +74,11 @@ async function startDevServer() {
   console.log("Server is running on port 5173");
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
-    process.once(signal, () => server?.close());
+    process.once(signal, async () => {
+      console.log(`Received shutdown signal: ${signal}`);
+      server?.close();
+      await shutdownTelemetry();
+    });
   });
 }
 

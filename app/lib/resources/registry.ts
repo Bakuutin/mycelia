@@ -1,28 +1,20 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
-import {
-  getMCPServer,
-  handleMCPRequest,
-} from "../mcp/mcp.server.ts";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { handleMCPRequest } from "../mcp/mcp.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 
 export interface ResourceEntry {
-  // Dynamic import path to the resource class
   module: string;
-  // Export name from the module (default: "default")
   export?: string;
-  // Resource constructor arguments (if any)
   args?: any[];
-  // Whether this resource is enabled
   enabled?: boolean;
 }
 
 export interface ResourceRegistryConfig {
   resources: ResourceEntry[];
+  customModules?: string[];
 }
 
-// Default resource configuration
 export const DEFAULT_RESOURCE_CONFIG: ResourceRegistryConfig = {
   resources: [
     {
@@ -57,33 +49,34 @@ export const DEFAULT_RESOURCE_CONFIG: ResourceRegistryConfig = {
 export async function loadResourceConfig(
   configPath?: string,
 ): Promise<ResourceRegistryConfig> {
-  // Default to config.ts if no path specified
   const configToLoad = configPath || "./config.ts";
 
   try {
-    const config = await import(configToLoad);
-    // Look for resources config in the imported config
-    const resourceConfig = config.resources || config.resourceConfig ||
-      config.default?.resources;
+    const cfgModule = await import(configToLoad);
 
-    if (resourceConfig) {
+    const resourcesFromConfig: ResourceRegistryConfig | undefined =
+      (cfgModule.resources as ResourceRegistryConfig) ||
+      (cfgModule.resourceConfig as ResourceRegistryConfig) ||
+      (cfgModule.config?.resources as ResourceRegistryConfig);
+
+    if (resourcesFromConfig) {
       return {
         ...DEFAULT_RESOURCE_CONFIG,
-        ...resourceConfig,
+        ...resourcesFromConfig,
+        resources: resourcesFromConfig.resources?.length
+          ? resourcesFromConfig.resources
+          : DEFAULT_RESOURCE_CONFIG.resources,
       };
     }
 
-    // If no resources config found, use defaults
     return DEFAULT_RESOURCE_CONFIG;
-  } catch (error) {
+  } catch (_error) {
     if (configPath) {
-      // If a specific config was requested but failed, warn and use defaults
       console.warn(
         `Failed to load resource config from ${configPath}, using defaults:`,
-        error,
+        _error,
       );
     }
-    // If config.ts doesn't exist or doesn't have resources, use defaults silently
     return DEFAULT_RESOURCE_CONFIG;
   }
 }
@@ -91,7 +84,6 @@ export async function loadResourceConfig(
 export async function registerResourcesFromConfig(
   config: ResourceRegistryConfig,
 ): Promise<void> {
-  // Register main resources
   for (const entry of config.resources) {
     if (entry.enabled === false) {
       continue;
@@ -114,23 +106,22 @@ export async function registerResourcesFromConfig(
         : new ResourceClass();
 
       defaultResourceManager.registerResource(resourceInstance);
-      
       console.log(
         `Registered resource: ${resourceInstance.code || ResourceClass.name}`,
       );
-      console.log(`Resources: ${defaultResourceManager.resources.size}`);
+      console.log(
+        `Resources: ${defaultResourceManager.listResources().length}`,
+      );
     } catch (error) {
       console.error(`Failed to load resource from ${entry.module}:`, error);
     }
   }
 
-  // Load custom modules
-  if (config.customModules) {
+  if (config.customModules && config.customModules.length > 0) {
     for (const modulePath of config.customModules) {
       try {
         const customModule = await import(modulePath);
 
-        // Custom modules can export a `registerResources` function
         if (typeof customModule.registerResources === "function") {
           await customModule.registerResources(defaultResourceManager);
           console.log(`Loaded custom module: ${modulePath}`);
@@ -157,9 +148,5 @@ export async function setupResources(configPath?: string): Promise<void> {
   await registerResourcesFromConfig(config);
 }
 
-export function createMCPServer(auth: Auth): McpServer {
-  return getMCPServer(auth, defaultResourceManager);
-}
 
 export { handleMCPRequest };
-

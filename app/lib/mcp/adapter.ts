@@ -1,9 +1,6 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import {
-  CallToolResult,
-  Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 function buildMCPInputSchema(schema: any): Tool["inputSchema"] {

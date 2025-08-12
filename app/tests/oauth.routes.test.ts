@@ -90,7 +90,8 @@ Deno.test(
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: "grant_type=authorization_code&client_secret=test_secret&client_id=foo",
+      body:
+        "grant_type=authorization_code&client_secret=test_secret&client_id=foo",
     });
 
     const response = await tokenAction(createMockActionArgs(request));
@@ -146,7 +147,8 @@ Deno.test(
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: "grant_type=client_credentials&client_secret=invalid_secret&client_id=foo",
+      body:
+        "grant_type=client_credentials&client_secret=invalid_secret&client_id=foo",
     });
 
     const response = await tokenAction(createMockActionArgs(request));
@@ -170,7 +172,8 @@ Deno.test(
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: `grant_type=client_credentials&client_secret=${apiKey}&client_id=${clientId}`,
+      body:
+        `grant_type=client_credentials&client_secret=${apiKey}&client_id=${clientId}`,
     });
 
     const response = await tokenAction(createMockActionArgs(request));
@@ -263,7 +266,8 @@ Deno.test(
         "authorization": `Basic ${credentials}`,
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: `grant_type=client_credentials&client_secret=${validApiKey}&client_id=${clientId}`,
+      body:
+        `grant_type=client_credentials&client_secret=${validApiKey}&client_id=${clientId}`,
     });
 
     const response = await tokenAction(createMockActionArgs(request));
@@ -286,7 +290,8 @@ Deno.test(
     const okReq = new Request(`${testOrigin}/oauth/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `grant_type=client_credentials&client_secret=${apiKey}&client_id=${validClientId}`,
+      body:
+        `grant_type=client_credentials&client_secret=${apiKey}&client_id=${validClientId}`,
     });
     const okRes = await tokenAction(createMockActionArgs(okReq));
     expect(okRes.status).toBe(200);
@@ -294,7 +299,8 @@ Deno.test(
     const badReq = new Request(`${testOrigin}/oauth/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `grant_type=client_credentials&client_secret=${apiKey}&client_id=some-other-id`
+      body:
+        `grant_type=client_credentials&client_secret=${apiKey}&client_id=some-other-id`,
     });
     const badRes = await tokenAction(createMockActionArgs(badReq));
     expect(badRes.status).toBe(401);

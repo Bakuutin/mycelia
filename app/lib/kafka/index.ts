@@ -54,7 +54,8 @@ type KafkaResponse = any;
 
 export class KafkaResource implements Resource<KafkaRequest, KafkaResponse> {
   code = "tech.mycelia.kafka";
-  description = "Apache Kafka messaging operations for producing and consuming messages with topic and consumer group management";
+  description =
+    "Apache Kafka messaging operations for producing and consuming messages with topic and consumer group management";
   schemas = {
     request: kafkaRequestSchema,
     response: z.any(),

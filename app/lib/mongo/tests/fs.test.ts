@@ -23,7 +23,7 @@ Deno.test(
     const download = await fs({
       action: "download",
       bucket: "test",
-      id: upload,
+      id: upload.toString(),
     });
     expect(download).toEqual(new Uint8Array([1, 2, 3]));
   }),

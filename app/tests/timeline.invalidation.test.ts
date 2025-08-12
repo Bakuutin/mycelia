@@ -10,9 +10,9 @@ Deno.test(
   withFixtures(["Admin", "Mongo"], async (auth: Auth) => {
     const mongo = await getMongoResource(auth);
     const timeline = await getTimelineResource(auth);
-    
+
     const testTime = new Date("2024-01-01T10:00:00.000Z");
-    
+
     // First create some histogram data
     await timeline({
       action: "recalculate",
@@ -33,7 +33,7 @@ Deno.test(
     // Verify histogram data exists
     const beforeData = await mongo({
       action: "find",
-      collection: "histogram_5min", 
+      collection: "histogram_5min",
       query: { start: testTime },
     });
     expect(beforeData.length).toBe(1);
@@ -44,7 +44,7 @@ Deno.test(
 
     // Verify histogram data was invalidated (marked as stale)
     const afterData = await mongo({
-      action: "find", 
+      action: "find",
       collection: "histogram_5min",
       query: { start: testTime },
     });

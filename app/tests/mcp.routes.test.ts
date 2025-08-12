@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { loader, action } from "@/routes/mcp.tsx";
+import { action, loader } from "@/routes/mcp.tsx";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 
 function createMockLoaderArgs(url: string, headers?: HeadersInit) {
@@ -69,17 +69,18 @@ Deno.test(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2024-11-05",
       },
-      body: JSON.stringify({ tool: "mongo", args: {} }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "mongo", arguments: {} },
+      }),
     });
 
-    try {
-      await action(createMockActionArgs(request));
-      expect(false).toBe(true); // Should not reach here
-    } catch (error) {
-      expect(error).toBeInstanceOf(Response);
-      expect((error as Response).status).toBe(401);
-    }
+    const response = await action(createMockActionArgs(request));
+    expect(response.status).toBe(401);
   }),
 );
 
@@ -91,15 +92,22 @@ Deno.test(
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2024-11-05",
       },
-      body: JSON.stringify({ args: {} }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { args: {} },
+      }),
     });
 
     const response = await action(createMockActionArgs(request));
-    const data = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(data.error).toBe("Missing or invalid 'tool' parameter");
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.error).toBeDefined();
+    expect(data.error.message).toBe("Tool name is required");
   }),
 );
 
@@ -111,22 +119,37 @@ Deno.test(
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2024-11-05",
       },
-      body: JSON.stringify({ 
-        tool: "mongo", 
-        args: { 
-          action: "find",
-          collection: "test",
-          filter: {}
-        }
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "tech.mycelia.mongo",
+          arguments: {
+            action: "find",
+            collection: "test",
+            query: {},
+          },
+        },
       }),
     });
 
     const response = await action(createMockActionArgs(request));
     const data = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(data).toHaveProperty("success");
-    expect(data).toHaveProperty("content");
+    expect(data).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "[]",
+          },
+        ],
+        isError: false,
+      },
+    });
   }),
 );

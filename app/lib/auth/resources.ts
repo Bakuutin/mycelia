@@ -70,6 +70,10 @@ export class ResourceManager {
     return Array.from(this.resources.values());
   }
 
+  clearResources(): void {
+    this.resources.clear();
+  }
+
   registerResource(
     resourceClass: Resource<any, any> | (new () => Resource<any, any>),
   ): Resource<any, any> {
@@ -105,6 +109,8 @@ export class ResourceManager {
     }
 
     return async (input: Input): Promise<Output> => {
+      input = resource.schemas.request.parse(input);
+
       const actions = resource.extractActions(input);
 
       const flatActions = actions.flatMap((action) =>

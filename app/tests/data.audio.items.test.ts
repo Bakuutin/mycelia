@@ -14,8 +14,14 @@ Deno.test(
   "Data audio items loader: should return audio items when authenticated",
   withFixtures(["TestApiKey"], async (token: string) => {
     const url = new URL("http://localhost:3000/data/audio/items");
-    url.searchParams.set("start", "2024-01-01T00:00:00.000Z");
-    url.searchParams.set("end", "2024-01-02T00:00:00.000Z");
+    url.searchParams.set(
+      "start",
+      new Date("2024-01-01T00:00:00.000Z").getTime().toString(),
+    );
+    url.searchParams.set(
+      "end",
+      new Date("2024-01-02T00:00:00.000Z").getTime().toString(),
+    );
 
     const response = await loader(
       createMockLoaderArgs(url.toString(), {
@@ -24,7 +30,10 @@ Deno.test(
     );
     const data = await response.json();
 
-    expect(Array.isArray(data)).toBe(true);
+    expect(data).toHaveProperty("items");
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(data).toHaveProperty("transcripts");
+    expect(Array.isArray(data.transcripts)).toBe(true);
   }),
 );
 
@@ -32,7 +41,9 @@ Deno.test(
   "Data audio items loader: should require authentication",
   withFixtures([], async () => {
     try {
-      await loader(createMockLoaderArgs("http://localhost:3000/data/audio/items"));
+      await loader(
+        createMockLoaderArgs("http://localhost:3000/data/audio/items"),
+      );
       expect(false).toBe(true); // Should not reach here
     } catch (error) {
       expect(error).toBeInstanceOf(Response);
@@ -51,7 +62,8 @@ Deno.test(
     );
     const data = await response.json();
 
-    expect(Array.isArray(data)).toBe(true);
+    expect(data).toHaveProperty("items");
+    expect(Array.isArray(data.items)).toBe(true);
   }),
 );
 
@@ -88,7 +100,8 @@ Deno.test(
     );
     const data = await response.json();
 
-    expect(Array.isArray(data)).toBe(true);
-    expect(data.length).toBeLessThanOrEqual(5);
+    expect(data).toHaveProperty("items");
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(data.items.length).toBeLessThanOrEqual(5);
   }),
 );

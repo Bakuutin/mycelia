@@ -56,6 +56,7 @@ export class Auth {
 }
 
 export const verifyToken = async (token: string): Promise<null | Auth> => {
+  // First try JWT verification
   try {
     const { payload } = await jwtVerify(
       token,
@@ -66,8 +67,24 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
     }
     return new Auth(expandTypedObjects(payload));
   } catch (error) {
-    return null;
+    // JWT failed, try API key verification
   }
+
+  // Try API key verification
+  try {
+    const { verifyApiKey } = await import("./tokens.ts");
+    const keyDoc = await verifyApiKey(token);
+    if (keyDoc) {
+      return new Auth({
+        principal: keyDoc.owner,
+        policies: expandTypedObjects(keyDoc.policies),
+      });
+    }
+  } catch (error) {
+    // API key verification failed
+  }
+
+  return null;
 };
 
 export const authenticate = async (request: Request): Promise<Auth | null> => {

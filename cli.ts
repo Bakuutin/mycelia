@@ -4,7 +4,7 @@ import { CompletionsCommand } from "@cliffy/command/completions";
 import process from "node:process";
 import { handleLogin } from "./cli/auth.ts";
 import { handleAudioImport, handleMicrophoneStream } from "./cli/audio.ts";
-import { handleMCPListTools, handleMCPCallTool } from "./cli/mcp.ts";
+import { handleMCPCallTool, handleMCPListTools } from "./cli/mcp.ts";
 import { getConfig } from "./cli/config.ts";
 
 const root = new Command()

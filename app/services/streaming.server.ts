@@ -215,7 +215,9 @@ export async function invalidateTimelineForData(
       start: startTime,
       end: invalidateEnd,
     });
-    console.log(`Timeline invalidated for range: ${startTime.toISOString()} - ${invalidateEnd.toISOString()}`);
+    console.log(
+      `Timeline invalidated for range: ${startTime.toISOString()} - ${invalidateEnd.toISOString()}`,
+    );
   } catch (error) {
     console.warn(`Timeline invalidation failed: ${error}`);
   }

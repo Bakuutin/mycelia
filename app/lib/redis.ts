@@ -69,10 +69,11 @@ type RedisResponse = any;
 
 export class RedisResource implements Resource<RedisRequest, RedisResponse> {
   code = "tech.mycelia.redis";
-  description = "Redis caching operations including key-value storage, hash operations, and TTL management with automatic expiration";
+  description =
+    "Redis caching operations";
   schemas: {
-    request: z.ZodType<RedisRequest>,
-    response: z.ZodType<RedisResponse>,
+    request: z.ZodType<RedisRequest>;
+    response: z.ZodType<RedisResponse>;
   } = {
     request: redisRequestSchema as z.ZodType<RedisRequest>,
     response: z.any() as z.ZodType<RedisResponse>,
@@ -103,9 +104,9 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
   extractActions(input: RedisRequest) {
     const keys = input.action === "del" ? input.keys : [input.key];
 
-    return keys.map(key => ({
+    return keys.map((key) => ({
       path: [key],
-      actions: [input.action]
+      actions: [input.action],
     }));
   }
 }

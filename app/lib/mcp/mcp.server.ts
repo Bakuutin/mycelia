@@ -1,61 +1,20 @@
-import { Resource } from "@/lib/auth/resources.ts";
+import { ResourceManager } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { 
-  CallToolResult, 
-  JSONRPCRequest, 
-  JSONRPCResponse,
+import {
+  CallToolResult,
   JSONRPCError,
   JSONRPCNotification,
-  InitializeResult,
-  Tool 
+  JSONRPCRequest,
+  JSONRPCResponse,
 } from "@modelcontextprotocol/sdk/types.js";
-import { resourceToMCPTool, createMCPToolsFromResources } from "./adapter.ts";
-
-
-// Factory function to create official MCP SDK server
-export function getMCPServer(
-  auth: Auth,
-  resourceManager: { resources: Map<string, Resource<any, any>> },
-): McpServer {
-  const server = new McpServer({
-    name: "mycelia",
-    version: "1.0.0",
-  });
-
-  // Register each resource as an MCP tool
-  for (const resource of resourceManager.resources.values()) {
-    server.tool(
-      resource.code,
-      resource.description || "No description available",
-      (resource.schemas.request as any)._def?.shape || {},
-      async (args: any) => {
-        try {
-          const parsedInput = resource.schemas.request.parse(args);
-          const result = await resource.use(parsedInput, auth);
-          return {
-            content: [],
-            structuredContent: result as any,
-            isError: false,
-          };
-        } catch (error) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: `Error: ${(error as Error).message}`,
-            }],
-            isError: true,
-          };
-        }
-      },
-    );
-  }
-
-  return server;
-}
+import { createMCPToolsFromResources } from "./adapter.ts";
 
 // Detect JSON-RPC message type
-export type JSONRPCMessageType = "request" | "notification" | "response" | "error";
+export type JSONRPCMessageType =
+  | "request"
+  | "notification"
+  | "response"
+  | "error";
 
 export function detectJSONRPCMessageType(message: any): JSONRPCMessageType {
   if (typeof message !== "object" || message === null) {
@@ -81,7 +40,7 @@ export function detectJSONRPCMessageType(message: any): JSONRPCMessageType {
 }
 
 // Create InitializeResult
-export function createInitializeResult(): InitializeResult {
+export function createInitializeResult() {
   return {
     protocolVersion: "2025-03-26",
     capabilities: {
@@ -99,7 +58,7 @@ export function createInitializeResult(): InitializeResult {
 
 // HTTP handler for MCP server - handles JSON-RPC requests over HTTP
 export async function handleMCPRequest(
-  resourceManager: { resources: Map<string, Resource<any, any>> },
+  resourceManager: ResourceManager,
   auth: Auth,
   request: JSONRPCRequest,
 ): Promise<JSONRPCResponse | JSONRPCError> {
@@ -117,10 +76,14 @@ export async function handleMCPRequest(
 
       case "tools/list": {
         // List all available tools using proper schemas from adapter
-        const resources = Array.from(resourceManager.resources.values());
-        console.log(`${resources.length} resources found: ${resources.map(r => r.code).join(", ")}`);
+        const resources = resourceManager.listResources();
+        console.log(
+          `${resources.length} resources found: ${
+            resources.map((r) => r.code).join(", ")
+          }`,
+        );
         const tools = createMCPToolsFromResources(resources);
-        
+
         return {
           jsonrpc: "2.0",
           id: request.id,
@@ -129,9 +92,9 @@ export async function handleMCPRequest(
       }
 
       case "tools/call": {
-        const { name, arguments: args } = request.params as { 
-          name: string; 
-          arguments?: Record<string, any> 
+        const { name, arguments: args } = request.params as {
+          name: string;
+          arguments?: Record<string, any>;
         };
 
         if (!name) {
@@ -145,7 +108,9 @@ export async function handleMCPRequest(
           } as JSONRPCError;
         }
 
-        const resource = resourceManager.resources.get(name);
+        const resource = resourceManager.listResources().find((r) =>
+          r.code === name
+        );
         if (!resource) {
           return {
             jsonrpc: "2.0",
@@ -158,20 +123,41 @@ export async function handleMCPRequest(
         }
 
         try {
-          const parsedInput = resource.schemas.request.parse(args || {});
-          const result = await resource.use(parsedInput, auth);
+          const run = await resourceManager.getResource(
+            name,
+            auth,
+          );
+          try {
+            const result = await run(args);
+
+            return {
+              jsonrpc: "2.0",
+              id: request.id,
+              result: {
+                content: [{
+                  type: "text",
+                  text: typeof result === "string"
+                    ? result
+                    : (result as any)?.result || JSON.stringify(result, null, 2),
+                }],
+                isError: false,
+              } as CallToolResult,
+            };
+          } catch (error) {
+            if (error instanceof Response) {
+              return {
+                jsonrpc: "2.0",
+                id: request.id,
+                error: {
+                  code: -32602,
+                  message: "Invalid params",
+                },
+              } as JSONRPCError;
+            }
+            throw error;
+          }
+
           
-          return {
-            jsonrpc: "2.0",
-            id: request.id,
-            result: {
-              content: [{
-                type: "text",
-                text: JSON.stringify(result, null, 2),
-              }],
-              isError: false,
-            } as CallToolResult,
-          };
         } catch (error) {
           return {
             jsonrpc: "2.0",
@@ -219,12 +205,12 @@ export async function handleMCPNotification(
         // Client has finished initialization
         console.log("MCP client initialized");
         break;
-      
+
       case "notifications/message":
         // Handle client notification
         console.log("Client notification:", notification.params);
         break;
-        
+
       default:
         console.warn(`Unknown notification method: ${notification.method}`);
     }

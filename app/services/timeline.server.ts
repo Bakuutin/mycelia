@@ -469,7 +469,7 @@ export async function invalidateHistogram(
 
   for (const res of resolutions) {
     const query: Record<string, any> = {};
-    
+
     if (start || end) {
       query.start = {};
       if (start) query.start.$gte = start;
@@ -477,7 +477,7 @@ export async function invalidateHistogram(
     }
 
     console.log(`Invalidating histogram_${res}`, query);
-    
+
     const result = await mongo({
       action: "updateMany",
       collection: `histogram_${res}`,
@@ -485,6 +485,8 @@ export async function invalidateHistogram(
       update: { $set: { stale: true } },
     });
 
-    console.log(`Marked ${result.modifiedCount} documents as stale in histogram_${res}`);
+    console.log(
+      `Marked ${result.modifiedCount} documents as stale in histogram_${res}`,
+    );
   }
 }

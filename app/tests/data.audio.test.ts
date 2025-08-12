@@ -16,12 +16,11 @@ Deno.test(
     const url = new URL("http://localhost:3000/data/audio");
     url.searchParams.set("start", "2024-01-01T00:00:00.000Z");
 
-    const response = await loader(
+    const data = await loader(
       createMockLoaderArgs(url.toString(), {
         "Authorization": `Bearer ${token}`,
       }),
     );
-    const data = await response.json();
 
     expect(data).toHaveProperty("segments");
     expect(Array.isArray(data.segments)).toBe(true);

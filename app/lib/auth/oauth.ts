@@ -63,7 +63,9 @@ export async function extractClientCredentials(
   return { clientId, clientSecret, grantType, scope };
 }
 
-export type ErrorDetail = string | ErrorDetail[] | { [key: string]: ErrorDetail };
+export type ErrorDetail = string | ErrorDetail[] | {
+  [key: string]: ErrorDetail;
+};
 
 export function oauthErrorJson(
   detail: ErrorDetail,

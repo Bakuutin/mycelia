@@ -8,7 +8,8 @@ import { z } from "zod";
 const zAudioQueryParams = z.object({
   start: z.string().transform((val: string) => new Date(val)),
   lastId: z.string().optional().nullable(),
-  limit: z.string().transform((val: string) => parseInt(val, 10)).optional(),
+  limit: z.string().transform((val: string) => parseInt(val, 10)).optional()
+    .nullable(),
 });
 
 const zAudioSegment = z.object({
@@ -31,8 +32,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const limitParam = url.searchParams.get("limit");
 
   if (!startParam) {
-    console.log("No start parameter");
-    return { segments: [] };
+    throw new Response("Missing required 'start' parameter", { status: 400 });
   }
 
   const queryParams = zAudioQueryParams.parse({

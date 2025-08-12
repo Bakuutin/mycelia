@@ -82,6 +82,7 @@ deno run -A --env server.ts serve
 ## Commands
 
 ### Local Server Management (server.ts)
+
 For local development and server management:
 
 ```bash
@@ -93,8 +94,8 @@ deno run -A --env server.ts token create
 ```
 
 ### Remote Operations (cli.ts)
-For operations against a remote server (requires login & API key):
 
+For operations against a remote server (requires login & API key):
 
 ```bash
 # Login to remote server

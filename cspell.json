@@ -50,6 +50,7 @@
     "matplotlib",
     "megasecond",
     "merch",
+    "Millis",
     "minimatch",
     "modelcontextprotocol",
     "nbconvert",

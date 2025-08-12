@@ -255,7 +255,11 @@ defineFixture({
   dependencies: ["Mongo", "ServerAuth"],
   factory: async () => {
     const { generateApiKey } = await import("@/lib/auth/tokens.ts");
-    const policies = [{ resource: "*", action: "*", effect: "allow" as const }];
+    const policies = [{
+      resource: "**",
+      action: "*",
+      effect: "allow" as const,
+    }];
     return await generateApiKey("test-owner", "test-key", policies);
   },
 });
@@ -281,7 +285,7 @@ export function withFixtures(
       for (const fixture of fixtures) {
         await fixture.teardown?.(resolved.get(fixture.token));
       }
-      defaultResourceManager.resources.clear();
+      defaultResourceManager.clearResources();
     }
   };
 }
