@@ -12,8 +12,13 @@ export async function importAudioFile(
 
   const formData = new FormData();
   formData.append("audio", new Blob([file], { type: "audio/wav" }), fileName);
-  formData.append("start", startTime.toISOString());
-  formData.append("metadata", JSON.stringify(metadata));
+  
+  const data = {
+    start: startTime.toISOString(),
+    chunk_number: 0,
+    metadata,
+  };
+  formData.append("data", JSON.stringify(data));
 
   const response = await fetch(getUrl("/api/audio/ingest"), {
     method: "POST",
@@ -29,7 +34,10 @@ export async function importAudioFile(
   }
 
   const result = await response.json();
-  console.log(`Upload successful: ${result.original_id}`);
+  console.log(`Upload successful: ${result.chunk_id}`);
+  if (result.source_file_id) {
+    console.log(`Source file ID: ${result.source_file_id}`);
+  }
   if (result.message) {
     console.log(`Note: ${result.message}`);
   }
@@ -94,6 +102,7 @@ class MicrophoneStreamer {
   private totalBytes = 0;
   private ffmpegProcess?: Deno.ChildProcess;
   private reader?: ReadableStreamDefaultReader<Uint8Array>;
+  private sourceFileId?: string;
 
   private static readonly CHUNK_DURATION_SECONDS = 10;
   private static readonly SAMPLE_RATE = 16000; // 16kHz
@@ -110,7 +119,7 @@ class MicrophoneStreamer {
     this.streamingBuffer = {
       buffer: new Uint8Array(MicrophoneStreamer.CHUNK_SIZE_BYTES),
       currentSize: 0,
-      chunkNumber: 1,
+      chunkNumber: 0,
       startTime: new Date(),
       maxSize: MicrophoneStreamer.CHUNK_SIZE_BYTES,
     };
@@ -290,17 +299,24 @@ class MicrophoneStreamer {
       new Blob([audioData], { type: "audio/wav" }),
       `microphone_chunk_${chunkNumber}.wav`,
     );
-    formData.append("start", chunkStartTime.toISOString());
-    formData.append("chunk_number", chunkNumber.toString());
-    formData.append(
-      "metadata",
-      JSON.stringify({
+    
+    const data: any = {
+      start: chunkStartTime.toISOString(),
+      chunk_number: chunkNumber,
+      metadata: {
         ...this.metadata,
         streaming: true,
         chunk_number: chunkNumber,
         chunk_duration_ms: Math.round((audioData.length / 2) / 16), // 16kHz, 16-bit samples
-      }),
-    );
+      },
+    };
+    
+    // For chunks after the first one, include the source_file_id
+    if (chunkNumber > 0 && this.sourceFileId) {
+      data.source_file_id = this.sourceFileId;
+    }
+    
+    formData.append("data", JSON.stringify(data));
 
     const uploadUrl = getUrl("/api/audio/ingest");
 
@@ -330,7 +346,14 @@ class MicrophoneStreamer {
 
       const result = await response.json();
       console.log(`✅ Chunk ${chunkNumber} uploaded successfully!`);
-      console.log(`🆔 Chunk ${chunkNumber} ID: ${result.original_id}`);
+      console.log(`🆔 Chunk ${chunkNumber} ID: ${result.chunk_id}`);
+      
+      // Store the source_file_id from the first chunk for subsequent uploads
+      if (chunkNumber === 0 && result.source_file_id) {
+        this.sourceFileId = result.source_file_id;
+        console.log(`🔗 Source file ID: ${this.sourceFileId}`);
+      }
+      
       if (result.message) {
         console.log(`💬 Server message: ${result.message}`);
       }

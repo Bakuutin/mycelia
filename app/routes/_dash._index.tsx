@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect } from "react";
-import { useDateStore } from "../modules/audio/player.tsx";
-import { useTimeline } from "../hooks/useTimeline.ts";
-import { config } from "@/config.ts";
+import { useDateStore } from "@/modules/audio/player.tsx";
+import { useTimeline } from "@/hooks/useTimeline.ts";
+import { config } from "#/config.ts";
 import { useTimelineRange } from "../stores/timelineRange.ts";
 import _ from "lodash";
 

@@ -93,7 +93,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .map((segment: any) => ({
       start: segment.start,
       data: segment.data.buffer.toString("base64"),
-      originalID: segment.original_id.toString(),
+      originalID: segment.original_id?.toString() || "",
       _id: `${segment._id.toString()}`,
     }));
 

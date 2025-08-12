@@ -253,3 +253,48 @@ Deno.test(
     expect(hasAudioData).toBe(true);
   }),
 );
+
+Deno.test(
+  "updateHistogram should make histogram non-stale",
+  withFixtures(["Admin", "Mongo"], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+
+    const startTime = new Date("2024-01-01T00:00:00.000Z");
+    const endTime = new Date("2024-01-01T01:00:00.000Z");
+
+    await mongo({
+      action: "insertOne",
+      collection: "histogram_5min",
+      doc: {
+        start: new Date("2024-01-01T00:10:00.000Z"),
+        stale: true,
+        totals: { audio_chunks: { count: 1 } },
+      },
+    });
+
+    await mongo({
+      action: "insertOne",
+      collection: "audio_chunks",
+      doc: {
+        start: new Date("2024-01-01T00:10:00.000Z"),
+        vad: { prob: 0.8, has_speech: true },
+      },
+    });
+
+    const beforeUpdate = await mongo({
+      action: "findOne",
+      collection: "histogram_5min",
+      query: { start: new Date("2024-01-01T00:10:00.000Z") },
+    });
+    expect(beforeUpdate.stale).toBe(true);
+
+    await updateHistogram(auth, startTime, endTime, "5min");
+
+    const afterUpdate = await mongo({
+      action: "findOne",
+      collection: "histogram_5min",
+      query: { start: new Date("2024-01-01T00:10:00.000Z") },
+    });
+    expect(afterUpdate.stale).toBe(false);
+  }),
+);

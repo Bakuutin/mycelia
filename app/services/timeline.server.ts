@@ -129,6 +129,7 @@ export async function updateHistogram(
         update: {
           $set: {
             updated_at: new Date(),
+            stale: false,
             ...(Object.keys(aggr).length > 0 && {
               [`totals.${sourceCollectionName}`]: aggr,
             }),
@@ -275,6 +276,7 @@ export async function updateHistogramOptimized(
         filter: { start: new Date(binKey) },
         update: {
           $set: {
+            stale: false,
             updated_at: new Date(),
             totals,
           },
@@ -331,6 +333,7 @@ export async function fetchTimelineData(
     id: doc._id.toHexString(),
     start: doc.start,
     end: new Date(doc.start.getTime() + RESOLUTION_TO_MS[resolution]),
+    stale: doc.stale || false,
     totals: {
       seconds: binSize,
       ...doc.totals,

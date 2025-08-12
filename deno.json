@@ -11,6 +11,7 @@
   "nodeModulesDir": "auto",
   "imports": {
     "@/": "./app/",
+    "#/": "./",
     "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7",
     "@cliffy/prompt": "jsr:@cliffy/prompt@^1.0.0-rc.7",
     "@needle-di/core": "jsr:@needle-di/core@^1.0.0",
