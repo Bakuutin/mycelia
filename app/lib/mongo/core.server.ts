@@ -112,8 +112,8 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
   listIndexesSchema,
 ]);
 
-type MongoRequest = z.infer<typeof mongoRequestSchema>;
-type MongoResponse = any;
+export type MongoRequest = z.infer<typeof mongoRequestSchema>;
+export type MongoResponse = any;
 
 const actionMap = {
   count: "read",

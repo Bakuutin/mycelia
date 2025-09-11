@@ -22,3 +22,7 @@ body {
 .zoomable rect.timeline-item {
   pointer-events: auto;
 }
+
+button {
+  cursor: pointer;
+}

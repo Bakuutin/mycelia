@@ -4,6 +4,9 @@ import { useTimeline } from "@/hooks/useTimeline.ts";
 import { config } from "#/config.ts";
 import { useTimelineRange } from "../stores/timelineRange.ts";
 import _ from "lodash";
+import { Link } from "@remix-run/react";
+import { Cog } from "lucide-react";
+import { Button } from "@/components/ui/button.tsx";
 
 interface Transcript {
   id: string;
@@ -76,6 +79,9 @@ const TimelinePage = () => {
               key={i}
             />
           ))}
+          <Link to="/settings" className="ml-auto">
+            <Button><Cog /></Button>
+          </Link>
         </div>
         <div
           ref={containerRef}

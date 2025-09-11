@@ -4,6 +4,7 @@
   "words": [
     "acodec",
     "aggr",
+    "atclocktime",
     "avfoundation",
     "birthtime",
     "bitnami",
@@ -73,6 +74,7 @@
     "pytz",
     "quettasecond",
     "redlock",
+    "retryable",
     "ronnasecond",
     "safetensors",
     "sasl",

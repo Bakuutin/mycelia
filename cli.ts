@@ -1,9 +1,8 @@
 import { exit } from "node:process";
 import { Command } from "@cliffy/command";
 import { CompletionsCommand } from "@cliffy/command/completions";
-import process from "node:process";
 import { handleLogin } from "./cli/auth.ts";
-import { handleAudioImport, handleMicrophoneStream } from "./cli/audio.ts";
+import { handleAudioImport } from "./cli/audio.ts";
 import { handleMCPCallTool, handleMCPListTools } from "./cli/mcp.ts";
 import { getConfig } from "./cli/config.ts";
 
@@ -50,43 +49,6 @@ const root = new Command()
                 file,
                 options.start,
                 options.metadata,
-              );
-            },
-          ),
-      )
-      .command(
-        "microphone",
-        new Command()
-          .description("Record and stream microphone audio")
-          .option(
-            "-d, --duration <duration>",
-            "Recording duration in seconds (optional, defaults to manual stop)",
-          )
-          .option(
-            "-m, --metadata <metadata>",
-            "Additional metadata as JSON string",
-          )
-          .option(
-            "--device <device>",
-            "Audio input device (use 'list' to see available devices, or device name/index)",
-          )
-          .action(
-            async (
-              options: {
-                duration?: string;
-                metadata?: string;
-                device?: string;
-              },
-            ) => {
-              const config = getConfig();
-              const duration = options.duration
-                ? parseInt(options.duration)
-                : undefined;
-              await handleMicrophoneStream(
-                config,
-                duration,
-                options.metadata,
-                options.device,
               );
             },
           ),

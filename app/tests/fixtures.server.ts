@@ -11,6 +11,7 @@ import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
 import { KafkaResource } from "@/lib/kafka/index.ts";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
+import { ProcessorResource } from "../lib/processors/core.server.ts";
 import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
 
@@ -167,11 +168,14 @@ defineFixture({
     const isolatedDB = client.db(databaseName);
     const fs = new FsResource();
     const timeline = new TimelineResource();
+    const processor = new ProcessorResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
+    processor.getRootDB = async () => isolatedDB;
     defaultResourceManager.registerResource(resource);
     defaultResourceManager.registerResource(fs);
     defaultResourceManager.registerResource(timeline);
+    defaultResourceManager.registerResource(processor);
 
     return {
       db: isolatedDB,
