@@ -6,6 +6,7 @@ import {
   signJWT,
 } from "@/lib/auth/index.ts";
 import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
+import { redis } from "@/lib/redis.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
@@ -50,6 +51,9 @@ const redisContainer = await new GenericContainer("redis")
   .withExposedPorts(6379)
   .withReuse()
   .start();
+
+redis.options.port = redisContainer.getMappedPort(6379);
+await redis.connect()
 
 console.log("Starting mongo container");
 const mongoContainer = await new GenericContainer("mongo:8.0")

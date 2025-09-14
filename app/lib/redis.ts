@@ -9,6 +9,7 @@ export const redis = new Redis({
   password: Deno.env.get("REDIS_PASSWORD"),
   host: Deno.env.get("REDIS_HOST") || "localhost",
   port: parseInt(Deno.env.get("REDIS_PORT") || "6379"),
+  lazyConnect: true,
 });
 
 export const redlock = new Redlock([redis as any], {

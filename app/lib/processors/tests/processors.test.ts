@@ -26,3 +26,29 @@ Deno.test(
   }),
 );
 
+
+Deno.test(
+  "should claimBatch in parallel with",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth, { db }: any) => {
+    const processor = await getProcessorResource(auth);
+    const names = Array.from({ length: 10 }, (_, i) => `test-${i}`)
+
+    await db.collection("itemsToProcess").insertMany(names.map(name => ({ name })));
+
+    const claims = Array.from({ length: 5 }, () => processor({
+      action: "claim",
+      collection: "itemsToProcess",
+      processorName: "test-processor",
+      workerId: "test-worker",
+      batchSize: 2,
+    }));
+
+    const results = await Promise.all(claims)
+
+    expect(results[0]).toHaveLength(2)
+    expect(results.flat().map(item => item.name).toSorted()).toEqual(names)
+  }),
+);

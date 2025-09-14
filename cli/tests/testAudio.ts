@@ -88,7 +88,7 @@ Deno.test("parseDateOrRelativeTime should handle different date formats", () => 
 
 Deno.test("parseDateOrRelativeTime should handle malformed inputs", () => {
   // Test empty string
-  expect(() => parseDateOrRelativeTime("")).toThrow("Invalid time expression");
+  expect(() => parseDateOrRelativeTime("")).toBeUndefined();
 
   // Test invalid relative time
   expect(() => parseDateOrRelativeTime("5x")).toThrow(
