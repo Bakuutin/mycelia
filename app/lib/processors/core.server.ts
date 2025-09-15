@@ -3,16 +3,30 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
 import { redlock } from "@/lib/redis.ts";
+import { ObjectId } from "mongodb";
+
+
 
 const acknowledgeBatchSchema = z.object({
   action: z.literal("acknowledge"),
   collection: z.string(),
   processorName: z.string(),
-  statuses: z.array(z.object({
-    id: z.string(),
-    status: z.enum(["done", "failed"]),
-    error: z.string().optional(),
-  })),
+  statuses: z.array(
+    z.discriminatedUnion(
+      "status",
+      [
+        z.object({
+          id: z.instanceof(ObjectId),
+          status: z.literal("done"),
+        }).passthrough(),
+        z.object({
+          id: z.instanceof(ObjectId),
+          status: z.literal("failed"),
+          error: z.any(),
+        }),
+      ]
+    ),
+  ),
 });
 
 const claimBatchSchema = z.object({
@@ -122,17 +136,15 @@ export class ProcessorResource
         collection: input.collection,
         query: { _id: { $in: docIds } },
         update: {
-          $set: {
-            [input.processorName]: {
-              status: "in-progress",
-              worker: {
-                id: input.workerId,
-                principal: auth.principal,
-              },
-              startedAt: new Date(),
-              version: 1,
+          $set: Object.fromEntries(Object.entries({
+            status: "in-progress",
+            worker: {
+              id: input.workerId,
+              principal: auth.principal,
             },
-          },
+            startedAt: new Date(),
+          }).map(([key, doc]) => ([`${input.processorName}.${key}`, doc])
+        )),
         },
       });
 
@@ -159,18 +171,16 @@ export class ProcessorResource
     await db({
       action: "bulkWrite",
       collection: input.collection,
-      operations: input.statuses.map((status) => ({
+      operations: input.statuses.map(item => ({
         updateOne: {
-          filter: { _id: status.id },
+          filter: { _id: item.id },
           update: {
-            $set: {
-              [input.processorName]: {
-                status: status.status,
-                error: status.error,
-              },
-            },
+            $set: Object.fromEntries(Object.entries({
+              ...item,
+              startedAt: new Date(),
+            }).map(([key, doc]) => ([`${input.processorName}.${key}`, doc]))),
           },
-        },
+        }
       })),
     });
   }
@@ -180,4 +190,9 @@ export async function getProcessorResource(
   auth: Auth,
 ): Promise<(input: ProcessorRequest) => Promise<ProcessorResponse>> {
   return auth.getResource("tech.mycelia.processors");
+}
+
+
+export class Processor {
+  
 }

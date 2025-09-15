@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { minimatch } from "minimatch";
-import { type Auth } from "./core.server.ts";
+import { accessLogger, type Auth } from "./core.server.ts";
 import { permissionDenied } from "./utils.ts";
 
 export type Rule = string & { __brand: "Rule" } | string;
@@ -181,6 +181,10 @@ export class ResourceManager {
             }, currentUse);
         }
       }
+
+      
+      accessLogger.log(auth, resource, actions)
+      
 
       return finalUse(input, auth);
     };

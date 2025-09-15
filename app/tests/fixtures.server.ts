@@ -15,6 +15,9 @@ import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import { ProcessorResource } from "../lib/processors/core.server.ts";
 import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
+import { accessLogger } from "@/lib/auth/core.server.ts";
+import { fn } from "@std/expect";
+
 
 export type Fixture = {
   token: any;
@@ -52,6 +55,7 @@ const redisContainer = await new GenericContainer("redis")
   .withReuse()
   .start();
 
+redis.options.password = undefined
 redis.options.port = redisContainer.getMappedPort(6379);
 await redis.connect()
 
@@ -282,6 +286,15 @@ defineFixture({
     };
   },
 });
+
+defineFixture({
+  token: 'accessLogger',
+  factory: () => {
+    const stub = fn(() => {}) as any;
+    accessLogger.log = (auth, resource, actions) => stub(auth.principal, resource.code, actions);
+    return stub
+  }
+})
 
 console.log("All fixtures defined");
 

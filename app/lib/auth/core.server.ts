@@ -4,7 +4,7 @@ import { expandTypedObjects } from "./typed.ts";
 import { permissionDenied } from "./utils.ts";
 import { ObjectId } from "mongodb";
 
-import { defaultResourceManager, Policy, ResourcePath } from "./resources.ts";
+import { defaultResourceManager, Policy, Resource, ResourcePath } from "./resources.ts";
 
 export const authCookie = createCookie("token", {
   path: "/",
@@ -26,12 +26,18 @@ export interface APIKey {
 class AccessLogger {
   async log(
     auth: Auth,
-    resource: ResourcePath,
-    action: string,
-    policies: Policy[],
-    result: "allowed" | "denied" | "filtered",
+    resource: Resource<any, any>,
+    actions: {
+      path: ResourcePath;
+      actions: string[];
+    }[],
   ) {
-    console.log("access", auth.principal, resource, action, policies, result);
+    console.log({
+      principal: auth.principal,
+      resource: resource.code,
+      actions
+    })
+    // TODO: access log
   }
 }
 

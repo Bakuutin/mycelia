@@ -17,8 +17,9 @@ Deno.test(
   "in-memory mongo is available",
   withFixtures([
     "Admin",
+    "accessLogger",
     "Mongo",
-  ], async (admin: Auth) => {
+  ], async (admin: Auth, accessLogger: any) => {
     const mongoResource = await getMongoResource(admin);
     await mongoResource({
       action: "insertOne",
@@ -33,5 +34,19 @@ Deno.test(
     });
     expect(result).toHaveLength(1);
     expect(result[0].name).toEqual("test");
+
+    expect(accessLogger).toHaveBeenCalledWith(admin, mongoResource, [
+      {
+        path: "db.test",
+        actions: ["write"],
+      }
+    ])
+
+    expect(accessLogger).toHaveBeenCalledWith(admin, mongoResource, [
+      {
+        path: "db.test",
+        actions: ["read"],
+      }
+    ])
   }),
 );
