@@ -54,6 +54,9 @@ const TARGET_COLLECTIONS: Record<string, AggregationConfig> = {
   diarizations: {
     count: true,
   },
+  transcriptions: {
+    count: true,
+  },
 };
 
 export async function updateHistogram(

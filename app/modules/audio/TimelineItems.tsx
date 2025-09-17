@@ -26,6 +26,19 @@ const getPattern = (item: TimelineItem) => {
   return getFill(item);
 };
 
+const HeatmapBlock = ({ intensity, x, y, width }: { intensity: number, x: number, y: number, width: number }) => {
+  return intensity > 0 ? (
+    <rect
+      x={x}
+      y={y}
+      width={width}
+      height={10}
+      fill={colorScale(Math.log(intensity))}
+      className="timeline-item"
+    />
+  ) : null;
+};
+
 export const TimelineItems = ({
   items,
   scale,
@@ -56,14 +69,22 @@ export const TimelineItems = ({
         const width = Math.max(endX - startX + 2, 2);
 
         return (
-          <rect
-            key={item.id}
-            x={startX}
-            width={width}
-            height={20}
-            fill={getPattern(item)}
-            className="timeline-item"
-          />
+          <g key={item.id}>
+            <rect
+              x={startX}
+              y={0}
+              width={width}
+              height={10}
+              fill={getPattern(item)}
+              className="timeline-item"
+            />
+            <HeatmapBlock
+              x={startX}
+              y={10}
+              width={width}
+              intensity={(item.totals?.transcriptions?.count || 0) / item.totals.seconds}
+            />
+          </g>
         );
       })}
     </g>
