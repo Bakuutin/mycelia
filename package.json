@@ -41,6 +41,7 @@
     "@types/luxon": "^3.6.0",
     "@types/minimatch": "^5.1.2",
     "@types/node": "^24.1.0",
+    "bson": "^6.10.4",
     "bullmq": "^5.47.1",
     "chokidar": "^4.0.3",
     "class-variance-authority": "^0.7.1",

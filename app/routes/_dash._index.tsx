@@ -8,39 +8,6 @@ import { Link } from "@remix-run/react";
 import { Cog } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 
-interface Transcript {
-  id: string;
-  start: string;
-  text: string;
-}
-
-interface TranscriptsRowProps {
-  transcripts: Transcript[];
-}
-
-function TranscriptsRow({ transcripts }: TranscriptsRowProps) {
-  const { resetDate, setIsPlaying } = useDateStore();
-
-  return (
-    <div className="">
-      {transcripts.map((transcript) => {
-        return (
-          <span
-            className="opacity-20 hover:opacity-100 transition-colors hover:cursor-pointer"
-            key={transcript.id}
-            onClick={() => {
-              resetDate(new Date(transcript.start));
-              setIsPlaying(true);
-            }}
-          >
-            {transcript.text}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
 const TimelinePage = () => {
   const { start, end } = useTimelineRange();
 

@@ -8,6 +8,7 @@ import {
   JSONRPCResponse,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createMCPToolsFromResources } from "./adapter.ts";
+import { EJSON } from "bson";
 
 // Detect JSON-RPC message type
 export type JSONRPCMessageType =
@@ -128,7 +129,8 @@ export async function handleMCPRequest(
             auth,
           );
           try {
-            const result = await run(args);
+            const deserializedArgs = EJSON.deserialize(args ?? {} as any);
+            const result = await run(deserializedArgs);
 
             return {
               jsonrpc: "2.0",
@@ -136,9 +138,7 @@ export async function handleMCPRequest(
               result: {
                 content: [{
                   type: "text",
-                  text: typeof result === "string"
-                    ? result
-                    : (result as any)?.result || JSON.stringify(result, null, 2),
+                  text: EJSON.stringify(result),
                 }],
                 isError: false,
               } as CallToolResult,

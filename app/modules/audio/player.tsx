@@ -212,5 +212,26 @@ export const AudioPlayer: React.FC = () => {
     }
   }, [isPlaying, chunks]);
 
+  useEffect(() => {
+    let interval: number | null = null;
+    
+    if (isPlaying && currentDate) {
+      const startTime = Date.now();
+      const initialDate = currentDate.getTime();
+      
+      interval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const newDate = new Date(initialDate + elapsed);
+        updateDate(newDate);
+      }, 100);
+    }
+    
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [isPlaying, startDate]);
+
   return null;
 };

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Resource } from "@/lib/auth/resources.ts";
-import { Auth } from "@/lib/auth/core.server.ts";
+import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
 import { redlock } from "@/lib/redis.ts";
 import { ObjectId } from "mongodb";

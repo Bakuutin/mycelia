@@ -1,10 +1,10 @@
 import { jwtVerify } from "jose";
 import { createCookie, redirect } from "@remix-run/node";
-import { expandTypedObjects } from "./typed.ts";
 import { permissionDenied } from "./utils.ts";
 import { ObjectId } from "mongodb";
 
 import { defaultResourceManager, Policy, Resource, ResourcePath } from "./resources.ts";
+import { EJSON } from "bson";
 
 export const authCookie = createCookie("token", {
   path: "/",
@@ -70,7 +70,7 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
     if (typeof payload === "string") {
       permissionDenied();
     }
-    return new Auth(expandTypedObjects(payload));
+    return new Auth(EJSON.deserialize(payload));
   } catch (error) {
     // JWT failed
   }

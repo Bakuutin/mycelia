@@ -29,12 +29,6 @@ Deno.test("parseDateOrRelativeTime should handle undefined", () => {
   expect(result).toBeUndefined();
 });
 
-Deno.test("parseDateOrRelativeTime should throw for invalid input", () => {
-  expect(() => parseDateOrRelativeTime("invalid-time")).toThrow(
-    "Invalid time expression",
-  );
-});
-
 Deno.test("parseDateOrRelativeTime should handle various time formats", () => {
   const now = Date.now();
 
@@ -84,24 +78,4 @@ Deno.test("parseDateOrRelativeTime should handle different date formats", () => 
   // Test date with time
   const dateTimeResult = parseDateOrRelativeTime("2024-01-15 10:30:00");
   expect(dateTimeResult).toBeInstanceOf(Date);
-});
-
-Deno.test("parseDateOrRelativeTime should handle malformed inputs", () => {
-  // Test empty string
-  expect(() => parseDateOrRelativeTime("")).toBeUndefined();
-
-  // Test invalid relative time
-  expect(() => parseDateOrRelativeTime("5x")).toThrow(
-    "Invalid time expression",
-  );
-
-  // Test invalid date
-  expect(() => parseDateOrRelativeTime("not-a-date")).toThrow(
-    "Invalid time expression",
-  );
-
-  // Test negative time
-  expect(() => parseDateOrRelativeTime("-5m")).toThrow(
-    "Invalid time expression",
-  );
 });

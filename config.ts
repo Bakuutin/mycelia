@@ -5,6 +5,8 @@ import {
   AudioLayer,
   AudioPlayerTool,
   GainTool,
+  TranscriptLayer,
+  DateTimePickerTool,
 } from "@/modules/audio/index.tsx";
 
 
@@ -13,9 +15,11 @@ export const config: Config = {
     TimeLayer({ formatter: SiFormatter }),
     TimeLayer(),
     AudioLayer(),
+    TranscriptLayer(),
   ],
   tools: [
     AudioPlayerTool,
     GainTool,
+    DateTimePickerTool,
   ],
 };
