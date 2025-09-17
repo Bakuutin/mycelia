@@ -90,7 +90,6 @@ export const AudioLayer: () => Layer = () => {
           height={40}
           onClick={(event) => {
             const svgElement = event.currentTarget;
-            console.log(svgElement);
             const rect = svgElement.getBoundingClientRect();
             const x = event.clientX - rect.left;
             const newScale = transform.rescaleX(scale);

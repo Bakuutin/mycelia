@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect } from "react";
 import { useFetcher } from "@remix-run/react";
 import { create } from "zustand";
 import _ from "lodash";
@@ -16,6 +16,13 @@ export interface DateStore {
   chunks: Chunk[];
   currentChunk: Chunk | null;
   volume: number;
+  audioContext: AudioContext | null;
+  sourceNode: AudioBufferSourceNode | null;
+  gainNode: GainNode | null;
+  isCreatingSource: boolean;
+  rafId: number | null;
+  baselineStartDate: Date | null;
+  baselineStartCtxTime: number | null;
   setIsPlaying: (isPlaying: boolean) => void;
   toggleIsPlaying: () => void;
   updateDate: (date: Date) => void;
@@ -23,6 +30,13 @@ export interface DateStore {
   appendChunks: (chunks: Chunk[]) => void;
   popChunk: () => Promise<Chunk | null>;
   setVolume: (volume: number) => void;
+  setAudioContext: (ctx: AudioContext | null) => void;
+  setSourceNode: (node: AudioBufferSourceNode | null) => void;
+  setGainNode: (node: GainNode | null) => void;
+  setIsCreatingSource: (isCreating: boolean) => void;
+  setRafId: (id: number | null) => void;
+  setBaselines: (date: Date, ctxTime: number) => void;
+  clearBaselines: () => void;
   update: (
     data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>),
   ) => void;
@@ -35,6 +49,13 @@ export const useDateStore = create<DateStore>((set) => ({
   currentChunk: null,
   isPlaying: false,
   volume: 1,
+  audioContext: null,
+  sourceNode: null,
+  gainNode: null,
+  isCreatingSource: false,
+  rafId: null,
+  baselineStartDate: null,
+  baselineStartCtxTime: null,
   setIsPlaying: (isPlaying: boolean) => set({ isPlaying }),
   toggleIsPlaying: () => set((state) => ({ isPlaying: !state.isPlaying })),
   updateDate: (date: Date) => set({ currentDate: date }),
@@ -43,7 +64,11 @@ export const useDateStore = create<DateStore>((set) => ({
   },
   appendChunks(chunks: Chunk[]) {
     console.log("Appending chunks", chunks.map((chunk) => chunk.start));
-    set((state) => ({ chunks: [...state.chunks, ...chunks] }));
+    set((state) => {
+      const combined = [...state.chunks, ...chunks];
+      combined.sort((a, b) => a.start.getTime() - b.start.getTime());
+      return { chunks: combined };
+    });
   },
   popChunk() {
     return new Promise<Chunk | null>((resolve) => {
@@ -58,6 +83,13 @@ export const useDateStore = create<DateStore>((set) => ({
       });
     });
   },
+  setAudioContext: (ctx: AudioContext | null) => set({ audioContext: ctx }),
+  setSourceNode: (node: AudioBufferSourceNode | null) => set({ sourceNode: node }),
+  setGainNode: (node: GainNode | null) => set({ gainNode: node }),
+  setIsCreatingSource: (isCreating: boolean) => set({ isCreatingSource: isCreating }),
+  setRafId: (id: number | null) => set({ rafId: id }),
+  setBaselines: (date: Date, ctxTime: number) => set({ baselineStartDate: date, baselineStartCtxTime: ctxTime }),
+  clearBaselines: () => set({ baselineStartDate: null, baselineStartCtxTime: null }),
   update(
     data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>),
   ) {
@@ -79,11 +111,22 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 export const AudioPlayer: React.FC = () => {
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
-  const [source, setSource] = useState<AudioBufferSourceNode | null>(null);
+  const {
+    audioContext,
+    setAudioContext,
+    sourceNode,
+    setSourceNode,
+    gainNode,
+    setGainNode,
+    isCreatingSource,
+    setIsCreatingSource,
+    rafId,
+    setRafId,
+    baselineStartDate,
+    baselineStartCtxTime,
+  } = useDateStore();
   const fetcher = useFetcher();
   const preloadLimit = 20; // Number of segments to preload
-  const [gainNode, setGainNode] = useState<GainNode | null>(null);
 
   const ensureAudioContext = () => {
     if (!audioContext) {
@@ -143,8 +186,6 @@ export const AudioPlayer: React.FC = () => {
     }
   }, [fetcher.data]);
 
-  const isBufferSourceCreating = useRef(false);
-
   useEffect(() => {
     if (audioContext && !gainNode) {
       const newGainNode = audioContext.createGain();
@@ -162,49 +203,56 @@ export const AudioPlayer: React.FC = () => {
 
   const createBufferSource = async () => {
     if (
-      !audioContext || chunks.length === 0 || isBufferSourceCreating.current
+      !audioContext || chunks.length === 0 || isCreatingSource
     ) return;
 
-    isBufferSourceCreating.current = true;
+    setIsCreatingSource(true);
 
     const bufferSource = audioContext.createBufferSource();
-    setSource(bufferSource);
+    setSourceNode(bufferSource);
 
     const chunk = await popChunk();
-    if (!chunk) return; // Handle null chunk
+    if (!chunk) {
+      setIsCreatingSource(false);
+      return;
+    }
     console.log("Playing", chunk.start.toISOString());
-    updateDate(chunk.start);
     bufferSource.buffer = chunk.buffer;
     bufferSource.connect(gainNode!);
 
-    bufferSource.start();
+    const when = audioContext.currentTime;
+    bufferSource.start(when);
+
+    useDateStore.getState().setBaselines(chunk.start, when);
+    updateDate(chunk.start);
 
     bufferSource.onended = () => {
-      setSource(null);
+      setSourceNode(null);
+      setIsCreatingSource(false);
     };
 
-    isBufferSourceCreating.current = false;
+    setIsCreatingSource(false);
   };
 
   useEffect(() => {
-    if (source) {
-      source.stop();
-      setSource(null);
+    if (sourceNode) {
+      sourceNode.stop();
+      setSourceNode(null);
     }
   }, [startDate]);
 
   useEffect(() => {
     if (!audioContext) return;
 
-    if (isPlaying && chunks.length && !source) {
+    if (isPlaying && chunks.length && !sourceNode) {
       createBufferSource();
     }
 
-    if (!isPlaying && source) {
-      source.stop();
-      setSource(null);
+    if (!isPlaying && sourceNode) {
+      sourceNode.stop();
+      setSourceNode(null);
     }
-  }, [isPlaying, chunks, source]);
+  }, [isPlaying, chunks, sourceNode, audioContext]);
 
   useEffect(() => {
     if (isPlaying && chunks.length < 3) {
@@ -213,25 +261,31 @@ export const AudioPlayer: React.FC = () => {
   }, [isPlaying, chunks]);
 
   useEffect(() => {
-    let interval: number | null = null;
-    
-    if (isPlaying && currentDate) {
-      const startTime = Date.now();
-      const initialDate = currentDate.getTime();
-      
-      interval = setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        const newDate = new Date(initialDate + elapsed);
-        updateDate(newDate);
-      }, 100);
+    if (!audioContext) return;
+
+    let frameId: number | null = null;
+
+    if (!isPlaying) {
+      if (frameId) cancelAnimationFrame(frameId);
+      return;
     }
-    
-    return () => {
-      if (interval) {
-        clearInterval(interval);
+
+    const tick = () => {
+      const { baselineStartDate, baselineStartCtxTime } = useDateStore.getState();
+      if (baselineStartDate && baselineStartCtxTime !== null) {
+        const elapsed = audioContext.currentTime - baselineStartCtxTime;
+        const newDate = new Date(baselineStartDate.getTime() + elapsed * 1000);
+        updateDate(newDate);
       }
+      frameId = requestAnimationFrame(tick);
     };
-  }, [isPlaying, startDate]);
+
+    frameId = requestAnimationFrame(tick);
+
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+    };
+  }, [isPlaying, audioContext]);
 
   return null;
 };
