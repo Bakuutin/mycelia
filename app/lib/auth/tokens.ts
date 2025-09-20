@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, createSecretKey, randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
-import { APIKey, getServerAuth } from "./core.server.ts";
+import { APIKey, Auth, getServerAuth } from "./core.server.ts";
 import { Policy } from "./resources.ts";
 import { z } from "zod";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
@@ -137,4 +137,30 @@ export async function exchangeApiKeyForAccessToken(
   }
 
   return { jwt, error: null };
+}
+
+export async function listApiKeys(auth: Auth): Promise<APIKeyDocument[]> {
+  const mongo = await getMongoResource(auth);
+
+  const docs = await mongo({
+    action: "find",
+    collection: "api_keys",
+    query: {},
+    options: { sort: { createdAt: -1 } },
+  });
+  return docs as APIKeyDocument[];
+}
+
+export async function revokeApiKey(owner: string, id: string): Promise<boolean> {
+  const auth = await getServerAuth();
+  const mongo = await getMongoResource(auth);
+
+  const result = await mongo({
+    action: "updateOne",
+    collection: "api_keys",
+    query: { _id: new ObjectId(id), owner },
+    update: { $set: { isActive: false } },
+  });
+
+  return Boolean(result && (result.modifiedCount || result.matchedCount));
 }

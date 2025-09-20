@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
+import { EJSON } from "bson";
 
 interface Transcript {
   _id: string;
-  text: string;
+  segments: {text: string; start: number; end: number}[];
   start: Date;
   end: Date;
 }
@@ -30,13 +31,13 @@ export const useTranscripts = (cursorDate: Date | null) => {
     fetch("/api/resource/tech.mycelia.mongo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: EJSON.stringify({
         action: "find",
         collection: "transcriptions",
         query: {
           start: {
-            $gte: { $date: startTime.toISOString() },
-            $lte: { $date: endTime.toISOString() },
+            $gte: startTime,
+            $lte: endTime,
           },
           segments: { $exists: true },
         },
@@ -45,20 +46,12 @@ export const useTranscripts = (cursorDate: Date | null) => {
     })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch transcripts");
-        return res.json();
+        return res.text().then((text) => EJSON.parse(text));
       })
       .then((data) => {
         if (!Array.isArray(data)) return;
-        const transcriptData = data.flatMap((item: any) =>
-          item.segments.map((seg: any, index: number) => ({
-            _id: `${item._id.$oid}-${index}`,
-            text: seg.text,
-            start: new Date(new Date(item.start).getTime() + seg.start * 1000),
-            end: new Date(new Date(item.start).getTime() + seg.end * 1000),
-          }))
-        );
-        cachedTranscripts = transcriptData;
-        setTranscripts(transcriptData);
+        cachedTranscripts = data;
+        setTranscripts(data);
         lastFetchedBucket = bucketKey;
       })
       .catch((error) => {

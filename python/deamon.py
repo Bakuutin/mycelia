@@ -1,13 +1,10 @@
-
-from discovery import FilesystemImporter, AppleVoiceMemosImporter
+#%%
+from discovery import Importer
 
 from discovery import source_files
-from chunking import ingest_source
 from pymongo import DESCENDING
 import logging
-import pytz
 from datetime import datetime, UTC
-import os
 from diarization import run_voice_activity_detection
 import time
 
@@ -21,6 +18,7 @@ from datetime import timedelta
 
 import settings
 
+#%%
 
 logger = logging.getLogger('daemon')
 
@@ -38,11 +36,20 @@ def import_new_files():
         importer.run()
 
 
+importer_map = {importer.code: importer for importer in settings.importers}
+unknown_importer = Importer(code="unknown")
+
+
 def ingests_missing_sources(limit=None):
     query = source_files.find({
         "ingested": False,
-        "path": {"$exists": True},
-        "platform.node": platform.node(),
+        "$or": [
+            {
+                "path": {"$exists": True},
+                "platform.node": platform.node(),
+            },
+            {"platform.importer": {"$in": list(importer_map.keys())}},
+        ],
     }).sort([('start', DESCENDING)])
     if limit:
         query = query.limit(limit)
@@ -52,7 +59,11 @@ def ingests_missing_sources(limit=None):
             logger.info(f"Skipping {source['_id']} due to previous error \"{error}\"")
             continue
         try:
-            ingest_source(source)
+            importer = importer_map.get(
+                source['platform'].get('importer'),
+                unknown_importer
+            )
+            importer.upload(source)
             source_files.update_one({"_id": source["_id"]}, {"$set": {
                 "ingested": True,
                 "ingested_at": datetime.now(tz=UTC),
@@ -107,6 +118,11 @@ def add_missing_ends():
             }
         )
 
+#%%
+
+import_new_files()
+
+#%%
 
 def main():
     import_new_files()
@@ -117,7 +133,15 @@ def main():
 if __name__ == '__main__':
     while True:
         start = time.time()
-        main()
+        try:
+            main()
+        except Exception as e:
+            logger.exception(f"Error in main: {e}")
+            time.sleep(10)
+            continue
         end = time.time()
         if end - start < 10:
+            logger.info("Sleeping for a few seconds")
             time.sleep(10)
+
+#%%

@@ -7,19 +7,23 @@ import {
   GainTool,
   TranscriptLayer,
   DateTimePickerTool,
+  TopicsLayer,
+  AutoCenterTool,
 } from "@/modules/audio/index.tsx";
 
 
 export const config: Config = {
   layers: [
+    TranscriptLayer(),
     TimeLayer({ formatter: SiFormatter }),
     TimeLayer(),
     AudioLayer(),
-    TranscriptLayer(),
+    TopicsLayer(),
   ],
   tools: [
     AudioPlayerTool,
     GainTool,
     DateTimePickerTool,
+    AutoCenterTool,
   ],
 };

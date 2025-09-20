@@ -13,6 +13,7 @@ export const zTimelineItem = z.object({
   totals: z.any(),
   id: z.string(),
   stale: z.boolean().optional(),
+  topics: z.array(z.string()).optional(),
 });
 
 export const zQueryParams = z.object({
@@ -24,7 +25,6 @@ export const zLoaderData = z.object({
   start: z.date(),
   end: z.date(),
   items: z.array(zTimelineItem),
-  transcripts: z.array(z.any()),
 });
 
 export type TimelineItem = z.infer<typeof zTimelineItem>;

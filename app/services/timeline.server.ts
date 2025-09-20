@@ -337,49 +337,17 @@ export async function fetchTimelineData(
     start: doc.start,
     end: new Date(doc.start.getTime() + RESOLUTION_TO_MS[resolution]),
     stale: doc.stale || false,
+    topics: doc.topics as string[] | undefined,
     totals: {
       seconds: binSize,
       ...doc.totals,
     },
   }));
 
-  const transcriptions = await mongo({
-    action: "find",
-    collection: "transcriptions",
-    query: {
-      start: { $lte: queryEnd },
-      end: { $gte: queryStart },
-      segments: {
-        $exists: true,
-        $type: "array",
-        $not: { $size: 0 },
-      },
-    },
-    options: { sort: { start: 1 }, limit: 30 },
-  }) as any[];
-
-  const transcripts = [];
-
-  for (const t of transcriptions) {
-    for (const s of t.segments) {
-      transcripts.push({
-        start: new Date(t.start.getTime() + s.start * 1000),
-        end: new Date(t.start.getTime() + s.end * 1000),
-        text: s.text,
-        id: t._id.toHexString() + "-" + s.start.toFixed(3),
-        no_speech_prob: s.no_speech_prob,
-        top_language_probs: t.top_language_probs,
-      });
-    }
-  }
-
-  transcripts.sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
-
   return {
     items,
     start: originalStart,
     end: originalEnd,
-    transcripts,
   };
 }
 

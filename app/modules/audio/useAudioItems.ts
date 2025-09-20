@@ -61,7 +61,10 @@ type AudioCacheStore = {
     };
   };
   inFlightRequests: {
-    [R in Resolution]?: LoadedRange[];
+    [R in Resolution]?: {
+      ranges: LoadedRange[];
+      requestedAt: Date;
+    };
   };
   addData: (
     resolution: Resolution,
@@ -122,8 +125,8 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
 
   getMissingRanges: (resolution, start, end) => {
     const loaded = get().data[resolution]?.loadedRanges ?? [];
-    const inFlight = get().inFlightRequests[resolution] ?? [];
-    return computeMissingRanges(start, end, loaded, inFlight);
+    const inFlightRanges = get().inFlightRequests[resolution]?.ranges ?? [];
+    return computeMissingRanges(start, end, loaded, inFlightRanges);
   },
 
   fetchMissingRanges: (resolution, start, end) => {
@@ -131,13 +134,17 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
     if (missingRanges.length === 0) return;
 
     // Add missing ranges to in-flight requests
-    const currentInFlight = get().inFlightRequests[resolution] ?? [];
-    const newInFlight = mergeRanges([...currentInFlight, ...missingRanges]);
+    const existing = get().inFlightRequests[resolution];
+    const currentInFlight = existing?.ranges ?? [];
+    const newRanges = mergeRanges([...currentInFlight, ...missingRanges]);
 
     set((state) => ({
       inFlightRequests: {
         ...state.inFlightRequests,
-        [resolution]: newInFlight,
+        [resolution]: {
+          ranges: newRanges,
+          requestedAt: new Date(),
+        },
       },
     }));
 
@@ -158,36 +165,51 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
               id: item.id,
               totals: item.totals,
               stale: item.stale,
+              topics: item.topics,
             })),
           );
 
           // Remove from in-flight requests
-          const updatedInFlight = store.inFlightRequests[resolution]?.filter(
+          const existing = store.inFlightRequests[resolution];
+          const updatedRanges = existing?.ranges?.filter(
             (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
 
-          set((state) => ({
-            inFlightRequests: {
-              ...state.inFlightRequests,
-              [resolution]: updatedInFlight,
-            },
-          }));
+          set((state) => {
+            const next = { ...state.inFlightRequests } as typeof state.inFlightRequests;
+            if (updatedRanges.length > 0) {
+              next[resolution] = {
+                ranges: updatedRanges,
+                requestedAt: existing?.requestedAt ?? new Date(),
+              };
+            } else {
+              delete next[resolution];
+            }
+            return { inFlightRequests: next };
+          });
         })
         .catch((error) => {
           console.error("Failed to fetch audio data:", error);
 
           // Remove from in-flight requests on error
           const store = get();
-          const updatedInFlight = store.inFlightRequests[resolution]?.filter(
+          const existing = store.inFlightRequests[resolution];
+          const updatedRanges = existing?.ranges?.filter(
             (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
 
-          set((state) => ({
-            inFlightRequests: {
-              ...state.inFlightRequests,
-              [resolution]: updatedInFlight,
-            },
-          }));
+          set((state) => {
+            const next = { ...state.inFlightRequests } as typeof state.inFlightRequests;
+            if (updatedRanges.length > 0) {
+              next[resolution] = {
+                ranges: updatedRanges,
+                requestedAt: existing?.requestedAt ?? new Date(),
+              };
+            } else {
+              delete next[resolution];
+            }
+            return { inFlightRequests: next };
+          });
         });
     }
   },

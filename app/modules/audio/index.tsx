@@ -1,5 +1,5 @@
 import { Layer, LayerComponentProps, Tool } from "@/core.ts";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 
 import { AudioPlayer, useDateStore } from "./player.tsx";
 import { TimelineItems } from "./TimelineItems.tsx";
@@ -61,12 +61,28 @@ export const DateTimePickerTool: Tool = {
   },
 };
 
+export const AutoCenterTool: Tool = {
+  component: () => {
+    const { autoCenter, toggleAutoCenter } = useTimelineRange();
+    return (
+      <button
+        type="button"
+        onClick={toggleAutoCenter}
+        className={autoCenter ? "px-2 py-1 bg-yellow-700 rounded" : "px-2 py-1 bg-gray-700 rounded"}
+        title={autoCenter ? "Auto-center: ON" : "Auto-center: OFF"}
+      >
+        {autoCenter ? "Auto-Center" : "Pan Mode"}
+      </button>
+    );
+  },
+};
+
 export const AudioLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { currentDate, resetDate, setIsPlaying } = useDateStore();
 
-      const { start, end } = useTimelineRange();
+      const { start, end, autoCenter, setRange } = useTimelineRange();
 
       const resolution = useMemo(() => {
         const duration = end.getTime() - start.getTime();
@@ -82,6 +98,24 @@ export const AudioLayer: () => Layer = () => {
       }, [start, end]);
 
       const { items } = useAudioItems(start, end, resolution);
+      React.useEffect(() => {
+        if (!autoCenter || !currentDate) return;
+        const svgs = (globalThis as any).d3?.selectAll?.(".zoomable");
+        if (!svgs) return;
+        svgs.each(function (this: SVGSVGElement) {
+          const svg = (globalThis as any).d3.select(this as SVGSVGElement);
+          const behavior = svg.property("__zoom_behavior");
+          const currentTransform = svg.property("__zoom") as any;
+          if (!behavior || !currentTransform) return;
+
+          const scaleX = transform.rescaleX(scale);
+          const centerX = scaleX(currentDate);
+          const widthPx = this.clientWidth || 0;
+          const dx = widthPx / 2 - centerX;
+          const newTransform = currentTransform.translate(dx, 0);
+          svg.call(behavior.transform, newTransform);
+        });
+      }, [autoCenter, currentDate, transform, scale]);
 
       return (
         <svg
@@ -96,6 +130,11 @@ export const AudioLayer: () => Layer = () => {
             const clickedDate = newScale.invert(x);
             resetDate(clickedDate);
             setIsPlaying(true);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setIsPlaying(false);
+            resetDate(null);
           }}
         >
           <g>
@@ -118,27 +157,182 @@ export const AudioLayer: () => Layer = () => {
 };
 
 
+
 export const TranscriptLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { currentDate } = useDateStore();
       const { transcripts } = useTranscripts(currentDate);
+      const containerRef = useRef<HTMLDivElement | null>(null);
+      const itemRefs = useRef<Record<string, HTMLParagraphElement | null>>({});
+      useEffect(() => {
+        if (!currentDate) return;
+        const active = transcripts.find((t) => t.start <= currentDate && currentDate <= t.end);
+        if (!active) return;
+        const el = itemRefs.current[String(active._id)];
+        if (el && containerRef.current) {
+          el.scrollIntoView({ block: "nearest" });
+        }
+      }, [currentDate, transcripts.map((t) => t._id).join(",")]);
       
       return (
         <div>
-          <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
-            {transcripts.map((transcript) => {
-              const isActive = !!currentDate && transcript.start <= currentDate && currentDate <= transcript.end;
-              const base = "text-sm p-1 rounded";
-              const cls = isActive ? `${base} bg-yellow-600` : `${base} bg-gray-600`;
-              return (
-                <p key={transcript._id} className={cls}>
-                  {transcript.text}
-                </p>
-              );
-            })}
+          <div
+            ref={containerRef}
+            className="mt-2 space-y-1 h-32 overflow-y-auto overscroll-none"
+          >
+            {transcripts.length === 0 ? (
+              <div className="h-full flex items-center text-gray-400 italic">
+                <p className="text-sm">... transcripts will be shown here...</p>
+              </div>
+            ) : (
+              transcripts.map((transcript) => {
+                const isActive = !!currentDate && transcript.start <= currentDate;
+                const base = "text-sm italic p-1 rounded whitespace-pre-wrap";
+                const cls = isActive ? `${base} text-yellow-600` : `${base}`;
+                const formatTime = (d: Date) => d.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                return (
+                  <div key={transcript._id} className="flex items-start gap-2">
+                    <div className="w-20 shrink-0 text-xs text-gray-400 text-right font-mono leading-6">
+                      {formatTime(transcript.start)}
+                    </div>
+                    <p
+                      ref={(el) => {
+                        itemRefs.current[String(transcript._id)] = el;
+                      }}
+                      className={cls}
+                    >
+                      {transcript.segments.map((segment, idx) => (
+                        <span key={idx}>{segment.text}</span>
+                      ))}
+                    </p>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
+      );
+    },
+  } as Layer;
+};
+
+export const TopicsLayer: () => Layer = () => {
+  return {
+    component: ({ scale, transform, width }: LayerComponentProps) => {
+      const { start, end } = useTimelineRange();
+      const { currentDate } = useDateStore();
+
+      const resolution = useMemo(() => {
+        const duration = end.getTime() - start.getTime();
+        if (duration > 300 * day) {
+          return "1week";
+        } else if (duration > 50 * day) {
+          return "1day";
+        } else if (duration > day) {
+          return "1hour";
+        } else {
+          return "5min";
+        }
+      }, [start, end]);
+
+      const { items } = useAudioItems(start, end, resolution);
+
+      const newScale = transform.rescaleX(scale);
+
+      const layout = useMemo(() => {
+        const viewCenterMs = (start.getTime() + end.getTime()) / 2;
+        const halfWindowSec = Math.max(1, (end.getTime() - start.getTime()) / 2000);
+        const candidates = items
+          .filter((i) => (i.topics?.length ?? 0) > 0)
+          .flatMap((i) => {
+            const topics = i.topics || [];
+            const startMs = i.start.getTime();
+            const endMs = i.end.getTime();
+            const durationMs = Math.max(1, endMs - startMs);
+            const segmentMs = durationMs / topics.length;
+            return topics.map((topic, idx) => {
+              const segStartMs = startMs + idx * segmentMs;
+              const segEndMs = segStartMs + segmentMs;
+              const segMidMs = segStartMs + segmentMs / 2;
+              const anchorX = newScale(new Date(segMidMs));
+              const distanceSec = Math.abs(segMidMs - viewCenterMs) / 1000;
+              const normalizedDistance = Math.min(1, distanceSec / halfWindowSec);
+              const isActive = !!currentDate && currentDate.getTime() >= segStartMs && currentDate.getTime() <= segEndMs;
+              return { id: `${i.id}-${idx}`, anchorX, topic, isActive, normalizedDistance };
+            });
+          })
+          .sort((a, b) => a.normalizedDistance - b.normalizedDistance || a.anchorX - b.anchorX);
+
+        const laneEnds: number[] = [];
+        const placed: Array<any> = [];
+
+
+        let lane = 0;
+
+        for (const c of candidates) {
+          placed.push({ ...c, lane  });
+          lane++;
+        }
+
+        const lanes = laneEnds.length;
+        return { placed, lanes };
+      }, [items, newScale, width, currentDate, start, end]);
+
+      const laneHeight = 16;
+      const topMargin = 0;
+      const svgHeight = 200;
+
+      return (
+          
+          <svg className="w-full zoomable" width={width} height={svgHeight}>
+            <g>
+              {layout.placed.map((p) => {
+                const textY = topMargin + p.lane * laneHeight + 12;
+                const centerX = width / 2;
+                const delta = Math.abs(p.anchorX - centerX);
+                const anchor: 'start' | 'middle' | 'end' = delta < width * 0.05
+                  ? 'middle'
+                  : (p.anchorX < centerX ? 'end' : 'start');
+                const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0;
+                return (
+                  <g
+                    key={`topics-${p.id}`}
+                    style={{ transition: "transform 300ms ease-in-out", transform: `translate(0px, ${textY}px)` }}
+                  >
+                    <text
+                      x={p.anchorX}
+                      y={0}
+                      textAnchor={anchor}
+                      dx={dx}
+                      className={p.isActive ? "text-[10px] fill-yellow-300 opacity-100" : "text-[10px] fill-white opacity-90"}
+                    >
+                      {p.topic}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+            <g>
+            {(() => {
+              const baseY = svgHeight - 2;
+              const apexY = 2;
+              const s = Math.max(1, baseY - apexY);
+              const R = (s / 2) + (width * width) / (8 * s);
+              const rx = R;
+              const ry = R;
+              const shiftDown = 200;
+              return (
+                <path
+                  d={`M 0,${shiftDown} A ${rx} ${ry} 0 0 1 ${width},${shiftDown}`}
+                  stroke="rgba(156,163,175,0.1)"
+                  strokeWidth={10}
+                  fill="none"
+                />
+              );
+            })()}
+            </g>
+          </svg>
       );
     },
   } as Layer;
