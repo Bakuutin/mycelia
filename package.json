@@ -55,6 +55,7 @@
     "jsonwebtoken": "^9.0.2",
     "kafkajs": "^2.2.4",
     "keytar": "^7.9.0",
+    "leaflet": "^1.9.4",
     "lodash": "^4.17.21",
     "lucide-react": "^0.475.0",
     "luxon": "^3.6.1",

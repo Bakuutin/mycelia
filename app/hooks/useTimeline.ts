@@ -78,7 +78,6 @@ export function useTimeline() {
       const svg = d3.select(this);
       svg.call(zoomBehavior as any);
       svg.property("__zoom", transform);
-      svg.property("__zoom_behavior", zoomBehavior);
     });
 
     return () => {

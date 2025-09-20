@@ -100,22 +100,12 @@ export const AudioLayer: () => Layer = () => {
       const { items } = useAudioItems(start, end, resolution);
       React.useEffect(() => {
         if (!autoCenter || !currentDate) return;
-        const svgs = (globalThis as any).d3?.selectAll?.(".zoomable");
-        if (!svgs) return;
-        svgs.each(function (this: SVGSVGElement) {
-          const svg = (globalThis as any).d3.select(this as SVGSVGElement);
-          const behavior = svg.property("__zoom_behavior");
-          const currentTransform = svg.property("__zoom") as any;
-          if (!behavior || !currentTransform) return;
-
-          const scaleX = transform.rescaleX(scale);
-          const centerX = scaleX(currentDate);
-          const widthPx = this.clientWidth || 0;
-          const dx = widthPx / 2 - centerX;
-          const newTransform = currentTransform.translate(dx, 0);
-          svg.call(behavior.transform, newTransform);
-        });
-      }, [autoCenter, currentDate, transform, scale]);
+        const duration = end.getTime() - start.getTime();
+        const half = duration / 2;
+        const newStart = new Date(currentDate.getTime() - half);
+        const newEnd = new Date(currentDate.getTime() + half);
+        setRange(newStart, newEnd);
+      }, [autoCenter, currentDate]);
 
       return (
         <svg

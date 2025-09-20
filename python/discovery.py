@@ -19,6 +19,7 @@ import pytz
 import shutil
 import stat
 import humanize
+from tqdm import tqdm
 from contextlib import contextmanager
 import paramiko
 from chunking import get_tmp_dir
@@ -216,7 +217,14 @@ class SshFilesystemImporter(FilesystemImporter):
             local_path = os.path.join(local_dir, os.path.basename(remote_path))
             with self.clients() as (ssh, sftp):
                 print(f"Downloading {humanize.naturalsize(source['size'])} from {self.host}")
-                sftp.get(remote_path, local_path)
+                total_size = int(source.get("size") or 0)
+                description = os.path.basename(remote_path)
+                with tqdm(total=total_size if total_size > 0 else None, unit='B', unit_scale=True, desc=f"{self.host}:{description}") as progress_bar:
+                    def handle_progress(transferred, total):
+                        if progress_bar.total != total and total:
+                            progress_bar.total = total
+                        progress_bar.update(transferred - progress_bar.n)
+                    sftp.get(remote_path, local_path, callback=handle_progress)
             local_source = deepcopy(source)
             local_source["path"] = local_path
             super().upload(local_source)
