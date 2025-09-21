@@ -1,5 +1,6 @@
 import { Layer, LayerComponentProps, Tool } from "@/core.ts";
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import * as d3 from "d3";
 
 import { AudioPlayer, useDateStore } from "./player.tsx";
 import { TimelineItems } from "./TimelineItems.tsx";
@@ -372,6 +373,7 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
   const { height = 80 } = options;
 
   const Component: React.FC<LayerComponentProps> = ({ width, scale, transform }) => {
+
     const newScale = useMemo(() => transform.rescaleX(scale), [transform, scale]);
     const calibration = useMemo(() => {
       const [s, e] = newScale.domain();
@@ -382,12 +384,26 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
       const xCenter = (xStart + xEnd) / 2;
       const a = (xEnd - xStart) / Math.max(1, tEnd - tStart);
       return { xCenter, a };
-    }, [newScale]);
+    }, [width, scale, transform]);
+
+
+    const delta = 23003609127040;
+    const  { start: flatStart, end: flatEnd } = useTimelineRange();
+    const centerMs = (flatStart.getTime() + flatEnd.getTime()) / 2;
+    const { start, end } = {
+      start: new Date(centerMs - delta),
+      end: new Date(centerMs + delta),
+    }
+    const items5 = useAudioItems(start, end, "5min").items;
+    const items1h = useAudioItems(start, end, "1hour").items;
+    const items1d = useAudioItems(start, end, "1day").items;
+    const items1w = useAudioItems(start, end, "1week").items;
+
     const K = 24;
     const [maxExp, setMaxExp] = React.useState<number>(10.5);
     const [isSettingsOpen, setIsSettingsOpen] = React.useState<boolean>(false);
     const [showLogToLinearDirection, setShowLogToLinearDirection] = React.useState<boolean>(false);
-    const [downPower, setDownPower] = React.useState<[number, number, number]>([0.4, 2.8, 10]);
+    const [downPower, setDownPower] = React.useState<[number, number, number]>([0.4, 2.1, 10]);
 
     const moveDown = useMemo(() => {
       const [a, b, c] = downPower;
@@ -409,8 +425,8 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
         { id: "6hours", label: "6h", ms: 6 * 60 * minute },
         { id: "1day", label: "1d", ms: dayMs },
         { id: "1week", label: "1w", ms: 7 * dayMs },
-        { id: "1month", label: "1mo", ms: 30 * dayMs },
-        { id: "6months", label: "6mo", ms: 180 * dayMs },
+        { id: "1month", label: "1m", ms: 30 * dayMs },
+        { id: "6months", label: "6m", ms: 180 * dayMs },
         { id: "2year", label: "2y", ms: 2 * 365 * dayMs },
         { id: "10years", label: "10y", ms: 10 * 365 * dayMs },
         { id: "100years", label: "100y", ms: 100 * 365 * dayMs },
@@ -427,7 +443,7 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
         if (xPosPlus >= 0 && xPosPlus <= width) out.push({ id: `${s.id}-pos`, x: xPosPlus, label: s.label });
       }
       return out.filter((o) => Math.abs(o.x - width / 2) > 10);
-    }, [calibration, width, specialDurations]);
+    }, [width, specialDurations, calibration]);
 
     const specialBlueDots = useMemo(() => {
       const middle = width / 2;
@@ -476,7 +492,58 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
         });
       });
       return results;
-    }, [calibration, width, moveDown]);
+    }, [width, moveDown]);
+
+    const colorScale = useMemo(() => d3.scaleSequential<string>()
+      .domain([-15, -2])
+      .interpolator(d3.interpolateRdYlBu), []);
+
+    const getFill = useCallback((item: any) => {
+      const seconds = Math.max(1e-6, item.totals.seconds);
+      const density = (item.totals.audio_chunks?.has_speech || 0.1) / seconds;
+      return colorScale(Math.log(density));
+    }, [colorScale]);
+
+    const getPattern = useCallback((item: any) => {
+      if (item.stale) return "url(#stale-stripes)";
+      return getFill(item);
+    }, [getFill]);
+
+    const spanMs = useMemo(() => Math.max(1, end.getTime() - start.getTime()), [start, end]);
+    const chooseResolutionForMs = useCallback((ms: number) => {
+      const minute = 60 * 1000;
+      const hour = 60 * minute;
+      const day = 24 * hour;
+      const dist = Math.abs(ms - centerMs);
+      const t1 = hour * 1;
+      const t2 = day * 1;
+      const t3 = day * 10;
+      if (dist <= t1) return "5min" as const;
+      if (dist <= t2) return "1hour" as const;
+      if (dist <= t3) return "1day" as const;
+      return "1week" as const;
+    }, [centerMs, spanMs]);
+    const selectedItems = useMemo(() => {
+      const pick = (list: any[], tag: "5min" | "1hour" | "1day" | "1week") =>
+        list.filter((it) => chooseResolutionForMs((it.start.getTime() + it.end.getTime()) / 2) === tag);
+      return [
+        ...pick(items5, "5min"),
+        ...pick(items1h, "1hour"),
+        ...pick(items1d, "1day"),
+        ...pick(items1w, "1week"),
+      ];
+    }, [items5, items1h, items1d, items1w, chooseResolutionForMs]);
+    const middle = width / 2;
+    const c = useMemo(() => (2 * maxExp) / K, [maxExp]);
+    const indexFromMs = useCallback((ms: number) => {
+      const delta = ms - centerMs;
+      const absSec = Math.max(1, Math.abs(delta) / 1000);
+      const v = Math.log10(absSec) / Math.max(1e-9, c);
+      const sign = delta >= 0 ? 1 : -1;
+      return sign * v;
+    }, [centerMs, c]);
+
+    const midText = centerMs;
 
     return (
       <svg width={width} height={height} className="overflow-visible">
@@ -484,6 +551,10 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
           <marker id="arrowWhite" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#FFFFFF" />
           </marker>
+          <pattern id="stale-stripes" patternUnits="userSpaceOnUse" width="4" height="4">
+            <rect width="4" height="4" fill="pink" opacity="1" />
+            <path d="M-1,1 l2,-2 M0,4 l4,-4 M3,5 l2,-2" stroke="rgb(255,20,147)" strokeWidth="0.5" />
+          </pattern>
         </defs>
         <g>
 
@@ -495,10 +566,40 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
             ))
           }
           {
+            (() => {
+              const lineGen = d3.line<[number, number]>()
+                .x((p) => p[0])
+                .y((p) => p[1])
+                .curve(d3.curveMonotoneX);
+              const buildPath = (iStart: number, iEnd: number, yOffset: number) => {
+                const steps = Math.max(2, Math.ceil(Math.abs(iEnd - iStart) * 6));
+                const pts: [number, number][] = [];
+                for (let s = 0; s < steps; s++) {
+                  const t = steps === 1 ? 0 : s / (steps - 1);
+                  const i = iStart + (iEnd - iStart) * t;
+                  const x = middle + (width * i) / K;
+                  const y = moveDown(i) + yOffset;
+                  pts.push([x, y]);
+                }
+                return lineGen(pts) || "";
+              };
+              return selectedItems.map((item: any) => {
+                const i0 = indexFromMs(item.start.getTime());
+                const i1 = indexFromMs(item.end.getTime());
+                const pathMain = buildPath(i0, i1, 12);
+                return (
+                  <g key={`log-item-${item.id}`}>
+                    <path d={pathMain} fill="none" stroke={getPattern(item)} strokeWidth={10} strokeLinecap="butt" className="timeline-item" />
+                  </g>
+                );
+              });
+            })()
+          }
+          {
             specialBlueDots.map((b) => (
               <g key={`b-${b.id}`}>
                 {(() => {
-                  const xLinear = calibration.xCenter + calibration.a * (b.sign * b.ms);
+                  const xLinear = width / 2;
                   const dx = xLinear - b.x;
                   const dy = 0 - b.y;
                   const len = Math.hypot(dx, dy) || 1;
@@ -521,7 +622,7 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
                   );
                 })()}
                 <circle cx={b.x} cy={b.y} r={2} fill="#999" />
-                <text x={b.x} y={b.y - 6} textAnchor="middle" dominantBaseline="baseline" fontSize="10px" fill="white">{b.ms !== 0 && b.label}</text>
+                <text x={b.x} y={b.y - 6} textAnchor="middle" dominantBaseline="baseline" fontSize="10px" fill="white">{b.ms == 0 ? midText : b.label}</text>
               </g>
             ))
           }

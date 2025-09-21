@@ -26,6 +26,7 @@ export interface TimelineRangeStore {
   setRange: (start: Date, end: Date) => void;
   reset: () => void;
   duration: number;
+  center: Date;
   autoCenter: boolean;
   setAutoCenter: (enabled: boolean) => void;
   toggleAutoCenter: () => void;
@@ -82,6 +83,10 @@ export const useTimelineRange = create<TimelineRangeStore>((set: any) => {
         start: new Date(),
         end: new Date(),
       }),
+
+    get center() {
+      return new Date((this.start.getTime() + this.end.getTime()) / 2);
+    },
 
     get duration() {
       return this.end.getTime() - this.start.getTime();

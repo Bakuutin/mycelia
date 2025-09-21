@@ -66,6 +66,9 @@ type AudioCacheStore = {
       requestedAt: Date;
     };
   };
+  hasGlobalPrefetch: boolean;
+  pendingByResolution: Partial<Record<Resolution, LoadedRange[]>>;
+  schedulerActive: Partial<Record<Resolution, boolean>>;
   addData: (
     resolution: Resolution,
     range: LoadedRange,
@@ -81,11 +84,17 @@ type AudioCacheStore = {
     start: Timestamp,
     end: Timestamp,
   ) => void;
+  prefetchAroundCenter: (
+    center: Timestamp,
+  ) => void;
 };
 
 export const useAudioCache = create<AudioCacheStore>((set, get) => ({
   data: {},
   inFlightRequests: {},
+  hasGlobalPrefetch: false,
+  pendingByResolution: {},
+  schedulerActive: {},
 
   addData: (resolution, range, items = []) => {
     const existing = get().data[resolution] ?? {
@@ -130,31 +139,59 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
   },
 
   fetchMissingRanges: (resolution, start, end) => {
-    const missingRanges = get().getMissingRanges(resolution, start, end);
-    if (missingRanges.length === 0) return;
-
-    // Add missing ranges to in-flight requests
-    const existing = get().inFlightRequests[resolution];
-    const currentInFlight = existing?.ranges ?? [];
-    const newRanges = mergeRanges([...currentInFlight, ...missingRanges]);
-
+    const pending = get().pendingByResolution[resolution] ?? [];
+    const nextPending = mergeRanges([...pending, { start, end }]);
     set((state) => ({
-      inFlightRequests: {
-        ...state.inFlightRequests,
-        [resolution]: {
-          ranges: newRanges,
-          requestedAt: new Date(),
-        },
+      pendingByResolution: {
+        ...state.pendingByResolution,
+        [resolution]: nextPending,
       },
     }));
 
-    // Fetch each missing range
-    for (const range of missingRanges) {
-      void fetch(
-        `/data/audio/items?start=${range.start}&end=${range.end}&resolution=${resolution}`,
-      )
-        .then((res) => res.json())
-        .then((data) => {
+    if (get().schedulerActive[resolution]) return;
+    set((state) => ({ schedulerActive: { ...state.schedulerActive, [resolution]: true } }));
+
+    const DEBOUNCE_MS = 250;
+    setTimeout(() => {
+      const pendingNow = get().pendingByResolution[resolution] ?? [];
+      if (pendingNow.length === 0) {
+        set((state) => ({ schedulerActive: { ...state.schedulerActive, [resolution]: false } }));
+        return;
+      }
+
+      const minStart = Math.min(...pendingNow.map((r) => r.start));
+      const maxEnd = Math.max(...pendingNow.map((r) => r.end));
+
+      set((state) => ({
+        pendingByResolution: { ...state.pendingByResolution, [resolution]: [] },
+        schedulerActive: { ...state.schedulerActive, [resolution]: false },
+      }));
+
+      const missingRanges = get().getMissingRanges(resolution, minStart, maxEnd);
+      if (missingRanges.length === 0) return;
+
+      const existing = get().inFlightRequests[resolution];
+      const currentInFlight = existing?.ranges ?? [];
+      const newRanges = mergeRanges([...currentInFlight, ...missingRanges]);
+
+      set((state) => ({
+        inFlightRequests: {
+          ...state.inFlightRequests,
+          [resolution]: {
+            ranges: newRanges,
+            requestedAt: new Date(),
+          },
+        },
+      }));
+
+      const queue = [...missingRanges];
+      const MAX = 5;
+      const runOne = async () => {
+        const range = queue.shift();
+        if (!range) return;
+        try {
+          const res = await fetch(`/data/audio/items?start=${range.start}&end=${range.end}&resolution=${resolution}`);
+          const data = await res.json();
           const store = get();
           store.addData(
             resolution,
@@ -168,13 +205,10 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
               topics: item.topics,
             })),
           );
-
-          // Remove from in-flight requests
           const existing = store.inFlightRequests[resolution];
           const updatedRanges = existing?.ranges?.filter(
             (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
-
           set((state) => {
             const next = { ...state.inFlightRequests } as typeof state.inFlightRequests;
             if (updatedRanges.length > 0) {
@@ -187,17 +221,13 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
             }
             return { inFlightRequests: next };
           });
-        })
-        .catch((error) => {
+        } catch (error) {
           console.error("Failed to fetch audio data:", error);
-
-          // Remove from in-flight requests on error
           const store = get();
           const existing = store.inFlightRequests[resolution];
           const updatedRanges = existing?.ranges?.filter(
             (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
-
           set((state) => {
             const next = { ...state.inFlightRequests } as typeof state.inFlightRequests;
             if (updatedRanges.length > 0) {
@@ -210,7 +240,39 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
             }
             return { inFlightRequests: next };
           });
-        });
+        }
+        await runOne();
+      };
+      void (async () => {
+        const workers = new Array(Math.min(MAX, queue.length)).fill(0).map(() => runOne());
+        await Promise.all(workers);
+      })();
+    }, DEBOUNCE_MS);
+  },
+
+  prefetchAroundCenter: (center) => {
+    if (get().hasGlobalPrefetch) return;
+    set({ hasGlobalPrefetch: true });
+    const RESOLUTION_MS: Record<Resolution, number> = {
+      "5min": 5 * 60 * 1000,
+      "1hour": 60 * 60 * 1000,
+      "1day": 24 * 60 * 60 * 1000,
+      "1week": 7 * 24 * 60 * 1000,
+    };
+    const resolutions: Resolution[] = ["5min", "1hour", "1day", "1week"];
+    const coarsest: Resolution = "1week";
+
+    const endAll = Date.now() + RESOLUTION_MS[coarsest];
+    get().fetchMissingRanges(coarsest, 0, endAll);
+
+    for (const res of resolutions) {
+      // if (res === coarsest) continue;
+      const unit = RESOLUTION_MS[res];
+      const totalWindow = 1000 * unit;
+      const half = Math.floor(totalWindow / 2);
+      const s = center - half;
+      const e = center + half;
+      get().fetchMissingRanges(res, s, e);
     }
   },
 }));
@@ -219,6 +281,7 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
   const {
     data,
     fetchMissingRanges,
+    prefetchAroundCenter,
   } = useAudioCache();
 
   const debouncedFetchMissingRanges = useCallback(
@@ -230,6 +293,8 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
 
   useEffect(() => {
     debouncedFetchMissingRanges(resolution, start.getTime(), end.getTime());
+    const center = Math.floor((start.getTime() + end.getTime()) / 2);
+    prefetchAroundCenter(center);
   }, [resolution, start.getTime(), end.getTime()]);
 
   const filteredItems = data[resolution]?.items.filter(
