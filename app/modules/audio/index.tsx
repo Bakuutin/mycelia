@@ -303,25 +303,7 @@ export const TopicsLayer: () => Layer = () => {
                 );
               })}
             </g>
-            <g>
-            {(() => {
-              const baseY = svgHeight - 2;
-              const apexY = 2;
-              const s = Math.max(1, baseY - apexY);
-              const R = (s / 2) + (width * width) / (8 * s);
-              const rx = R;
-              const ry = R;
-              const shiftDown = 200;
-              return (
-                <path
-                  d={`M 0,${shiftDown} A ${rx} ${ry} 0 0 1 ${width},${shiftDown}`}
-                  stroke="rgba(156,163,175,0.1)"
-                  strokeWidth={10}
-                  fill="none"
-                />
-              );
-            })()}
-            </g>
+            
           </svg>
       );
     },

@@ -18,9 +18,9 @@ export const config: Config = {
     TranscriptLayer(),
     TimeLayer({ formatter: SiFormatter }),
     TimeLayer(),
-    MapLayer({ height: 80, curvatureK: 2, gridLines: 8 }),
     AudioLayer(),
-    TopicsLayer(),
+    MapLayer({ height: 80, curvatureK: 2, gridLines: 8 }),
+    // TopicsLayer(),
   ],
   tools: [
     AudioPlayerTool,

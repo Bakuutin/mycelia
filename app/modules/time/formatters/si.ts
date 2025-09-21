@@ -17,7 +17,7 @@ const SI_PREFIXES = [
   { value: 1e30, symbol: "Qs", power: 30, unit: "quettasecond" },
 ].reverse();
 
-const formatDuration = (ms: number): React.ReactNode[] => {
+export const formatDuration = (ms: number): React.ReactNode[] => {
   const isNegative = ms < 0;
   const seconds = Math.abs(ms / 1000);
   const segments: React.ReactNode[] = [];
