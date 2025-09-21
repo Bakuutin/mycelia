@@ -22,6 +22,8 @@ export const MapLayer: (options?: MapLayerOptions) => Layer = (
     const linear = Array.from({ length: K+1 }, (_, i) => -K/2 + i);
 
     
+
+
     
     return (
       <svg width={width} height={height} className="zoomable overflow-visible">

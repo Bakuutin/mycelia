@@ -10,6 +10,7 @@ import {
   DateTimePickerTool,
   TopicsLayer,
   AutoCenterTool,
+  CurvedTimeLayer,
 } from "@/modules/audio/index.tsx";
 
 
@@ -17,9 +18,8 @@ export const config: Config = {
   layers: [
     TranscriptLayer(),
     TimeLayer({ formatter: SiFormatter }),
-    TimeLayer(),
     AudioLayer(),
-    MapLayer({ height: 80, curvatureK: 2, gridLines: 8 }),
+    CurvedTimeLayer({ height: 80 }),
     // TopicsLayer(),
   ],
   tools: [
