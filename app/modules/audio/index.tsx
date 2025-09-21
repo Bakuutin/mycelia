@@ -316,28 +316,51 @@ export const TopicsLayer: () => Layer = () => {
 
 
 
+/**
+ * Layer that renders an exponentially spaced time grid.
+ * Labels indicate durations using formatDuration: past on the left, future on the right, center at 0s.
+ */
 export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
   options = {},
 ) => {
   const { height = 80 } = options;
 
-  const Component: React.FC<LayerComponentProps> = ({ scale, transform, width }) => {
+  const Component: React.FC<LayerComponentProps> = ({ width, scale, transform }) => {
+    const newScale = transform.rescaleX(scale);
     const middle = width / 2;
+    const [start, end] = newScale.domain();
+    const middleTS: number = (start.getTime() + end.getTime()) / 2;
     const K = 14;
     const linear = Array.from({ length: K+1 }, (_, i) => -K/2 + i);
   
     return (
-      <svg width={width} height={height} className="zoomable overflow-visible">
+      <svg width={width} height={height} className="overflow-visible">
         <g>
           {
-            linear.map((i) => (
-              <g key={i.toString()} style={{ transform: `translateX(${middle + width * i / K}px)` }}> 
-                <line y1={0} y2={10 + i*i} stroke="#E5E7EB" strokeWidth={1} fill="none" />
-                <text y={20 + i*i} textAnchor="middle" dominantBaseline="hanging" fontSize="12px" fill="#E5E7EB">
-                  {formatDuration(1000 * (10**Math.abs(i)) * Math.sign(i))}
-                </text>
-              </g>
-            ))
+            linear.map((i) => {
+              const duration = 1000 * (10**Math.abs(i));
+              const linearX = newScale(new Date(middleTS + duration * Math.sign(i)));
+              const logX = middle + width * i / K;
+              const origin = [logX, 10 + i*i];
+              const target = [linearX, 0];
+              const dx = target[0] - origin[0];
+              const dy = target[1] - origin[1];
+              let length = Math.abs(dx) + Math.abs(dy);
+              if (length < 1000) {
+                length = Math.sqrt(dx * dx + dy * dy);
+              }
+              const lineLen = 10;
+              const unitVector = [dx / length, dy / length];
+              
+              return (
+                <g key={i.toString()}> 
+                  <line x1={origin[0]} x2={origin[0] + unitVector[0] * lineLen} y1={origin[1]} y2={origin[1] + unitVector[1] * lineLen} stroke="#E5E7EB" strokeWidth={1} fill="none" />
+                  <text x={logX} y={20 + i*i} textAnchor="middle" dominantBaseline="hanging" fontSize="12px" fill="#E5E7EB">
+                    {formatDuration(duration * Math.sign(i))}
+                  </text>
+                </g>
+              )
+            })
           }
         </g>
       </svg>

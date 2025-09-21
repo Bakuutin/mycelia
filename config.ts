@@ -17,7 +17,7 @@ import {
 export const config: Config = {
   layers: [
     TranscriptLayer(),
-    TimeLayer({ formatter: SiFormatter }),
+    TimeLayer(),
     AudioLayer(),
     CurvedTimeLayer({ height: 80 }),
     // TopicsLayer(),
