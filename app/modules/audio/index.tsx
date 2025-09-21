@@ -9,11 +9,57 @@ import { useTimelineRange } from "@/stores/timelineRange.ts";
 import { PlayPauseButton } from "./PlayPauseButton.tsx";
 import GainSlider from "./GainSlider.tsx";
 import { useTranscripts } from "./useTranscripts.ts";
+import { Settings2 as Sliders } from "lucide-react";
+import { Button } from "@/components/ui/button.tsx";
 
 import { formatDuration } from "@/modules/time/formatters/si.ts";
 
 
 const day = 1000 * 60 * 60 * 24;
+
+const roundToSignificantSeconds = (ms: number, significantDigits = 1): number => {
+  if (ms === 0) return 0;
+  const sign = Math.sign(ms);
+  const secondsAbs = Math.abs(ms) / 1000;
+  const power = Math.floor(Math.log10(secondsAbs)) - (significantDigits - 1);
+  const factor = Math.pow(10, power);
+  const roundedSeconds = Math.round(secondsAbs / factor) * factor;
+  return sign * roundedSeconds * 1000;
+};
+
+const lambertW = (z: number, branch: 0 | -1 = 0): number => {
+  const negInvE = -1 / Math.E;
+  if (branch === 0 && z < negInvE) return NaN;
+  if (branch === -1 && (z < negInvE || z >= 0)) return NaN;
+  if (z === 0) return 0;
+  let w: number;
+  if (branch === 0) {
+    if (z < 1) {
+      w = z;
+    } else {
+      w = Math.log(z) - Math.log(Math.log(z));
+    }
+  } else {
+    if (z > -0.1) {
+      w = Math.log(-z);
+    } else {
+      w = Math.log(-z) - Math.log(-Math.log(-z));
+    }
+  }
+  const maxIter = 64;
+  const tol = 1e-12;
+  for (let i = 0; i < maxIter; i++) {
+    const ew = Math.exp(w);
+    const wew = w * ew;
+    const f = wew - z;
+    const denomBase = ew * (w + 1);
+    const denom = denomBase - (w + 2) * f / (2 * (w + 1));
+    const dw = f / denom;
+    w -= dw;
+    if (Math.abs(dw) <= tol * (1 + Math.abs(w))) break;
+  }
+  return w;
+};
 
 export const AudioPlayerTool: Tool = {
   component: () => {
@@ -35,12 +81,12 @@ export const GainTool: Tool = {
 export const DateTimePickerTool: Tool = {
   component: () => {
     const { currentDate, resetDate } = useDateStore();
-    
+
     const handleDateTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
       const newDate = new Date(event.target.value);
       resetDate(newDate);
     };
-    
+
     const formatDateTimeLocal = (date: Date | null) => {
       if (!date) return "";
       const year = date.getFullYear();
@@ -51,7 +97,7 @@ export const DateTimePickerTool: Tool = {
       const seconds = String(date.getSeconds()).padStart(2, '0');
       return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
     };
-    
+
     return (
       <input
         type="datetime-local"
@@ -167,7 +213,7 @@ export const TranscriptLayer: () => Layer = () => {
           el.scrollIntoView({ block: "nearest" });
         }
       }, [currentDate, transcripts.map((t) => t._id).join(",")]);
-      
+
       return (
         <div>
           <div
@@ -264,7 +310,7 @@ export const TopicsLayer: () => Layer = () => {
         let lane = 0;
 
         for (const c of candidates) {
-          placed.push({ ...c, lane  });
+          placed.push({ ...c, lane });
           lane++;
         }
 
@@ -277,37 +323,37 @@ export const TopicsLayer: () => Layer = () => {
       const svgHeight = 200;
 
       return (
-          
-          <svg className="w-full zoomable" width={width} height={svgHeight}>
-            <g>
-              {layout.placed.map((p) => {
-                const textY = topMargin + p.lane * laneHeight + 12;
-                const centerX = width / 2;
-                const delta = Math.abs(p.anchorX - centerX);
-                const anchor: 'start' | 'middle' | 'end' = delta < width * 0.05
-                  ? 'middle'
-                  : (p.anchorX < centerX ? 'end' : 'start');
-                const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0;
-                return (
-                  <g
-                    key={`topics-${p.id}`}
-                    style={{ transition: "transform 300ms ease-in-out", transform: `translate(0px, ${textY}px)` }}
+
+        <svg className="w-full zoomable" width={width} height={svgHeight}>
+          <g>
+            {layout.placed.map((p) => {
+              const textY = topMargin + p.lane * laneHeight + 12;
+              const centerX = width / 2;
+              const delta = Math.abs(p.anchorX - centerX);
+              const anchor: 'start' | 'middle' | 'end' = delta < width * 0.05
+                ? 'middle'
+                : (p.anchorX < centerX ? 'end' : 'start');
+              const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0;
+              return (
+                <g
+                  key={`topics-${p.id}`}
+                  style={{ transition: "transform 300ms ease-in-out", transform: `translate(0px, ${textY}px)` }}
+                >
+                  <text
+                    x={p.anchorX}
+                    y={0}
+                    textAnchor={anchor}
+                    dx={dx}
+                    className={p.isActive ? "text-[10px] fill-yellow-300 opacity-100" : "text-[10px] fill-white opacity-90"}
                   >
-                    <text
-                      x={p.anchorX}
-                      y={0}
-                      textAnchor={anchor}
-                      dx={dx}
-                      className={p.isActive ? "text-[10px] fill-yellow-300 opacity-100" : "text-[10px] fill-white opacity-90"}
-                    >
-                      {p.topic}
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-            
-          </svg>
+                    {p.topic}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+
+        </svg>
       );
     },
   } as Layer;
@@ -326,43 +372,257 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
   const { height = 80 } = options;
 
   const Component: React.FC<LayerComponentProps> = ({ width, scale, transform }) => {
-    const newScale = transform.rescaleX(scale);
-    const middle = width / 2;
-    const [start, end] = newScale.domain();
-    const middleTS: number = (start.getTime() + end.getTime()) / 2;
-    const K = 14;
-    const linear = Array.from({ length: K+1 }, (_, i) => -K/2 + i);
-  
+    const newScale = useMemo(() => transform.rescaleX(scale), [transform, scale]);
+    const calibration = useMemo(() => {
+      const [s, e] = newScale.domain();
+      const tStart = s.getTime();
+      const tEnd = e.getTime();
+      const xStart = newScale(s);
+      const xEnd = newScale(e);
+      const xCenter = (xStart + xEnd) / 2;
+      const a = (xEnd - xStart) / Math.max(1, tEnd - tStart);
+      return { xCenter, a };
+    }, [newScale]);
+    const K = 24;
+    const [maxExp, setMaxExp] = React.useState<number>(10.5);
+    const [isSettingsOpen, setIsSettingsOpen] = React.useState<boolean>(false);
+    const [showLogToLinearDirection, setShowLogToLinearDirection] = React.useState<boolean>(false);
+    const [downPower, setDownPower] = React.useState<[number, number, number]>([0.4, 2.8, 10]);
+
+    const moveDown = useMemo(() => {
+      const [a, b, c] = downPower;
+      // ax^b + c
+      return (i: number) => {
+        return 10 + a * Math.abs(i) ** b + c;
+      };
+    }, [downPower]);
+
+
+
+    const specialDurations = useMemo(() => {
+      const minute = 60 * 1000;
+      const dayMs = 24 * 60 * 60 * 1000;
+      return [
+        { id: "1min", label: "1m", ms: minute },
+        { id: "10min", label: "10m", ms: 10 * minute },
+        { id: "1hour", label: "1h", ms: 60 * minute },
+        { id: "6hours", label: "6h", ms: 6 * 60 * minute },
+        { id: "1day", label: "1d", ms: dayMs },
+        { id: "1week", label: "1w", ms: 7 * dayMs },
+        { id: "1month", label: "1mo", ms: 30 * dayMs },
+        { id: "6months", label: "6mo", ms: 180 * dayMs },
+        { id: "2year", label: "2y", ms: 2 * 365 * dayMs },
+        { id: "10years", label: "10y", ms: 10 * 365 * dayMs },
+        { id: "100years", label: "100y", ms: 100 * 365 * dayMs },
+        { id: "1000years", label: "1000y", ms: 1000 * 365 * dayMs },
+      ];
+    }, []);
+
+    const specialMarks = useMemo(() => {
+      const out: Array<{ id: string; x: number; label: string }> = [];
+      for (const s of specialDurations) {
+        const xPosPlus = calibration.xCenter + calibration.a * s.ms;
+        const xPosMinus = calibration.xCenter - calibration.a * s.ms;
+        if (xPosMinus >= 0 && xPosMinus <= width) out.push({ id: `${s.id}-neg`, x: xPosMinus, label: `-${s.label}` });
+        if (xPosPlus >= 0 && xPosPlus <= width) out.push({ id: `${s.id}-pos`, x: xPosPlus, label: s.label });
+      }
+      return out.filter((o) => Math.abs(o.x - width / 2) > 10);
+    }, [calibration, width, specialDurations]);
+
+    const specialBlueDots = useMemo(() => {
+      const middle = width / 2;
+      const c = (2 * maxExp) / K;
+      const out: Array<{ id: string; x: number; y: number; label: string; ms: number; sign: 1 | -1 }> = [];
+      for (const s of specialDurations) {
+        const v = Math.log10(Math.max(1, s.ms / 1000)) / Math.max(1e-9, c);
+        const maxIndex = K / 2;
+        if (v >= 0 && v <= maxIndex) {
+          const iPos = v;
+          const iNeg = -v;
+          const xPos = middle + (width * iPos) / K;
+          const yPos = moveDown(iPos);
+          const xNeg = middle + (width * iNeg) / K;
+          const yNeg = moveDown(iNeg);
+          out.push({ id: `${s.id}-pos`, x: xPos, y: yPos, label: s.label, ms: s.ms, sign: 1 });
+          out.push({ id: `${s.id}-neg`, x: xNeg, y: yNeg, label: `-${s.label}`, ms: s.ms, sign: -1 });
+        }
+      }
+      out.push({ id: `zero`, x: middle, y: moveDown(0), label: `0`, ms: 0, sign: 1 });
+      return out;
+    }, [width, maxExp, K, specialDurations, moveDown]);
+
+    const verticalDots = useMemo(() => {
+      const middle = width / 2;
+      const p = width / K;
+      const D = middle - calibration.xCenter;
+      const r = calibration.a * 1000;
+      const a = (2 * maxExp / K) * Math.log(10);
+      const results: Array<{ x: number; y: number; label: React.ReactNode[] }> = [];
+      ([-1, 1] as const).forEach((side) => {
+        const q = side * D;
+        const z = -(a * r / p) * Math.exp((-a * q) / p);
+        [0, -1].forEach((branch) => {
+          const W = lambertW(z, branch as 0 | -1);
+          if (!Number.isFinite(W)) return;
+          const v = -(1 / a) * W - q / p;
+          if (!Number.isFinite(v)) return;
+          if (v < 1) return;
+          const i = side * v;
+          const x = middle + (width * i) / K;
+          const y = moveDown(i);
+          const durationMs = 1000 * Math.exp(a * v) * side;
+          const label = formatDuration(roundToSignificantSeconds(durationMs, 1));
+          results.push({ x, y, label });
+        });
+      });
+      return results;
+    }, [calibration, width, moveDown]);
+
     return (
       <svg width={width} height={height} className="overflow-visible">
+        <defs>
+          <marker id="arrowWhite" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#FFFFFF" />
+          </marker>
+        </defs>
         <g>
+
           {
-            linear.map((i) => {
-              const duration = 1000 * (10**Math.abs(i));
-              const linearX = newScale(new Date(middleTS + duration * Math.sign(i)));
-              const logX = middle + width * i / K;
-              const origin = [logX, 10 + i*i];
-              const target = [linearX, 0];
-              const dx = target[0] - origin[0];
-              const dy = target[1] - origin[1];
-              let length = Math.abs(dx) + Math.abs(dy);
-              if (length < 1000) {
-                length = Math.sqrt(dx * dx + dy * dy);
-              }
-              const lineLen = 10;
-              const unitVector = [dx / length, dy / length];
-              
-              return (
-                <g key={i.toString()}> 
-                  <line x1={origin[0]} x2={origin[0] + unitVector[0] * lineLen} y1={origin[1]} y2={origin[1] + unitVector[1] * lineLen} stroke="#E5E7EB" strokeWidth={1} fill="none" />
-                  <text x={logX} y={20 + i*i} textAnchor="middle" dominantBaseline="hanging" fontSize="12px" fill="#E5E7EB">
-                    {formatDuration(duration * Math.sign(i))}
-                  </text>
-                </g>
-              )
-            })
+            specialMarks.map((m) => (
+              <g key={m.id}>
+                  <text x={m.x} y={-10} textAnchor="middle" dominantBaseline="hanging" fontSize="10px" fill="white" fontStyle="italic">{m.label}</text>
+              </g>
+            ))
+          }
+          {
+            specialBlueDots.map((b) => (
+              <g key={`b-${b.id}`}>
+                {(() => {
+                  const xLinear = calibration.xCenter + calibration.a * (b.sign * b.ms);
+                  const dx = xLinear - b.x;
+                  const dy = 0 - b.y;
+                  const len = Math.hypot(dx, dy) || 1;
+                  const ux = dx / len;
+                  const uy = dy / len;
+                  const tickLen = 10;
+                  return (
+                    <g>
+                      {
+                        showLogToLinearDirection && (
+                          <line x1={b.x} x2={b.x + ux * tickLen} y1={b.y} y2={b.y + uy * tickLen} stroke="#999" strokeWidth={1} markerEnd="url(#arrowWhite)" />
+                        )
+                      }
+                      {
+                        len > 10 && len < 1000 && Math.abs(b.x + ux * len - width / 2) > 30 &&(
+                          <line x1={b.x} x2={b.x + ux * len} y1={b.y} y2={0} stroke="#999" opacity={0.5} strokeWidth={1} strokeDasharray="1 9" />
+                        )
+                      }
+                    </g>
+                  );
+                })()}
+                <circle cx={b.x} cy={b.y} r={2} fill="#999" />
+                <text x={b.x} y={b.y - 6} textAnchor="middle" dominantBaseline="baseline" fontSize="10px" fill="white">{b.ms !== 0 && b.label}</text>
+              </g>
+            ))
+          }
+          {
+            verticalDots.map((d, idx) => (
+              <g key={`vd-${idx}`}>
+                <circle cx={d.x} cy={d.y} r={2} fill="white" />
+                <circle cx={d.x} cy={-10} r={2} fill="white" />
+                <text x={d.x} y={d.y + 12} textAnchor="middle" dominantBaseline="hanging" fontSize="10px" fill="#999">{d.label}</text>
+              </g>
+            ))
           }
         </g>
+        {!isSettingsOpen && (
+          <foreignObject x={width - 50} y={0} width={50} height={50}>
+            <Button
+              onClick={() => setIsSettingsOpen(true)}
+              className="text-xs text-gray-500"
+            >
+              <Sliders />
+            </Button>
+          </foreignObject>
+        )}
+
+        {isSettingsOpen && (
+          <foreignObject x={Math.max(0, width - 240)} y={0} width={240} height={200}>
+            <div className="flex flex-col gap-2 text-[10px] text-gray-300 bg-black/30 px-2 py-4 rounded">
+              <div className="absolute top-0 right-0">
+                <button
+                  type="button"
+                  aria-label="Close settings"
+                  title="Close settings"
+                  className="p-3 text-xs rounded text-gray-200"
+                  onClick={() => setIsSettingsOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+              <span>maxExp {maxExp.toFixed(1)}</span>
+              <input
+                type="range"
+                min={2}
+                max={20}
+                step={0.1}
+                value={maxExp}
+                onChange={(e) => setMaxExp(parseFloat(e.target.value))}
+              />
+              <label className="flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={showLogToLinearDirection}
+                  onChange={(e) => setShowLogToLinearDirection(e.target.checked)}
+                />
+                <span>show log to linear direction</span>
+              </label>
+              <span>down power: a={downPower[0].toFixed(2)} b={downPower[1].toFixed(2)} c={downPower[2].toFixed(2)}</span>
+              <label className="flex items-center gap-1">
+                <span className="w-3 text-right">a</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={20}
+                  step={0.1}
+                  value={downPower[0]}
+                  onChange={(e) => {
+                    const nextA = parseFloat(e.target.value);
+                    setDownPower((prev) => [nextA, prev[1], prev[2]]);
+                  }}
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                <span className="w-3 text-right">b</span>
+                <input
+                  type="range"
+                  min={0.1}
+                  max={5}
+                  step={0.1}
+                  value={downPower[1]}
+                  onChange={(e) => {
+                    const nextB = parseFloat(e.target.value);
+                    setDownPower((prev) => [prev[0], nextB, prev[2]]);
+                  }}
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                <span className="w-3 text-right">c</span>
+                <input
+                  type="range"
+                  min={-50}
+                  max={50}
+                  step={0.5}
+                  value={downPower[2]}
+                  onChange={(e) => {
+                    const nextC = parseFloat(e.target.value);
+                    setDownPower((prev) => [prev[0], prev[1], nextC]);
+                  }}
+                />
+              </label>
+            </div>
+          </foreignObject>
+        )}
       </svg>
     );
   };

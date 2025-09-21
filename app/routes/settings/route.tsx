@@ -118,7 +118,7 @@ export default function Layout() {
       <div className="mx-auto w-full max-w-2xl space-y-6">
         <div className="flex items-baseline justify-between">
           <div className="text-xl font-semibold">Settings</div>
-          <div className="text-sm text-muted-foreground">{auth.principal}</div>
+          <div className="text-sm text-gray-400">{auth.principal}</div>
         </div>
 
         <Card>
@@ -152,7 +152,7 @@ export default function Layout() {
 
               {actionData?.created && (
                 <div className="rounded border bg-muted/40 p-3">
-                  <div className="text-xs text-muted-foreground mb-1">New key (copy now, it won’t be shown again)</div>
+                  <div className="text-xs text-gray-400 mb-1">New key (copy now, it won’t be shown again)</div>
                   <div className="text-sm font-mono break-all">{actionData.created}</div>
                 </div>
               )}
@@ -166,7 +166,7 @@ export default function Layout() {
           </CardHeader>
           <CardContent>
             {keys.length === 0 ? (
-              <div className="text-sm text-muted-foreground">No keys yet.</div>
+              <div className="text-sm text-gray-400">No keys yet.</div>
             ) : (
               <ul className="divide-y rounded border">
                 {keys.map((k, idx) => {
@@ -177,7 +177,7 @@ export default function Layout() {
                       <div className="flex items-center gap-3">
                         <div className="flex-1">
                           <div className="text-sm font-medium">{k.name}</div>
-                          <div className="text-xs text-muted-foreground">Prefix: {k.openPrefix} • {created}</div>
+                          <div className="text-xs text-gray-400">Prefix: {k.openPrefix} • {created}</div>
                         </div>
                         <div className={"text-xs mr-2 " + (k.isActive ? "text-emerald-600" : "text-red-500")}>
                           {k.isActive ? "Active" : "Revoked"}
