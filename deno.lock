@@ -94,6 +94,7 @@
     "npm:chokidar@^4.0.3": "4.0.3",
     "npm:class-variance-authority@~0.7.1": "0.7.1",
     "npm:clsx@^2.1.1": "2.1.1",
+    "npm:crossfilter2@^1.5.4": "1.5.4",
     "npm:cspell@*": "9.2.0",
     "npm:d3@7": "7.9.0_d3-selection@3.0.0",
     "npm:d3@^7.9.0": "7.9.0_d3-selection@3.0.0",
@@ -115,6 +116,7 @@
     "npm:kafkajs@^2.2.4": "2.2.4",
     "npm:keytar@^7.9.0": "7.9.0",
     "npm:leaflet@1.9.4": "1.9.4",
+    "npm:leaflet@^1.9.4": "1.9.4",
     "npm:lodash@^4.17.21": "4.17.21",
     "npm:lucide-react@0.475": "0.475.0_react@18.3.1",
     "npm:luxon@^3.6.1": "3.7.1",
@@ -2422,6 +2424,9 @@
     "@radix-ui/rect@1.1.1": {
       "integrity": "sha512-HPwpGIzkl28mWyZqG52jiqDJ12waP11Pa1lGoiyUkIEuMLBP0oeK/C89esbXrxsky5we7dfd8U58nm0SgAWpVw=="
     },
+    "@ranfdev/deepobj@1.0.2": {
+      "integrity": "sha512-FM3y6kfJaj5MCoAjdv24EDCTDbuFz+4+pgAunbjYfugwIE4O/xx8mPNji1n/ouG8pHCntSnBr1xwTOensF23Gg=="
+    },
     "@react-router/dev@7.7.0_react-router@7.7.0__react@18.3.1__react-dom@18.3.1___react@18.3.1_typescript@5.8.3_vite@6.3.5__@types+node@24.1.0__tsx@4.20.3__picomatch@4.0.3_@babel+core@7.28.0_react@18.3.1_react-dom@18.3.1__react@18.3.1_@types+node@24.1.0_tsx@4.20.3": {
       "integrity": "sha512-z6tJ0US20pS/YpaPz59SJgSH+1BJ6xvQmQ/u4Y4HM1uLOa4b3Mleg3KujqAvwGP5wkMkNFz3Ae2g6/kDTFyuCA==",
       "dependencies": [
@@ -4234,6 +4239,12 @@
         "path-key",
         "shebang-command",
         "which@2.0.2"
+      ]
+    },
+    "crossfilter2@1.5.4": {
+      "integrity": "sha512-oOGqOM0RocwQFOXJnEaUKqYV6Mc1TNCRv3LrNUa0QlofQTutGAXyQaLW1aGKLls2sfnbwBEtsa6tPD3jY+ycqQ==",
+      "dependencies": [
+        "@ranfdev/deepobj"
       ]
     },
     "cspell-config-lib@9.2.0": {
@@ -9496,6 +9507,7 @@
         "npm:chokidar@^4.0.3",
         "npm:class-variance-authority@~0.7.1",
         "npm:clsx@^2.1.1",
+        "npm:crossfilter2@^1.5.4",
         "npm:d3@^7.9.0",
         "npm:detect-libc@^2.0.4",
         "npm:eslint-import-resolver-typescript@^3.6.1",

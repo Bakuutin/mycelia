@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import _ from "lodash";
 import type { TimelineItem } from "@/types/timeline.ts";
 
@@ -307,3 +307,4 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
     items: filteredItems,
   };
 }
+
