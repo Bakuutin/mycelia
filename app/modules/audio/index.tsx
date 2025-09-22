@@ -3,7 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import * as d3 from "d3";
 
 import { AudioPlayer, useDateStore } from "./player.tsx";
-import { TimelineItems } from "./TimelineItems.tsx";
+import { TimelineItems, BucketedTimelineItems } from "./TimelineItems.tsx";
+import { useTimelineRangeIntegration } from "@/modules/ranges/index.ts";
 import { CursorLine } from "./cursorLine.tsx";
 import { useAudioItems } from "./useAudioItems.ts";
 import { useTimelineRange } from "@/stores/timelineRange.ts";
@@ -149,6 +150,8 @@ export const AudioLayer: () => Layer = () => {
       }, [start, end]);
 
       const { items } = useAudioItems(start, end, resolution);
+      const buckets = useTimelineRangeIntegration(items, resolution);
+      
       React.useEffect(() => {
         if (!autoCenter || !currentDate) return;
         const duration = end.getTime() - start.getTime();
@@ -179,10 +182,11 @@ export const AudioLayer: () => Layer = () => {
           }}
         >
           <g>
-            <TimelineItems
-              items={items as any}
+            <BucketedTimelineItems
+              buckets={buckets}
               scale={scale}
               transform={transform}
+              resolution={resolution}
             />
             {currentDate !== null && (
               <CursorLine
@@ -763,6 +767,7 @@ export const CurvedTopicsLayer: () => Layer = () => {
         }, [start, end]);
   
         const { items } = useAudioItems(start, end, resolution);
+        const buckets = useTimelineRangeIntegration(items, resolution);
   
         const newScale = transform.rescaleX(scale);
   
