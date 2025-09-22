@@ -24,7 +24,7 @@ export const useTranscripts = (cursorDate: Date | null) => {
 
     inFlightBuckets.add(bucketKey);
 
-    const delta = 5 * 60 * 1000;
+    const delta = 25 * 60 * 1000;
     const startTime = new Date(cursorDate.getTime() - delta);
     const endTime = new Date(cursorDate.getTime() + delta);
 

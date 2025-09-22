@@ -11,16 +11,18 @@ import {
   TopicsLayer,
   AutoCenterTool,
   CurvedTimeLayer,
+  CurvedTopicsLayer,
 } from "@/modules/audio/index.tsx";
 
 
 export const config: Config = {
   layers: [
     TranscriptLayer(),
+    TopicsLayer(),
     TimeLayer(),
     AudioLayer(),
     CurvedTimeLayer({ height: 80 }),
-    // TopicsLayer(),
+    CurvedTopicsLayer(),
   ],
   tools: [
     AudioPlayerTool,

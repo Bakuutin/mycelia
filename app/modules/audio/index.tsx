@@ -13,7 +13,8 @@ import { useTranscripts } from "./useTranscripts.ts";
 import { Settings2 as Sliders } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 
-import { formatDuration } from "@/modules/time/formatters/si.ts";
+import { formatDuration as formatDurationSI } from "@/modules/time/formatters/si.ts";
+import { formatLabel as formatLabelGregorian } from "@/modules/time/formatters/gregorian.ts";
 
 
 const day = 1000 * 60 * 60 * 24;
@@ -161,7 +162,7 @@ export const AudioLayer: () => Layer = () => {
         <svg
           className="w-full h-full zoomable"
           width={width}
-          height={40}
+          height={35}
           onClick={(event) => {
             const svgElement = event.currentTarget;
             const rect = svgElement.getBoundingClientRect();
@@ -200,20 +201,20 @@ export const AudioLayer: () => Layer = () => {
 
 export const TranscriptLayer: () => Layer = () => {
   return {
-    component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { currentDate } = useDateStore();
+    component: () => {
+      const { currentDate, resetDate } = useDateStore();
       const { transcripts } = useTranscripts(currentDate);
       const containerRef = useRef<HTMLDivElement | null>(null);
       const itemRefs = useRef<Record<string, HTMLParagraphElement | null>>({});
-      useEffect(() => {
-        if (!currentDate) return;
-        const active = transcripts.find((t) => t.start <= currentDate && currentDate <= t.end);
-        if (!active) return;
-        const el = itemRefs.current[String(active._id)];
-        if (el && containerRef.current) {
-          el.scrollIntoView({ block: "nearest" });
-        }
-      }, [currentDate, transcripts.map((t) => t._id).join(",")]);
+      // useEffect(() => {
+      //   if (!currentDate) return;
+      //   const active = transcripts.find((t) => t.start <= currentDate && currentDate <= t.end);
+      //   if (!active) return;
+      //   const el = itemRefs.current[String(active._id)];
+      //   if (el && containerRef.current) {
+      //     el.scrollIntoView({ block: "nearest" });
+      //   }
+      // }, [currentDate, transcripts.map((t) => t._id).join(",")]);
 
       return (
         <div>
@@ -243,7 +244,9 @@ export const TranscriptLayer: () => Layer = () => {
                       className={cls}
                     >
                       {transcript.segments.map((segment, idx) => (
-                        <span key={idx}>{segment.text}</span>
+                        <span onClick={() => {
+                          resetDate(new Date(segment.start));
+                        }} key={idx}>{segment.text}</span>
                       ))}
                     </p>
                   </div>
@@ -257,109 +260,105 @@ export const TranscriptLayer: () => Layer = () => {
   } as Layer;
 };
 
+
+
 export const TopicsLayer: () => Layer = () => {
   return {
-    component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { start, end } = useTimelineRange();
+    component: ({ width }: LayerComponentProps) => {
+      let { start, end } = useTimelineRange();
       const { currentDate } = useDateStore();
+      const centerMs = currentDate ? currentDate.getTime() : (start.getTime() + end.getTime()) / 2;
+      start = new Date(centerMs - 1000 * 60 * 30);
+      end = new Date(centerMs + 1000 * 60 * 30);
 
-      const resolution = useMemo(() => {
-        const duration = end.getTime() - start.getTime();
-        if (duration > 300 * day) {
-          return "1week";
-        } else if (duration > 50 * day) {
-          return "1day";
-        } else if (duration > day) {
-          return "1hour";
-        } else {
-          return "5min";
-        }
-      }, [start, end]);
+      const resolution = "5min";
 
       const { items } = useAudioItems(start, end, resolution);
 
-      const newScale = transform.rescaleX(scale);
+      const sToShift = (s: any) => {
+        return (s.ts - centerMs) / 100 / (s.siblingCount) + width / 2;
+      };
+
 
       const layout = useMemo(() => {
-        const viewCenterMs = (start.getTime() + end.getTime()) / 2;
-        const halfWindowSec = Math.max(1, (end.getTime() - start.getTime()) / 2000);
-        const candidates = items
+        return items
           .filter((i) => (i.topics?.length ?? 0) > 0)
           .flatMap((i) => {
             const topics = i.topics || [];
             const startMs = i.start.getTime();
-            const endMs = i.end.getTime();
-            const durationMs = Math.max(1, endMs - startMs);
-            const segmentMs = durationMs / topics.length;
+            const segmentMs = startMs + 2.5 * 60 * 100;
             return topics.map((topic, idx) => {
               const segStartMs = startMs + idx * segmentMs;
-              const segEndMs = segStartMs + segmentMs;
-              const segMidMs = segStartMs + segmentMs / 2;
-              const anchorX = newScale(new Date(segMidMs));
-              const distanceSec = Math.abs(segMidMs - viewCenterMs) / 1000;
-              const normalizedDistance = Math.min(1, distanceSec / halfWindowSec);
-              const isActive = !!currentDate && currentDate.getTime() >= segStartMs && currentDate.getTime() <= segEndMs;
-              return { id: `${i.id}-${idx}`, anchorX, topic, isActive, normalizedDistance };
+              const seg = { id: `${i.id}-${idx}`,ts: segStartMs, topic, siblingCount: topics.length, idx };
+              return { ...seg, x: sToShift(seg)};
             });
           })
-          .sort((a, b) => a.normalizedDistance - b.normalizedDistance || a.anchorX - b.anchorX);
+      }, [items, currentDate, centerMs ]);
 
-        const laneEnds: number[] = [];
-        const placed: Array<any> = [];
-
-
-        let lane = 0;
-
-        for (const c of candidates) {
-          placed.push({ ...c, lane });
-          lane++;
-        }
-
-        const lanes = laneEnds.length;
-        return { placed, lanes };
-      }, [items, newScale, width, currentDate, start, end]);
-
-      const laneHeight = 16;
-      const topMargin = 0;
-      const svgHeight = 200;
+      const baselineY = 14;
 
       return (
 
-        <svg className="w-full zoomable" width={width} height={svgHeight}>
-          <g>
-            {layout.placed.map((p) => {
-              const textY = topMargin + p.lane * laneHeight + 12;
-              const centerX = width / 2;
-              const delta = Math.abs(p.anchorX - centerX);
+        <div className="relative h-[28px]">
+            {layout.map((p) => {
+              const referenceX = width / 2;
+              const delta = Math.abs(p.x - referenceX);
               const anchor: 'start' | 'middle' | 'end' = delta < width * 0.05
                 ? 'middle'
-                : (p.anchorX < centerX ? 'end' : 'start');
-              const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0;
+                : (p.x < referenceX ? 'end' : 'start');
               return (
-                <g
+                <span
                   key={`topics-${p.id}`}
-                  style={{ transition: "transform 300ms ease-in-out", transform: `translate(0px, ${textY}px)` }}
+                  style={{
+                    transform: `translate(${p.x}px, ${baselineY}px)`,
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    width: '100%',
+                    height: '30px',
+                }}
+                  className="text-[10px] fill-white opacity-90"
                 >
-                  <text
-                    x={p.anchorX}
-                    y={0}
-                    textAnchor={anchor}
-                    dx={dx}
-                    className={p.isActive ? "text-[10px] fill-yellow-300 opacity-100" : "text-[10px] fill-white opacity-90"}
-                  >
-                    {p.topic}
-                  </text>
-                </g>
+                  {p.idx === 0 && (
+                    <span className="text-yellow-600">{
+                      new Date(p.ts).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" })
+                    }</span>
+                  )} {p.topic}
+                </span>
               );
             })}
-          </g>
-
-        </svg>
+        </div>
       );
     },
   } as Layer;
 };
 
+
+
+
+
+
+
+const MidText = ({ date }: { date: Date }) => {
+  const [first, ...rest] = formatLabelGregorian(date);
+  return (
+    <foreignObject
+      width={150}
+      height="40px"
+      className="overflow-visible"
+      x={-75}
+    >
+      <div className="flex flex-col-reverse h-full">
+        <p className="text-center text-xs">{first}</p>
+        {rest.length > 0 && (
+          <div className="mx-auto text-center text-xs flex flex-row-reverse gap-1">
+            {rest.map((segment, i) => <span key={i}>{segment}</span>)}
+          </div>
+        )}
+      </div>
+    </foreignObject>
+);
+}
 
 
 
@@ -442,7 +441,7 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
         if (xPosMinus >= 0 && xPosMinus <= width) out.push({ id: `${s.id}-neg`, x: xPosMinus, label: `-${s.label}` });
         if (xPosPlus >= 0 && xPosPlus <= width) out.push({ id: `${s.id}-pos`, x: xPosPlus, label: s.label });
       }
-      return out.filter((o) => Math.abs(o.x - width / 2) > 10);
+      return out.filter((o) => Math.abs(o.x - width / 2) > 70);
     }, [width, specialDurations, calibration]);
 
     const specialBlueDots = useMemo(() => {
@@ -487,12 +486,12 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
           const x = middle + (width * i) / K;
           const y = moveDown(i);
           const durationMs = 1000 * Math.exp(a * v) * side;
-          const label = formatDuration(roundToSignificantSeconds(durationMs, 1));
+          const label = formatDurationSI(roundToSignificantSeconds(durationMs, 1));
           results.push({ x, y, label });
         });
       });
       return results;
-    }, [width, moveDown]);
+    }, [width, moveDown, calibration]);
 
     const colorScale = useMemo(() => d3.scaleSequential<string>()
       .domain([-15, -2])
@@ -542,8 +541,6 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
       const sign = delta >= 0 ? 1 : -1;
       return sign * v;
     }, [centerMs, c]);
-
-    const midText = centerMs;
 
     return (
       <svg width={width} height={height} className="overflow-visible">
@@ -621,8 +618,19 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
                     </g>
                   );
                 })()}
-                <circle cx={b.x} cy={b.y} r={2} fill="#999" />
-                <text x={b.x} y={b.y - 6} textAnchor="middle" dominantBaseline="baseline" fontSize="10px" fill="white">{b.ms == 0 ? midText : b.label}</text>
+
+                  {b.ms == 0 ? (
+                    <g transform={`translate(${b.x}, ${-18})`}>
+                    <MidText date={new Date(centerMs)} />
+                    </g>
+                  ) : (
+                    <g transform={`translate(${b.x}, ${b.y - 6})`}>
+                      <circle cy={6} r={2} fill="#999" />
+                      <text textAnchor="middle" dominantBaseline="baseline" fontSize="10px" fill="white">
+                        {b.label}
+                      </text>
+                    </g>
+                  )}
               </g>
             ))
           }
@@ -631,7 +639,7 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
               <g key={`vd-${idx}`}>
                 <circle cx={d.x} cy={d.y} r={2} fill="white" />
                 <circle cx={d.x} cy={-10} r={2} fill="white" />
-                <text x={d.x} y={d.y + 12} textAnchor="middle" dominantBaseline="hanging" fontSize="10px" fill="#999">{d.label}</text>
+                {/* <text x={d.x} y={d.y + 12} textAnchor="middle" dominantBaseline="hanging" fontSize="10px" fill="#999">{d.label}</text> */}
               </g>
             ))
           }
@@ -731,3 +739,109 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
   return { component: Component } as Layer;
 };
 
+
+
+
+
+export const CurvedTopicsLayer: () => Layer = () => {
+    return {
+      component: ({ scale, transform, width }: LayerComponentProps) => {
+        const { start, end } = useTimelineRange();
+        const { currentDate } = useDateStore();
+  
+        const resolution = useMemo(() => {
+          const duration = end.getTime() - start.getTime();
+          if (duration > 300 * day) {
+            return "1week";
+          } else if (duration > 50 * day) {
+            return "1day";
+          } else if (duration > day) {
+            return "1hour";
+          } else {
+            return "5min";
+          }
+        }, [start, end]);
+  
+        const { items } = useAudioItems(start, end, resolution);
+  
+        const newScale = transform.rescaleX(scale);
+  
+        const layout = useMemo(() => {
+          const viewCenterMs = (start.getTime() + end.getTime()) / 2;
+          const halfWindowSec = Math.max(1, (end.getTime() - start.getTime()) / 2000);
+          const candidates = items
+            .filter((i) => (i.topics?.length ?? 0) > 0)
+            .flatMap((i) => {
+              const topics = i.topics || [];
+              const startMs = i.start.getTime();
+              const endMs = i.end.getTime();
+              const durationMs = Math.max(1, endMs - startMs);
+              const segmentMs = durationMs / topics.length;
+              return topics.map((topic, idx) => {
+                const segStartMs = startMs + idx * segmentMs;
+                const segEndMs = segStartMs + segmentMs;
+                const segMidMs = segStartMs + segmentMs / 2;
+                const anchorX = newScale(new Date(segMidMs));
+                const distanceSec = Math.abs(segMidMs - viewCenterMs) / 1000;
+                const normalizedDistance = Math.min(1, distanceSec / halfWindowSec);
+                const isActive = !!currentDate && currentDate.getTime() >= segStartMs && currentDate.getTime() <= segEndMs;
+                return { id: `${i.id}-${idx}`, anchorX, topic, isActive, normalizedDistance };
+              });
+            })
+            .sort((a, b) => a.normalizedDistance - b.normalizedDistance || a.anchorX - b.anchorX);
+  
+          const laneEnds: number[] = [];
+          const placed: Array<any> = [];
+  
+  
+          let lane = 0;
+  
+          for (const c of candidates) {
+            placed.push({ ...c, lane  });
+            lane++;
+          }
+  
+          const lanes = laneEnds.length;
+          return { placed, lanes };
+        }, [items, newScale, width, currentDate, start, end]);
+  
+        const laneHeight = 16;
+        const topMargin = 0;
+        const svgHeight = 200;
+  
+        return (
+            
+            <svg className="w-full zoomable" width={width} height={svgHeight}>
+              <g>
+                {layout.placed.map((p) => {
+                  const textY = topMargin + p.lane * laneHeight + 12;
+                  const centerX = width / 2;
+                  const delta = Math.abs(p.anchorX - centerX);
+                  const anchor: 'start' | 'middle' | 'end' = delta < width * 0.05
+                    ? 'middle'
+                    : (p.anchorX < centerX ? 'end' : 'start');
+                  const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0;
+                  return (
+                    <g
+                      key={`topics-${p.id}`}
+                      style={{ transition: "transform 300ms ease-in-out", transform: `translate(0px, ${textY}px)` }}
+                    >
+                      <text
+                        x={p.anchorX}
+                        y={0}
+                        textAnchor={anchor}
+                        dx={dx}
+                        className={p.isActive ? "text-[10px] fill-yellow-300 opacity-100" : "text-[10px] fill-white opacity-90"}
+                      >
+                        {p.topic}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+              
+            </svg>
+        );
+      },
+    } as Layer;
+  };

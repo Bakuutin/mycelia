@@ -58,15 +58,26 @@ const formatTime = (
     });
 };
 
-const formatLabel = (
+export const formatLabel = (
   date: Date,
-  allJanFirst: boolean,
-  hasTime: boolean,
-  hasWeekdays: boolean,
-  hasSeconds: boolean,
-  hasMilliseconds: boolean,
+  options?: {
+    allJanFirst?: boolean,
+    hasTime?: boolean,
+    hasWeekdays?: boolean,
+    hasSeconds?: boolean,
+    hasMilliseconds?: boolean,
+  },
 ): React.ReactNode[] => {
   const year = date.getFullYear().toString();
+  const defaults = {
+    allJanFirst: false,
+    hasTime: true,
+    hasWeekdays: true,
+    hasSeconds: true,
+    hasMilliseconds: false,
+  }
+
+  const { allJanFirst, hasTime, hasWeekdays, hasSeconds, hasMilliseconds } = { ...defaults, ...options };
 
   if (allJanFirst) {
     return [year];
@@ -106,11 +117,7 @@ const generateGregorianLabels = (
   return ticks.map(({ value, xOffset }) => {
     const fullSegments = formatLabel(
       value,
-      allJanFirst,
-      hasTime,
-      hasWeekdays,
-      hasSeconds,
-      hasMilliseconds,
+      { allJanFirst, hasTime, hasWeekdays, hasSeconds, hasMilliseconds },
     );
     const result = {
       value,
