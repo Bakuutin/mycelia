@@ -27,9 +27,6 @@ export interface TimelineRangeStore {
   reset: () => void;
   duration: number;
   center: Date;
-  autoCenter: boolean;
-  setAutoCenter: (enabled: boolean) => void;
-  toggleAutoCenter: () => void;
 }
 
 const day = 1000 * 60 * 60 * 24;
@@ -70,7 +67,6 @@ export const useTimelineRange = create<TimelineRangeStore>((set: any) => {
   return {
     start,
     end,
-    autoCenter: false,
 
     setStart: (start: Date) => set({ start }),
 
@@ -91,8 +87,5 @@ export const useTimelineRange = create<TimelineRangeStore>((set: any) => {
     get duration() {
       return this.end.getTime() - this.start.getTime();
     },
-
-    setAutoCenter: (enabled: boolean) => set({ autoCenter: enabled }),
-    toggleAutoCenter: () => set((state: any) => ({ autoCenter: !state.autoCenter })),
   };
 });

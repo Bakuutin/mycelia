@@ -7,7 +7,7 @@ import { useFetcher, useLoaderData, useNavigate } from "@remix-run/react";
 import { type Timestamp, zTimestamp } from "../types/timeline.ts";
 import { fetchTimelineData, getDaysAgo } from "../services/timeline.server.ts";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
-import { Resolution } from "@/services/timeline.server.ts";
+import type { Resolution } from "@/types/resolution.ts";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const auth = await authenticateOr401(request);

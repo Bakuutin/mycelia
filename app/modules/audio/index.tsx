@@ -112,28 +112,12 @@ export const DateTimePickerTool: Tool = {
   },
 };
 
-export const AutoCenterTool: Tool = {
-  component: () => {
-    const { autoCenter, toggleAutoCenter } = useTimelineRange();
-    return (
-      <button
-        type="button"
-        onClick={toggleAutoCenter}
-        className={autoCenter ? "px-2 py-1 bg-yellow-700 rounded" : "px-2 py-1 bg-gray-700 rounded"}
-        title={autoCenter ? "Auto-center: ON" : "Auto-center: OFF"}
-      >
-        {autoCenter ? "Auto-Center" : "Pan Mode"}
-      </button>
-    );
-  },
-};
-
 export const AudioLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { currentDate, resetDate, setIsPlaying } = useDateStore();
 
-      const { start, end, autoCenter, setRange } = useTimelineRange();
+      const { start, end, setRange } = useTimelineRange();
 
       const resolution = useMemo(() => {
         const duration = end.getTime() - start.getTime();
@@ -150,13 +134,13 @@ export const AudioLayer: () => Layer = () => {
 
       const { items } = useAudioItems(start, end, resolution);
       React.useEffect(() => {
-        if (!autoCenter || !currentDate) return;
+        if (!currentDate) return;
         const duration = end.getTime() - start.getTime();
         const half = duration / 2;
         const newStart = new Date(currentDate.getTime() - half);
         const newEnd = new Date(currentDate.getTime() + half);
         setRange(newStart, newEnd);
-      }, [autoCenter, currentDate]);
+      }, [currentDate]);
 
       return (
         <svg
@@ -738,10 +722,6 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
 
   return { component: Component } as Layer;
 };
-
-
-
-
 
 export const CurvedTopicsLayer: () => Layer = () => {
     return {

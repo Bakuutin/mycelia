@@ -7,20 +7,12 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { defaultResourceManager } from "../lib/auth/resources.ts";
 
-export type Resolution = "5min" | "1hour" | "1day" | "1week";
-
-const RESOLUTION_TO_MS: Record<Resolution, number> = {
-  "5min": ms("5m"),
-  "1hour": ms("1h"),
-  "1day": ms("1d"),
-  "1week": ms("1w"),
-};
-
-const RESOLUTION_ORDER: Resolution[] = Object.keys(
+import type { Resolution } from "@/types/resolution.ts";
+import {
   RESOLUTION_TO_MS,
-) as Resolution[];
-
-const LOWEST_RESOLUTION: Resolution = RESOLUTION_ORDER[0];
+  RESOLUTION_ORDER,
+  LOWEST_RESOLUTION,
+} from "@/types/resolution.ts";
 
 type AggregationOperation = {
   $sum?: any;

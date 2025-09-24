@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import _ from "lodash";
 import type { TimelineItem } from "@/types/timeline.ts";
+import crossfilter from "crossfilter2";
 
 type Resolution = "5min" | "1hour" | "1day" | "1week";
 
@@ -60,6 +61,13 @@ type AudioCacheStore = {
       items: TimelineItem[];
     };
   };
+  indexByResolution: {
+    [R in Resolution]?: {
+      cf: any;
+      tsDim: any;
+      idDim: any;
+    };
+  };
   inFlightRequests: {
     [R in Resolution]?: {
       ranges: LoadedRange[];
@@ -69,6 +77,7 @@ type AudioCacheStore = {
   hasGlobalPrefetch: boolean;
   pendingByResolution: Partial<Record<Resolution, LoadedRange[]>>;
   schedulerActive: Partial<Record<Resolution, boolean>>;
+  ensureIndex: (resolution: Resolution) => void;
   addData: (
     resolution: Resolution,
     range: LoadedRange,
@@ -91,10 +100,25 @@ type AudioCacheStore = {
 
 export const useAudioCache = create<AudioCacheStore>((set, get) => ({
   data: {},
+  indexByResolution: {},
   inFlightRequests: {},
   hasGlobalPrefetch: false,
   pendingByResolution: {},
   schedulerActive: {},
+
+  ensureIndex: (resolution) => {
+    const existing = get().indexByResolution[resolution];
+    if (existing) return;
+    const cf = crossfilter([]);
+    const tsDim = cf.dimension((d: any) => new Date(d.start).getTime());
+    const idDim = cf.dimension((d: any) => d.id);
+    set((state) => ({
+      indexByResolution: {
+        ...state.indexByResolution,
+        [resolution]: { cf, tsDim, idDim },
+      },
+    }));
+  },
 
   addData: (resolution, range, items = []) => {
     const existing = get().data[resolution] ?? {
@@ -130,6 +154,13 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
         },
       },
     }));
+
+    get().ensureIndex(resolution);
+    const index = get().indexByResolution[resolution]!;
+    index.tsDim.filterAll();
+    index.idDim.filterAll();
+    index.cf.remove();
+    index.cf.add(sortedItems);
   },
 
   getMissingRanges: (resolution, start, end) => {
@@ -282,6 +313,8 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
     data,
     fetchMissingRanges,
     prefetchAroundCenter,
+    indexByResolution,
+    ensureIndex,
   } = useAudioCache();
 
   const debouncedFetchMissingRanges = useCallback(
@@ -297,11 +330,15 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
     prefetchAroundCenter(center);
   }, [resolution, start.getTime(), end.getTime()]);
 
-  const filteredItems = data[resolution]?.items.filter(
-    (item) =>
-      item.end.getTime() >= start.getTime() &&
-      item.start.getTime() <= end.getTime(),
-  ) ?? [];
+  const filteredItems = useMemo(() => {
+    ensureIndex(resolution);
+    const idx = indexByResolution[resolution];
+    if (!idx) return data[resolution]?.items ?? [];
+    idx.tsDim.filterRange([start.getTime(), end.getTime()]);
+    const rows = idx.tsDim.top(Infinity) as TimelineItem[];
+    idx.tsDim.filterAll();
+    return rows;
+  }, [indexByResolution[resolution]?.cf, data[resolution]?.items, start.getTime(), end.getTime()]);
 
   return {
     items: filteredItems,

@@ -9,7 +9,6 @@ import {
   TranscriptLayer,
   DateTimePickerTool,
   TopicsLayer,
-  AutoCenterTool,
   CurvedTimeLayer,
   CurvedTopicsLayer,
 } from "@/modules/audio/index.tsx";
@@ -28,6 +27,5 @@ export const config: Config = {
     AudioPlayerTool,
     GainTool,
     DateTimePickerTool,
-    AutoCenterTool,
   ],
 };
