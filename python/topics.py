@@ -1,5 +1,6 @@
 # %%
 
+from typing import Literal
 from lib import call_resource
 
 import pytz
@@ -11,15 +12,21 @@ from datetime import timedelta, datetime
 
 # %%
 
-def get_latest_hist_5m_with_topics_start():
-    last_hist_5m_with_topics = call_resource(
+topics_absolute_start = pytz.UTC.localize(datetime(2024, 12, 10, 5, 0))
+
+
+
+def get_latest_hist_with_topics_start(scale: Literal["5min", "1hour", "1day", "1week"], prev: datetime | None = None):
+    if not prev:
+        prev = topics_absolute_start
+    last_hist_with_topics = call_resource(
         "tech.mycelia.mongo",
         {
             "action": "findOne",
-            "collection": "histogram_5min",
+            "collection": f"histogram_{scale}",
             "query": {
                 "start": {
-                    "$gte": pytz.UTC.localize(datetime(2024, 12, 10, 5, 0)),
+                    "$gte": prev,
                 },
                 "topics": {
                     "$exists": True,
@@ -28,15 +35,17 @@ def get_latest_hist_5m_with_topics_start():
             "options": {"sort": {"start": -1}},
         },
     )
+    if not last_hist_with_topics:
+        return prev
 
-    last_hist_5m_no_topics = call_resource(
+    last_hist_no_topics = call_resource(
         "tech.mycelia.mongo",
         {
             "action": "findOne",
-            "collection": "histogram_5min",
+            "collection": f"histogram_{scale}",
             "query": {
                 "start": {
-                    "$gte": last_hist_5m_with_topics['start']
+                    "$gte": last_hist_with_topics['start']
                 },
                 "topics": {
                     "$exists": False,
@@ -47,11 +56,18 @@ def get_latest_hist_5m_with_topics_start():
     )
 
 
-    return last_hist_5m_no_topics['start']
+    return last_hist_no_topics['start']
 
 
-get_latest_hist_5m_with_topics_start()
+get_latest_hist_with_topics_start("1day")
 # %%
+
+SCALE_TO_RESOLUTION = {
+    "5min": timedelta(minutes=5),
+    "1hour": timedelta(hours=1),
+    "1day": timedelta(days=1),
+    "1week": timedelta(weeks=1),
+}
 
 
 
@@ -94,7 +110,7 @@ remove_if_lonely = {
 }
 
 
-def get_segments(start):
+def get_segments(start, scale: Literal["5min", "1hour", "1day", "1week"]):
     transcripts = call_resource(
         "tech.mycelia.mongo",
         {
@@ -103,11 +119,14 @@ def get_segments(start):
             "query": {
                 "start": {
                     "$gte": start,
-                }
+                },
+                "end": {
+                    "$lte": date_to_bucket(start + SCALE_TO_RESOLUTION[scale], scale),
+                },
             },
             "options": {
                 "sort": {"start": 1},
-                "limit": 1000,
+                "limit": max(10000, SCALE_TO_RESOLUTION[scale].total_seconds()),
             },
         },
     )
@@ -184,16 +203,14 @@ def coerce_json(text: str):
     return json.loads(s)
 
 
-def split_segments_into_blocks(segments):
+def split_segments_into_blocks(segments, scale: Literal["5min", "1hour", "1day", "1week"]):
     blocks = []
     block = []
     block_tokens = 0
     prev = None
     for s in segments:
         if block and (
-            s["start"] - prev["end"] > timedelta(minutes=5) or
-            block_tokens + get_num_tokens(s["text"]) > 5000 or
-            prev and s["start"] - block[0]["start"] > timedelta(minutes=5)
+            s["start"] - max(prev["end"], block[0]["start"]) > SCALE_TO_RESOLUTION[scale]
         ):
             blocks.append(block)
             block = []
@@ -232,92 +249,152 @@ llm.invoke(prompt)
 
 PROMPT = """
 <start_of_turn>user
-You are segmenting a transcript into semantic topics.
-You are given a transcript. Read it. Extract all distinct topics mentioned.
+You are an assistant that summarizes long, chaotic human conversations. 
+You are given a transcript of about one hour, plus a list of raw topics mentioned.  
+
+Information about the main speaker:
+{{
+  "name": "Tigor Bakutin",
+  "pronouns": "he/him (non-binary person)",
+  "location": "Amsterdam, Netherlands",
+  "identity": "Refugee, software developer, entrepreneur, artist, member of the Temple of Satan, vegetarian, autistic, dissociative disorder",
+  "roles": [
+    "Tech lead building privacy-first systems (Mycelia project)",
+    "Community organizer in coliving and rationalist spaces",
+    "Writer and translator of philosophy",
+    "Musician and experimental artist"
+  ],
+  "values": [
+    "Privacy and digital sovereignty",
+    "Transhumanism and posthuman identity",
+    "Exploring multiple identities and narratives",
+    "Deep conversations and authentic relationships"
+  ],
+  "importance_signals": [
+    "Conversations about work, projects, or startups are highly relevant",
+    "Interactions with close friends, community members, or collaborators matter a lot",
+    "Family conversations are emotionally intense but often painful",
+    "Art, music, and philosophical discussions are central to self-expression",
+    "Medical and legal matters have high practical importance"
+  ]
+}}
+
 Transcript:
 {transcript}
 
+
 Instructions:
-Use descriptive topic names 2-10 words long.
-i.e "Sad Feelings" not "Emotional state of the speaker"
-Be very specific so it is easy to understand what was said.
+- Act like a detective: your job is to identify what *actually mattered* during this hour.  
+- Focus only on the most important things (decisions, events, insights, conflicts, strong emotions, or meaningful themes).  
+- Ignore filler, small talk, repeated phrases, irrelevant chatter.  
+- Group related utterances into coherent topics.  
+- Content of a book about zorian in never important.
+- Global news are never important unless they affect the main speaker.
+- For each important topic, give:
+  - **name**: a short, clear label (2–8 words).  
+  - **description**: a concise explanation of why it was important and what happened.  
+- Write in English.  
+- Maximum 10 topics. If nothing important happened, return an empty array.  
 
-Use english language.
-
-Ignore
-    - filler words
-    - greetings and farewell statements
-    - expressions of gratitude
-    - random vocalizations
-
-Maximum 10 topics. If there are no topics, return an empty array.
-
-Use strict JSON format:
+Output format (strict JSON):
 [
-    "Topic 1",
-    "Topic 2",
+    {{
+        "name": "Topic Name",
+        "importance": int, number between 0 and 100,
+        "description": "Description of the topic"
+    }},
     ...
 ]
 <end_of_turn>
 <start_of_turn>model
 """
 
-
-
-def render_segments_for_llm(segments):
-    return ''.join(s["text"] for s in segments)
-
-
-
-def date_to_5m_bucket(date: datetime) -> datetime:
-    return datetime(date.year, date.month, date.day, date.hour, date.minute // 5 * 5)
+def date_to_bucket(date: datetime, scale: Literal["5min", "1hour", "1day", "1week"]) -> datetime:
+    step = SCALE_TO_RESOLUTION[scale].total_seconds()
+    return datetime.fromtimestamp((date.timestamp() // step) * step)
 
 errors = []
 
 from time import sleep
 
+def render_segments_for_llm(segments):
+    return ''.join(s["text"] for s in segments)
 
+scale = "1day"
+
+prev = topics_absolute_start
+# %%
 while True:
     try:
-        start = get_latest_hist_5m_with_topics_start()
-        segments = get_segments(start)
-        blocks = split_segments_into_blocks(segments)
+        print(f"Processing {scale} from {prev}")
+        start = get_latest_hist_with_topics_start(scale, prev)
+        prev = start + SCALE_TO_RESOLUTION[scale] - timedelta(seconds=10)
+        segments = get_segments(start, scale)
 
-        for block in blocks:
-            try:
-                topics = coerce_json(
-                    llm.invoke(
-                        PROMPT.format(transcript=render_segments_for_llm(block))
-                    )
-                )
-            except Exception as e:
-                print(e)
-                errors.append((block, e))
-                continue
-            print(
-                '{}-{}'.format(
-                    block[0]["start"].strftime("%H:%M:%S"),
-                    block[-1]["end"].strftime("%H:%M:%S")
+        try:
+            topics = coerce_json(
+                llm.invoke(
+                    PROMPT.format(transcript=render_segments_for_llm(segments))
                 )
             )
-            print(topics)
-            if topics:
-                call_resource(
-                    "tech.mycelia.mongo",
-                    {
-                        "action": "updateOne",
-                        "collection": "histogram_5min",
-                        "query": {
-                            "start": date_to_5m_bucket(block[0]["start"]),
+        except Exception as e:
+            print(e)
+            errors.append((segments, e))
+            continue
+        print(
+            '{}-{}'.format(
+                segments[0]["start"].isoformat(),
+                segments[-1]["end"].isoformat()
+            )
+        )
+        print(topics)
+        if topics:
+            call_resource(
+                "tech.mycelia.mongo",
+                {
+                    "action": "updateOne",
+                    "collection": f"histogram_{scale}",
+                    "query": {
+                        "start": date_to_bucket(segments[0]["start"], scale),
+                    },
+                    "update": {
+                        "$addToSet": {
+                            "topics": {"$each": list(topics)},
                         },
-                        "update": {
-                            "$addToSet": {
-                                "topics": {"$each": list(topics)},
-                            },
-                        },
-                    }
-                )
+                    },
+                }
+            )
     except Exception as e:
         print(e)
         errors.append((None, e))
         sleep(10)
+
+# %%
+segments
+# %%
+len(blocks)
+# %%
+
+# load all days with topics
+# %%
+
+from datetime import datetime
+start = datetime(2024, 12, 10, 5, 0)
+end = datetime(2025, 1, 1, 5, 0)
+
+from lib import call_resource
+
+
+days = call_resource(
+    "tech.mycelia.mongo",
+    {
+        "action": "find",
+        "collection": "histogram_1day",
+        "query": {
+            "topics": {
+                "$exists": True,
+            },
+        },
+    }
+)
+# %%

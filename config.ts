@@ -12,20 +12,23 @@ import {
   CurvedTimeLayer,
   CurvedTopicsLayer,
 } from "@/modules/audio/index.tsx";
+import { EventsLayer, CreateEventTool } from "@/modules/events/index.tsx";
 
 
 export const config: Config = {
   layers: [
     TranscriptLayer(),
-    TopicsLayer(),
+    // TopicsLayer(),
     TimeLayer(),
+    EventsLayer(),
     AudioLayer(),
-    CurvedTimeLayer({ height: 80 }),
-    CurvedTopicsLayer(),
+    CurvedTimeLayer({ height: 100 }),
+    // CurvedTopicsLayer(),
   ],
   tools: [
     AudioPlayerTool,
     GainTool,
     DateTimePickerTool,
+    CreateEventTool,
   ],
 };

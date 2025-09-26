@@ -13,7 +13,14 @@ export const zTimelineItem = z.object({
   totals: z.any(),
   id: z.string(),
   stale: z.boolean().optional(),
-  topics: z.array(z.string()).optional(),
+  topics: z.array(
+    z.union([
+      z.string(),
+      z.object({
+        name: z.string(),
+        description: z.string(),
+      }),
+    ])).optional(),
 });
 
 export const zQueryParams = z.object({

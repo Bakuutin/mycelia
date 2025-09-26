@@ -12,6 +12,7 @@ import GainSlider from "./GainSlider.tsx";
 import { useTranscripts } from "./useTranscripts.ts";
 import { Settings2 as Sliders } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 
 import { formatDuration as formatDurationSI } from "@/modules/time/formatters/si.ts";
 import { formatLabel as formatLabelGregorian } from "@/modules/time/formatters/gregorian.ts";
@@ -307,7 +308,7 @@ export const TopicsLayer: () => Layer = () => {
                     <span className="text-yellow-600">{
                       new Date(p.ts).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" })
                     }</span>
-                  )} {p.topic}
+                  )} {JSON.stringify(p.topic) }
                 </span>
               );
             })}
@@ -729,18 +730,7 @@ export const CurvedTopicsLayer: () => Layer = () => {
         const { start, end } = useTimelineRange();
         const { currentDate } = useDateStore();
   
-        const resolution = useMemo(() => {
-          const duration = end.getTime() - start.getTime();
-          if (duration > 300 * day) {
-            return "1week";
-          } else if (duration > 50 * day) {
-            return "1day";
-          } else if (duration > day) {
-            return "1hour";
-          } else {
-            return "5min";
-          }
-        }, [start, end]);
+        const resolution = "1day" as const;
   
         const { items } = useAudioItems(start, end, resolution);
   
@@ -751,22 +741,17 @@ export const CurvedTopicsLayer: () => Layer = () => {
           const halfWindowSec = Math.max(1, (end.getTime() - start.getTime()) / 2000);
           const candidates = items
             .filter((i) => (i.topics?.length ?? 0) > 0)
-            .flatMap((i) => {
+            .map((i) => {
               const topics = i.topics || [];
               const startMs = i.start.getTime();
               const endMs = i.end.getTime();
               const durationMs = Math.max(1, endMs - startMs);
-              const segmentMs = durationMs / topics.length;
-              return topics.map((topic, idx) => {
-                const segStartMs = startMs + idx * segmentMs;
-                const segEndMs = segStartMs + segmentMs;
-                const segMidMs = segStartMs + segmentMs / 2;
-                const anchorX = newScale(new Date(segMidMs));
-                const distanceSec = Math.abs(segMidMs - viewCenterMs) / 1000;
-                const normalizedDistance = Math.min(1, distanceSec / halfWindowSec);
-                const isActive = !!currentDate && currentDate.getTime() >= segStartMs && currentDate.getTime() <= segEndMs;
-                return { id: `${i.id}-${idx}`, anchorX, topic, isActive, normalizedDistance };
-              });
+              const segMidMs = startMs + durationMs / 2;
+              const anchorX = newScale(new Date(segMidMs));
+              const distanceSec = Math.abs(segMidMs - viewCenterMs) / 1000;
+              const normalizedDistance = Math.min(1, distanceSec / halfWindowSec);
+              return { id: i.id, anchorX, topics: topics.map((t) => typeof t === "string" ? {name: t} : t), normalizedDistance };
+    
             })
             .sort((a, b) => a.normalizedDistance - b.normalizedDistance || a.anchorX - b.anchorX);
   
@@ -787,40 +772,41 @@ export const CurvedTopicsLayer: () => Layer = () => {
   
         const laneHeight = 16;
         const topMargin = 0;
-        const svgHeight = 200;
-  
+        const containerHeight = 200;
+
         return (
-            
-            <svg className="w-full zoomable" width={width} height={svgHeight}>
-              <g>
-                {layout.placed.map((p) => {
-                  const textY = topMargin + p.lane * laneHeight + 12;
-                  const centerX = width / 2;
-                  const delta = Math.abs(p.anchorX - centerX);
-                  const anchor: 'start' | 'middle' | 'end' = delta < width * 0.05
-                    ? 'middle'
-                    : (p.anchorX < centerX ? 'end' : 'start');
-                  const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0;
-                  return (
-                    <g
-                      key={`topics-${p.id}`}
-                      style={{ transition: "transform 300ms ease-in-out", transform: `translate(0px, ${textY}px)` }}
-                    >
-                      <text
-                        x={p.anchorX}
-                        y={0}
-                        textAnchor={anchor}
-                        dx={dx}
-                        className={p.isActive ? "text-[10px] fill-yellow-300 opacity-100" : "text-[10px] fill-white opacity-90"}
-                      >
-                        {p.topic}
-                      </text>
-                    </g>
-                  );
-                })}
-              </g>
-              
-            </svg>
+          <div className="relative w-full overflow-visible" style={{ height: containerHeight }}>
+
+<TooltipProvider>
+            {layout.placed.map((p) => {
+              const textY = topMargin + p.lane * laneHeight + 12;
+              return (
+                <div
+                  key={`topics-${p.id}`}
+                  className="absolute"
+                  style={{
+                    transform: `translate(${p.anchorX}px, ${textY}px)`,
+                  }}
+                >
+                    <div className="text-[10px]" style={{ width: 55 }}>
+                      {p.topics.map((t: any, idx: number) => (
+                        <Tooltip key={idx}>
+                          <TooltipTrigger asChild>
+                            <p lang="en" className="text-[10px] w-full leading-relaxed mb-3" style={{ hyphens: "auto" }}>{t.name}</p>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div className="text-[10px] w-full text-justify bg-black rounded p-2 max-w-[150px] text-left leading-relaxed mb-3">
+                              {t.description || "No description"}
+                            </div>
+                            </TooltipContent>
+                        </Tooltip>
+                      ))}
+                    </div>
+                </div>
+              );
+            })}
+            </TooltipProvider>
+          </div>
         );
       },
     } as Layer;

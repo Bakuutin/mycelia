@@ -19,8 +19,8 @@ body {
   pointer-events: none;
 }
 
-.zoomable rect.timeline-item {
-  pointer-events: auto;
+.zoomable .timeline-item {
+  pointer-events: bounding-box;
 }
 
 button {
