@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { EJSON } from "bson";
+import { callResource } from "@/utils/resources.client.ts";
 
 interface Transcript {
   _id: string;
@@ -28,26 +28,18 @@ export const useTranscripts = (cursorDate: Date | null) => {
     const startTime = new Date(cursorDate.getTime() - delta);
     const endTime = new Date(cursorDate.getTime() + delta);
 
-    fetch("/api/resource/tech.mycelia.mongo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: EJSON.stringify({
-        action: "find",
-        collection: "transcriptions",
-        query: {
-          start: {
-            $gte: startTime,
-            $lte: endTime,
-          },
-          segments: { $exists: true },
+    callResource("tech.mycelia.mongo", {
+      action: "find",
+      collection: "transcriptions",
+      query: {
+        start: {
+          $gte: startTime,
+          $lte: endTime,
         },
-        options: { limit: 50, sort: { start: 1 } },
-      }),
+        segments: { $exists: true },
+      },
+      options: { limit: 50, sort: { start: 1 } },
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch transcripts");
-        return res.text().then((text) => EJSON.parse(text));
-      })
       .then((data) => {
         if (!Array.isArray(data)) return;
         cachedTranscripts = data;
@@ -55,7 +47,7 @@ export const useTranscripts = (cursorDate: Date | null) => {
         lastFetchedBucket = bucketKey;
       })
       .catch((error) => {
-        console.error("Failed to fetch transcripts:", error);
+        console.error("Failed to get transcripts:", error);
       })
       .finally(() => {
         inFlightBuckets.delete(bucketKey);

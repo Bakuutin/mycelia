@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ObjectId } from "bson";
 
 export const zEventStyle = z.object({
   rightBorder: z.enum(["straight", "zigzag", "wave", "fade"]).optional(),
@@ -6,7 +7,7 @@ export const zEventStyle = z.object({
 }).strict().optional();
 
 export const zEvent = z.object({
-  _id: z.any(),
+  _id: z.instanceof(ObjectId),
   kind: z.enum(["point", "range"]),
   title: z.string(),
   shortTitle: z.string().optional(),

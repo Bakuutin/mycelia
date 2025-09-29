@@ -1,32 +1,25 @@
 import { create } from "zustand";
-import { z } from "zod";
-import { EJSON } from "bson";
 import _ from "lodash";
 import { useEffect, useMemo } from "react";
 import { EventItem } from "@/types/events.ts";
-import { useTimelineRange } from "@/stores/timelineRange.ts";
+import { callResource } from "@/utils/resources.client.ts";
+import { ObjectId } from "bson";
 
 type EventsState = {
   items: EventItem[];
-  hoveringId: string | null;
-  selectedId: string | null;
+  selectedId: ObjectId | null;
   editingEvent: EventItem | null;
-  setHovering: (id: string | null) => void;
-  setSelected: (id: string | null) => void;
+  setSelected: (id: ObjectId | null) => void;
   setEditingEvent: (event: EventItem | null) => void;
   setItems: (items: EventItem[] | ((items: EventItem[]) => EventItem[])) => void;
 };
 
 export const useEventsStore = create<EventsState>((set) => ({
   items: [],
-  hoveringId: null,
   selectedId: null,
   editingEvent: null,
-  filters: undefined,
-  setHovering: (id) => set({ hoveringId: id }),
   setSelected: (id) => set({ selectedId: id }),
   setEditingEvent: (event) => set({ editingEvent: event }),
-  setFilters: (filters) => set({ filters }),
   setItems: (items) => {
     if (typeof items === "function") {
       set((state) => ({ items: items(state.items) }));
@@ -37,21 +30,12 @@ export const useEventsStore = create<EventsState>((set) => ({
 }));
 
 async function fetchEvents(): Promise<EventItem[]> {
-  const body = {
+  return callResource("tech.mycelia.mongo", {
     action: "find",
     collection: "events",
     query: {},
     options: { sort: { start: 1 } },
-  } as const;
-
-  const res = await fetch("/api/resource/tech.mycelia.mongo", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(EJSON.serialize(body)),
   });
-  if (!res.ok) return [];
-  const docs = EJSON.deserialize(await res.json());
-  return (docs as EventItem[]);
 }
 
 export function useEvents() {
@@ -59,8 +43,7 @@ export function useEvents() {
 
   useEffect(() => {
     const run = _.debounce(async () => {
-      const data = await fetchEvents();
-      setItems(data);
+      setItems(await fetchEvents());
     }, 250);
     run();
     return () => run.cancel();

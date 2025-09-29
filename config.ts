@@ -1,6 +1,6 @@
 import type { Config } from "@/core.ts";
 
-import { SiFormatter, TimeLayer } from "@/modules/time/index.tsx";
+import { TimeLayer } from "@/modules/time/index.tsx";
 import { MapLayer } from "@/modules/map/index.tsx";
 import {
   AudioLayer,
@@ -8,9 +8,6 @@ import {
   GainTool,
   TranscriptLayer,
   DateTimePickerTool,
-  TopicsLayer,
-  CurvedTimeLayer,
-  CurvedTopicsLayer,
 } from "@/modules/audio/index.tsx";
 import { EventsLayer, CreateEventTool } from "@/modules/events/index.tsx";
 
@@ -22,7 +19,7 @@ export const config: Config = {
     TimeLayer(),
     EventsLayer(),
     AudioLayer(),
-    CurvedTimeLayer({ height: 100 }),
+    // CurvedTimeLayer({ height: 100 }),
     // CurvedTopicsLayer(),
   ],
   tools: [
