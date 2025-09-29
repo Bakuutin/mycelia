@@ -8,4 +8,4 @@ export type {
   Resource,
   TextContent,
   Tool,
-} from "npm:@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/sdk/types.js";

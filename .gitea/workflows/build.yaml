@@ -12,6 +12,9 @@ env:
   PORTAINER_SWARM_ID: ${{ secrets.PORTAINER_SWARM_ID }}
   REGISTRY: ${{ secrets.REGISTRY }}
 
+extra_hosts:
+  - host.docker.internal:gitea.tigor.net
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest

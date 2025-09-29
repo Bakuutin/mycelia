@@ -6,14 +6,14 @@ import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
 import { type Policy } from "@/lib/auth/resources.ts";
-import { createServer } from "npm:vite";
-import express from "npm:express";
-import morgan from "npm:morgan";
+import { createServer } from "vite";
+import express from "express";
+import morgan from "morgan";
 
 import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
 
-import { meter, requestCounter, tracer } from "@/lib/telemetry.ts";
+import { requestCounter } from "@/lib/telemetry.ts";
 import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import path from "node:path";
 import { setupResources } from "@/lib/resources/registry.ts";
@@ -41,7 +41,7 @@ async function startProdServer() {
   app.use(morgan("tiny"));
 
   app.use((req: Request, _res: Response, next: () => void) => {
-    requestCounter.add(1, { method: req.method, route: new URL(req.url).pathname });
+    requestCounter.add(1, { method: req.method, route: new URL(req.url, "http://localhost").pathname });
     next();
   });
 

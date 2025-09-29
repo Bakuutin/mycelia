@@ -1,12 +1,12 @@
-import { NodeSDK } from "npm:@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "npm:@opentelemetry/exporter-trace-otlp-http";
-import { OTLPMetricExporter } from "npm:@opentelemetry/exporter-metrics-otlp-http";
-import { PeriodicExportingMetricReader } from "npm:@opentelemetry/sdk-metrics";
-import { HttpInstrumentation } from "npm:@opentelemetry/instrumentation-http";
-import { ExpressInstrumentation } from "npm:@opentelemetry/instrumentation-express";
-import { MongoDBInstrumentation } from "npm:@opentelemetry/instrumentation-mongodb";
-import { IORedisInstrumentation } from "npm:@opentelemetry/instrumentation-ioredis";
-import { metrics, trace } from "npm:@opentelemetry/api@1";
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
+import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
+import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
+import { MongoDBInstrumentation } from "@opentelemetry/instrumentation-mongodb";
+import { IORedisInstrumentation } from "@opentelemetry/instrumentation-ioredis";
+import { metrics, trace } from "@opentelemetry/api";
 
 const otlpEndpoint = Deno.env.get("OTEL_EXPORTER_OTLP_ENDPOINT") ??
   "http://localhost:4318";
