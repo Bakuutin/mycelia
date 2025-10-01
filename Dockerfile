@@ -7,4 +7,4 @@ RUN chown -R deno:deno /app
 USER deno
 RUN deno cache cmd.ts --lock=deno.lock
 RUN deno run -A npm:@remix-run/dev vite:build
-CMD ["deno", "run", "-A", "cmd.ts", "serve", "--prod"]
+CMD ["deno", "run", "-A", "--env", "server.ts", "serve", "--prod"]
