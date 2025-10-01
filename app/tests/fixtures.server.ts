@@ -67,7 +67,7 @@ const mongoContainer = await new GenericContainer("mongo:8.0")
 
 console.log("Starting kafka container");
 const kafkaPort = 9992;
-const kafkaContainer = await new GenericContainer("bitnami/kafka:latest")
+const kafkaContainer = await new GenericContainer("bitnamilegacy/kafka:latest")
   .withExposedPorts({
     container: 9092,
     host: kafkaPort,
