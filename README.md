@@ -93,6 +93,8 @@ deno run -A --env server.ts serve
 deno run -A --env server.ts token create
 ```
 
+After running the command, copy `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN` values from output to your `.env` file.
+
 ### Remote Operations (cli.ts)
 
 For operations against a remote server (requires login & API key):

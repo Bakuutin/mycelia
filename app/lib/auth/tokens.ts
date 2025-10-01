@@ -55,7 +55,8 @@ export async function generateApiKey(
     collection: "api_keys",
     doc: newApiKey,
   });
-  console.log(result.insertedId);
+  const clientId = result.insertedId.toString();
+  console.log('MYCELIA_CLIENT_ID: ', clientId);
 
   return apiKey;
 }
