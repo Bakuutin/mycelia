@@ -154,12 +154,12 @@ const root = new Command()
             console.log("Generating token...");
             const key = await generateApiKey(owner, name, [
               {
-                "resource": "*",
-                "action": "*",
+                "resource": "**",
+                "action": "**",
                 "effect": "allow",
               } as Policy,
             ]);
-            console.log(`Token: ${key}`);
+            console.log(`MYCELIA_TOKEN: ${key}`);
           }),
       )
       .command(

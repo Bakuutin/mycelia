@@ -12,3 +12,4 @@ node_modules
 .ruff_cache
 *.ipynb
 coverage
+.vscode

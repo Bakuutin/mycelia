@@ -4,7 +4,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - /mnt/data/mycelia/redis:/bitnami/redis/data
+      - redis_data:/bitnami/redis/data
     environment:
       - REDIS_PASSWORD
     networks:
@@ -39,7 +39,7 @@ services:
     ports:
       - "9092:9092"
     volumes:
-      - /mnt/data/mycelia/kafka:/bitnami/kafka
+      - kafka_data:/bitnami/kafka
     networks:
       - a5t
   mongo:
@@ -47,33 +47,41 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - /mnt/data/mycelia/mongo:/data/db
+      - mongo_data:/data/db
     restart: unless-stopped
-    command: ["mongod", "--keyFile", "/data/db/mongo-keyfile", "--bind_ip_all"]
+    # command: ["mongod", "--keyFile", "/data/db/mongo-keyfile", "--bind_ip_all"]
     networks:
       - a5t
-  app:
-    image: ${IMAGE}
-    environment:
-      MONGO_URL: ${MONGO_URL}
-      SECRET_KEY: ${SECRET_KEY}
-      DATABASE_NAME: ${DATABASE_NAME}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      KAFKA_BROKER: kafka:9094
-      KAFKA_USERNAME: admin
-      KAFKA_PASSWORD: ${KAFKA_ADMIN_PASSWORD}
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
-      - "traefik.http.routers.mycelia.service=mycelia"
-      - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
-    networks:
-      - traefik_default
-      - a5t
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     MONGO_URL: ${MONGO_URL}
+  #     SECRET_KEY: ${SECRET_KEY}
+  #     DATABASE_NAME: ${DATABASE_NAME}
+  #     REDIS_HOST: redis
+  #     REDIS_PORT: 6379
+  #     REDIS_PASSWORD: ${REDIS_PASSWORD}
+  #     KAFKA_BROKER: kafka:9094
+  #     KAFKA_USERNAME: admin
+  #     KAFKA_PASSWORD: ${KAFKA_ADMIN_PASSWORD}
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
+  #     - "traefik.http.routers.mycelia.service=mycelia"
+  #     - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
+  #   networks:
+  #     - a5t
+  #     # - traefik_default
 
 networks:
   a5t:
-  traefik_default:
-    external: true
+  # traefik_default:
+  #   external: true
+
+
+volumes:
+  kafka_data:
+  mongo_data:
+  redis_data:

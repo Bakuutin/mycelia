@@ -86,12 +86,31 @@ deno run -A --env server.ts serve
 For local development and server management:
 
 ```bash
-# Start the server
-deno run -A --env server.ts serve
-
-# Generate auth tokens
+# Generate auth tokens and put
+# `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN` in .env
 deno run -A --env server.ts token create
 ```
+```bash
+# Start the server
+deno run -A --env server.ts serve
+```
+
+Then open http://localhost:5173/ and use generated token to login.
+
+### Setup Recordings Import
+
+1. Copy `python/settings.example.py` to `python/settings.py` and configure your import sources (for example, Google Drive export, Apple Voice Memos, or a local folder).
+
+2. Start the daemon, which will automatically import new recordings from your sources in the background.
+
+```bash
+# Run recordings import daemon
+cd python
+uv run daemon.py
+```
+
+3. After the initial import completes, run the `Recalculate timeline histograms` command below.
+
 
 ### Remote Operations (cli.ts)
 
