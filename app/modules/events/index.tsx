@@ -11,6 +11,13 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger, SheetFooter
 import type { EventItem } from "@/types/events.ts";
 import { callResource } from "@/utils/resources.client.ts";
 import { PlusIcon } from "lucide-react/icons";
+import Color from 'color';
+
+
+function getContrastingTextColor(hexColor: string): string {
+  const color = Color(hexColor);
+  return color.isDark() ? "#ffffff" : "#000000";
+}
 
 function useLaneLayout(items: ReturnType<typeof useEvents>["items"], xFor: (d: Date) => number) {
   return useMemo(() => {
@@ -74,15 +81,20 @@ function useLaneLayout(items: ReturnType<typeof useEvents>["items"], xFor: (d: D
 export const EventComponent: React.FC<{ p: any, topMargin: number, laneHeight: number, event: EventItem }> = ({ p, topMargin, laneHeight, event }) => {
     const { setSelected, setEditingEvent } = useEventsStore();
 
+    if (p.endX < 0) return null;
+
     const y = topMargin + p.lane * laneHeight;
-    const isPoint = p.kind === "point";
-    const w = Math.max(2, p.endX - p.startX);
+    const isPoint = event.kind !== "range";
+    const x = Math.max(p.startX, 0);
+    const w = Math.max(2, p.endX - x);
     const fill = event.color;
 
     let title = event.title ?? '';
-    if (w < (100) && event.shortTitle) {
+    if (w < (100) && !isPoint && event.shortTitle) {
       title = event.shortTitle;
     }
+
+  
 
 
     return (
@@ -98,10 +110,12 @@ export const EventComponent: React.FC<{ p: any, topMargin: number, laneHeight: n
         }}
          style={{ cursor: 'pointer' }}
       >
-        <rect x={p.startX} y={y + (p.thin ? 4 : 2)} width={w} height={p.thin ? 6 : 10} fill={fill} />
-        <foreignObject x={p.startX} y={y} width={isPoint ? 100 : w} height={laneHeight} className="text-[10px]">
+        <rect x={x} y={y + (p.thin ? 4 : 2)} width={w} height={p.thin ? 6 : 10} fill={fill} />
+        <foreignObject x={x + (isPoint ? 5 : 0)} y={y} width={isPoint ? 100 : w} height={laneHeight} className="text-[10px] font-medium overflow-hidden"
+        style={{ color: isPoint ? "white" : getContrastingTextColor(event.color) }}
+        >
             {title}
-        </foreignObject>
+</foreignObject>
       </g>
     );
 }
