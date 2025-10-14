@@ -20,7 +20,7 @@ class LocalFilesystemImporter(ExtractStartTimeFromPathMixin, FilesystemImporter)
 
 
 importers: list[FilesystemImporter] = [
-    GoogleCloudImporter(root="/Users/tigor/Library/CloudStorage/GoogleDrive-igorbakutin@gmail.com/My Drive/Easy Voice Recorder/"),
-    AppleVoiceMemosImporter(root="/Users/tigor/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/"),
-    LocalFilesystemImporter(root="/Users/tigor/Library/mycelia//audio", code="local", ),
+    GoogleCloudImporter(root=os.path.expanduser("~/Library/CloudStorage/GoogleDrive-YOUR_EMAIL/My Drive/Easy Voice Recorder/")),
+    AppleVoiceMemosImporter(root=os.path.expanduser("~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/")),
+    LocalFilesystemImporter(root=os.path.expanduser("~/Library/mycelia/audio"), code="local"),
 ]
