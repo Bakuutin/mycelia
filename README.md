@@ -143,6 +143,8 @@ uv run daemon.py
 
    **Resumable**: The daemon tracks already-processed files in the database. If you cancel (Ctrl+C) and restart, it will skip files that were already discovered and continue from where it left off.
 
+   **Logging**: All processing is logged to `~/Library/mycelia/logs/daemon.log` with detailed debug information, while the console shows INFO level messages.
+
 4. After the initial import completes, run the `Recalculate timeline histograms` command below.
 
 

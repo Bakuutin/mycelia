@@ -22,13 +22,24 @@ import settings
 
 logger = logging.getLogger('daemon')
 
-
+import os
+log_dir = os.path.expanduser('~/Library/mycelia/logs')
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, 'daemon.log')
 
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logging.basicConfig(level=logging.DEBUG, handlers=[console])
+console.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+logging.basicConfig(level=logging.DEBUG, handlers=[console, file_handler])
+
+logger.info(f"Logging to {log_file}")
 
 
 def import_new_files():
