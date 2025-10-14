@@ -117,9 +117,11 @@ The new frontend runs on http://localhost:3000/. In the settings page, configure
 
 ### Setup Recordings Import
 
-1. Copy `python/settings.example.py` to `python/settings.py` and configure your import sources (for example, Google Drive export, Apple Voice Memos, or a local folder).
+1. Copy `python/settings.example.py` to `python/settings.py` and configure your import sources. Replace `YOUR_EMAIL` in the Google Drive path with your email if using Google Drive import.
 
-2. Start the daemon, which will automatically import new recordings from your sources in the background.
+2. **macOS only**: Grant Full Disk Access to your terminal app (Terminal, iTerm, VS Code, etc.) via System Settings → Privacy & Security → Full Disk Access. Restart the terminal after granting access.
+
+3. Start the daemon, which will automatically import new recordings from your sources in the background.
 
 ```bash
 # Run recordings import daemon
@@ -127,7 +129,7 @@ cd python
 uv run daemon.py
 ```
 
-3. After the initial import completes, run the `Recalculate timeline histograms` command below.
+4. After the initial import completes, run the `Recalculate timeline histograms` command below.
 
 
 ### Speech-to-Text (STT)
