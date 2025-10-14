@@ -68,12 +68,16 @@ cd mycelia
 # Install deno deps
 deno install
 
-# Start the services
+# Configure environment (edit your .env accordingly)
+cp .env.example .env
+
+# Start the services (MongoDB, Redis, Kafka)
 mkdir .docker
 docker compose up -d
 
-# Configure environment (edit your .env accordingly)
-cp .env.example .env
+# Generate auth credentials (requires services running)
+deno run -A --env server.ts token create
+# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
 
 # Start the server
 deno run -A --env server.ts serve

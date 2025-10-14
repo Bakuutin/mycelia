@@ -52,6 +52,7 @@ async function startProdServer() {
 
   const server = app.listen(3000, () => {
     console.log("Server is running on port 3000");
+    console.log("Open http://localhost:3000");
   });
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
@@ -72,6 +73,7 @@ async function startDevServer() {
   await server.listen(5173);
 
   console.log("Server is running on port 5173");
+  console.log("Open http://localhost:5173");
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
     process.once(signal, async () => {
