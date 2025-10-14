@@ -51,8 +51,8 @@ importer_map = {importer.code: importer for importer in settings.importers}
 unknown_importer = Importer(code="unknown")
 
 
-def ingests_missing_sources(limit=None):
-    query = source_files.find({
+def ingests_missing_sources(limit=None, retry_errors=False):
+    base_query = {
         "ingested": False,
         "$or": [
             {
@@ -61,14 +61,44 @@ def ingests_missing_sources(limit=None):
             },
             {"platform.importer": {"$in": list(importer_map.keys())}},
         ],
-    }).sort([('start', DESCENDING)])
+    }
+
+    if not retry_errors:
+        base_query["ingestion.error"] = {"$exists": False}
+
+    total_pending = source_files.count_documents(base_query)
+
+    already_ingested = source_files.count_documents({"ingested": True})
+
+    errored_count = source_files.count_documents({
+        "ingested": False,
+        "ingestion.error": {"$exists": True}
+    })
+
+    total_files = already_ingested + total_pending + errored_count
+
+    if total_pending == 0:
+        if errored_count > 0:
+            logger.info(f"✓ Ingestion complete: {already_ingested}/{total_files} files successfully ingested, {errored_count} errored files cached")
+        else:
+            logger.info(f"✓ Ingestion complete: {already_ingested}/{total_files} files successfully ingested")
+        return
+
+    logger.info(f"Starting ingestion: {total_pending} pending, {already_ingested} already ingested, {errored_count} errored (Total: {total_files} files)")
+
+    query = source_files.find(base_query).sort([('start', DESCENDING)])
     if limit:
         query = query.limit(limit)
-    for source in query:
-        error = source.get('ingestion', {}).get('error')
-        if error and source['ingestion']['last_attempt'] > datetime.now(tz=UTC) - timedelta(hours=2):
-            logger.info(f"Skipping {source['_id']} due to previous error \"{error}\"")
-            continue
+
+    processed = 0
+    errors = 0
+
+    for idx, source in enumerate(query, 1):
+        file_path = source.get('path', str(source['_id']))
+        file_name = os.path.basename(file_path) if 'path' in source else str(source['_id'])
+
+        logger.info(f"Processing [{idx}/{min(limit or total_pending, total_pending)}]: {file_name}")
+
         try:
             importer = importer_map.get(
                 source['platform'].get('importer'),
@@ -79,15 +109,74 @@ def ingests_missing_sources(limit=None):
                 "ingested": True,
                 "ingested_at": datetime.now(tz=UTC),
             }})
+            processed += 1
+            logger.info(f"✓ Successfully ingested: {file_name}")
         except Exception as e:
-            logger.exception(f"Error ingesting {source['_id']}")
+            errors += 1
+            error_msg = str(e)
+            logger.error(f"✗ Error ingesting {file_name}: {error_msg[:100]}")
             source_files.update_one({"_id": source["_id"]}, {"$set": {"ingestion": {
-                "error": str(e),
+                "error": error_msg,
                 "last_attempt": datetime.now(tz=UTC),
             }}})
 
+    remaining = total_pending - processed - errors
+    new_ingested_total = already_ingested + processed
+    new_errored_total = errored_count + errors
+    logger.info(f"Batch complete: {processed} processed, {errors} errors, {remaining} remaining")
+    logger.info(f"Overall status: {new_ingested_total}/{total_files} ingested, {new_errored_total} errored")
 
 
+
+
+
+def list_errored_files():
+    errored_files = source_files.find({
+        "ingested": False,
+        "ingestion.error": {"$exists": True}
+    }).sort([('ingestion.last_attempt', DESCENDING)])
+
+    count = 0
+    for source in errored_files:
+        count += 1
+        file_path = source.get('path', str(source['_id']))
+        file_name = os.path.basename(file_path) if 'path' in source else str(source['_id'])
+        error = source['ingestion']['error'][:100]
+        last_attempt = source['ingestion']['last_attempt'].strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{count}. {file_name}")
+        print(f"   ID: {source['_id']}")
+        print(f"   Error: {error}")
+        print(f"   Last attempt: {last_attempt}")
+        print()
+
+    if count == 0:
+        print("No errored files found")
+    else:
+        print(f"Total: {count} errored files")
+
+    return count
+
+
+def clear_error(file_id):
+    result = source_files.update_one(
+        {"_id": file_id},
+        {"$unset": {"ingestion": ""}}
+    )
+    if result.modified_count > 0:
+        logger.info(f"Cleared error for file {file_id}")
+        return True
+    else:
+        logger.warning(f"File {file_id} not found or no error to clear")
+        return False
+
+
+def clear_all_errors():
+    result = source_files.update_many(
+        {"ingestion.error": {"$exists": True}},
+        {"$unset": {"ingestion": ""}}
+    )
+    logger.info(f"Cleared errors for {result.modified_count} files")
+    return result.modified_count
 
 
 def add_missing_durations():
@@ -136,9 +225,22 @@ import_new_files()
 #%%
 
 def main():
+    logger.info("=" * 60)
+    logger.info("Starting daemon cycle")
+    logger.info("=" * 60)
+
+    logger.info("\n[1/3] Importing new files from sources...")
     import_new_files()
+
+    logger.info("\n[2/3] Ingesting audio files...")
     ingests_missing_sources(limit=20)
+
+    logger.info("\n[3/3] Running voice activity detection...")
     run_voice_activity_detection(limit=1000)
+
+    logger.info("=" * 60)
+    logger.info("Daemon cycle complete")
+    logger.info("=" * 60)
 
 
 if __name__ == '__main__':
