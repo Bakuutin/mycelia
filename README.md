@@ -103,7 +103,17 @@ Then open http://localhost:5173/ and use generated token to login.
 
 ### Setup Recordings Import
 
-1. Copy `python/settings.example.py` to `python/settings.py` and configure your import sources. Replace `YOUR_EMAIL` in the Google Drive path with your email if using Google Drive import.
+1. The `python/settings.py` works out-of-the-box and auto-detects:
+   - Apple Voice Memos (if `CloudRecordings.db` exists)
+   - Google Drive Easy Voice Recorder (scans `~/Library/CloudStorage/GoogleDrive-*`)
+   - Local audio folder (`~/Library/mycelia/audio`)
+
+   Customize paths/timezones via environment variables in `.env`:
+   - `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
+   - `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive Easy Voice Recorder path
+   - `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder path
+   - `MYCELIA_GOOGLE_TZ` - Timezone for Google Drive timestamps (default: `UTC`)
+   - `MYCELIA_LOCAL_TZ` - Timezone for local file timestamps (default: `UTC`)
 
 2. **macOS only**: Grant Full Disk Access to your terminal app (Terminal, iTerm, VS Code, etc.) via System Settings → Privacy & Security → Full Disk Access. Restart the terminal after granting access.
 
