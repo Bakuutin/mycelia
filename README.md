@@ -139,6 +139,10 @@ cd python
 uv run daemon.py
 ```
 
+   **Progress tracking**: The import process shows progress bars for each source (e.g., Apple Voice Memos shows "X/Y files").
+
+   **Resumable**: The daemon tracks already-processed files in the database. If you cancel (Ctrl+C) and restart, it will skip files that were already discovered and continue from where it left off.
+
 4. After the initial import completes, run the `Recalculate timeline histograms` command below.
 
 
