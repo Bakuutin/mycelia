@@ -1,17 +1,17 @@
 services:
   redis:
-    image: bitnami/redis:8.0
+    image: bitnamilegacy/redis:8.0
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/bitnami/redis/data
+      - redis_data:/bitnamilegacy/redis/data
     environment:
       - REDIS_PASSWORD
     networks:
       - a5t
 
   kafka:
-    image: bitnami/kafka:4.0
+    image: bitnamilegacy/kafka:4.0
     environment:
       - KAFKA_CFG_KRAFT_MODE=true
       - KAFKA_CFG_CLUSTER_ID=${KAFKA_CLUSTER_ID}
@@ -39,7 +39,7 @@ services:
     ports:
       - "9092:9092"
     volumes:
-      - kafka_data:/bitnami/kafka
+      - kafka_data:/bitnamilegacy/kafka
     networks:
       - a5t
   mongo:
