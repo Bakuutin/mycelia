@@ -33,7 +33,7 @@ def split_to_opus_chunks(original, *, quiet=True):
         .input(original)
         .output(
             os.path.join(dest_dir, "%010d.opus"),
-            f='segment', 
+            f='segment',
             segment_time=int(CHUNK_MAX_LEN.total_seconds()),
             acodec='libopus',
             audio_bitrate='64k',
@@ -45,7 +45,12 @@ def split_to_opus_chunks(original, *, quiet=True):
     if os.listdir(dest_dir):
         pass
     else:
-        stream.run(quiet=quiet)
+        try:
+            stream.run(quiet=quiet, capture_stdout=True, capture_stderr=True)
+        except ffmpeg.Error as e:
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            logger.error(f"FFmpeg error processing '{original}':\n{error_msg}")
+            raise Exception(f"ffmpeg error processing {os.path.basename(original)}: {error_msg[:200]}")
 
     return [
         (i * CHUNK_MAX_LEN, os.path.join(dest_dir, f))
@@ -68,7 +73,7 @@ def wav_to_array(source: io.BytesIO) -> np.ndarray:
     if wav_file.getnchannels() != 1:
         raise ValueError("WAV file must be mono")
     frames = wav_file.readframes(wav_file.getnframes())
-    
+
     # Get sample width to determine dtype
     if wav_file.getsampwidth() == 2:
         data = np.frombuffer(frames, dtype=np.int16)
@@ -76,33 +81,33 @@ def wav_to_array(source: io.BytesIO) -> np.ndarray:
         data = np.frombuffer(frames, dtype=np.int32)
     else:
         raise ValueError("Unsupported sample width")
-        
+
     # Normalize to float between -1.0 and 1.0
     return data.astype(np.float32) / np.iinfo(data.dtype).max
 
 def array_to_wav(audio_data: np.ndarray, sample_rate=16000) -> io.BytesIO:
     """
     Convert numpy array to WAV file in memory
-    
+
     Args:
         audio_data (numpy.ndarray): Audio data normalized between -1.0 and 1.0
         sample_rate (int): Sample rate in Hz
-        
+
     Returns:
         io.BytesIO: WAV file in memory
     """
     # Convert to 16-bit PCM
     audio_data = (audio_data * 32767).astype(np.int16)
-    
+
     # Create BytesIO object
     wav_buffer = io.BytesIO()
-    
+
     with wave.open(wav_buffer, 'wb') as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(audio_data.tobytes())
-    
+
     wav_buffer.seek(0)
     return wav_buffer
 
@@ -112,10 +117,10 @@ def read_codec(source: bytes, codec: str, sample_rate: int = sample_rate) -> np.
         ffmpeg
         .input('pipe:', codec=codec)
         .output(
-            'pipe:',    
-            format='wav', 
-            acodec='pcm_s16le', 
-            ar=str(sample_rate), 
+            'pipe:',
+            format='wav',
+            acodec='pcm_s16le',
+            ar=str(sample_rate),
             ac=1,
         )
         .overwrite_output()
@@ -125,7 +130,7 @@ def read_codec(source: bytes, codec: str, sample_rate: int = sample_rate) -> np.
             pipe_stderr=True,
         )
     )
-            
+
     output_data, stderr = process.communicate(input=source)
 
     if process.returncode != 0:
@@ -172,7 +177,7 @@ class AudioChunkReader:
             duration = timedelta(seconds=duration)
         elif kwargs:
             duration = timedelta(**kwargs)
-        
+
         start = self.cursor
         result = []
 
@@ -193,11 +198,11 @@ class AudioChunkReader:
                 result.append(np.zeros(diff, dtype=np.float32))
             elif diff < 0:
                 # chunk starts in the past
-                if result: 
+                if result:
                     # combine overlap with prev chunk
                     overlap = -diff
                     prev = result[-1]
-                    result[-1] = prev[:overlap] 
+                    result[-1] = prev[:overlap]
                     result.append(np.mean([prev[overlap:], audio[:overlap]], axis=0))
                 audio = audio[-diff:]
 
@@ -213,7 +218,7 @@ def fetch_audio(
         start: datetime,
         duration: timedelta,
         *,
-        filter_chunks: dict | None = None, 
+        filter_chunks: dict | None = None,
         prefetch_chunks: int = 10,
         sample_rate: int = sample_rate,
         db_collection: Collection = audio_chunks_collection,
@@ -250,4 +255,4 @@ def ingest_source(original: dict):
                     "data": f.read(),
                 })
     finally:
-        shutil.rmtree(tmp_dir) 
+        shutil.rmtree(tmp_dir)
