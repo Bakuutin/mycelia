@@ -54,8 +54,21 @@ def get_voice_prob(audio):
 
 
 def run_voice_activity_detection(limit=1000):
+    import time
+
+    pending_chunks = audio_chunks_collection.count_documents({"vad": None})
+    processed_chunks = audio_chunks_collection.count_documents({"vad": {"$ne": None}})
+    total_chunks = pending_chunks + processed_chunks
+
+    if pending_chunks == 0:
+        logger.info(f"✓ VAD complete: {processed_chunks}/{total_chunks} chunks processed")
+        return
+
+    chunks_to_process = min(limit, pending_chunks) if limit else pending_chunks
+    logger.info(f"Starting VAD: {chunks_to_process} chunks to process, {processed_chunks} already processed (Total: {total_chunks} chunks)")
+
     cursor = audio_chunks_collection.find(
-        {   
+        {
             "vad": None,
         },
         sort=[("start", -1)],
@@ -64,7 +77,8 @@ def run_voice_activity_detection(limit=1000):
     )
     updates = []
     has_speech = 0
-    pbar = tqdm(cursor, total=limit, unit="chunks")
+    start_time = time.time()
+    pbar = tqdm(cursor, total=chunks_to_process, unit="chunks")
     for i, chunk in enumerate(pbar):
         audio = read_codec(chunk["data"], codec="opus", sample_rate=sample_rate)
         prob = get_voice_prob(audio)
@@ -79,7 +93,27 @@ def run_voice_activity_detection(limit=1000):
             }
         ))
         has_speech += prob > vad_threshold
+        current_overall = processed_chunks + (i + 1)
+
+        elapsed_time = time.time() - start_time
+        chunks_processed_now = i + 1
+        speed = chunks_processed_now / elapsed_time if elapsed_time > 0 else 0
+
+        remaining_overall = total_chunks - current_overall
+        eta_seconds = remaining_overall / speed if speed > 0 else 0
+
+        if eta_seconds < 60:
+            eta_str = f"{int(eta_seconds)}s"
+        elif eta_seconds < 3600:
+            eta_str = f"{int(eta_seconds / 60)}m {int(eta_seconds % 60)}s"
+        else:
+            hours = int(eta_seconds / 3600)
+            minutes = int((eta_seconds % 3600) / 60)
+            eta_str = f"{hours}h {minutes}m"
+
         pbar.set_postfix({
+            'overall': f"{current_overall}/{total_chunks}",
+            'eta_all': eta_str,
             'has_speech': f"{(has_speech / (i+1)) * 100:.1f}%",
             'ts': chunk['start'].replace(microsecond=0).isoformat(),
         })
@@ -89,8 +123,11 @@ def run_voice_activity_detection(limit=1000):
 
         if limit and i >= limit:
             break
-    
+
     # Process any remaining updates
     if updates:
         audio_chunks_collection.bulk_write(updates)
 
+    new_processed_chunks = processed_chunks + (i + 1)
+    logger.info(f"VAD batch complete: {i + 1} chunks processed, {has_speech} with speech ({(has_speech / (i+1)) * 100:.1f}%)")
+    logger.info(f"Overall VAD status: {new_processed_chunks}/{total_chunks} chunks processed")

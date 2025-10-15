@@ -68,12 +68,16 @@ cd mycelia
 # Install deno deps
 deno install
 
-# Start the services
+# Configure environment (edit your .env accordingly)
+cp .env.example .env
+
+# Start the services (MongoDB, Redis, Kafka)
 mkdir .docker
 docker compose up -d
 
-# Configure environment (edit your .env accordingly)
-cp .env.example .env
+# Generate auth credentials (requires services running)
+deno run -A --env server.ts token create
+# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
 
 # Start the server
 deno run -A --env server.ts serve
@@ -99,9 +103,21 @@ Then open http://localhost:5173/ and use generated token to login.
 
 ### Setup Recordings Import
 
-1. Copy `python/settings.example.py` to `python/settings.py` and configure your import sources (for example, Google Drive export, Apple Voice Memos, or a local folder).
+1. The `python/settings.py` works out-of-the-box and auto-detects:
+   - Apple Voice Memos (if `CloudRecordings.db` exists)
+   - Google Drive Easy Voice Recorder (scans `~/Library/CloudStorage/GoogleDrive-*`)
+   - Local audio folder (`~/Library/mycelia/audio`)
 
-2. Start the daemon, which will automatically import new recordings from your sources in the background.
+   Customize paths/timezones via environment variables in `.env`:
+   - `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
+   - `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive Easy Voice Recorder path
+   - `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder path
+   - `MYCELIA_GOOGLE_TZ` - Timezone for Google Drive timestamps (default: `UTC`)
+   - `MYCELIA_LOCAL_TZ` - Timezone for local file timestamps (default: `UTC`)
+
+2. **macOS only**: Grant Full Disk Access to your terminal app (Terminal, iTerm, VS Code, etc.) via System Settings → Privacy & Security → Full Disk Access. Restart the terminal after granting access.
+
+3. Start the daemon, which will automatically import new recordings from your sources in the background.
 
 ```bash
 # Run recordings import daemon
@@ -109,7 +125,30 @@ cd python
 uv run daemon.py
 ```
 
-3. After the initial import completes, run the `Recalculate timeline histograms` command below.
+   **Progress tracking**: The import process shows:
+   - Discovery progress bars for each source (e.g., "Discovering apple_voicememos: 45/150 files")
+   - Ingestion progress: "Starting ingestion: 23 files pending"
+   - Per-file status: "Ingesting [5/23]: /path/to/file.m4a"
+   - Batch summary: "Ingestion batch complete: 20 processed, 2 skipped, 1 errors, 3 remaining"
+
+   **Processing frequency**: The daemon runs continuously, processing up to 20 files per batch, then sleeps briefly before the next batch. Failed files are skipped for 2 hours before retry.
+
+   **Resumable**: The daemon tracks already-processed files in the database. If you cancel (Ctrl+C) and restart, it will skip files that were already discovered and continue from where it left off.
+
+   **Logging**: All processing is logged to `~/Library/mycelia/logs/daemon.log` with detailed debug information including full ffmpeg errors. The console shows INFO level messages.
+
+4. After the initial import completes, run the `Recalculate timeline histograms` command below.
+
+#### Troubleshooting Import Issues
+
+**FFmpeg errors**: If you see "ffmpeg error (see stderr output for detail)":
+1. Check `~/Library/mycelia/logs/daemon.log` for the full error message
+2. Common causes:
+   - Corrupted audio file (try playing it in another app)
+   - Unsupported codec (ffmpeg may need additional codecs)
+   - File permission issues (verify Full Disk Access is granted)
+3. Files with errors are automatically retried after 2 hours
+4. To force immediate retry, remove the error from MongoDB or wait for the retry window
 
 
 ### Remote Operations (cli.ts)

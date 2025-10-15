@@ -1,6 +1,4 @@
 **/.venv
 **/.ruff_cache
 *.pyc
-
 *.ipynb
-settings.py

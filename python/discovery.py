@@ -63,7 +63,7 @@ class Importer:
 
     def discover(self) -> Iterable[Metadata]:
         raise NotImplementedError
-    
+
     def get_start(self, metadata: Metadata) -> datetime:
         raise NotImplementedError
 
@@ -73,7 +73,7 @@ class Importer:
             "node": platform.node(),
             "importer": self.code,
         }
-    
+
     def ingest(self, metadata: Metadata):
         metadata.update({
             "ingested": False,
@@ -86,9 +86,12 @@ class Importer:
     def run(self):
         with self.lock:
             new_files = list(self.discover())
-            self.logger.info("discovered %s new files in '%s'", len(new_files), self.root)
-            for item in new_files:
-                self.ingest(item)
+            if new_files:
+                self.logger.info("discovered %s new files in '%s'", len(new_files), self.root)
+                for item in new_files:
+                    self.ingest(item)
+            else:
+                self.logger.info("no new files found in '%s'", self.root)
 
     def upload(self, source: dict):
         ingest_source(source)
@@ -97,7 +100,7 @@ class Importer:
 class FilesystemImporter(Importer):
     def should_discover(self, path: str) -> bool:
         return is_audio_file(path) and not is_discovered(path)
-    
+
     def get_start(self, metadata: Metadata) -> datetime:
         return metadata["created"]
 
@@ -121,7 +124,13 @@ class AppleVoiceMemosImporter(Importer):
         return apple_date_to_datetime(metadata["voicememo"]["ZDATE"])
 
     def get_sqlite_data(self):
-        db = sqlite3.connect(os.path.join(self.root, 'CloudRecordings.db'))
+        db_path = os.path.join(self.root, 'CloudRecordings.db')
+        if not os.path.exists(db_path):
+            return []
+        try:
+            db = sqlite3.connect(db_path)
+        except sqlite3.Error:
+            return []
         try:
             cursor = db.cursor()
             cursor.execute("SELECT * FROM ZCLOUDRECORDING")
@@ -131,23 +140,30 @@ class AppleVoiceMemosImporter(Importer):
             db.close()
 
     def discover(self) -> Iterable[Metadata]:
-        for memo in self.get_sqlite_data():
-            if not memo["ZPATH"]:
-                continue
-            path = os.path.join(self.root, memo["ZPATH"])
-            
-            if is_discovered(path):
-                continue
+        sqlite_data = self.get_sqlite_data()
+        total_memos = len(sqlite_data)
 
-            yield {
-                **get_os_metadata(path),
-                "voicememo": {
-                    "ZENCRYPTEDTITLE": memo["ZENCRYPTEDTITLE"],
-                    "ZUNIQUEID": memo["ZUNIQUEID"],
-                    "ZDATE": memo["ZDATE"],
-                },
-                "duration": memo["ZDURATION"],
-            }
+        with tqdm(total=total_memos, desc=f"Discovering {self.code}", unit="files") as pbar:
+            for memo in sqlite_data:
+                if not memo["ZPATH"]:
+                    pbar.update(1)
+                    continue
+                path = os.path.join(self.root, memo["ZPATH"])
+
+                if is_discovered(path):
+                    pbar.update(1)
+                    continue
+
+                yield {
+                    **get_os_metadata(path),
+                    "voicememo": {
+                        "ZENCRYPTEDTITLE": memo["ZENCRYPTEDTITLE"],
+                        "ZUNIQUEID": memo["ZUNIQUEID"],
+                        "ZDATE": memo["ZDATE"],
+                    },
+                    "duration": memo["ZDURATION"],
+                }
+                pbar.update(1)
 
 
 class SshFilesystemImporter(FilesystemImporter):
