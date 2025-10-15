@@ -85,7 +85,7 @@ async function startDevServer() {
 }
 
 const root = new Command()
-  .name("deno run -A --env cmd.ts")
+  .name("deno run -A --env server.ts")
   .action(() => {
     console.log(root.getHelp());
   })
