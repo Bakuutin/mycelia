@@ -4,8 +4,8 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "dev": "deno run --env-file -A cmd.ts serve",
-    "cli": "deno run --env-file -A cmd.ts"
+    "dev": "deno run --env-file -A server.ts serve",
+    "cli": "deno run --env-file -A server.ts"
   },
   "bin": {
     "mycelia": "./bin/dev.js"
