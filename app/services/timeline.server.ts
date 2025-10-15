@@ -162,7 +162,8 @@ export async function updateHistogramOptimized(
   start = new Date(Math.floor(start.getTime() / binSize) * binSize);
   end = new Date(Math.ceil(end.getTime() / binSize) * binSize);
 
-  console.log("Updating histogram", start, end, resolution);
+  const totalBins = Math.ceil((end.getTime() - start.getTime()) / binSize);
+  console.log(`   ├─ Querying lower resolution data (expected ~${totalBins} bins)...`);
 
   // Get the next lower resolution
   const currentIndex = RESOLUTION_ORDER.indexOf(resolution);
@@ -174,6 +175,8 @@ export async function updateHistogramOptimized(
     collection: `histogram_${lowerResolution}`,
     query: { start: { $gte: start, $lt: end } },
   });
+
+  console.log(`   ├─ Processing ${lowerData.length} source bins into ${totalBins} target bins...`);
 
   // Aggregate the lower resolution data into the current resolution
   const aggregatedData = new Map<
@@ -281,13 +284,22 @@ export async function updateHistogramOptimized(
     };
   });
 
-  for (let i = 0; i < ops.length; i += 1000) {
+  const batchSize = 1000;
+  const totalBatches = Math.ceil(ops.length / batchSize);
+  console.log(`   ├─ Writing ${ops.length} bins in ${totalBatches} batches...`);
+
+  for (let i = 0; i < ops.length; i += batchSize) {
+    const batchNum = Math.floor(i / batchSize) + 1;
     await mongo({
       action: "bulkWrite",
       collection: `histogram_${resolution}`,
-      operations: ops.slice(i, i + 1000),
+      operations: ops.slice(i, i + batchSize),
     });
+    if (totalBatches > 1) {
+      console.log(`   │  └─ Batch ${batchNum}/${totalBatches} written (${Math.round(batchNum / totalBatches * 100)}%)`);
+    }
   }
+  console.log(`   └─ ✓ Completed writing ${ops.length} bins`);
 }
 
 const day = 1000 * 60 * 60 * 24;
@@ -368,6 +380,7 @@ export async function updateAllHistogram(
   let latestStart: Date | null = null;
 
   if (!start || !end) {
+    console.log("[Timeline] Scanning collections for data range...");
     for (const collectionName of Object.keys(TARGET_COLLECTIONS)) {
       const firstDoc = await mongo({
         action: "find",
@@ -407,11 +420,50 @@ export async function updateAllHistogram(
     }
   }
 
-  console.log("Updating all histograms", start, end);
+  const totalDays = Math.ceil((end.getTime() - start.getTime()) / day);
+  console.log(`[Timeline] Recalculating histograms from ${start.toISOString()} to ${end.toISOString()} (~${totalDays} days)`);
+  console.log(`[Timeline] Processing ${RESOLUTION_ORDER.length} resolutions: ${RESOLUTION_ORDER.join(", ")}`);
+  console.log(`[Timeline] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
-  for (const resolution of RESOLUTION_ORDER) {
+  const startTime = Date.now();
+  const resolutionTimes: number[] = [];
+
+  for (let i = 0; i < RESOLUTION_ORDER.length; i++) {
+    const resolution = RESOLUTION_ORDER[i];
+    const progress = Math.round((i / RESOLUTION_ORDER.length) * 100);
+
+    console.log(`\n[Timeline] [${i + 1}/${RESOLUTION_ORDER.length}] ${resolution.toUpperCase()} (${progress}% complete)`);
+    console.log(`[Timeline] ┌─────────────────────────────────────────────────────`);
+
+    const resStart = Date.now();
     await updateHistogramOptimized(auth, start, end, resolution);
+    const resDuration = (Date.now() - resStart) / 1000;
+    resolutionTimes.push(resDuration);
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    const avgTimePerResolution = resolutionTimes.reduce((a, b) => a + b, 0) / resolutionTimes.length;
+    const remainingResolutions = RESOLUTION_ORDER.length - (i + 1);
+    const etaSeconds = avgTimePerResolution * remainingResolutions;
+
+    let etaStr = "";
+    if (etaSeconds < 60) {
+      etaStr = `~${Math.round(etaSeconds)}s remaining`;
+    } else if (etaSeconds < 3600) {
+      etaStr = `~${Math.round(etaSeconds / 60)}m remaining`;
+    } else {
+      const hours = Math.floor(etaSeconds / 3600);
+      const mins = Math.round((etaSeconds % 3600) / 60);
+      etaStr = `~${hours}h ${mins}m remaining`;
+    }
+
+    const completePct = Math.round(((i + 1) / RESOLUTION_ORDER.length) * 100);
+    console.log(`[Timeline] └─────────────────────────────────────────────────────`);
+    console.log(`[Timeline] ✓ ${resolution} completed in ${resDuration.toFixed(1)}s | ${completePct}% complete | ${etaStr}`);
   }
+
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`\n[Timeline] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`[Timeline] ✅ All histograms updated successfully in ${totalTime}s`);
 }
 
 export async function ensureHistogramIndex(auth: Auth): Promise<void> {
