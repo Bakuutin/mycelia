@@ -78,12 +78,19 @@ export class TimelineResource
           ? parseDateOrRelativeTime(input.end)
           : undefined;
 
+        const startTime = Date.now();
         if (input.all) {
           await updateAllHistogram(auth);
         } else {
           await updateAllHistogram(auth, parsedStart, parsedEnd);
         }
-        return { success: true };
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        return {
+          success: true,
+          duration: `${duration}s`,
+          message: `Timeline histograms recalculated successfully`
+        };
       }
       case "ensureIndex":
         await ensureHistogramIndex(auth);

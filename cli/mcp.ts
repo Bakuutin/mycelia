@@ -48,6 +48,20 @@ export async function handleMCPListTools(config: CliConfig): Promise<void> {
 }
 
 
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  } else if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}m ${secs}s`;
+  } else {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+  }
+}
+
 export async function handleMCPCallTool(
   config: CliConfig,
   toolName: string,
@@ -65,6 +79,25 @@ export async function handleMCPCallTool(
         Deno.exit(1);
       }
     }
+
+    console.log(`\n🚀 Calling tool: ${toolName}`);
+    if (Object.keys(args).length > 0) {
+      console.log(`📝 Arguments: ${JSON.stringify(args, null, 2)}`);
+    }
+    console.log(`⏳ Processing... (check server logs for progress)\n`);
+
+    const startTime = Date.now();
+    let progressInterval: number | undefined;
+
+    // Show elapsed time while waiting
+    progressInterval = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      Deno.stdout.writeSync(
+        new TextEncoder().encode(
+          `\r⏱️  Elapsed: ${formatElapsed(elapsed)} (still processing...)`,
+        ),
+      );
+    }, 1000);
 
     const response = await fetch(getUrl("/mcp"), {
       method: "POST",
@@ -84,20 +117,28 @@ export async function handleMCPCallTool(
       }),
     });
 
+    if (progressInterval) {
+      clearInterval(progressInterval);
+      console.log("\r" + " ".repeat(60) + "\r"); // Clear the progress line
+    }
+
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error("MCP call failed:", errorBody);
+      console.error(`❌ MCP call failed (${totalTime}s):`, errorBody);
       Deno.exit(1);
     }
 
     const result = await response.json();
 
     if (result.error) {
-      console.error("Tool call failed:", result.error.message);
+      console.error(`❌ Tool call failed (${totalTime}s):`, result.error.message);
       Deno.exit(1);
     }
 
     // Print successful result
+    console.log(`✅ Completed in ${totalTime}s\n`);
     if (result.result?.content) {
       for (const content of result.result.content) {
         if (content.type === "text") {
@@ -108,7 +149,7 @@ export async function handleMCPCallTool(
       console.log(JSON.stringify(result.result, null, 2));
     }
   } catch (error) {
-    console.error("Failed to call MCP tool:", (error as Error).message);
+    console.error("❌ Failed to call MCP tool:", (error as Error).message);
     Deno.exit(1);
   }
 }
