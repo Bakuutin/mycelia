@@ -1,11 +1,15 @@
 import io
 import time
 import wave
+import os
+import argparse
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 
 from utils import lazy, mongo
+
+STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087')
 
 from pydantic import BaseModel
 from datetime import datetime
@@ -136,7 +140,7 @@ def process_speech_sequences(limit=None, max_workers=4):
 
 
 def transcribe_sequence(sequence: SpeechSequence):
-    response = requests.post('http://localhost:8081/transcribe', files=[
+    response = requests.post(f'{STT_SERVER_URL}/transcribe', files=[
         ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
         for i, chunk in enumerate(reversed(sequence.chunks))
     ])
@@ -171,4 +175,7 @@ def mark_as_transcribed(seq: SpeechSequence):
 
 
 if __name__ == '__main__':
-    process_speech_sequences(limit=None, max_workers=5)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--limit', type=int, default=None)
+    args = parser.parse_args()
+    process_speech_sequences(limit=args.limit, max_workers=5)
