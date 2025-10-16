@@ -112,6 +112,14 @@ uv run daemon.py
 3. After the initial import completes, run the `Recalculate timeline histograms` command below.
 
 
+### Speech-to-Text (STT)
+
+Configure and run the STT processor:
+
+- Run python/whisper_server/server.py on a gpu machine and set the `STT_SERVER_URL` in .env
+- Run `uv run stt.py` to process the audio chunks
+
+
 ### Remote Operations (cli.ts)
 
 For operations against a remote server (requires login & API key):
