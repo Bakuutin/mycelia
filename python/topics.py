@@ -2,12 +2,15 @@
 
 from typing import Literal
 from lib import call_resource
+import os
 
 import pytz
 
 
 from langchain_ollama import OllamaLLM
 from datetime import timedelta, datetime
+
+
 #
 
 # %%
@@ -16,9 +19,23 @@ topics_absolute_start = pytz.UTC.localize(datetime(2024, 12, 10, 5, 0))
 
 
 
-def get_latest_hist_with_topics_start(scale: Literal["5min", "1hour", "1day", "1week"], prev: datetime | None = None):
-    if not prev:
-        prev = topics_absolute_start
+def get_earliest_hist_without_topics_start(scale: Literal["5min", "1hour", "1day", "1week"], before_time: datetime | None = None):
+    if not before_time:
+        # Find the latest histogram entry as the upper bound
+        latest_hist = call_resource(
+            "tech.mycelia.mongo",
+            {
+                "action": "findOne",
+                "collection": f"histogram_{scale}",
+                "query": {},
+                "options": {"sort": {"start": -1}},
+            },
+        )
+        if not latest_hist:
+            return topics_absolute_start
+        before_time = latest_hist['start'] + SCALE_TO_RESOLUTION[scale]
+
+    # Find the latest histogram with topics before the given time
     last_hist_with_topics = call_resource(
         "tech.mycelia.mongo",
         {
@@ -26,7 +43,7 @@ def get_latest_hist_with_topics_start(scale: Literal["5min", "1hour", "1day", "1
             "collection": f"histogram_{scale}",
             "query": {
                 "start": {
-                    "$gte": prev,
+                    "$lt": before_time,
                 },
                 "topics": {
                     "$exists": True,
@@ -35,17 +52,21 @@ def get_latest_hist_with_topics_start(scale: Literal["5min", "1hour", "1day", "1
             "options": {"sort": {"start": -1}},
         },
     )
-    if not last_hist_with_topics:
-        return prev
 
-    last_hist_no_topics = call_resource(
+    if not last_hist_with_topics:
+        # No processed histograms before this time, start from the beginning
+        return topics_absolute_start
+
+    # Find the earliest histogram without topics after the last processed one
+    next_hist_without_topics = call_resource(
         "tech.mycelia.mongo",
         {
             "action": "findOne",
             "collection": f"histogram_{scale}",
             "query": {
                 "start": {
-                    "$gte": last_hist_with_topics['start']
+                    "$gte": last_hist_with_topics['start'],
+                    "$lt": before_time,
                 },
                 "topics": {
                     "$exists": False,
@@ -55,11 +76,14 @@ def get_latest_hist_with_topics_start(scale: Literal["5min", "1hour", "1day", "1
         },
     )
 
+    if not next_hist_without_topics:
+        # No unprocessed histograms in this range, try earlier
+        return topics_absolute_start
 
-    return last_hist_no_topics['start']
+    return next_hist_without_topics['start']
 
 
-get_latest_hist_with_topics_start("1day")
+# get_earliest_hist_without_topics_start("1day")
 # %%
 
 SCALE_TO_RESOLUTION = {
@@ -76,39 +100,7 @@ from datetime import timedelta
 import re
 from bisect import bisect_left
 
-known_errors = {
-    'Продолжение следует...',
-    '.',
-    '...',
-    'Субтитры сделал DimaTorzok',
-    '*',
-    'おやすみなさい。',
-    '*sad breathing*',
-    '*mimics*',
-    '- Mm.',
-    '- Oh.',
-    '- Yeah.',
-    'И...',
-    'uh',
-    'Ну...',
-    '-',
-}
-
-
-asterisk_pattern = re.compile(r'^\*.*\*$')
-
-remove_if_lonely = {
-    'Thank you.',
-    "I'm sorry.",
-    'Okay.',
-    'All right.',
-    'Спасибо.',
-    'Дякую.',
-    'Gracias.',
-    'Obrigado.',
-    'Dziękuję.',
-}
-
+from lib.transcription import known_errors, asterisk_pattern, remove_if_lonely
 
 def get_segments(start, scale: Literal["5min", "1hour", "1day", "1week"]):
     transcripts = call_resource(
@@ -229,9 +221,10 @@ def split_segments_into_blocks(segments, scale: Literal["5min", "1hour", "1day",
 
 #%%
 
-ollama_machine = 'http://localhost:4444/'
+ollama_machine = os.getenv('OLLAMA_URL')
+assert ollama_machine, "OLLAMA_URL is not set"
 
-llm = OllamaLLM(model="gemma3:27b-it-qat", base_url=ollama_machine)
+llm = OllamaLLM(model="gemma3:12b-it-qat", base_url=ollama_machine)
 
 prompt = """
 <start_of_turn>user
@@ -320,34 +313,58 @@ from time import sleep
 def render_segments_for_llm(segments):
     return ''.join(s["text"] for s in segments)
 
-scale = "1day"
+scale = "5min"
 
-prev = topics_absolute_start
+# Find the latest histogram to determine where to start processing from newest to oldest
+latest_hist = call_resource(
+    "tech.mycelia.mongo",
+    {
+        "action": "findOne",
+        "collection": f"histogram_{scale}",
+        "query": {},
+        "options": {"sort": {"start": -1}},
+    },
+)
+
+if latest_hist:
+    current_time = latest_hist['start'] + SCALE_TO_RESOLUTION[scale]
+else:
+    current_time = topics_absolute_start
+
 # %%
-while True:
+while current_time > topics_absolute_start:
     try:
-        print(f"Processing {scale} from {prev}")
-        start = get_latest_hist_with_topics_start(scale, prev)
-        prev = start + SCALE_TO_RESOLUTION[scale] - timedelta(seconds=10)
+        print(f"Processing {scale} before {current_time}")
+        start = get_earliest_hist_without_topics_start(scale, current_time)
+        if start < topics_absolute_start or start >= current_time:
+            break
+
+        print(f"Processing interval starting at {start}")
         segments = get_segments(start, scale)
 
-        try:
-            topics = coerce_json(
-                llm.invoke(
-                    PROMPT.format(transcript=render_segments_for_llm(segments))
+        if segments:
+            try:
+                topics = coerce_json(
+                    llm.invoke(
+                        PROMPT.format(transcript=render_segments_for_llm(segments))
+                    )
+                )
+            except Exception as e:
+                print(e)
+                errors.append((segments, e))
+                current_time = start - SCALE_TO_RESOLUTION[scale] + timedelta(seconds=10)
+                continue
+
+            print(
+                '{}-{}'.format(
+                    segments[0]["start"].isoformat(),
+                    segments[-1]["end"].isoformat()
                 )
             )
-        except Exception as e:
-            print(e)
-            errors.append((segments, e))
-            continue
-        print(
-            '{}-{}'.format(
-                segments[0]["start"].isoformat(),
-                segments[-1]["end"].isoformat()
-            )
-        )
-        print(topics)
+        else:
+            print("No segments")
+            topics = []
+
         if topics:
             call_resource(
                 "tech.mycelia.mongo",
@@ -355,7 +372,7 @@ while True:
                     "action": "updateOne",
                     "collection": f"histogram_{scale}",
                     "query": {
-                        "start": date_to_bucket(segments[0]["start"], scale),
+                        "start": date_to_bucket(start, scale),
                     },
                     "update": {
                         "$addToSet": {
@@ -364,37 +381,13 @@ while True:
                     },
                 }
             )
+
+        # Move to the previous interval (go backwards in time)
+        current_time = start - SCALE_TO_RESOLUTION[scale] + timedelta(seconds=10)
+
     except Exception as e:
         print(e)
         errors.append((None, e))
-        sleep(10)
+        sleep(5)
 
-# %%
-segments
-# %%
-len(blocks)
-# %%
-
-# load all days with topics
-# %%
-
-from datetime import datetime
-start = datetime(2024, 12, 10, 5, 0)
-end = datetime(2025, 1, 1, 5, 0)
-
-from lib import call_resource
-
-
-days = call_resource(
-    "tech.mycelia.mongo",
-    {
-        "action": "find",
-        "collection": "histogram_1day",
-        "query": {
-            "topics": {
-                "$exists": True,
-            },
-        },
-    }
-)
 # %%

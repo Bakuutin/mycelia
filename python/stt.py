@@ -52,7 +52,8 @@ class SpeechSequence(BaseModel):
         return self.last['index']
 
     def __repr__(self):
-        return f'{self.original_id}: {repr([chunk['index'] for chunk in self.chunks])}'
+        indices = [chunk['index'] for chunk in self.chunks]
+        return f'{self.original_id}: {repr(indices)}'
             
         
 
@@ -91,11 +92,15 @@ def get_speech_sequences(limit=10, filters=None) -> Iterator[SpeechSequence]:
             continue
         
         if original_id not in sequences_by_id:
-            seq = sequences_by_id[original_id] = SpeechSequence(
-                start=start,
-                original_id=original_id,
-                chunks=[]
-            )
+            try:
+                seq = sequences_by_id[original_id] = SpeechSequence(
+                    start=start,
+                    original_id=original_id,
+                    chunks=[]
+                )
+            except Exception as e:
+                print(f"Error creating speech sequence for {original_id}: {e}")
+                continue
         
         seq.chunks.append(chunk)
         
@@ -117,10 +122,19 @@ def process_sequence(sequence: SpeechSequence):
         print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\t started')
         start = time.time()
         text = transcribe_sequence(sequence)
-        mark_as_transcribed(sequence)
-        end = time.time()
-        print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {end - start}s', repr(text))
-        return True
+
+        # Only mark as transcribed if we got a result (even if empty string)
+        # text is None only for actual failures (network errors, etc.)
+        if text is not None:
+            mark_as_transcribed(sequence)
+            end = time.time()
+            status = "transcribed" if text.strip() else "no speech detected"
+            print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {end - start}s - {status}', repr(text))
+            return True
+        else:
+            end = time.time()
+            print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {end - start}s - transcription failed')
+            return False
     except Exception as e:
         print(f"Error processing sequence starting at {sequence.start}: {e}")
         return False
@@ -140,28 +154,44 @@ def process_speech_sequences(limit=None, max_workers=4):
 
 
 def transcribe_sequence(sequence: SpeechSequence):
-    response = requests.post(f'{STT_SERVER_URL}/transcribe', files=[
-        ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
-        for i, chunk in enumerate(reversed(sequence.chunks))
-    ])
-    assert response.status_code == 200
+    try:
+        response = requests.post(f'{STT_SERVER_URL}/transcribe', files=[
+            ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
+            for i, chunk in enumerate(reversed(sequence.chunks))
+        ])
+        response.raise_for_status()  # Raise an exception for bad status codes
 
-    transcript = response.json()
+        transcript = response.json()
 
-    if not transcript['segments'] or transcript['language'] == 'nn':
-        return
-    
-    duration: float = transcript['segments'][-1]['end']
+        # Extract segments (could be empty, which is valid)
+        segments = transcript.get('segments', [])
 
-    transcriptions.insert_one({
-        'original': sequence.original_id,
-        'start': sequence.start,
-        'duration': duration,
-        'end': sequence.start + timedelta(seconds=duration),
-        **transcript
-    })
+        # Calculate duration from segments if available, otherwise use 0
+        duration = 0.0
+        if segments:
+            duration = segments[-1]['end']
 
-    return ' '.join(segment['text'] for segment in transcript['segments'])
+        # Store the transcription (even if empty segments - no speech is valid)
+        transcription_data = {
+            'original': sequence.original_id,
+            'start': sequence.start,
+            'duration': duration,
+            'end': sequence.start + timedelta(seconds=duration),
+            **transcript
+        }
+
+        transcriptions.insert_one(transcription_data)
+
+        # Return the transcribed text (empty string if no segments)
+        transcribed_text = ' '.join(segment['text'] for segment in segments)
+        return transcribed_text
+
+    except requests.RequestException as e:
+        print(f"Request error transcribing sequence starting at {sequence.start}: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error transcribing sequence starting at {sequence.start}: {e}")
+        return None
 
 
 
