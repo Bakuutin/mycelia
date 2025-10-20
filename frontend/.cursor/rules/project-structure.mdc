@@ -1,0 +1,96 @@
+---
+alwaysApply: true
+description: Project structure and import conventions
+globs: "*.ts,*.tsx,*.js,*.jsx"
+---
+
+# Project Structure and Imports
+
+This project follows a specific structure for organization and imports:
+
+## Directory Structure
+```
+src/
+  components/           # Reusable UI components
+    ui/                 # Base UI components (buttons, cards, etc.)
+    forms/              # Form-related components
+    timeline/           # Timeline-specific components
+    ConversationCard.tsx # Feature-specific components
+  pages/                # Page components (route handlers)
+    HomePage.tsx
+    ConversationsPage.tsx
+    CreateConversationPage.tsx
+  hooks/                # Custom React hooks
+    useTheme.ts
+    useTimeline.ts
+  lib/                  # Utilities and configurations
+    api.ts              # API client
+    auth.ts             # Authentication utilities
+    utils.ts            # General utilities
+  modules/              # Feature modules
+    audio/              # Audio player functionality
+    events/             # Event management
+    time/               # Time formatting and utilities
+  stores/               # Zustand state stores
+    settingsStore.ts
+    timelineRange.ts
+  types/                # TypeScript type definitions
+    conversations.ts
+    events.ts
+    people.ts
+  core/                 # Core application logic
+    core.ts
+  router.tsx            # React Router configuration
+  App.tsx               # Main app component
+  main.tsx              # Application entry point
+```
+
+## Import Conventions
+
+### Path Aliases
+- Use `@/` for imports from the `src/` directory
+- Use relative imports (`./` or `../`) only within the same feature module
+- Never use absolute paths like `/src/components/`
+
+### Import Order
+```typescript
+// 1. React and React DOM
+import React, { useState } from 'react';
+
+// 2. Third-party libraries (alphabetical)
+import { useQuery } from '@tanstack/react-query';
+import { z } from 'zod';
+
+// 3. Internal utilities and configurations
+import { cn } from '@/lib/utils';
+import { api } from '@/lib/api';
+
+// 4. Internal components and hooks
+import { Button } from '@/components/ui/button';
+import { useTheme } from '@/hooks/useTheme';
+
+// 5. Types
+import type { Conversation } from '@/types/conversations';
+```
+
+### Module Imports
+- Import entire modules when using multiple exports: `import * as Utils from './utils'`
+- Use named imports for specific exports: `import { formatDate } from './utils'`
+- Prefer default imports for main page components: `import HomePage from './pages/HomePage'`
+
+### Type Imports
+- Use `import type` for type-only imports to improve bundling
+- Group type imports with regular imports when both are needed
+
+```typescript
+// Good: Type-only import
+import type { User, Profile } from '@/types/user';
+
+// Good: Mixed imports
+import { formatUser, type User } from '@/lib/user';
+```
+
+## Module Organization
+- Keep feature modules self-contained in their directories
+- Export a single `index.ts` file from each module for clean imports
+- Use barrel exports for cleaner import statements

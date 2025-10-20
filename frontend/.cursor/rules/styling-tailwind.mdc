@@ -1,0 +1,72 @@
+---
+alwaysApply: true
+description: Tailwind CSS styling patterns and conventions
+globs: "*.tsx,*.css"
+---
+
+# Tailwind CSS Styling
+
+This project uses Tailwind CSS for styling with consistent patterns:
+
+## Utility Classes
+- Use the `cn()` utility function for conditional classes: `cn("base-classes", condition && "conditional-class")`
+- Prefer utility classes over custom CSS when possible
+- Use semantic color names from the Tailwind config
+
+## Component Styling
+```typescript
+// Good: Proper use of cn utility
+import { cn } from '@/lib/utils';
+
+export function Button({ variant = 'primary', className, ...props }) {
+  return (
+    <button
+      className={cn(
+        "px-4 py-2 rounded-md font-medium transition-colors",
+        {
+          "bg-blue-500 text-white hover:bg-blue-600": variant === 'primary',
+          "bg-gray-200 text-gray-900 hover:bg-gray-300": variant === 'secondary',
+        },
+        className
+      )}
+      {...props}
+    />
+  );
+}
+```
+
+## CSS Variables and Theming
+- Use CSS custom properties for theme colors (defined in `src/index.css`)
+- Follow the design system colors consistently
+- Use semantic class names that describe purpose, not appearance
+
+## Responsive Design
+- Use responsive prefixes (`sm:`, `md:`, `lg:`, `xl:`) for mobile-first design
+- Test components across different screen sizes
+- Prefer responsive utilities over media queries in CSS
+
+## Animation and Transitions
+- Use `transition-all` or specific transitions for interactive elements
+- Keep animations subtle and purposeful
+- Use `duration-300` as the default transition duration
+
+## Layout Patterns
+- Use CSS Grid and Flexbox utilities for layout
+- Prefer `flex` over `inline-flex` for better performance
+- Use `gap-*` utilities for consistent spacing
+- Use `container` class for centered content with max-width
+
+## Common Patterns
+```css
+/* Good: Consistent spacing scale */
+.gap-2    /* 0.5rem */
+.gap-4    /* 1rem */
+.gap-6    /* 1.5rem */
+.gap-8    /* 2rem */
+
+/* Good: Responsive typography */
+text-sm sm:text-base lg:text-lg
+
+/* Good: Interactive states */
+hover:bg-opacity-80 focus:outline-none focus:ring-2 focus:ring-blue-500
+```

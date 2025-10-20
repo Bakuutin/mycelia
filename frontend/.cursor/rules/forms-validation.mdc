@@ -1,0 +1,118 @@
+---
+alwaysApply: true
+description: Form handling and validation patterns using react-hook-form and Zod
+globs: "*.tsx"
+---
+
+# Forms and Validation
+
+This project uses react-hook-form with Zod for robust form handling and validation:
+
+## Form Structure
+- Use `react-hook-form` for all form state management
+- Combine with `zod` for schema validation
+- Use `zodResolver` to connect Zod schemas with react-hook-form
+
+```typescript
+// Good: Proper form setup
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+
+const conversationSchema = z.object({
+  title: z.string().min(1, 'Title is required').max(100),
+  description: z.string().optional(),
+  participants: z.array(z.string()).min(1, 'At least one participant required'),
+});
+
+type ConversationFormData = z.infer<typeof conversationSchema>;
+
+export function CreateConversationForm() {
+  const form = useForm<ConversationFormData>({
+    resolver: zodResolver(conversationSchema),
+    defaultValues: {
+      title: '',
+      description: '',
+      participants: [],
+    },
+  });
+
+  const onSubmit = (data: ConversationFormData) => {
+    // Handle form submission
+    console.log(data);
+  };
+
+  return (
+    <form onSubmit={form.handleSubmit(onSubmit)}>
+      {/* Form fields */}
+    </form>
+  );
+}
+```
+
+## Form Components
+- Use the form components from `src/components/forms/`
+- Follow consistent patterns for form field components
+- Include proper error handling and display
+
+```typescript
+// Good: Using form components
+import { FormField } from '@/components/forms/FormField';
+import { Input } from '@/components/ui/input';
+
+<FormField
+  control={form.control}
+  name="title"
+  label="Conversation Title"
+  render={({ field }) => (
+    <Input {...field} placeholder="Enter conversation title" />
+  )}
+/>
+```
+
+## Validation Patterns
+- Define validation schemas at the top of form components
+- Use descriptive error messages in Zod schemas
+- Handle both client-side and server-side validation errors
+
+```typescript
+// Good: Comprehensive validation schema
+const eventSchema = z.object({
+  title: z.string()
+    .min(1, 'Title is required')
+    .max(200, 'Title must be less than 200 characters'),
+
+  description: z.string()
+    .max(2000, 'Description must be less than 2000 characters')
+    .optional(),
+
+  startTime: z.date({
+    required_error: 'Start time is required',
+  }),
+
+  endTime: z.date()
+    .optional(),
+
+  category: z.string()
+    .min(1, 'Category is required'),
+
+  location: z.string()
+    .optional(),
+}).refine(
+  (data) => !data.endTime || data.endTime > data.startTime,
+  {
+    message: 'End time must be after start time',
+    path: ['endTime'],
+  }
+);
+```
+
+## Error Handling
+- Display validation errors clearly to users
+- Handle server-side validation errors appropriately
+- Provide helpful error messages and suggestions
+
+## Form State Management
+- Use `form.watch()` for computed values based on form state
+- Use `form.reset()` to clear forms after successful submission
+- Handle loading states during form submission

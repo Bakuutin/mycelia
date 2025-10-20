@@ -1,0 +1,112 @@
+---
+alwaysApply: true
+description: Project overview and architecture patterns
+---
+
+# Mycelia Frontend - Project Overview
+
+This is a React TypeScript application for managing conversations, events, and timeline data with a modular architecture.
+
+## Architecture Overview
+
+### Technology Stack
+- **Framework**: React 18 with TypeScript
+- **Build Tool**: Vite
+- **Styling**: Tailwind CSS with shadcn/ui components
+- **State Management**: Zustand
+- **Routing**: React Router v7
+- **Forms**: React Hook Form with Zod validation
+- **Development**: ESLint, TypeScript strict mode
+
+### Key Features
+- **Conversations**: Create and manage conversation threads
+- **Events**: Timeline-based event management
+- **Audio**: Audio playback functionality
+- **People**: Contact and person management
+- **Timeline**: Chronological data visualization
+
+## Core Patterns
+
+### Component Architecture
+- **Pages**: Route components in `src/pages/` (default exports)
+- **Components**: Reusable UI in `src/components/` (named exports)
+- **UI Components**: Base components in `src/components/ui/` (shadcn/ui)
+- **Forms**: Form components in `src/components/forms/`
+
+### State Management
+- **Global State**: Zustand stores in `src/stores/`
+- **Local State**: React useState/useReducer in components
+- **Server State**: React Query for API data fetching
+- **Form State**: React Hook Form for complex forms
+
+### Code Organization
+```
+src/
+  ├── components/      # Reusable UI components
+  ├── pages/          # Route/page components
+  ├── hooks/          # Custom React hooks
+  ├── lib/            # Utilities and API clients
+  ├── modules/        # Feature-specific modules
+  ├── stores/         # Zustand state stores
+  ├── types/          # TypeScript definitions
+  └── core/           # Core application logic
+```
+
+## Development Workflow
+
+### Getting Started
+1. Install dependencies: `npm install`
+2. Start development server: `npm run dev`
+3. Run linting: `npm run lint`
+4. Type checking: `npm run type-check`
+
+### Code Standards
+- Use TypeScript strict mode
+- Follow ESLint configuration
+- Use absolute imports with `@/` prefix
+- Write self-documenting code with clear naming
+- Maintain consistent formatting
+
+### Key Conventions
+- **Imports**: React → Third-party → Internal → Types
+- **Exports**: Named for utilities, default for pages
+- **Types**: Interfaces for objects, types for unions
+- **Styling**: Tailwind utilities with `cn()` helper
+- **Forms**: Zod schemas with react-hook-form
+- **API**: Centralized client with proper error handling
+
+## Module Structure
+
+### Audio Module (`src/modules/audio/`)
+- Audio playback controls and timeline
+- Transcript management
+- Gain and volume controls
+
+### Events Module (`src/modules/events/`)
+- Event creation and management
+- Timeline integration
+- Event categorization
+
+### Time Module (`src/modules/time/`)
+- Date/time formatting utilities
+- Gregorian and SI time formatters
+- Timeline range management
+
+## UI Patterns
+
+### Design System
+- **Colors**: Semantic color system with CSS variables
+- **Spacing**: Consistent spacing scale (2, 4, 6, 8, 12, 16, 24, 32)
+- **Typography**: Responsive text sizing
+- **Components**: shadcn/ui with consistent styling
+
+### Responsive Design
+- Mobile-first approach
+- Responsive breakpoints: sm (640px), md (768px), lg (1024px), xl (1280px)
+- Touch-friendly interactions on mobile devices
+
+## Performance Considerations
+- Code splitting by routes
+- Lazy loading of heavy components
+- Optimized bundle size
+- Efficient re-renders with proper dependency arrays

@@ -1,0 +1,109 @@
+---
+alwaysApply: true
+description: Testing patterns and development workflow guidelines
+globs: "*.ts,*.tsx,*.test.*,*.spec.*"
+---
+
+# Testing and Development Workflow
+
+This project follows consistent patterns for testing and development:
+
+## Development Commands
+```bash
+# Start development server
+npm run dev
+
+# Run linting
+npm run lint
+
+# Type checking
+npm run type-check
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```
+
+## Code Quality
+- Run `npm run lint` before committing code
+- Fix all ESLint errors and warnings
+- Run `npm run type-check` to ensure TypeScript correctness
+- Maintain high test coverage for critical functionality
+
+## Testing Patterns
+- Use Vitest for unit testing (configured in `vite.config.ts`)
+- Test components with React Testing Library
+- Mock external dependencies appropriately
+- Write descriptive test names and organize test files
+
+```typescript
+// Good: Component testing pattern
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { Button } from './Button';
+
+describe('Button', () => {
+  it('renders with correct text', () => {
+    render(<Button>Click me</Button>);
+    expect(screen.getByRole('button')).toHaveTextContent('Click me');
+  });
+
+  it('calls onClick when clicked', () => {
+    const handleClick = vi.fn();
+    render(<Button onClick={handleClick}>Click me</Button>);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(handleClick).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+## File Naming
+- Use `.test.tsx` for component tests
+- Use `.test.ts` for utility tests
+- Use `.spec.tsx` for integration tests
+- Place test files next to the files they test
+
+## Mock Patterns
+- Mock API calls using MSW (Mock Service Worker)
+- Mock stores for isolated component testing
+- Use proper cleanup in test teardown
+
+```typescript
+// Good: API mocking pattern
+import { rest } from 'msw';
+import { setupServer } from 'msw/node';
+
+const server = setupServer(
+  rest.get('/api/conversations', (req, res, ctx) => {
+    return res(ctx.json([
+      { id: '1', title: 'Test Conversation' }
+    ]));
+  }),
+);
+
+// Setup and teardown
+beforeAll(() => server.listen());
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+```
+
+## Component Testing Best Practices
+- Test user interactions, not implementation details
+- Use semantic queries (`getByRole`, `getByLabelText`)
+- Test both happy path and error scenarios
+- Mock external dependencies and stores
+
+## Integration Testing
+- Test complete user workflows across multiple components
+- Mock external APIs and services
+- Verify data flow between components
+- Test error boundaries and error handling
+
+## Performance Considerations
+- Avoid unnecessary re-renders in components
+- Use React.memo for expensive components
+- Test performance-critical components
+- Monitor bundle size and optimize imports

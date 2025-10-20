@@ -1,0 +1,99 @@
+---
+alwaysApply: true
+description: API client usage and data handling patterns
+globs: "*.ts,*.tsx"
+---
+
+# API and Data Handling
+
+This project uses consistent patterns for API communication and data management:
+
+## API Client (`src/lib/api.ts`)
+- Use the centralized API client for all HTTP requests
+- Handle authentication tokens automatically
+- Include proper error handling for all API calls
+
+```typescript
+// Good: Using the API client
+import { api } from '@/lib/api';
+
+const fetchConversations = async () => {
+  try {
+    const response = await api.get<Conversation[]>('/conversations');
+    return response.data;
+  } catch (error) {
+    console.error('Failed to fetch conversations:', error);
+    throw error;
+  }
+};
+```
+
+## Error Handling
+- Create specific error types for different scenarios
+- Use proper HTTP status code handling
+- Provide meaningful error messages to users
+
+## Data Fetching Patterns
+- Use React Query/TanStack Query for server state management
+- Implement proper loading and error states
+- Use optimistic updates for better UX where appropriate
+
+```typescript
+// Good: Proper data fetching pattern
+import { useQuery, useMutation } from '@tanstack/react-query';
+
+export function useConversations() {
+  return useQuery({
+    queryKey: ['conversations'],
+    queryFn: fetchConversations,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+}
+
+export function useCreateConversation() {
+  return useMutation({
+    mutationFn: (data: CreateConversationData) =>
+      api.post<Conversation>('/conversations', data),
+    onSuccess: () => {
+      // Invalidate and refetch conversations
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    },
+  });
+}
+```
+
+## Type Safety
+- Define API response types for all endpoints
+- Use Zod for runtime type validation when needed
+- Keep API types in sync with backend types
+
+```typescript
+// Good: API response typing
+interface ApiResponse<T> {
+  data: T;
+  message?: string;
+  success: boolean;
+}
+
+interface Conversation {
+  id: string;
+  title: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// API function with proper typing
+async function getConversation(id: string): Promise<ApiResponse<Conversation>> {
+  return api.get(`/conversations/${id}`);
+}
+```
+
+## Caching Strategy
+- Use appropriate `staleTime` and `cacheTime` for different data types
+- Implement proper cache invalidation strategies
+- Use background refetching for non-critical data updates
+
+## Authentication
+- Handle authentication tokens in the API client
+- Implement proper token refresh logic
+- Redirect to login on authentication failures

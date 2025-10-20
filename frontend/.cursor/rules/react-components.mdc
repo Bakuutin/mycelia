@@ -1,0 +1,71 @@
+---
+alwaysApply: true
+description: React component patterns and conventions used in this project
+globs: "*.tsx"
+---
+
+# React Component Patterns
+
+This project follows consistent patterns for React components. Use these guidelines:
+
+## Component Structure
+- Use functional components with hooks, never class components
+- Start component files with proper imports, then the component function
+- Use default exports for page components, named exports for reusable components
+- Keep components small and focused - extract complex logic into custom hooks
+
+## File Organization
+```
+src/
+  components/           # Reusable UI components
+    ui/                 # Base UI components (buttons, inputs, etc.)
+    forms/              # Form-specific components
+    timeline/           # Timeline-specific components
+  pages/                # Page components (route components)
+  hooks/                # Custom hooks
+  lib/                  # Utilities and configurations
+```
+
+## Component Patterns
+```typescript
+// Good: Proper component structure
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+
+interface MyComponentProps {
+  title: string;
+  onAction?: () => void;
+}
+
+export function MyComponent({ title, onAction }: MyComponentProps) {
+  const [count, setCount] = useState(0);
+
+  return (
+    <Card className="p-4">
+      <h2>{title}</h2>
+      <Button onClick={() => setCount(c => c + 1)}>
+        Count: {count}
+      </Button>
+      {onAction && <Button onClick={onAction}>Action</Button>}
+    </Card>
+  );
+}
+```
+
+## Props Interface
+- Always define props with a proper interface
+- Use optional props with `?` for non-required props
+- Destructure props in function parameters for cleaner code
+- Use proper TypeScript types for event handlers
+
+## State Management
+- Use Zustand stores for global state (see `src/stores/`)
+- Use `useState` for local component state
+- Use `useEffect` for side effects, but avoid overusing it
+- Extract complex state logic into custom hooks in `src/hooks/`
+
+## Component Composition
+- Prefer composition over deep prop drilling
+- Use children props for flexible component composition
+- Extract common patterns into reusable components

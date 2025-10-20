@@ -1,0 +1,142 @@
+---
+alwaysApply: true
+description: State management patterns using Zustand stores
+globs: "*.ts,*.tsx"
+---
+
+# State Management with Zustand
+
+This project uses Zustand for global state management. Follow these patterns:
+
+## Store Structure
+- Create stores in the `src/stores/` directory
+- Use a consistent store structure with actions and state
+- Keep stores focused on specific domains
+
+```typescript
+// Good: Proper store structure
+import { create } from 'zustand';
+import { devtools } from 'zustand/middleware';
+
+interface SettingsState {
+  theme: 'light' | 'dark' | 'system';
+  language: string;
+  notifications: boolean;
+}
+
+interface SettingsActions {
+  setTheme: (theme: SettingsState['theme']) => void;
+  setLanguage: (language: string) => void;
+  toggleNotifications: () => void;
+  reset: () => void;
+}
+
+type SettingsStore = SettingsState & SettingsActions;
+
+const initialState: SettingsState = {
+  theme: 'system',
+  language: 'en',
+  notifications: true,
+};
+
+export const useSettingsStore = create<SettingsStore>()(
+  devtools(
+    (set) => ({
+      ...initialState,
+
+      setTheme: (theme) => set({ theme }, false, 'setTheme'),
+
+      setLanguage: (language) => set({ language }, false, 'setLanguage'),
+
+      toggleNotifications: () =>
+        set((state) => ({ notifications: !state.notifications }), false, 'toggleNotifications'),
+
+      reset: () => set(initialState, false, 'reset'),
+    }),
+    {
+      name: 'settings-store',
+    }
+  )
+);
+```
+
+## Store Usage
+- Use the `useSettingsStore` hook in components
+- Subscribe to specific parts of the store state
+- Use actions for state mutations
+
+```typescript
+// Good: Proper store usage
+import { useSettingsStore } from '@/stores/settingsStore';
+
+export function ThemeSelector() {
+  const { theme, setTheme } = useSettingsStore();
+
+  return (
+    <select
+      value={theme}
+      onChange={(e) => setTheme(e.target.value as SettingsState['theme'])}
+    >
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+      <option value="system">System</option>
+    </select>
+  );
+}
+```
+
+## Store Composition
+- Split large stores into smaller, focused stores
+- Use store composition for related but separate concerns
+- Share common state through store slicing when needed
+
+## Async Actions
+- Handle async operations within store actions
+- Use proper loading and error states
+- Keep async logic in stores, not components
+
+```typescript
+// Good: Async actions in stores
+interface AuthStore {
+  user: User | null;
+  isLoading: boolean;
+  error: string | null;
+  login: (credentials: LoginCredentials) => Promise<void>;
+  logout: () => void;
+}
+
+export const useAuthStore = create<AuthStore>()(
+  devtools(
+    (set) => ({
+      user: null,
+      isLoading: false,
+      error: null,
+
+      login: async (credentials) => {
+        set({ isLoading: true, error: null });
+
+        try {
+          const user = await api.login(credentials);
+          set({ user, isLoading: false });
+        } catch (error) {
+          set({
+            error: error instanceof Error ? error.message : 'Login failed',
+            isLoading: false
+          });
+        }
+      },
+
+      logout: () => {
+        set({ user: null, error: null });
+      },
+    }),
+    { name: 'auth-store' }
+  )
+);
+```
+
+## Best Practices
+- Use the `devtools` middleware for debugging in development
+- Provide meaningful action names for Redux DevTools
+- Keep store actions pure and predictable
+- Avoid deeply nested state structures

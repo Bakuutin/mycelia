@@ -1,0 +1,55 @@
+---
+alwaysApply: true
+description: TypeScript best practices and patterns used in this project
+globs: "*.ts,*.tsx"
+---
+
+# TypeScript Best Practices
+
+This project uses TypeScript with strict settings enabled. Follow these patterns:
+
+## Type Definitions
+- Define types in separate files under `src/types/` directory
+- Use PascalCase for type names (e.g., `ConversationData`, `EventItem`)
+- Export types at the end of type definition files
+- Use union types (`|`) for mutually exclusive values
+- Prefer interfaces for object shapes, types for unions/aliases
+
+## Imports and Exports
+- Use named exports for components and utilities: `export function MyComponent()`
+- Use default exports for main page components: `export default function HomePage()`
+- Group imports: React → third-party → internal modules → types
+- Use absolute imports with `@/` prefix for internal modules
+
+## Strict TypeScript Rules
+- No `any` types allowed - use proper typing or `unknown` with type guards
+- Enable all strict TypeScript compiler options
+- Use `noUnusedLocals` and `noUnusedParameters` to catch dead code
+- Always handle all cases in switch statements with proper typing
+
+## Generic Patterns
+```typescript
+// Good: Proper generic usage
+function useApi<T>(endpoint: string): UseQueryResult<T> {
+  return useQuery({
+    queryKey: [endpoint],
+    queryFn: () => api.get<T>(endpoint)
+  });
+}
+
+// Good: Proper interface extension
+interface BaseEntity {
+  id: string;
+  createdAt: Date;
+}
+
+interface Conversation extends BaseEntity {
+  title: string;
+  participants: Person[];
+}
+```
+
+## Error Handling
+- Use proper error types, never throw generic `Error`
+- Create specific error classes for different error scenarios
+- Handle async errors with proper try/catch or error boundaries
