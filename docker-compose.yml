@@ -54,7 +54,7 @@ services:
       - a5t
   # app:
   #   build:
-  #     context: .
+  #     context: ./backend
   #     dockerfile: Dockerfile
   #   environment:
   #     MONGO_URL: ${MONGO_URL}

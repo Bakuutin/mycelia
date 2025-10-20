@@ -63,7 +63,7 @@ irm https://deno.land/install.ps1 | iex
 ```bash
 # Clone the repo
 git clone https://github.com/your-org/mycelia.git
-cd mycelia
+cd mycelia/backend
 
 # Install deno deps
 deno install
@@ -72,10 +72,12 @@ deno install
 cp .env.example .env
 
 # Start the services (MongoDB, Redis, Kafka)
+cd ..
 mkdir .docker
 docker compose up -d
 
 # Generate auth credentials (requires services running)
+cd backend
 deno run -A --env server.ts token create
 # Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
 
@@ -92,10 +94,12 @@ For local development and server management:
 ```bash
 # Generate auth tokens and put
 # `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN` in .env
+cd backend
 deno run -A --env server.ts token create
 ```
 ```bash
 # Start the server
+cd backend
 deno run -A --env server.ts serve
 ```
 
@@ -179,6 +183,7 @@ For operations against a remote server (requires login & API key):
 
 ```bash
 # Login to remote server
+cd backend
 deno run --env -E='MYCELIA_*' --allow-net cli.ts login
 
 # Import audio file to remote server

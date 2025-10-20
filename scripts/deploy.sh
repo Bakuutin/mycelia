@@ -1,4 +1,4 @@
 #!/bin/bash
 
 set -e
-docker build . -t hub.tigor.net/mycelia/ui:latest
+docker build ./backend -t hub.tigor.net/mycelia/ui:latest
