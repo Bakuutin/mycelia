@@ -97,6 +97,20 @@ deno run -A --env server.ts serve
 
 Then open http://localhost:5173/ and use generated token to login.
 
+**New Frontend (separate app):**
+
+To use the new frontend, run it separately:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The new frontend runs on http://localhost:3000/. In the settings page, configure:
+- Backend URL: `http://localhost:5173`
+- Enter your generated credentials (client ID and token)
+
 ### Setup Recordings Import
 
 1. Copy `python/settings.example.py` to `python/settings.py` and configure your import sources (for example, Google Drive export, Apple Voice Memos, or a local folder).
