@@ -140,13 +140,13 @@ def process_sequence(sequence: SpeechSequence):
         return False
         
 
-def process_speech_sequences(limit=None, max_workers=4):
+def process_speech_sequences(limit=None, max_workers=1):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for sequence in get_speech_sequences(limit=limit):
             futures.append(executor.submit(process_sequence, sequence))
             print(f'{len(futures)} futures scheduled')
-            while len(futures) > max_workers * 2:
+            while futures:
                 futures = [f for f in futures if not f.done()]
                 time.sleep(0.1)
         

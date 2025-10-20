@@ -12,15 +12,8 @@ from bson import ObjectId
 import json
 import os
 
-def get_url(*path):
-    return os.getenv('MYCELIA_URL') + "/" + "/".join(path)
+from .config import client_id, client_secret, get_url
 
-base_url = os.getenv('MYCELIA_URL') or ''
-if base_url.startswith('http://'):
-    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-
-client_id = os.getenv('MYCELIA_CLIENT_ID')
-client_secret = os.getenv('MYCELIA_TOKEN')
 token_url = get_url("oauth", "token")
 
 oauth_client = BackendApplicationClient(client_id=client_id)

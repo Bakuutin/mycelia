@@ -32,10 +32,18 @@ export async function getJWT(config: CliConfig) {
   );
 
   if (!response.ok) {
-    const errorBody = await response.json();
-    throw new Error(
-      `Authentication failed: ${JSON.stringify(errorBody) || "Unknown error"}`,
-    );
+    const url = new URL(response.url);
+    console.error(url)
+    try {
+      const errorBody = await response.json();
+      throw new Error(
+        `Authentication failed: ${JSON.stringify(errorBody) || "Unknown error"}`,
+      );
+    } catch (error) {
+      throw new Error(
+        `Authentication failed: ${response.status} ${response.statusText}`,
+      );
+    }
   }
 
   const { access_token, error } = await response.json();

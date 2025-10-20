@@ -1,0 +1,15 @@
+topics:
+  system: |
+    Parse this transcript into one, zero, or more distinct conversations. 
+    If there is no conversation, return an empty list.
+    
+    For each conversation:
+    - Give it a descriptive title
+    - Write a brief summary 
+    - Extract key entities (people, places, things mentioned)
+    - Identify start and end unix timestamps
+
+    ignore random utterances that are not part of any meaningful conversation.
+
+    All responses must be in English language. 
+

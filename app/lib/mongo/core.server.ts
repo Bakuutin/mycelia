@@ -116,20 +116,20 @@ export type MongoRequest = z.infer<typeof mongoRequestSchema>;
 export type MongoResponse = any;
 
 const actionMap = {
-  count: "read",
-  find: "read",
-  findOne: "read",
-  insertOne: "write",
-  insertMany: "write",
-  updateOne: "update",
-  updateMany: "update",
-  deleteOne: "delete",
-  deleteMany: "delete",
-  aggregate: "read",
-  bulkWrite: "write",
-  createIndex: "write",
-  listIndexes: "read",
-} satisfies { [K in MongoRequest["action"]]: string };
+  count: ["read"],
+  find: ["read"],
+  findOne: ["read"],
+  insertOne: ["write"],
+  insertMany: ["write"],
+  updateOne: ["update"],
+  updateMany: ["update"],
+  deleteOne: ["delete"],
+  deleteMany: ["delete"],
+  aggregate: ["read", "write", "update", "delete"],
+  bulkWrite: ["write", "update", "delete"],
+  createIndex: ["write"],
+  listIndexes: ["read"],
+} satisfies { [K in MongoRequest["action"]]: string[] };
 
 export class MongoResource implements Resource<MongoRequest, MongoResponse> {
   code = "tech.mycelia.mongo";
@@ -181,7 +181,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
   }
 
   extractActions(input: MongoRequest) {
-    const actions = [actionMap[input.action]];
+    const actions = [...actionMap[input.action]];
     if (
       (input.action === "updateOne" || input.action === "updateMany") &&
       input.options?.upsert
