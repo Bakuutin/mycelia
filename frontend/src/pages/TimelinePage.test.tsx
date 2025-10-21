@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import * as userEventLib from '@testing-library/user-event';
+
+const userEvent = (userEventLib as any).default || userEventLib;
 import { MemoryRouter } from 'react-router-dom';
 import { ObjectId } from 'bson';
 import TimelinePage from './TimelinePage';

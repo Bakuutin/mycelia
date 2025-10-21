@@ -37,6 +37,7 @@ export function PersonChip({ personId, name }: PersonChipProps) {
 
   return (
     <button
+      type="button"
       onClick={handleClick}
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-xs hover:bg-accent transition-colors cursor-pointer"
     >

@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Deno
+.deno
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

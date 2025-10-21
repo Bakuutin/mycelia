@@ -7,6 +7,7 @@ import type { EventItem } from "@/types/events.ts";
 import { PlusIcon } from "lucide-react/icons";
 import { EditableTimelineItem } from "@/components/timeline/EditableTimelineItem.tsx";
 import { useNavigate } from "react-router-dom";
+import { ObjectId } from "bson";
 
 function useLaneLayout(items: ReturnType<typeof useEvents>["items"], xFor: (d: Date) => number) {
   return useMemo(() => {
@@ -20,7 +21,7 @@ function useLaneLayout(items: ReturnType<typeof useEvents>["items"], xFor: (d: D
 
     const getDepth = (item: EventItem): number => {
       if (!item.parentId) return 0;
-      const parent = itemsById.get(item.parentId);
+      const parent = itemsById.get(new ObjectId(item.parentId));
       if (!parent) return 0;
       return 1 + getDepth(parent);
     };

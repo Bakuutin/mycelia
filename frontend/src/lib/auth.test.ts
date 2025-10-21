@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { exchangeApiKeyForJWT, getCurrentJWT } from './auth';
 import { useSettingsStore } from '@/stores/settingsStore';
 
-global.fetch = vi.fn();
+(globalThis as any).fetch = vi.fn();
 
 describe('exchangeApiKeyForJWT', () => {
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe('exchangeApiKeyForJWT', () => {
       ok: true,
       json: vi.fn().mockResolvedValue({ access_token: 'mock-jwt-token' }),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     const result = await exchangeApiKeyForJWT(
       'http://localhost:8000',
@@ -26,7 +26,7 @@ describe('exchangeApiKeyForJWT', () => {
       jwt: 'mock-jwt-token',
       error: null,
     });
-    expect(global.fetch).toHaveBeenCalledWith(
+    expect((globalThis as any).fetch).toHaveBeenCalledWith(
       'http://localhost:8000/oauth/token',
       expect.objectContaining({
         method: 'POST',
@@ -40,7 +40,7 @@ describe('exchangeApiKeyForJWT', () => {
       ok: false,
       json: vi.fn().mockResolvedValue({ error: 'invalid_client' }),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     const result = await exchangeApiKeyForJWT(
       'http://localhost:8000',
@@ -59,7 +59,7 @@ describe('exchangeApiKeyForJWT', () => {
       ok: false,
       json: vi.fn().mockResolvedValue({}),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     const result = await exchangeApiKeyForJWT(
       'http://localhost:8000',
@@ -78,7 +78,7 @@ describe('exchangeApiKeyForJWT', () => {
       ok: false,
       json: vi.fn().mockRejectedValue(new Error('Invalid JSON')),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     const result = await exchangeApiKeyForJWT(
       'http://localhost:8000',
@@ -93,7 +93,7 @@ describe('exchangeApiKeyForJWT', () => {
   });
 
   it('handles network errors', async () => {
-    (global.fetch as any).mockRejectedValue(new Error('Network error'));
+    ((globalThis as any).fetch as any).mockRejectedValue(new Error('Network error'));
 
     const result = await exchangeApiKeyForJWT(
       'http://localhost:8000',
@@ -110,11 +110,11 @@ describe('exchangeApiKeyForJWT', () => {
       ok: true,
       json: vi.fn().mockResolvedValue({ access_token: 'token' }),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     await exchangeApiKeyForJWT('http://localhost:8000', 'id', 'secret');
 
-    const callArgs = (global.fetch as any).mock.calls[0];
+    const callArgs = ((globalThis as any).fetch as any).mock.calls[0];
     const body = callArgs[1].body;
     expect(body.toString()).toContain('grant_type=client_credentials');
     expect(body.toString()).toContain('client_id=id');
@@ -143,7 +143,7 @@ describe('getCurrentJWT', () => {
       ok: true,
       json: vi.fn().mockResolvedValue({ access_token: 'jwt-token' }),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     const jwt = await getCurrentJWT();
     expect(jwt).toBe('jwt-token');
@@ -158,7 +158,7 @@ describe('getCurrentJWT', () => {
 
     const jwt = await getCurrentJWT();
     expect(jwt).toBeNull();
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect((globalThis as any).fetch).not.toHaveBeenCalled();
   });
 
   it('returns null when clientSecret is missing', async () => {
@@ -170,7 +170,7 @@ describe('getCurrentJWT', () => {
 
     const jwt = await getCurrentJWT();
     expect(jwt).toBeNull();
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect((globalThis as any).fetch).not.toHaveBeenCalled();
   });
 
   it('returns null when both credentials are missing', async () => {
@@ -182,7 +182,7 @@ describe('getCurrentJWT', () => {
 
     const jwt = await getCurrentJWT();
     expect(jwt).toBeNull();
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect((globalThis as any).fetch).not.toHaveBeenCalled();
   });
 
   it('returns null when exchange fails', async () => {
@@ -196,7 +196,7 @@ describe('getCurrentJWT', () => {
       ok: false,
       json: vi.fn().mockResolvedValue({ error: 'invalid_client' }),
     };
-    (global.fetch as any).mockResolvedValue(mockResponse);
+    ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
 
     const jwt = await getCurrentJWT();
     expect(jwt).toBeNull();

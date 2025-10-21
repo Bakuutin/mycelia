@@ -9,31 +9,35 @@ This is the standalone React frontend for Mycelia, a self-hosted AI memory and t
 ## Development Commands
 
 ```bash
-# Install dependencies
-npm install
+# Install dependencies (Deno handles this automatically)
+deno install
 
-# Start development server (http://localhost:3000)
+# Start development server (http://localhost:3001)
+deno task dev
+
+# Or using npm scripts
 npm run dev
 
 # Build for production
-npm run build
+deno task build
 
 # Preview production build
-npm run preview
+deno task preview
 
 # Type check without emitting files
-npm run type-check
+deno task type-check
 
 # Lint code
-npm run lint
+deno lint
 ```
 
 ## Architecture
 
 ### Tech Stack
+- **Deno** for runtime and package management
 - **React 18** with TypeScript
 - **React Router v7** for client-side routing
-- **Vite** for build tooling and dev server
+- **Vite** with @deno/vite-plugin for build tooling and dev server
 - **Zustand** for state management
 - **D3.js** for timeline visualization with zoom/pan
 - **Tailwind CSS v4** for styling
@@ -117,12 +121,17 @@ Layers are registered in individual modules (e.g., `src/modules/audio/index.tsx`
 
 ### Import Conventions
 
-Use `@/` alias for all imports:
+Use `@/` alias for all imports (configured in `deno.json` import map):
 ```typescript
 import { Component } from '@/components/Component'
 import { useTimeline } from '@/hooks/useTimeline'
 import type { TimelineItem } from '@/types/timeline'
 ```
+
+Dependencies are managed through Deno's import map in `deno.json`:
+- npm packages are prefixed with `npm:` in the import map
+- Standard library packages use `jsr:@std/*`
+- The `@/` alias points to `./src/`
 
 ## Code Style
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 
 export type Timestamp = number & { readonly __brand: unique symbol };
 

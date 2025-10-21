@@ -6,7 +6,7 @@ afterEach(() => {
   cleanup();
 });
 
-global.confirm = vi.fn(() => true);
+(globalThis as any).confirm = vi.fn(() => true);
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
@@ -22,7 +22,7 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
+(globalThis as any).ResizeObserver = vi.fn().mockImplementation(() => ({
   observe: vi.fn(),
   unobserve: vi.fn(),
   disconnect: vi.fn(),

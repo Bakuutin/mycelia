@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import * as userEventLib from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { ObjectId } from 'bson';
 import EventDetailPage from './EventDetailPage';
 import * as api from '@/lib/api';
 import type { EventItem } from '@/types/events';
+
+const userEvent = (userEventLib as any).default || userEventLib;
 
 const mockNavigate = vi.fn();
 
@@ -403,7 +405,7 @@ describe('EventDetailPage', () => {
         return Promise.resolve(null);
       });
 
-      global.confirm = vi.fn(() => true);
+      (globalThis as any).confirm = vi.fn(() => true);
 
       renderEventDetailPage(mockEvent._id.toString());
 
@@ -444,7 +446,7 @@ describe('EventDetailPage', () => {
         return Promise.resolve(null);
       });
 
-      global.confirm = vi.fn(() => false);
+      (globalThis as any).confirm = vi.fn(() => false);
 
       renderEventDetailPage(mockEvent._id.toString());
 

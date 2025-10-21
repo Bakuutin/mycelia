@@ -3,7 +3,7 @@ import { ApiClient } from './api';
 import { useSettingsStore } from '@/stores/settingsStore';
 import * as auth from './auth';
 
-global.fetch = vi.fn();
+(globalThis as any).fetch = vi.fn();
 
 vi.mock('./auth', () => ({
   getCurrentJWT: vi.fn(),
@@ -28,13 +28,13 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ data: 'test' }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const response = await client.fetch('/test');
 
       expect(response.ok).toBe(true);
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
         'http://localhost:8000/test',
         expect.objectContaining({
           headers: expect.objectContaining({
@@ -51,7 +51,7 @@ describe('ApiClient', () => {
         status: 404,
         statusText: 'Not Found',
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       await expect(client.fetch('/test')).rejects.toThrow('API request failed: 404 Not Found');
@@ -62,12 +62,12 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ data: 'test' }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue(null);
 
       await client.fetch('/test');
 
-      const callArgs = (global.fetch as any).mock.calls[0];
+      const callArgs = ((globalThis as any).fetch as any).mock.calls[0];
       expect(callArgs[1].headers).not.toHaveProperty('Authorization');
     });
 
@@ -76,14 +76,14 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ data: 'test' }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       await client.fetch('/test', {
         headers: { 'X-Custom-Header': 'value' },
       });
 
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
         'http://localhost:8000/test',
         expect.objectContaining({
           headers: expect.objectContaining({
@@ -102,7 +102,7 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ data: 'test' }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       await client.fetch('/test1');
@@ -116,7 +116,7 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ data: 'test' }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any)
         .mockResolvedValueOnce('jwt-token-1')
         .mockResolvedValueOnce('jwt-token-2');
@@ -140,7 +140,7 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue(mockData),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.get('/items/1');
@@ -156,13 +156,13 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ id: 1, ...postData }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.post('/items', postData);
 
       expect(result).toEqual({ id: 1, ...postData });
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
         'http://localhost:8000/items',
         expect.objectContaining({
           method: 'POST',
@@ -179,13 +179,13 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ id: 1, ...updateData }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.put('/items/1', updateData);
 
       expect(result).toEqual({ id: 1, ...updateData });
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
         'http://localhost:8000/items/1',
         expect.objectContaining({
           method: 'PUT',
@@ -201,13 +201,13 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({ success: true }),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.delete('/items/1');
 
       expect(result).toEqual({ success: true });
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
         'http://localhost:8000/items/1',
         expect.objectContaining({
           method: 'DELETE',
@@ -222,7 +222,7 @@ describe('ApiClient', () => {
         ok: true,
         json: vi.fn().mockResolvedValue({}),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.testConnection();
@@ -236,7 +236,7 @@ describe('ApiClient', () => {
         status: 500,
         statusText: 'Internal Server Error',
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.testConnection();
@@ -245,7 +245,7 @@ describe('ApiClient', () => {
     });
 
     it('returns false on network error', async () => {
-      (global.fetch as any).mockRejectedValue(new Error('Network error'));
+      ((globalThis as any).fetch as any).mockRejectedValue(new Error('Network error'));
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.testConnection();
@@ -262,13 +262,13 @@ describe('ApiClient', () => {
         ok: true,
         text: vi.fn().mockResolvedValue(JSON.stringify(responseData)),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.callResource('tech.mycelia.mongo', requestBody);
 
       expect(result).toEqual(responseData);
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
         'http://localhost:8000/api/resource/tech.mycelia.mongo',
         expect.objectContaining({
           method: 'POST',
@@ -283,7 +283,7 @@ describe('ApiClient', () => {
         ok: true,
         text: vi.fn().mockResolvedValue('{"date":{"$date":"2024-01-15T00:00:00.000Z"}}'),
       };
-      (global.fetch as any).mockResolvedValue(mockResponse);
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
       (auth.getCurrentJWT as any).mockResolvedValue('jwt-token');
 
       const result = await client.callResource('tech.mycelia.test', requestBody);

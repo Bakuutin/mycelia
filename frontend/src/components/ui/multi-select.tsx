@@ -454,10 +454,10 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 				}
 			};
 			handleResize();
-			window.addEventListener("resize", handleResize);
+			globalThis.addEventListener("resize", handleResize);
 			return () => {
 				if (typeof window !== "undefined") {
-					window.removeEventListener("resize", handleResize);
+					globalThis.removeEventListener("resize", handleResize);
 				}
 			};
 		}, []);
@@ -559,7 +559,7 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 					uniqueOptions.push(option);
 				}
 			});
-			if (process.env.NODE_ENV === "development" && duplicates.length > 0) {
+			if (import.meta.env.DEV && duplicates.length > 0) {
 				const action = deduplicateOptions
 					? "automatically removed"
 					: "detected";
@@ -580,7 +580,7 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 		const getOptionByValue = React.useCallback(
 			(value: string): MultiSelectOption | undefined => {
 				const option = getAllOptions().find((option) => option.value === value);
-				if (!option && process.env.NODE_ENV === "development") {
+				if (!option && import.meta.env.DEV) {
 					console.warn(
 						`MultiSelect: Option with value "${value}" not found in options list`
 					);

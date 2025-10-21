@@ -4,6 +4,7 @@ A standalone React SPA for the Mycelia AI memory and timeline system.
 
 ## Tech Stack
 
+- **Deno** - Runtime and package manager
 - **React 18** - UI framework
 - **React Router v7** - Client-side routing
 - **TypeScript** - Type safety
@@ -16,20 +17,26 @@ A standalone React SPA for the Mycelia AI memory and timeline system.
 ## Development
 
 ```bash
-# Install dependencies
-npm install
+# Install dependencies (Deno handles this automatically)
+deno install
 
-# Start development server (http://localhost:3000)
+# Start development server (http://localhost:3001)
+deno task dev
+
+# Or using npm scripts
 npm run dev
 
 # Build for production
-npm run build
+deno task build
 
 # Preview production build
-npm run preview
+deno task preview
 
 # Type check
-npm run type-check
+deno task type-check
+
+# Lint
+deno lint
 ```
 
 ## Project Structure
@@ -49,7 +56,8 @@ frontend/
 ├── index.html          # HTML template
 ├── vite.config.ts      # Vite configuration
 ├── tsconfig.json       # TypeScript configuration
-└── package.json        # Dependencies and scripts
+├── deno.json           # Deno configuration and import maps
+└── package.json        # npm compatibility and scripts
 ```
 
 ## API Integration

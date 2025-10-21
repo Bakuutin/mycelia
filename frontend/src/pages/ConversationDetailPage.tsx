@@ -120,7 +120,7 @@ const ConversationDetailPage = () => {
     if (summaryDebounceRef.current) {
       clearTimeout(summaryDebounceRef.current);
     }
-    summaryDebounceRef.current = window.setTimeout(() => {
+    summaryDebounceRef.current = globalThis.setTimeout(() => {
       autoSave({ summary: next || undefined });
     }, 500);
   };
@@ -514,7 +514,7 @@ const ConversationDetailPage = () => {
             onValueChange={handleParticipantsChange}
             placeholder="Select participants"
             maxCount={5}
-            searchable={true}
+            searchable
             emptyIndicator={(searchValue) => <CreatePersonEmptyIndicator searchValue={searchValue} />}
           />
 

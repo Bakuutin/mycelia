@@ -11,13 +11,6 @@ interface TopicItem {
   description: string;
 }
 
-interface HistogramItem {
-  _id: { $oid: string } | string;
-  start: Date;
-  end?: Date;
-  topics?: TopicItem[];
-}
-
 const TopicsPage = () => {
   const { items, loading, loadingMore, error, fetchInitial, loadMore } = useTopicsStore();
   const { timeFormat } = useSettingsStore();

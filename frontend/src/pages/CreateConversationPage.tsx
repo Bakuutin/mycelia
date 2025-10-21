@@ -282,7 +282,7 @@ const CreateConversationPage = () => {
             onValueChange={handleParticipantsChange}
             placeholder="Select participants"
             maxCount={5}
-            searchable={true}
+            searchable
             emptyIndicator={(searchValue) => <CreatePersonEmptyIndicator searchValue={searchValue} />}
           />
 
