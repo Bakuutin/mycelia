@@ -6,6 +6,7 @@ import { FsResource } from "@/lib/mongo/fs.server.ts";
 import { RedisResource } from "@/lib/redis.ts";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import { ProcessorResource } from "../processors/core.server.ts";
+import { LLMResource } from "@/lib/llm/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -14,6 +15,7 @@ const resources = [
   RedisResource,
   TimelineResource,
   ProcessorResource,
+  LLMResource,
 ];
 
 export async function setupResources(): Promise<void> {

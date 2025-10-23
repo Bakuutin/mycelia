@@ -18,9 +18,11 @@ import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import path from "node:path";
 import { setupResources } from "@/lib/resources/registry.ts";
 import { shutdownTelemetry } from "@/lib/telemetry.ts";
+import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 
 async function setup() {
   await setupResources();
+  await ensureAllCollectionsExist();
 }
 
 async function startProdServer() {

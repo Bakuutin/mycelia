@@ -9,10 +9,18 @@ import CreateConversationPage from './pages/CreateConversationPage';
 import ConversationDetailPage from './pages/ConversationDetailPage';
 import PersonDetailPage from './pages/PersonDetailPage';
 import PeoplePage from './pages/PeoplePage';
-import SettingsPage from './pages/SettingsPage';
+import SettingsLayout from './components/SettingsLayout';
+import GeneralSettingsPage from './pages/settings/GeneralSettingsPage';
+import APISettingsPage from './pages/settings/APISettingsPage';
+import LLMSettingsPage from './pages/settings/LLMSettingsPage';
+import CreateLLMPage from './pages/settings/CreateLLMPage';
+import LLMDetailPage from './pages/settings/LLMDetailPage';
 import NotFoundPage from './pages/NotFoundPage';
 import TopicsPage from './pages/TopicsPage';
 import TranscriptPage from './pages/TranscriptPage';
+import ObjectsPage from './pages/ObjectsPage';
+import ObjectDetailPage from './pages/ObjectDetailPage';
+import CreateObjectPage from './pages/CreateObjectPage';
 
 export const router = createBrowserRouter([
   {
@@ -64,8 +72,42 @@ export const router = createBrowserRouter([
         element: <PersonDetailPage />,
       },
       {
+        path: 'objects',
+        element: <ObjectsPage />,
+      },
+      {
+        path: 'objects/new',
+        element: <CreateObjectPage />,
+      },
+      {
+        path: 'objects/:id',
+        element: <ObjectDetailPage />,
+      },
+      {
         path: 'settings',
-        element: <SettingsPage />,
+        element: <SettingsLayout />,
+        children: [
+          {
+            index: true,
+            element: <GeneralSettingsPage />,
+          },
+          {
+            path: 'api',
+            element: <APISettingsPage />,
+          },
+          {
+            path: 'llms',
+            element: <LLMSettingsPage />,
+          },
+          {
+            path: 'llms/new',
+            element: <CreateLLMPage />,
+          },
+          {
+            path: 'llms/:id',
+            element: <LLMDetailPage />,
+          },
+        ],
       },
       {
         path: '*',

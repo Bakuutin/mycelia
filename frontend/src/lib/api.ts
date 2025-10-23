@@ -40,6 +40,11 @@ export class ApiClient {
     return headers;
   }
 
+  get baseURL(): string {
+    const { apiEndpoint } = this.getConfig();
+    return apiEndpoint.replace(/\/$/, '');
+  }
+
   async fetch(path: string, options: RequestInit = {}): Promise<Response> {
     const { apiEndpoint } = this.getConfig();
     const url = `${apiEndpoint}${path}`;

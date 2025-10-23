@@ -8,6 +8,8 @@ from pymongo.collection import Collection
 from utils import mongo
 import logging
 
+
+import time
 from tqdm import tqdm
 import torch
 from pymongo import UpdateOne
@@ -52,20 +54,25 @@ def get_voice_prob(audio):
     return max_prob
 
 
+def run_voice_activity_detection(limit=1000, verbose_logs=False):
 
-def run_voice_activity_detection(limit=1000):
-    import time
+    total_chunks = audio_chunks_collection.estimated_document_count()
 
-    pending_chunks = audio_chunks_collection.count_documents({"vad": None})
-    processed_chunks = audio_chunks_collection.count_documents({"vad": {"$ne": None}})
-    total_chunks = pending_chunks + processed_chunks
+    if verbose_logs:
+        # very slow on large collections
+        pending_chunks = audio_chunks_collection.count_documents({"vad": None})
 
-    if pending_chunks == 0:
-        logger.info(f"✓ VAD complete: {processed_chunks}/{total_chunks} chunks processed")
-        return
+        processed_chunks = total_chunks - pending_chunks
 
-    chunks_to_process = min(limit, pending_chunks) if limit else pending_chunks
-    logger.info(f"Starting VAD: {chunks_to_process} chunks to process, {processed_chunks} already processed (Total: {total_chunks} chunks)")
+        if pending_chunks == 0:
+            logger.info(f"✓ VAD complete: {processed_chunks}/{total_chunks} chunks processed")
+            return
+
+        chunks_to_process = min(limit, pending_chunks) if limit else pending_chunks
+        logger.info(f"Starting VAD: {chunks_to_process} chunks to process, {processed_chunks} already processed (Total: {total_chunks} chunks)")
+    else:
+        chunks_to_process = limit
+        processed_chunks = total_chunks - limit
 
     cursor = audio_chunks_collection.find(
         {
@@ -128,6 +135,7 @@ def run_voice_activity_detection(limit=1000):
     if updates:
         audio_chunks_collection.bulk_write(updates)
 
-    new_processed_chunks = processed_chunks + (i + 1)
-    logger.info(f"VAD batch complete: {i + 1} chunks processed, {has_speech} with speech ({(has_speech / (i+1)) * 100:.1f}%)")
-    logger.info(f"Overall VAD status: {new_processed_chunks}/{total_chunks} chunks processed")
+    if verbose_logs:
+        new_processed_chunks = processed_chunks + (i + 1)
+        logger.info(f"VAD batch complete: {i + 1} chunks processed, {has_speech} with speech ({(has_speech / (i+1)) * 100:.1f}%)")
+        logger.info(f"Overall VAD status: {new_processed_chunks}/{total_chunks} chunks processed")

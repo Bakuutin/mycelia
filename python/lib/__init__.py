@@ -1,7 +1,10 @@
 
 import dotenv
+from pathlib import Path
 
-dotenv.load_dotenv(f'{__file__}/../../.env')
+env_path = Path(__file__).parent.parent.parent / "backend" / ".env"
+assert env_path.exists(), f"Environment file not found at {env_path}"
+dotenv.load_dotenv(env_path)
 
 
 from requests_oauthlib import OAuth2Session

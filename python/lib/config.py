@@ -1,7 +1,7 @@
 
 import dotenv
 
-dotenv.load_dotenv(f'{__file__}/../../.env')
+dotenv.load_dotenv(f'{__file__}/../../backend/.env')
 
 
 from requests_oauthlib import OAuth2Session

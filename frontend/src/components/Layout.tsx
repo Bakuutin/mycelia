@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, Clock, MessageSquare, Settings } from 'lucide-react';
+import { Home, Clock, MessageSquare, Settings, Package } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 
 const Layout = () => {
@@ -9,6 +9,7 @@ const Layout = () => {
   const navigation = [
     { name: 'Timeline', path: '/timeline', icon: Clock },
     { name: 'Conversations', path: '/conversations', icon: MessageSquare },
+    { name: 'Objects', path: '/objects', icon: Package },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
 

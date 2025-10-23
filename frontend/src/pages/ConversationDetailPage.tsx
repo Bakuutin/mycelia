@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, Trash2, PlusIcon, X, Copy, Share2, UserPlus } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
-import { SmartDateInput } from '@/components/forms/SmartDateInput';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 import { IconDisplay } from '@/components/IconDisplay';
 import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select';
@@ -25,8 +25,8 @@ const ConversationDetailPage = () => {
   const [people, setPeople] = useState<Person[]>([]);
   const [rangeTranscripts, setRangeTranscripts] = useState<Record<number, { loading: boolean; error: string | null; segments: { time: Date; endTime: Date; text: string }[]; visible: boolean }>>({});
   const [summaryDraft, setSummaryDraft] = useState<string>('');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const summaryInitializedRef = useRef(false);
-  const summaryDebounceRef = useRef<number | null>(null);
 
   useEffect(() => {
     const fetchConversation = async () => {
@@ -79,22 +79,20 @@ const ConversationDetailPage = () => {
     }
   }, [conversation]);
 
-  useEffect(() => {
-    return () => {
-      if (summaryDebounceRef.current) {
-        clearTimeout(summaryDebounceRef.current);
-      }
-    };
-  }, []);
-
-  const autoSave = async (updates: Partial<Conversation>) => {
+  const handleSave = async () => {
     if (!conversation) return;
 
     setSaving(true);
     try {
       const updateDoc: any = {
         $set: {
-          ...updates,
+          title: conversation.title,
+          summary: summaryDraft || undefined,
+          icon: conversation.icon,
+          participants: conversation.participants,
+          timeRanges: conversation.timeRanges,
+          isShared: conversation.isShared,
+          shareLink: conversation.shareLink,
           updatedAt: new Date(),
         },
       };
@@ -106,9 +104,10 @@ const ConversationDetailPage = () => {
         update: updateDoc,
       });
 
-      setConversation({ ...conversation, ...updates });
+      setHasUnsavedChanges(false);
     } catch (err) {
-      console.error('Auto-save failed:', err);
+      console.error('Save failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save conversation');
     } finally {
       setSaving(false);
     }
@@ -117,12 +116,7 @@ const ConversationDetailPage = () => {
   const handleSummaryChange: React.ChangeEventHandler<HTMLTextAreaElement> = (e) => {
     const next = e.target.value;
     setSummaryDraft(next);
-    if (summaryDebounceRef.current) {
-      clearTimeout(summaryDebounceRef.current);
-    }
-    summaryDebounceRef.current = globalThis.setTimeout(() => {
-      autoSave({ summary: next || undefined });
-    }, 500);
+    setHasUnsavedChanges(true);
   };
 
   const handleDelete = async () => {
@@ -148,20 +142,23 @@ const ConversationDetailPage = () => {
       start: new Date(),
       end: new Date(Date.now() + 3600000),
     };
-    autoSave({ timeRanges: [...conversation.timeRanges, newRange] });
+    setConversation({ ...conversation, timeRanges: [...conversation.timeRanges, newRange] });
+    setHasUnsavedChanges(true);
   };
 
   const updateTimeRange = (index: number, field: 'start' | 'end', value: Date) => {
     if (!conversation) return;
     const newRanges = [...conversation.timeRanges];
     newRanges[index] = { ...newRanges[index], [field]: value };
-    autoSave({ timeRanges: newRanges });
+    setConversation({ ...conversation, timeRanges: newRanges });
+    setHasUnsavedChanges(true);
   };
 
   const removeTimeRange = (index: number) => {
     if (!conversation) return;
     const newRanges = conversation.timeRanges.filter((_, i) => i !== index);
-    autoSave({ timeRanges: newRanges });
+    setConversation({ ...conversation, timeRanges: newRanges });
+    setHasUnsavedChanges(true);
   };
 
   async function fetchSegmentsRange(rangeStart: Date, rangeEnd: Date) {
@@ -226,10 +223,11 @@ const ConversationDetailPage = () => {
 
     if (!conversation.isShared) {
       const shareLink = `${window.location.origin}/shared/conversations/${conversation._id.toString()}`;
-      autoSave({ isShared: true, shareLink });
+      setConversation({ ...conversation, isShared: true, shareLink });
     } else {
-      autoSave({ isShared: false, shareLink: undefined });
+      setConversation({ ...conversation, isShared: false, shareLink: undefined });
     }
+    setHasUnsavedChanges(true);
   };
 
   const copyShareLink = () => {
@@ -258,7 +256,8 @@ const ConversationDetailPage = () => {
       return { id: person._id, name: person.name };
     });
 
-    autoSave({ participants: newParticipants });
+    setConversation({ ...conversation, participants: newParticipants });
+    setHasUnsavedChanges(true);
   };
 
   const handleCreatePersonFromSearch = async (personName: string) => {
@@ -292,7 +291,8 @@ const ConversationDetailPage = () => {
           name: newPerson.name,
         };
         const updatedParticipants = [...conversation.participants, newParticipant];
-        autoSave({ participants: updatedParticipants });
+        setConversation({ ...conversation, participants: updatedParticipants });
+        setHasUnsavedChanges(true);
       }
     } catch (err) {
       console.error('Failed to create person:', err);
@@ -367,6 +367,16 @@ const ConversationDetailPage = () => {
         </Link>
         <div className="flex items-center gap-2">
           {saving && <span className="text-xs text-muted-foreground">Saving...</span>}
+          {hasUnsavedChanges && (
+            <span className="text-xs text-orange-500">Unsaved changes</span>
+          )}
+          <Button 
+            onClick={handleSave} 
+            disabled={saving || !hasUnsavedChanges}
+            size="sm"
+          >
+            Save
+          </Button>
           <Button variant="destructive" size="sm" onClick={handleDelete}>
             <Trash2 className="w-4 h-4 mr-2" />
             Delete
@@ -382,7 +392,10 @@ const ConversationDetailPage = () => {
               <div className="mt-1">
                 <EmojiPickerButton
                   value={conversation.icon}
-                  onChange={(icon) => autoSave({ icon })}
+                  onChange={(icon) => {
+                    setConversation({ ...conversation, icon });
+                    setHasUnsavedChanges(true);
+                  }}
                 />
               </div>
             </div>
@@ -392,7 +405,10 @@ const ConversationDetailPage = () => {
               <Input
                 id="title"
                 value={conversation.title}
-                onChange={(e) => autoSave({ title: e.target.value })}
+                onChange={(e) => {
+                  setConversation({ ...conversation, title: e.target.value });
+                  setHasUnsavedChanges(true);
+                }}
                 placeholder="Conversation title"
                 className="mt-1"
               />
@@ -405,7 +421,6 @@ const ConversationDetailPage = () => {
               id="summary"
               value={summaryDraft}
               onChange={handleSummaryChange}
-              onBlur={() => autoSave({ summary: summaryDraft || undefined })}
               placeholder="Optional summary of the conversation"
               className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
@@ -449,19 +464,19 @@ const ConversationDetailPage = () => {
 
                   <div className="space-y-2">
                     <Label htmlFor={`range-${index}-start`}>Start</Label>
-                    <SmartDateInput
-                      id={`range-${index}-start`}
+                    <DateTimePicker
                       value={range.start}
-                      onChange={(date) => date && updateTimeRange(index, 'start', date)}
+                      onChange={(value) => updateTimeRange(index, 'start', new Date(value))}
+                      placeholder="Enter start time"
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor={`range-${index}-end`}>End</Label>
-                    <SmartDateInput
-                      id={`range-${index}-end`}
+                    <DateTimePicker
                       value={range.end}
-                      onChange={(date) => date && updateTimeRange(index, 'end', date)}
+                      onChange={(value) => updateTimeRange(index, 'end', new Date(value))}
+                      placeholder="Enter end time"
                     />
                   </div>
 

@@ -68,7 +68,8 @@ def get_silence_message(gap: timedelta) -> str:
     return f'silence for {m:.0f}m {s:.0f}s'
 
 def get_timestamp_message(timestamp: datetime) -> str:
-    return f'unix time {int(timestamp.timestamp())}'
+    return f'time: {utc(timestamp).isoformat()}'
+
 
 def iterate_conversations(
     not_later_than: datetime | None = None,
@@ -100,7 +101,12 @@ def iterate_conversations(
 
 
 #%%
+# %%
+# %%
+a = int(datetime.fromisoformat('2025-10-05T17:15:45.000+00:00').timestamp())
+b = int(datetime.fromisoformat('2025-10-05T19:13:36.000+00:00').timestamp())
 
+a, b
 # %%
 
 from pydantic import BaseModel, Field
@@ -123,8 +129,8 @@ class Conversation(BaseModel):
     title: str = Field(description="Descriptive title for the conversation")
     summary: str = Field(description="Summary of what was discussed, key points, decisions, outcomes, etc.")
     entities: List[str] = Field(default_factory=list, description="People, places, things mentioned")
-    start: int = Field(description="Unix timestamp when conversation started")
-    end: int = Field(description="Unix timestamp when conversation ended")
+    start: datetime = Field(description="ISO 8601 timestamp when conversation started")
+    end: datetime = Field(description="ISO 8601 timestamp when conversation ended")
     emoji: str = Field(description="Single emoji representing the conversation")
 
 
@@ -180,7 +186,7 @@ def chunk_to_prompt(chunk: list[dict]):
 i = 0
 while True:
     i += 1
-    if i > 10:
+    if i > 1:
         break
     chunk = next(conv_iterator)
 
@@ -239,11 +245,6 @@ while True:
     cursor = chunk_start
 
 
-#%%
-print(conv)
-# %%
-
-# %%
 from tqdm import tqdm
 
 
@@ -271,88 +272,3 @@ for conv in tqdm(call_resource(
                 "update": {"$set": {"timeRanges": conv["timeRanges"]}},
             }
         )
-# %%
-
-call_resource(
-    "tech.mycelia.mongo",
-    {
-        "action": "deleteMany",
-        "collection": "conversations",
-        "query": {},
-    }
-)
-
-# %%
-
-tool_call
-# %%
-
-utc(1759683633), utc(1759683657)
-# %%
-
-
-
-
-print(chunk_to_prompt(chunk))
-
-# %%
-
-
-from bson import ObjectId
-
-convo_id = ObjectId("68f298794959aae6866d7d14")
-
-convo = call_resource(
-    "tech.mycelia.mongo",
-    {
-        "action": "findOne",
-        "collection": "conversations",
-        "query": {"_id": convo_id},
-    }
-)
-convo
-# %%
-
-
-# fetch all transcripts for this conversation
-transcripts = call_resource(
-    "tech.mycelia.mongo",
-    {
-        "action": "find",
-        "collection": "transcriptions",
-        "query": {
-            "$or": [
-                {
-                    "start": {
-                        "$gte": r["start"],
-                        "$lte": r["end"],
-                    }
-                } for r in convo["timeRanges"]
-            ]
-        }
-    }
-)
-transcripts
-
-#%%
-r = convo["timeRanges"][0]
-start, end = r["start"], r["end"]
-start
-# %%
-
-call_resource(
-    "tech.mycelia.mongo",
-    {
-        "action": "aggregate",
-        "collection": "transcriptions",
-        "pipeline": [
-            {
-                "$match": {
-                    "start": {
-                        "$gte": datetime.now(pytz.UTC) - timedelta(hours=2),
-                    }
-                }
-            }
-        ]
-    }
-)

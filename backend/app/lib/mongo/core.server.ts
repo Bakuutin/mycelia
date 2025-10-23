@@ -139,13 +139,51 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     request: mongoRequestSchema,
     response: z.any(),
   };
+  
+  // Cache for collection existence checks to avoid repeated database calls
+  private collectionExistsCache = new Set<string>();
+  
+  // Method to clear the cache (useful for testing or if collections are dropped externally)
+  clearCollectionCache(): void {
+    this.collectionExistsCache.clear();
+  }
   async getRootDB(): Promise<Db> {
     return getRootDB();
   }
+  
+  async ensureCollectionExists(db: Db, collectionName: string): Promise<void> {
+    // Check cache first - if we've already verified this collection exists, skip the check
+    if (this.collectionExistsCache.has(collectionName)) {
+      return;
+    }
+    
+    try {
+      const collections = await db.listCollections({ name: collectionName }).toArray();
+      
+      if (collections.length === 0) {
+        await db.createCollection(collectionName);
+        console.log(`Auto-created collection: ${collectionName}`);
+      }
+      
+      // Add to cache after successful verification/creation
+      this.collectionExistsCache.add(collectionName);
+    } catch (error) {
+      console.error(`Failed to ensure collection ${collectionName} exists:`, error);
+      // Don't add to cache on error - we'll try again next time
+      // Don't throw the error - let the operation continue
+      // The operation will fail gracefully if the collection truly doesn't exist
+    }
+  }
   async use(input: MongoRequest): Promise<MongoResponse> {
     const db = await this.getRootDB();
+    
+    // Check if collection exists and create if it doesn't
+    await this.ensureCollectionExists(db, input.collection);
+    
     const collection = db.collection(input.collection);
-    switch (input.action) {
+    
+    try {
+      switch (input.action) {
       case "find":
         return collection.find(input.query, input.options).toArray();
       case "findOne":
@@ -177,6 +215,10 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
         return collection.indexes();
       default:
         throw new Error("Unknown action");
+      }
+    } catch (error) {
+      console.error(`MongoDB operation failed on collection ${input.collection}:`, error);
+      throw new Error(`Database operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

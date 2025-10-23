@@ -6,10 +6,10 @@ import argparse
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
-
+from lib.config import get_url
 from utils import lazy, mongo
 
-STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087')
+STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087').rstrip('/')
 
 from pydantic import BaseModel
 from datetime import datetime
@@ -34,7 +34,9 @@ from typing import Any, Optional, List
 
 class SpeechSequence(BaseModel):
     original_id: ObjectId
-    chunks: list[Any] = [] 
+    chunks: list[Any] = []
+    is_partial: bool = False
+    is_continuation: bool = False
     
     class Config:
         arbitrary_types_allowed = True
@@ -57,7 +59,7 @@ class SpeechSequence(BaseModel):
             
         
 
-def get_speech_sequences(limit=10, filters=None) -> Iterator[SpeechSequence]:
+def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iterator[SpeechSequence]:
     print('getting speech sequences')
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
     yielded = 0
@@ -104,12 +106,23 @@ def get_speech_sequences(limit=10, filters=None) -> Iterator[SpeechSequence]:
         
         seq.chunks.append(chunk)
         
+        if len(seq.chunks) >= max_sequence_length:
+            seq.is_partial = True
+            yield seq
+            yielded += 1
+            sequences_by_id[original_id] = SpeechSequence(
+                start=chunk['start'],
+                original_id=original_id,
+                chunks=[chunk],
+                is_continuation=True,
+            )
         
         if i % 5 == 0:
             for existing_id, seq in tuple(sequences_by_id.items()):
                 if seq.start - start> timedelta(seconds=20):
-                    yield seq
-                    yielded += 1
+                    if not seq.is_continuation or len(seq.chunks) > 1:
+                        yield seq
+                        yielded += 1
                     del sequences_by_id[existing_id]
     
     if limit is None:
@@ -146,19 +159,25 @@ def process_speech_sequences(limit=None, max_workers=1):
         for sequence in get_speech_sequences(limit=limit):
             futures.append(executor.submit(process_sequence, sequence))
             print(f'{len(futures)} futures scheduled')
-            while futures:
-                futures = [f for f in futures if not f.done()]
-                time.sleep(0.1)
-        
-    
+            while len(futures) >= max_workers:
+                _, not_done = concurrent.futures.wait(futures, timeout=0.1)
+                futures = list(not_done)
+
 
 
 def transcribe_sequence(sequence: SpeechSequence):
     try:
-        response = requests.post(f'{STT_SERVER_URL}/transcribe', files=[
-            ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
-            for i, chunk in enumerate(reversed(sequence.chunks))
-        ])
+        headers = {}
+        api_key = os.environ.get('STT_API_KEY')
+        if api_key:
+            headers['X-Api-Key'] = api_key
+        
+        response = requests.post(f'{STT_SERVER_URL}/transcribe', 
+                               files=[
+                                   ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
+                                   for i, chunk in enumerate(reversed(sequence.chunks))
+                               ],
+                               headers=headers)
         response.raise_for_status()  # Raise an exception for bad status codes
 
         transcript = response.json()
@@ -196,12 +215,14 @@ def transcribe_sequence(sequence: SpeechSequence):
 
 
 def mark_as_transcribed(seq: SpeechSequence):
-    chunks.update_many(
-        {
-            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]}
-        },
-        {'$set': {'transcribed_at': datetime.now(tz=UTC)}}
-    )
+    chunks_to_mark = seq.chunks[:-1] if seq.is_partial else seq.chunks
+    if chunks_to_mark:
+        chunks.update_many(
+            {
+                '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]}
+            },
+            {'$set': {'transcribed_at': datetime.now(tz=UTC)}}
+        )
 
 
 if __name__ == '__main__':

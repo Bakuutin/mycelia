@@ -52,7 +52,7 @@ export interface Resource<Input, Output> {
   modifiers?: {
     [key: string]: ResourceAccessModifier<Input, Output, any>;
   };
-  use: (input: Input, auth: Auth) => Promise<Output>;
+  use: (input: Input, auth: Auth) => Promise<Output | Response>;
   extractActions: (input: Input) => {
     path: ResourcePath;
     actions: string[];
@@ -184,7 +184,15 @@ export class ResourceManager {
 
       accessLogger.log(auth, resource, actions);
 
-      return finalUse(input, auth);
+      const result = await finalUse(input, auth);
+      
+      // If result is a Response object, return it directly without schema validation
+      if (result instanceof Response) {
+        return result;
+      }
+      
+      // Otherwise, validate and return the typed response
+      return resource.schemas.response.parse(result);
     };
   }
 }
