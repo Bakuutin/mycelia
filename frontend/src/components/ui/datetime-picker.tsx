@@ -20,7 +20,7 @@ export function DateTimePicker({
   placeholder = "Pick a date and time", 
   disabled
 }: DateTimePickerProps) {
-  value
+  const { timeFormat } = useSettingsStore();
   const [isoTS, setIsoTS] = useState<number | null>(value ? value.getTime() / 1000 : null)
   return (
     <div>
@@ -37,6 +37,11 @@ export function DateTimePicker({
         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
         disabled={disabled}
       />
+      {isoTS && (
+        <span className="text-sm text-gray-500">
+          {formatTime(new Date(isoTS * 1000), timeFormat)}
+        </span>
+      )}
     </div>
   )
 }
