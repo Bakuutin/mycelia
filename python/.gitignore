@@ -3,4 +3,4 @@
 *.pyc
 *.ipynb
 
-settings.py
+local.py

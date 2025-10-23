@@ -60,16 +60,20 @@ def find_local_audio() -> str | None:
     return default if os.path.isdir(default) else None
 
 
-importers: list[FilesystemImporter] = []
+try:
+    from local import importers
+except ImportError:
+    print("No local.py found, using default importers")
+    importers: list[FilesystemImporter] = []
 
-google_root = find_google_drive_evr()
-if google_root:
-    importers.append(GoogleCloudImporter(root=google_root, code="google_drive"))
+    google_root = find_google_drive_evr()
+    if google_root:
+        importers.append(GoogleCloudImporter(root=google_root, code="google_drive"))
 
-apple_root = find_apple_voicememos()
-if apple_root:
-    importers.append(AppleVoiceMemosImporter(root=apple_root, code="apple_voicememos"))
+    apple_root = find_apple_voicememos()
+    if apple_root:
+        importers.append(AppleVoiceMemosImporter(root=apple_root, code="apple_voicememos"))
 
-local_root = find_local_audio()
-if local_root:
-    importers.append(LocalFilesystemImporter(root=local_root, code="local"))
+    local_root = find_local_audio()
+    if local_root:
+        importers.append(LocalFilesystemImporter(root=local_root, code="local"))
