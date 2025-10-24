@@ -317,7 +317,7 @@ const ObjectDetailPage = () => {
                     <X className="w-4 h-4" />
                   </Button>
                 </div>
-                
+
                 <div>
                   <Label htmlFor={`range-name-${index}`} className="text-xs">Name (optional)</Label>
                   <Input
@@ -331,33 +331,30 @@ const ObjectDetailPage = () => {
                     placeholder="Range name"
                   />
                 </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label htmlFor={`range-start-${index}`} className="text-xs">Start</Label>
-                    <DateTimePicker
-                      value={range.start}
-                      onChange={(date) => {
-                        const newRanges = [...(object.timeRanges || [])];
-                        newRanges[index] = { ...range, start: date };
-                        autoSave({ timeRanges: newRanges });
-                      }}
-                      placeholder="Pick start time"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor={`range-end-${index}`} className="text-xs">End (optional)</Label>
-                    <DateTimePicker
-                      nullable
-                      value={range.end}
-                      onChange={(date) => {
-                        const newRanges = [...(object.timeRanges || [])];
-                        newRanges[index] = { ...range, end: date };
-                        autoSave({ timeRanges: newRanges });
-                      }}
-                      placeholder="Pick end time (optional)"
-                    />
-                  </div>
+                <div>
+                  <Label htmlFor={`range-start-${index}`} className="text-xs">Start</Label>
+                  <DateTimePicker
+                    value={range.start}
+                    onChange={(date) => {
+                      const newRanges = [...(object.timeRanges || [])];
+                      newRanges[index] = { ...range, start: date };
+                      autoSave({ timeRanges: newRanges });
+                    }}
+                    placeholder="Pick start time"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor={`range-end-${index}`} className="text-xs">End (optional)</Label>
+                  <DateTimePicker
+                    nullable
+                    value={range.end}
+                    onChange={(date) => {
+                      const newRanges = [...(object.timeRanges || [])];
+                      newRanges[index] = { ...range, end: date || undefined };
+                      autoSave({ timeRanges: newRanges });
+                    }}
+                    placeholder="Pick end time (optional)"
+                  />
                 </div>
               </div>
             ))}

@@ -12,7 +12,8 @@ export function formatTime(date: Date, format?: TimeFormat): string {
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-        second: '2-digit'
+        second: '2-digit',
+        timeZoneName: 'short',
       }).replace(' ', 'T');
 
     case 'gregorian-local-verbose':
@@ -23,18 +24,20 @@ export function formatTime(date: Date, format?: TimeFormat): string {
         hour: 'numeric',
         minute: '2-digit',
         second: '2-digit',
-        hour12: true
+        hour12: true,
+        timeZoneName: 'short',
       });
 
     case 'gregorian-local-european':
-      return date.toLocaleString('en-GB', {
+      return date.toLocaleString('sv-SE', {
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
-        hour12: false
+        hour12: false,
+        timeZoneName: 'short',
       });
 
     case 'gregorian-local-american':
@@ -45,7 +48,8 @@ export function formatTime(date: Date, format?: TimeFormat): string {
         hour: 'numeric',
         minute: '2-digit',
         second: '2-digit',
-        hour12: true
+        hour12: true,
+        timeZoneName: 'short',
       });
 
     case 'gregorian-utc-iso':
@@ -61,7 +65,7 @@ export function formatTime(date: Date, format?: TimeFormat): string {
         minute: '2-digit',
         second: '2-digit',
         hour12: true,
-        timeZone: 'UTC'
+        timeZoneName: 'short',
       }) + ' UTC';
     }
 
