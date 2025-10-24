@@ -9,7 +9,7 @@ import { ColorInput } from '@/components/forms/ColorInput';
 import { CategoryInput } from '@/components/forms/CategoryInput';
 import { ToggleGroup } from '@/components/ui/toggle-group';
 import { Separator } from '@/components/ui/separator';
-import { SmartDateInput } from '@/components/forms/SmartDateInput';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
 
 const EVENT_CATEGORIES = ["geography", "life", "education", "relationship", "work", "misc"];
 
@@ -144,8 +144,7 @@ const CreateEventPage = () => {
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="start">Start *</Label>
-            <SmartDateInput
-              id="start"
+            <DateTimePicker
               value={formData.start}
               onChange={(date) => date && setFormData({ ...formData, start: date })}
             />
@@ -154,8 +153,7 @@ const CreateEventPage = () => {
           {formData.kind === "range" && (
             <div className="space-y-2">
               <Label htmlFor="end">End</Label>
-              <SmartDateInput
-                id="end"
+              <DateTimePicker
                 value={formData.end}
                 onChange={(date) => setFormData({ ...formData, end: date })}
               />

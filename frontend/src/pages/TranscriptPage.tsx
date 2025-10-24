@@ -6,7 +6,8 @@ import { formatTime, formatTimeRangeDuration } from '@/lib/formatTime';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { DateTimeInput, toLocalDateTime } from '@/components/forms/DateTimeInput';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
+
 
 interface TranscriptSegment {
   start: number; // seconds from transcript start
@@ -79,8 +80,8 @@ const TranscriptPage = () => {
   const [searchSegments, setSearchSegments] = useState<RenderSegment[]>([]);
   const [lastSearchedQ, setLastSearchedQ] = useState<string>(initialQ);
 
-  const [startStr, setStartStr] = useState<string>('');
-  const [endStr, setEndStr] = useState<string>('');
+  const [formStartDate, setFormStartDate] = useState<Date | undefined>(undefined);
+  const [formEndDate, setFormEndDate] = useState<Date | undefined>(undefined);
 
   function updateRange(newStart: Date, newEnd: Date) {
     const currentSearch = new URLSearchParams(window.location.search);
@@ -150,12 +151,9 @@ const TranscriptPage = () => {
   }
 
   async function handleApplyRange() {
-    if (!startStr || !endStr) return;
-    const s = new Date(startStr);
-    const e = new Date(endStr);
-    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return;
-    const startNorm = s.getTime() > e.getTime() ? e : s;
-    const endNorm = s.getTime() > e.getTime() ? s : e;
+    if (!formStartDate || !formEndDate) return;
+    const startNorm = formStartDate.getTime() > formEndDate.getTime() ? formEndDate : formStartDate;
+    const endNorm = formStartDate.getTime() > formEndDate.getTime() ? formStartDate : formEndDate;
     setLoading(true);
     setError(null);
     setSearchError(null);
@@ -164,8 +162,8 @@ const TranscriptPage = () => {
       setSegments(rendered);
       setDisplayStart(startNorm);
       setDisplayEnd(endNorm);
-      setStartStr(toLocalDateTime(startNorm));
-      setEndStr(toLocalDateTime(endNorm));
+      setFormStartDate(startNorm);
+      setFormEndDate(endNorm);
       updateRange(startNorm, endNorm);
       const query = q.trim();
       if (query) {
@@ -309,8 +307,8 @@ const TranscriptPage = () => {
         setSegments(rendered);
         setDisplayStart(s);
         setDisplayEnd(e);
-        setStartStr(toLocalDateTime(s));
-        setEndStr(toLocalDateTime(e));
+        setFormStartDate(s);
+        setFormEndDate(e);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch transcripts');
       } finally {
@@ -320,8 +318,8 @@ const TranscriptPage = () => {
 
     // Initialize form fields with default values if no URL parameters
     if (!startParam && !endParam) {
-      setStartStr(toLocalDateTime(startDate));
-      setEndStr(toLocalDateTime(endDate));
+      setFormStartDate(startDate);
+      setFormEndDate(endDate);
     }
 
     initialFetch();
@@ -364,14 +362,14 @@ const TranscriptPage = () => {
         }}
       >
         <div className="flex gap-2 w-full sm:w-auto">
-          <DateTimeInput
-            value={startStr}
-            onChange={(e) => setStartStr(e.target.value)}
+          <DateTimePicker
+            value={formStartDate}
+            onChange={(date) => setFormStartDate(date)}
             placeholder="Start"
           />
-          <DateTimeInput
-            value={endStr}
-            onChange={(e) => setEndStr(e.target.value)}
+          <DateTimePicker
+            value={formEndDate}
+            onChange={(date) => setFormEndDate(date)}
             placeholder="End"
           />
         </div>
@@ -383,7 +381,7 @@ const TranscriptPage = () => {
           />
         </div>
         <div className="flex gap-2">
-          <Button type="submit" disabled={loading || !startStr || !endStr || searching}>
+          <Button type="submit" disabled={loading || !formStartDate || !formEndDate || searching}>
             {searching ? 'Applying…' : 'Apply'}
           </Button>
         </div>

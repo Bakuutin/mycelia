@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, PlusIcon, X, UserPlus } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
-import { SmartDateInput } from '@/components/forms/SmartDateInput';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
 import { IconDisplay } from '@/components/IconDisplay';
 import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select';
 import { ObjectId } from 'bson';
@@ -251,8 +251,7 @@ const CreateConversationPage = () => {
 
                 <div className="space-y-2">
                   <Label htmlFor={`range-${index}-start`}>Start</Label>
-                  <SmartDateInput
-                    id={`range-${index}-start`}
+                  <DateTimePicker
                     value={range.start}
                     onChange={(date) => date && updateTimeRange(index, 'start', date)}
                   />
@@ -260,8 +259,7 @@ const CreateConversationPage = () => {
 
                 <div className="space-y-2">
                   <Label htmlFor={`range-${index}-end`}>End</Label>
-                  <SmartDateInput
-                    id={`range-${index}-end`}
+                  <DateTimePicker
                     value={range.end}
                     onChange={(date) => date && updateTimeRange(index, 'end', date)}
                   />

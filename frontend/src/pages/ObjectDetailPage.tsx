@@ -5,7 +5,9 @@ import type { Object } from '@/types/objects';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
+import { ArrowLeft, Trash2, Plus, X } from 'lucide-react';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 
 const ObjectDetailPage = () => {
@@ -170,6 +172,210 @@ const ObjectDetailPage = () => {
             placeholder="Optional details about this object"
             className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
+        </div>
+
+        <div className="flex gap-6">
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="isEvent"
+              checked={object.isEvent || false}
+              onCheckedChange={(checked) => autoSave({ isEvent: checked as boolean })}
+            />
+            <Label htmlFor="isEvent" className="text-sm font-medium cursor-pointer">
+              Is Event
+            </Label>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="isPerson"
+              checked={object.isPerson || false}
+              onCheckedChange={(checked) => autoSave({ isPerson: checked as boolean })}
+            />
+            <Label htmlFor="isPerson" className="text-sm font-medium cursor-pointer">
+              Is Person
+            </Label>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">Aliases</Label>
+          <div className="space-y-2">
+            {(object.aliases || []).map((alias, index) => (
+              <div key={index} className="flex gap-2">
+                <Input
+                  value={alias}
+                  onChange={(e) => {
+                    const newAliases = [...(object.aliases || [])];
+                    newAliases[index] = e.target.value;
+                    autoSave({ aliases: newAliases });
+                  }}
+                  placeholder="Alias"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const newAliases = (object.aliases || []).filter((_, i) => i !== index);
+                    autoSave({ aliases: newAliases.length > 0 ? newAliases : undefined });
+                  }}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const newAliases = [...(object.aliases || []), ''];
+                autoSave({ aliases: newAliases });
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Alias
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">Location</Label>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="latitude" className="text-xs text-muted-foreground">Latitude</Label>
+              <Input
+                id="latitude"
+                type="number"
+                step="any"
+                value={object.location?.latitude ?? ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    autoSave({ location: undefined });
+                  } else {
+                    autoSave({
+                      location: {
+                        latitude: parseFloat(value),
+                        longitude: object.location?.longitude ?? 0,
+                      },
+                    });
+                  }
+                }}
+                placeholder="0.0"
+              />
+            </div>
+            <div>
+              <Label htmlFor="longitude" className="text-xs text-muted-foreground">Longitude</Label>
+              <Input
+                id="longitude"
+                type="number"
+                step="any"
+                value={object.location?.longitude ?? ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    autoSave({ location: undefined });
+                  } else {
+                    autoSave({
+                      location: {
+                        latitude: object.location?.latitude ?? 0,
+                        longitude: parseFloat(value),
+                      },
+                    });
+                  }
+                }}
+                placeholder="0.0"
+              />
+            </div>
+          </div>
+          {object.location && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => autoSave({ location: undefined })}
+            >
+              Clear Location
+            </Button>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">Time Ranges</Label>
+          <div className="space-y-3">
+            {(object.timeRanges || []).map((range, index) => (
+              <div key={index} className="border rounded-md p-4 space-y-3">
+                <div className="flex justify-between items-start">
+                  <Label className="text-xs text-muted-foreground">Range {index + 1}</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      const newRanges = (object.timeRanges || []).filter((_, i) => i !== index);
+                      autoSave({ timeRanges: newRanges.length > 0 ? newRanges : undefined });
+                    }}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+                
+                <div>
+                  <Label htmlFor={`range-name-${index}`} className="text-xs">Name (optional)</Label>
+                  <Input
+                    id={`range-name-${index}`}
+                    value={range.name || ''}
+                    onChange={(e) => {
+                      const newRanges = [...(object.timeRanges || [])];
+                      newRanges[index] = { ...range, name: e.target.value || undefined };
+                      autoSave({ timeRanges: newRanges });
+                    }}
+                    placeholder="Range name"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor={`range-start-${index}`} className="text-xs">Start</Label>
+                    <DateTimePicker
+                      value={range.start}
+                      onChange={(date) => {
+                        const newRanges = [...(object.timeRanges || [])];
+                        newRanges[index] = { ...range, start: date };
+                        autoSave({ timeRanges: newRanges });
+                      }}
+                      placeholder="Pick start time"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor={`range-end-${index}`} className="text-xs">End (optional)</Label>
+                    <DateTimePicker
+                      nullable
+                      value={range.end}
+                      onChange={(date) => {
+                        const newRanges = [...(object.timeRanges || [])];
+                        newRanges[index] = { ...range, end: date };
+                        autoSave({ timeRanges: newRanges });
+                      }}
+                      placeholder="Pick end time (optional)"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const newRanges = [
+                  ...(object.timeRanges || []),
+                  { start: new Date(), end: undefined, name: undefined },
+                ];
+                autoSave({ timeRanges: newRanges });
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Time Range
+            </Button>
+          </div>
         </div>
       </div>
     </div>

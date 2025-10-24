@@ -183,6 +183,24 @@ const form = useForm({
 });
 ```
 
+### UI Component Conventions
+
+**Date and Time Input:**
+- **ALWAYS** use `DateTimePicker` component from `@/components/ui/datetime-picker` for editable date/time fields
+- Never use native HTML `<input type="datetime-local">` or `<input type="date">`
+- `DateTimePicker` integrates with user's time format preferences (SI time/Gregorian) from settings store
+- Uses Unix timestamp input with formatted display
+
+```typescript
+import { DateTimePicker } from '@/components/ui/datetime-picker';
+
+<DateTimePicker
+  value={startDate}
+  onChange={(date) => setStartDate(date)}
+  placeholder="Pick a date and time"
+/>
+```
+
 ### Deno-Specific Patterns
 
 **Import Maps:**

@@ -10,7 +10,7 @@ import { ColorInput } from '@/components/forms/ColorInput';
 import { CategoryInput } from '@/components/forms/CategoryInput';
 import { ToggleGroup } from '@/components/ui/toggle-group';
 import { Separator } from '@/components/ui/separator';
-import { SmartDateInput } from '@/components/forms/SmartDateInput';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 import { Combobox } from '@/components/ui/combobox';
 
@@ -267,8 +267,7 @@ const EventDetailPage = () => {
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="start">Start</Label>
-            <SmartDateInput
-              id="start"
+            <DateTimePicker
               value={event.start}
               onChange={(date) => date && autoSave({ start: date })}
             />
@@ -279,9 +278,8 @@ const EventDetailPage = () => {
               <Label htmlFor="end">End</Label>
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <SmartDateInput
-                    id="end"
-                    value={event.end || null}
+                  <DateTimePicker
+                    value={event.end || undefined}
                     onChange={(date) => autoSave({ end: date || undefined })}
                   />
                 </div>
