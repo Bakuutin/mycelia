@@ -8,11 +8,11 @@ import { DateTimePicker } from '@/components/ui/datetime-picker';
 import { Plus, X } from 'lucide-react';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 import { ObjectId } from 'bson';
+import { useObjectSelection } from '@/hooks/useObjectQueries';
 
 interface ObjectFormProps {
   object: Object;
   onUpdate: (updates: Partial<Object>) => Promise<void>;
-  allObjects: Object[];
 }
 
 const renderIcon = (icon: any) => {
@@ -23,7 +23,8 @@ const renderIcon = (icon: any) => {
   return '';
 };
 
-export function ObjectForm({ object, onUpdate, allObjects }: ObjectFormProps) {
+export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
+  const { data: selectionObjects = [], isLoading: loadingSelection } = useObjectSelection();
   return (
     <div className="space-y-6">
       <div className="flex items-start gap-4">
@@ -136,7 +137,7 @@ export function ObjectForm({ object, onUpdate, allObjects }: ObjectFormProps) {
                 className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="">Select subject...</option>
-                {allObjects.map(obj => (
+                {selectionObjects.map((obj: Object) => (
                   <option key={obj._id.toString()} value={obj._id.toString()}>
                     {renderIcon(obj.icon)} {obj.name}
                   </option>
@@ -161,7 +162,7 @@ export function ObjectForm({ object, onUpdate, allObjects }: ObjectFormProps) {
                 className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="">Select object...</option>
-                {allObjects.map(obj => (
+                {selectionObjects.map((obj: Object) => (
                   <option key={obj._id.toString()} value={obj._id.toString()}>
                     {renderIcon(obj.icon)} {obj.name}
                   </option>

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { callResource } from '@/lib/api';
 import type { Object } from '@/types/objects';
 import { Button } from '@/components/ui/button';
-import { Package } from 'lucide-react';
+import { Package, Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { IconDisplay } from '@/components/IconDisplay';
 
@@ -58,6 +58,12 @@ const ObjectsPage = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Objects</h1>
+        <Button asChild>
+          <Link to="/objects/create">
+            <Plus className="w-4 h-4 mr-2" />
+            Create Object
+          </Link>
+        </Button>
       </div>
 
       {objects.length === 0 ? (

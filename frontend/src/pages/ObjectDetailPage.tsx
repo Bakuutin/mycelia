@@ -1,95 +1,36 @@
-import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { callResource } from '@/lib/api';
 import type { Object } from '@/types/objects';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Trash2 } from 'lucide-react';
-import { useObjects, useRelatedObjects } from '@/hooks/useObjects';
+import { useObject, useUpdateObject, useDeleteObject } from '@/hooks/useObjectQueries';
 import { ObjectForm } from '@/components/ObjectForm';
 import { RelationshipsPanel } from '@/components/RelationshipsPanel';
+import { ObjectId } from "bson";
 
 const ObjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [object, setObject] = useState<Object | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  
-  // Use custom hooks for object management
-  const { allObjects, fetchAllObjects } = useObjects();
-  const { relatedObjects, fetchRelatedObjects } = useRelatedObjects(id);
-
-
-  useEffect(() => {
-    const fetchObject = async () => {
-      try {
-        const result = await callResource("tech.mycelia.mongo", {
-          action: "findOne",
-          collection: "objects",
-          query: { _id: { $oid: id } },
-        });
-        if (result) {
-          setObject(result);
-          if (!result.isRelationship) {
-            fetchRelatedObjects(id!);
-          }
-        } else {
-          setError("Object not found");
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch object');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (id) {
-      fetchObject();
-      fetchAllObjects();
-    }
-  }, [id, fetchAllObjects, fetchRelatedObjects]);
+  // Use React Query hooks
+  const { data: object, isLoading: loading, error } = useObject(id);
+  const updateObjectMutation = useUpdateObject();
+  const deleteObjectMutation = useDeleteObject();
 
   const autoSave = async (updates: Partial<Object>) => {
-    if (!object) return;
-
-    setSaving(true);
-    try {
-      await callResource("tech.mycelia.mongo", {
-        action: "updateOne",
-        collection: "objects",
-        query: { _id: object._id },
-        update: {
-          $set: {
-            ...updates,
-            updatedAt: new Date(),
-          },
-        },
-      });
-
-      setObject({ ...object, ...updates });
-    } catch (err) {
-      console.error('Auto-save failed:', err);
-    } finally {
-      setSaving(false);
-    }
+    if (!object || !id) return;
+    
+    updateObjectMutation.mutate({ id, updates });
   };
 
   const handleDelete = async () => {
-    if (!object) return;
+    if (!object || !id) return;
     const confirmed = globalThis.confirm ? globalThis.confirm("Delete this object?") : true;
     if (!confirmed) return;
 
-    try {
-      await callResource("tech.mycelia.mongo", {
-        action: "deleteOne",
-        collection: "objects",
-        query: { _id: object._id },
-      });
-      navigate('/objects');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete object');
-    }
+    deleteObjectMutation.mutate(id, {
+      onSuccess: () => {
+        navigate('/objects');
+      },
+    });
   };
 
   if (loading) {
@@ -122,7 +63,7 @@ const ObjectDetailPage = () => {
           </Link>
         </div>
         <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error || 'Object not found'}</p>
+          <p className="text-red-500">Error: {error?.message || 'Object not found'}</p>
         </div>
       </div>
     );
@@ -138,31 +79,29 @@ const ObjectDetailPage = () => {
           </Button>
         </Link>
         <div className="flex items-center gap-2">
-          {saving && <span className="text-xs text-muted-foreground">Saving...</span>}
-          <Button variant="destructive" size="sm" onClick={handleDelete}>
+          {updateObjectMutation.isPending && <span className="text-xs text-muted-foreground">Saving...</span>}
+          <Button 
+            variant="destructive" 
+            size="sm" 
+            onClick={handleDelete}
+            disabled={deleteObjectMutation.isPending}
+          >
             <Trash2 className="w-4 h-4 mr-2" />
-            Delete
+            {deleteObjectMutation.isPending ? 'Deleting...' : 'Delete'}
           </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left Column - Object Details */}
         <div className="border rounded-lg p-6">
           <ObjectForm 
             object={object} 
             onUpdate={autoSave} 
-            allObjects={allObjects} 
           />
         </div>
 
-        {/* Right Column - Relationships */}
         <div className="border rounded-lg p-6">
-          <RelationshipsPanel 
-            object={object} 
-            allObjects={allObjects} 
-            relatedObjects={relatedObjects} 
-          />
+          <RelationshipsPanel object={object} />
         </div>
       </div>
     </div>

@@ -19,6 +19,7 @@ import NotFoundPage from './pages/NotFoundPage';
 import TranscriptPage from './pages/TranscriptPage';
 import ObjectsPage from './pages/ObjectsPage';
 import ObjectDetailPage from './pages/ObjectDetailPage';
+import CreateObjectPage from './pages/CreateObjectPage';
 
 export const router = createBrowserRouter([
   {
@@ -68,6 +69,10 @@ export const router = createBrowserRouter([
       {
         path: 'objects',
         element: <ObjectsPage />,
+      },
+      {
+        path: 'objects/create',
+        element: <CreateObjectPage />,
       },
       {
         path: 'objects/:id',

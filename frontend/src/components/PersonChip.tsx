@@ -26,7 +26,7 @@ export function PersonChip({ personId, name }: PersonChipProps) {
   const { data: icon } = useQuery({
     queryKey: ["person", personId, "icon"],
     queryFn: () => fetchPersonIcon(personId),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 30 * 1000 // 30 sec
   });
 
   const handleClick = (e: React.MouseEvent) => {
