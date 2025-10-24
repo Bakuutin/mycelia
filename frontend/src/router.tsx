@@ -16,11 +16,9 @@ import LLMSettingsPage from './pages/settings/LLMSettingsPage';
 import CreateLLMPage from './pages/settings/CreateLLMPage';
 import LLMDetailPage from './pages/settings/LLMDetailPage';
 import NotFoundPage from './pages/NotFoundPage';
-import TopicsPage from './pages/TopicsPage';
 import TranscriptPage from './pages/TranscriptPage';
 import ObjectsPage from './pages/ObjectsPage';
 import ObjectDetailPage from './pages/ObjectDetailPage';
-import CreateObjectPage from './pages/CreateObjectPage';
 
 export const router = createBrowserRouter([
   {
@@ -34,10 +32,6 @@ export const router = createBrowserRouter([
       {
         path: 'timeline',
         element: <TimelinePage />,
-      },
-      {
-        path: 'topics',
-        element: <TopicsPage />,
       },
       {
         path: 'transcript',
@@ -74,10 +68,6 @@ export const router = createBrowserRouter([
       {
         path: 'objects',
         element: <ObjectsPage />,
-      },
-      {
-        path: 'objects/new',
-        element: <CreateObjectPage />,
       },
       {
         path: 'objects/:id',

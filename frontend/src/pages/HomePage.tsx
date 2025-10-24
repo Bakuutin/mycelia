@@ -26,15 +26,15 @@ const HomePage = () => {
         </Link>
 
         <Link
-          to="/topics"
+          to="/transcript"
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Topics</h2>
+            <h2 className="text-2xl font-semibold">Transcript</h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            Browse recent topics extracted from your conversations, newest first
+            View and search through your audio transcriptions
           </p>
         </Link>
 

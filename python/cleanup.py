@@ -3,14 +3,14 @@ from datetime import datetime, timedelta
 
 import pytz
 
-from lib import call_resource
-from lib.transcription import known_errors
+from lib.resources import call_resource
+from lib.transcription import known_errors, remove_if_lonely
 
 
 # %%
 end_date = datetime.now(pytz.UTC)
 start_date = end_date - timedelta(days=3000)
-error_patterns = list(known_errors)
+
     
 pipeline = [
     {
@@ -25,7 +25,7 @@ pipeline = [
         "$addFields": {
             "cleanedSegments": {
                 "$filter": {
-                    "input": "$segments",
+                    "input": {"$ifNull": ["$segments", []]},
                     "as": "seg",
                     "cond": {
                         "$and": [
@@ -33,7 +33,7 @@ pipeline = [
                                 "$not": {
                                     "$in": [
                                         {"$trim": {"input": "$$seg.text"}},
-                                        error_patterns
+                                        list(known_errors)
                                     ]
                                 }
                             },
@@ -49,36 +49,66 @@ pipeline = [
                     }
                 }
             },
-            "originalSegmentCount": {"$size": "$segments"}
-        }
+        },
     },
     {
         "$addFields": {
+            "keepableSegments": {
+                "$filter": {
+                    "input": "$cleanedSegments",
+                    "as": "seg",
+                    "cond": {
+                        "$not": {
+                            "$in": [
+                                {"$trim": {"input": "$$seg.text"}},
+                                list(remove_if_lonely)
+                            ]
+                        }
+                    }
+                },
+            },
+        },
+    },
+    {
+        "$addFields": {
+            "keepableCount": {"$size": "$keepableSegments"},
+            "originalSegmentCount": {"$size": {"$ifNull": ["$segments", []]}},
             "cleanedSegmentCount": {"$size": "$cleanedSegments"},
+        },
+    },
+    {
+        "$addFields": {
+            "shouldDelete": {"$eq": ["$keepableCount", 0]},
+        },
+    },
+    {
+        "$addFields": {
             "needsUpdate": {
-                "$or": [
-                    {"$ne": [{"$size": "$segments"}, {"$size": "$cleanedSegments"}]},
-                    {"$eq": [{"$size": "$cleanedSegments"}, 0]}
+                "$and": [
+                    {"$ne": [{"$size": {"$ifNull": ["$segments", []]}}, {"$size": "$cleanedSegments"}]},
+                    {"shouldDelete": False}
                 ]
-            }
+            },
         }
     },
     {
         "$match": {
-            "needsUpdate": True
+            "$or": [
+                {"shouldDelete": {"$eq": True}},
+                {"needsUpdate": {"$eq": True}}
+            ]
         }
     },
     {
         "$project": {
             "_id": 1,
-            "start": 1,
             "originalSegmentCount": 1,
             "cleanedSegmentCount": 1,
             "cleanedSegments": 1,
-            # "needsUpdate": 1,
-            "shouldDelete": {"$eq": ["$cleanedSegmentCount", 0]}
+            "needsUpdate": 1,
+            "shouldDelete": 1,
         }
-    }
+    },
 ]
 
 results = call_resource(
@@ -92,6 +122,8 @@ results = call_resource(
 
 len(results)
 
+
+#%%
 #%%
 from collections import Counter
 
@@ -116,10 +148,11 @@ updated_count = 0
 total_segments_removed = 0
 
 for result in results:
-    if not result.get("needsUpdate", True):
-        continue
-
-    segments_removed = result["originalSegmentCount"] - result["cleanedSegmentCount"]
+    segments_removed = (
+        result["originalSegmentCount"] - result["cleanedSegmentCount"] 
+        if result["needsUpdate"] else 
+        result["originalSegmentCount"] 
+    )
     total_segments_removed += segments_removed
     
     if result["shouldDelete"]:
@@ -138,11 +171,10 @@ for result in results:
         })
         updated_count += 1
 #%%
-print(f"  Total transcripts processed: {len(results)}")
+print(f"  Total transcripts processed: {len(bulk_operations)}")
 print(f"  Deleted transcripts: {deleted_count}")
 print(f"  Updated transcripts: {updated_count}")
 print(f"  Total segments removed: {total_segments_removed}")
-
 #%%
 
 if bulk_operations:
@@ -159,13 +191,4 @@ if bulk_operations:
 
 #%%
 
-from bson import ObjectId
-call_resource(
-    "tech.mycelia.mongo",
-    {
-        "action": "findOne",
-        "collection": "transcriptions",
-        "query": {"_id": ObjectId("68ed0af5eafdc893101bbce9")},
-    }
-)
 # %%

@@ -49,8 +49,19 @@ const TranscriptPage = () => {
   const startParam = searchParams.get('start');
   const endParam = searchParams.get('end');
 
-  const startDate = useMemo(() => parseDateParam(startParam), [startParam]);
-  const endDate = useMemo(() => parseDateParam(endParam), [endParam]);
+  const startDate = useMemo(() => {
+    const parsed = parseDateParam(startParam);
+    if (parsed) return parsed;
+    // Default to 24 hours ago if no start parameter
+    return new Date(Date.now() - 24 * 60 * 60 * 1000);
+  }, [startParam]);
+  
+  const endDate = useMemo(() => {
+    const parsed = parseDateParam(endParam);
+    if (parsed) return parsed;
+    // Default to now if no end parameter
+    return new Date();
+  }, [endParam]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -307,23 +318,15 @@ const TranscriptPage = () => {
       }
     };
 
+    // Initialize form fields with default values if no URL parameters
+    if (!startParam && !endParam) {
+      setStartStr(toLocalDateTime(startDate));
+      setEndStr(toLocalDateTime(endDate));
+    }
+
     initialFetch();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, startParam, endParam]);
 
-  const missingParams = !startDate || !endDate;
-
-  if (missingParams) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-3xl font-bold">Transcript</h1>
-        <div className="border rounded-lg p-6 space-y-2">
-          <p className="text-muted-foreground">Provide query parameters to select an interval.</p>
-          <p className="text-sm text-muted-foreground">Example: <code>/transcript?start=2025-01-01T12:00:00Z&end=2025-01-01T13:00:00Z</code></p>
-          <p className="text-sm text-muted-foreground">Epoch millis also supported: <code>/transcript?start=1735723200000&end=1735726800000</code></p>
-        </div>
-      </div>
-    );
-  }
 
   if (loading) {
     return (

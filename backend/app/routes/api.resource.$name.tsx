@@ -65,12 +65,18 @@ export async function action({ request, params }: ActionFunctionArgs) {
       
       return result;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      console.error(`Error in api.resource.${toolName}:`, error);
+      console.error("Stack trace:", error instanceof Error ? error.stack : "No stack trace available");
+      
       span.setAttributes({
         "error": true,
-        "error.message": error instanceof Error ? error.message : "Unknown error",
+        "error.message": errorMessage,
       });
 
       if (error instanceof Response) {
+        console.error("Error was a Response object");
         return Response.json({
           success: false,
           error: "Invalid parameters",
@@ -79,7 +85,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
       return Response.json({
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: errorMessage,
       }, { status: 500 });
     } finally {
       span.end();

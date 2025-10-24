@@ -7,9 +7,9 @@ topics:
     - Give it a descriptive title
     - Write a brief summary 
     - Extract key entities (people, places, things mentioned)
-    - Identify start and end unix timestamps
+    - Identify start and end time
 
-    ignore random utterances that are not part of any meaningful conversation.
+    ignore random utterances that are not part of any meaningful conversation. if it's unclear what the speakers are saying, ignore it.
 
     All responses must be in English language. 
 

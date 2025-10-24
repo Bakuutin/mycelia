@@ -18,8 +18,10 @@ import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from lib import call_resource
+from lib.resources import call_resource
 from lib.llm import small_llm
+from lib.hist import mark_buckets_as, get_ranges, date_to_bucket, SCALE_TO_RESOLUTION
+
 
 # Signal handling for graceful shutdown
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -73,36 +75,29 @@ def get_timestamp_message(timestamp: datetime) -> str:
     """Generate timestamp message for conversation chunks."""
     return f'time: {utc(timestamp).isoformat()}'
 
-
-def get_cursor_position(not_later_than: datetime | None = None) -> datetime:
-    # check histogram_1d, find the latest one without converstaions.extracted_at 
-    query = {"conversations": {"$exists": False}}
-    if not_later_than:
-        query["start"] = {"$lte": not_later_than}
-    
-    result = call_resource(
-        "tech.mycelia.mongo",
-        {
-            "action": "findOne",
-            "collection": "histogram_1d",
-            "query": query,
-            "options": {"sort": {"start": -1}},
-        }
-    )
-
-    if not result:
-        return None
-
-    return result["start"] + timedelta(days=1)
+scale = "1day"
 
 def iterate_transcripts(not_later_than: datetime | None = None, batch_size: int = 100):
     """
     Iterate through all transcripts in reverse chronological order.
     Yields one transcript at a time.
     """
+    known_ranges = [
+        r for r in get_ranges("conversations", scale) if r.done
+    ]
+
+    def shift_if_in_known_range(cursor: datetime) -> datetime:
+        for range in known_ranges:
+            if range.start is not None and range.end is not None:
+                if range.start <= cursor <= range.end:
+                    return range.start
+        return cursor
+
     cursor = not_later_than or datetime.now(pytz.UTC) + timedelta(days=1)
-    # cursor = get_cursor_position(not_later_than)
+
     while cursor:
+        cursor = shift_if_in_known_range(cursor)
+
         transcripts = call_resource(
             "tech.mycelia.mongo",
             {
@@ -128,7 +123,7 @@ def iterate_transcripts(not_later_than: datetime | None = None, batch_size: int 
             return
             
         cursor = transcripts[-1]["start"]
-        
+
         for transcript in transcripts:
             yield {
                 'start': transcript["start"],
@@ -284,6 +279,8 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
     processed = 0
     total_conversations = 0
     cursor = not_later_than
+    current_bucket = None
+    delta = SCALE_TO_RESOLUTION[scale]
 
     try:
         conv_iterator = iterate_conversations(cursor)
@@ -292,16 +289,35 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
             if limit and processed >= limit:
                 logger.info(f"Reached limit of {limit} chunks")
                 break
+            
+            chunk_start = chunk[0]["start"]
+            chunk_bucket = date_to_bucket(chunk_start, scale)
+            
+            if current_bucket is not None and chunk_bucket < current_bucket:
+                bucket_end = current_bucket + delta
+                mark_buckets_as("done", "conversations", current_bucket, bucket_end, scale=scale)
+                logger.info(f"Marked bucket as done: {current_bucket} -> {bucket_end}")
+                
+            current_bucket = chunk_bucket
                 
             conversations_found = process_conversation_chunk(chunk, tool_llm, system_prompt)
             total_conversations += conversations_found
             processed += 1
-            cursor = chunk[0]["start"]  # Update cursor to earliest transcript in chunk
+            cursor = chunk_start
             
             logger.info(f"Processed {processed} chunks, found {total_conversations} total conversations")
+        
+        if current_bucket is not None:
+            bucket_end = current_bucket + delta
+            mark_buckets_as("done", "conversations", current_bucket, bucket_end, scale=scale)
+            logger.info(f"Marked final bucket as done: {current_bucket} -> {bucket_end}")
             
     except Exception as e:
         logger.error(f"Error in conversation extraction: {e}")
+        if current_bucket is not None:
+            bucket_end = current_bucket + delta
+            mark_buckets_as("stale", "conversations", current_bucket, bucket_end, scale=scale)
+            logger.info(f"Marked bucket as stale due to error: {current_bucket} -> {bucket_end}")
         raise
 
     logger.info("=" * 60)
@@ -313,7 +329,7 @@ def main():
     """Main function with argument parsing."""
     parser = argparse.ArgumentParser(description="Extract conversations from transcripts")
     parser.add_argument('--limit', type=int, default=None, help='Limit number of conversation chunks to process')
-    parser.add_argument('--not-later-than', type=str, help='Process transcripts not later than this ISO datetime')
+    parser.add_argument('--not-later-than', type=int, help='Process transcripts not later than this timestamp')
     args = parser.parse_args()
     
     setup_logging()
@@ -321,7 +337,7 @@ def main():
     not_later_than = None
     if args.not_later_than:
         try:
-            not_later_than = datetime.fromisoformat(args.not_later_than)
+            not_later_than = datetime.fromtimestamp(args.not_later_than, tz=pytz.UTC)
         except ValueError:
             logger.error(f"Invalid datetime format: {args.not_later_than}")
             return 1

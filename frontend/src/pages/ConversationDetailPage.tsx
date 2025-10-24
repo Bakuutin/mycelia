@@ -6,14 +6,14 @@ import type { Person } from '@/types/people';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ArrowLeft, Trash2, PlusIcon, X, Copy, Share2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Trash2, PlusIcon, X, Copy, Share2, UserPlus, ArrowRight } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { DateTimePicker } from '@/components/ui/datetime-picker';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 import { IconDisplay } from '@/components/IconDisplay';
 import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select';
 import { ObjectId } from 'bson';
-import { formatTime } from '@/lib/formatTime';
+import { formatTimeRangeDuration } from '@/lib/formatTime';
 
 const ConversationDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -23,7 +23,6 @@ const ConversationDetailPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
-  const [rangeTranscripts, setRangeTranscripts] = useState<Record<number, { loading: boolean; error: string | null; segments: { time: Date; endTime: Date; text: string }[]; visible: boolean }>>({});
   const [summaryDraft, setSummaryDraft] = useState<string>('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const summaryInitializedRef = useRef(false);
@@ -161,62 +160,7 @@ const ConversationDetailPage = () => {
     setHasUnsavedChanges(true);
   };
 
-  async function fetchSegmentsRange(rangeStart: Date, rangeEnd: Date) {
-    const docs: Array<{ start: Date; end: Date; segments: Array<{ start: number; end: number; text: string }> }> = await callResource("tech.mycelia.mongo", {
-      action: "find",
-      collection: "transcriptions",
-      query: {
-        start: { $lt: rangeEnd },
-        end: { $gt: rangeStart },
-      },
-      options: { sort: { start: 1 }, limit: 10000 },
-    });
 
-    const rendered: { time: Date; endTime: Date; text: string }[] = [];
-    for (const doc of docs) {
-      for (const s of doc.segments || []) {
-        const absStart = new Date(new Date(doc.start).getTime() + s.start * 1000);
-        const absEnd = new Date(new Date(doc.start).getTime() + s.end * 1000);
-        if (absEnd > rangeStart && absStart < rangeEnd) {
-          rendered.push({ time: absStart, endTime: absEnd, text: (s.text || '').replace(/\n/g, ' ') });
-        }
-      }
-    }
-    rendered.sort((a, b) => a.time.getTime() - b.time.getTime());
-    return rendered;
-  }
-
-  const toggleShowTranscript = async (index: number, start: Date, end?: Date) => {
-    const rangeEnd = end ?? new Date(start.getTime() + 60 * 60 * 1000);
-    setRangeTranscripts((prev) => ({
-      ...prev,
-      [index]: { loading: true, error: null, segments: prev[index]?.segments || [], visible: !prev[index]?.visible }
-    }));
-
-    // If becoming visible and no segments loaded yet, fetch them
-    const current = rangeTranscripts[index];
-    const becomingVisible = !(current && current.visible);
-    if (becomingVisible && (!current || current.segments.length === 0)) {
-      try {
-        const segs = await fetchSegmentsRange(start, rangeEnd);
-        setRangeTranscripts((prev) => ({
-          ...prev,
-          [index]: { loading: false, error: null, segments: segs, visible: true }
-        }));
-      } catch (err) {
-        setRangeTranscripts((prev) => ({
-          ...prev,
-          [index]: { loading: false, error: err instanceof Error ? err.message : 'Failed to load transcript', segments: [], visible: false }
-        }));
-      }
-    } else {
-      // Just toggle visibility without refetch
-      setRangeTranscripts((prev) => ({
-        ...prev,
-        [index]: { ...(prev[index] || { loading: false, error: null, segments: [] }), loading: false, visible: !current?.visible }
-      }));
-    }
-  };
 
   const toggleShare = async () => {
     if (!conversation) return;
@@ -450,7 +394,7 @@ const ConversationDetailPage = () => {
               {conversation.timeRanges.map((range, index) => (
                 <div key={index} className="border rounded-lg p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Range {index + 1}</span>
+                    <span className="text-sm font-medium">{formatTimeRangeDuration(range.start, range.end)}</span>
                     <Button
                       type="button"
                       variant="ghost"
@@ -480,38 +424,14 @@ const ConversationDetailPage = () => {
                     />
                   </div>
 
-                  <div className="pt-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => toggleShowTranscript(index, range.start, range.end)}
-                      disabled={rangeTranscripts[index]?.loading}
-                    >
-                      {rangeTranscripts[index]?.visible ? 'Hide transcript' : 'Show transcript'}
-                    </Button>
+                  <div className="pt-2 flex items-center gap-2">
+                    <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}>
+                      <Button variant="outline" size="sm">
+                        Go to transcript
+                      </Button>
+                    </Link>
                   </div>
 
-                  {rangeTranscripts[index]?.visible && (
-                    <div className="mt-3 border rounded-md">
-                      {rangeTranscripts[index]?.loading ? (
-                        <div className="p-4 text-sm text-muted-foreground">Loading transcript…</div>
-                      ) : rangeTranscripts[index]?.error ? (
-                        <div className="p-4 text-sm text-red-500">Error: {rangeTranscripts[index]?.error}</div>
-                      ) : rangeTranscripts[index]?.segments.length === 0 ? (
-                        <div className="p-4 text-sm text-muted-foreground">No utterances in this range</div>
-                      ) : (
-                        <div className="divide-y">
-                          {rangeTranscripts[index]?.segments.map((seg, i) => (
-                            <div key={i} className="p-3">
-                              <div className="text-xs text-muted-foreground mb-1">{formatTime(seg.time)}</div>
-                              <div className="text-sm whitespace-pre-wrap leading-relaxed">{seg.text}</div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>

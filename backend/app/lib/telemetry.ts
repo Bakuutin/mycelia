@@ -1,7 +1,14 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
-import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import {
+  ConsoleMetricExporter,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
+import {
+  BatchSpanProcessor,
+  ConsoleSpanExporter,
+} from "@opentelemetry/sdk-trace-base";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
 import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
 import { MongoDBInstrumentation } from "@opentelemetry/instrumentation-mongodb";
@@ -18,14 +25,25 @@ const metricExporter = new OTLPMetricExporter({
   url: `${otlpEndpoint}/v1/metrics`,
 });
 
-const metricReader = new PeriodicExportingMetricReader({
+const consoleTraceExporter = new ConsoleSpanExporter();
+const consoleMetricExporter = new ConsoleMetricExporter();
+
+const otlpMetricReader = new PeriodicExportingMetricReader({
   exporter: metricExporter,
   exportIntervalMillis: 5000,
 });
 
+const consoleMetricReader = new PeriodicExportingMetricReader({
+  exporter: consoleMetricExporter,
+  exportIntervalMillis: 5000,
+});
+
 const sdk = new NodeSDK({
-  traceExporter,
-  metricReader,
+  spanProcessors: [
+    new BatchSpanProcessor(traceExporter),
+    new BatchSpanProcessor(consoleTraceExporter),
+  ],
+  metricReaders: [otlpMetricReader, consoleMetricReader],
   instrumentations: [
     new HttpInstrumentation(),
     new ExpressInstrumentation(),
