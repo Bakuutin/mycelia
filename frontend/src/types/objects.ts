@@ -10,6 +10,12 @@ export const zObject = z.object({
   aliases: z.array(z.string()).optional(),
   isEvent: z.boolean().optional(),
   isPerson: z.boolean().optional(),
+  isRelationship: z.boolean().optional(),
+  relationship: z.object({
+    object: z.instanceof(ObjectId),
+    subject: z.instanceof(ObjectId),
+    symmetrical: z.boolean(),
+  }).optional(),
   location: z.object({
     latitude: z.number(),
     longitude: z.number(),
