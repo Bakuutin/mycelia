@@ -3,7 +3,7 @@ import type { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
 import { useObjects, useObjectsStore } from "./useObjects.ts";
 import { Button } from "@/components/ui/button.tsx";
 import type { Object } from "@/types/objects.ts";
-import { PlusIcon, RefreshCw } from "lucide-react/icons";
+import { PlusIcon, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTimelineRange } from "../../stores/timelineRange.ts";
 import { useNow } from "@/hooks/useNow.ts";
