@@ -2,6 +2,34 @@
 
 This directory contains the Python components of Mycelia, including audio processing, daemon services, and data ingestion.
 
+## Prerequisites
+
+The main prerequisites are listed in the [root README](../README.md). This section covers Python-specific requirements:
+
+### Python & uv
+
+**Install uv (Python package manager):**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### PortAudio (Required for `stt.py`)
+
+**macOS:**
+```bash
+brew install portaudio
+```
+
+**Linux:**
+```bash
+sudo apt install portaudio19-dev
+```
+
+**Windows:**
+```bash
+# Download from https://www.portaudio.com/download.html
+```
+
 ## Components
 
 ### Daemon (`daemon.py`)

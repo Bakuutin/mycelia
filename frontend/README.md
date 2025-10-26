@@ -62,10 +62,7 @@ frontend/
 
 ## API Integration
 
-The frontend connects to the Mycelia backend API server (default: http://localhost:8000). API proxy is configured in `vite.config.ts`:
-
-- `/api/*` - API endpoints
-- `/data/*` - Data endpoints
+The frontend connects to the Mycelia backend API server (default: http://localhost:5173). Configure the backend URL and credentials in the settings page.
 
 ## Features
 
