@@ -1,4 +1,5 @@
 import subprocess
+import platform
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from faster_whisper import WhisperModel
 import asyncio
@@ -9,9 +10,39 @@ import wave
 
 sample_rate = 16000
 
-device = "cuda"
+# Auto-detect best device and compute_type
+def get_device_config():
+    """
+    Auto-detect the best device and compute_type for the current system.
+
+    Returns:
+        tuple: (device, compute_type)
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            # NVIDIA GPU available
+            return "cuda", "float16"
+    except ImportError:
+        pass
+
+    # Check if running on Apple Silicon
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        # Apple Silicon M1/M2/M3 - CTranslate2 doesn't support Metal GPU yet
+        # Use CPU with int8 for good balance of speed and memory
+        print("Apple Silicon detected - using CPU with int8 (Metal GPU not supported by CTranslate2)")
+        return "cpu", "int8"
+
+    # Default to CPU with int8 for other systems
+    return "cpu", "int8"
+
+device, compute_type = get_device_config()
 model_size = "large-v3"
-model = WhisperModel(model_size, device=device, compute_type="float16", num_workers=5, cpu_threads=10)
+
+print(f"Initializing Whisper model: {model_size}")
+print(f"Device: {device}, Compute type: {compute_type}")
+
+model = WhisperModel(model_size, device=device, compute_type=compute_type, num_workers=5, cpu_threads=10)
 
 def wav_to_array(source: io.BytesIO) -> np.ndarray:
     wav_file = wave.open(source, 'rb')

@@ -36,18 +36,18 @@ class SpeechSequence(BaseModel):
     chunks: list[Any] = []
     is_partial: bool = False
     is_continuation: bool = False
-    
+
     class Config:
         arbitrary_types_allowed = True
 
     @property
     def last(self) -> Any:
         return self.chunks[-1]
-    
+
     @property
     def start(self) -> datetime:
         return self.last['start']
-    
+
     @property
     def min_index(self) -> int:
         return self.last['index']
@@ -55,24 +55,24 @@ class SpeechSequence(BaseModel):
     def __repr__(self):
         indices = [chunk['index'] for chunk in self.chunks]
         return f'{self.original_id}: {repr(indices)}'
-            
-        
+
+
 
 def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iterator[SpeechSequence]:
     print('getting speech sequences')
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
     yielded = 0
-    
+
     base_filters = {
         'transcribed_at': {'$eq': None},
         'vad.has_speech': True
     }
-    
+
     if filters:
         base_filters.update(filters)
-    
+
     cursor = chunks.find(base_filters).sort('start', -1)
-    
+
     for i, chunk in enumerate(cursor):
         if limit is not None and yielded >= limit:
             break
@@ -99,7 +99,7 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
             del sequences_by_id[original_id]
             yielded += 1
             continue
-        
+
         if original_id not in sequences_by_id:
             try:
                 seq = sequences_by_id[original_id] = SpeechSequence(
@@ -110,9 +110,9 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
             except Exception as e:
                 print(f"Error creating speech sequence for {original_id}: {e}")
                 continue
-        
+
         seq.chunks.append(chunk)
-        
+
         if len(seq.chunks) >= max_sequence_length:
             seq.is_partial = True
             yield seq
@@ -123,9 +123,9 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
                 chunks=[chunk],
                 is_continuation=True,
             )
-        
-        
-    
+
+
+
     if limit is None or yielded < limit:
         for seq in sequences_by_id.values():
             yield seq
@@ -146,7 +146,7 @@ def process_sequence(sequence: SpeechSequence):
     except Exception as e:
         print(f"Error processing sequence starting at {sequence.start}: {e}")
 
-        
+
 
 def process_speech_sequences(limit=None, max_workers=1):
     processed_count = 0
@@ -175,8 +175,8 @@ def transcribe_sequence(sequence: SpeechSequence):
     api_key = os.environ.get('STT_API_KEY')
     if api_key:
         headers['X-Api-Key'] = api_key
-    
-    response = requests.post(f'{STT_SERVER_URL}/transcribe', 
+
+    response = requests.post(f'{STT_SERVER_URL}/transcribe',
                             files=[
                                 ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
                                 for i, chunk in enumerate(reversed(sequence.chunks))
@@ -194,21 +194,21 @@ def transcribe_sequence(sequence: SpeechSequence):
     filtered_segments = []
     for segment in segments:
         text = segment.get('text', '').strip().lower()
-        
+
         if (
             not text or
             text in known_errors or
             text.startswith('*') and text.endswith('*')
         ):
             continue
-            
+
         filtered_segments.append(segment)
 
     if not filtered_segments or all(
         segment['text'].strip() in remove_if_lonely for segment in filtered_segments
     ):
         return NO_SPEECH_DETECTED
-    
+
 
     transcript['segments'] = segments = filtered_segments
 
