@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { callResource } from '@/lib/api';
-import type { Object } from '@/types/objects';
+import type { Object, ObjectFormData } from '@/types/objects';
+import { validateObjectForSave } from '@/types/objects';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ObjectForm } from '@/components/ObjectForm';
@@ -12,22 +13,24 @@ const CreateObjectPage = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [object, setObject] = useState<Partial<Object>>({
+  const [object, setObject] = useState<ObjectFormData>({
     name: '',
     details: '',
     icon: { text: '📦' },
     aliases: [],
+    isPromise: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
 
-  const handleUpdate = async (updates: Partial<Object>) => {
+  const handleUpdate = async (updates: Partial<ObjectFormData>) => {
     setObject(prev => ({ ...prev, ...updates }));
   };
 
   const handleSubmit = async () => {
-    if (!object.name?.trim()) {
-      setError('Name is required');
+    const validation = validateObjectForSave(object);
+    if (!validation.valid) {
+      setError(validation.error!);
       return;
     }
 
@@ -74,7 +77,7 @@ const CreateObjectPage = () => {
       </div>
 
       <Card className="p-6">
-        <ObjectForm object={object as Object} onUpdate={handleUpdate} />
+        <ObjectForm object={object} onUpdate={handleUpdate} />
         
         {error && (
           <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">

@@ -179,7 +179,7 @@ Configure and run the STT processor:
 
 ### Remote Operations (cli.ts)
 
-For operations against a remote server (requires login & API key):
+For operations against a remote server (requires login & API key), from /backend directory:
 
 ```bash
 # Login to remote server

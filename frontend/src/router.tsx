@@ -4,9 +4,6 @@ import HomePage from './pages/HomePage';
 import TimelinePage from './pages/TimelinePage';
 import CreateEventPage from './pages/CreateEventPage';
 import EventDetailPage from './pages/EventDetailPage';
-import ConversationsPage from './pages/ConversationsPage';
-import CreateConversationPage from './pages/CreateConversationPage';
-import ConversationDetailPage from './pages/ConversationDetailPage';
 import PersonDetailPage from './pages/PersonDetailPage';
 import PeoplePage from './pages/PeoplePage';
 import SettingsLayout from './components/SettingsLayout';
@@ -45,18 +42,6 @@ export const router = createBrowserRouter([
       {
         path: 'events/:id',
         element: <EventDetailPage />,
-      },
-      {
-        path: 'conversations',
-        element: <ConversationsPage />,
-      },
-      {
-        path: 'conversations/new',
-        element: <CreateConversationPage />,
-      },
-      {
-        path: 'conversations/:id',
-        element: <ConversationDetailPage />,
       },
       {
         path: 'people',

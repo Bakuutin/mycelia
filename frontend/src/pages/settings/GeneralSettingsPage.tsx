@@ -2,11 +2,12 @@ import { useState, useMemo } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Moon, Sun, Monitor } from 'lucide-react';
 import { formatTime } from '@/lib/formatTime';
 
 const GeneralSettingsPage = () => {
-  const { theme, timeFormat, setTheme, setTimeFormat } = useSettingsStore();
+  const { theme, timeFormat, transcriptThresholdHours, setTheme, setTimeFormat, setTranscriptThresholdHours } = useSettingsStore();
   const now = useMemo(() => new Date(), []);
 
   return (
@@ -80,6 +81,28 @@ const GeneralSettingsPage = () => {
             </select>
             <p className="text-xs text-muted-foreground">
               Choose how dates and times are displayed across the application
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="transcriptThreshold">Transcript Button Threshold (hours)</Label>
+            <Input
+              id="transcriptThreshold"
+              type="number"
+              min="0.1"
+              max="168"
+              step="0.1"
+              value={transcriptThresholdHours}
+              onChange={(e) => {
+                const value = parseFloat(e.target.value);
+                if (!isNaN(value) && value > 0) {
+                  setTranscriptThresholdHours(value);
+                }
+              }}
+              className="w-32"
+            />
+            <p className="text-xs text-muted-foreground">
+              Time ranges shorter than this duration will show a "Go to transcript" button.
             </p>
           </div>
         </div>

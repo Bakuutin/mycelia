@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import type { Layer } from "@/core/core";
 import { useTimeline } from "@/hooks/useTimeline";
 import { TimeLayer } from "@/modules/time";
-import { EventsLayer } from "@/modules/events";
+import { ObjectsLayer } from "@/modules/objects";
 
 interface TimelineChartProps {
   layers?: Layer[];
@@ -14,7 +14,7 @@ export const TimelineChart: React.FC<TimelineChartProps> = ({ layers, className 
 
   const resolvedLayers = useMemo<Layer[]>(() => {
     if (layers && layers.length > 0) return layers;
-    return [TimeLayer(), EventsLayer()];
+    return [TimeLayer(), ObjectsLayer()];
   }, [layers]);
 
   return (

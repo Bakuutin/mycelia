@@ -48,6 +48,32 @@ export function useObjectSelection() {
   });
 }
 
+// Fetch objects with search functionality for dropdowns
+export function useObjectSearch(searchTerm: string = '', limit: number = 50) {
+  return useQuery({
+    queryKey: [...objectKeys.selection(), 'search', searchTerm, limit],
+    queryFn: async () => {
+      const query: any = { isRelationship: { $ne: true } };
+      
+      if (searchTerm.trim()) {
+        query.$or = [
+          { name: { $regex: searchTerm, $options: 'i' } },
+          { aliases: { $regex: searchTerm, $options: 'i' } }
+        ];
+      }
+
+      return await callResource("tech.mycelia.mongo", {
+        action: "find",
+        collection: "objects",
+        query,
+        sort: { name: 1 },
+        limit,
+      });
+    },
+    staleTime: 10 * 1000 // 10 sec for search results
+  });
+}
+
 
 export function getRelationships(objectId: string | ObjectId | undefined): UseQueryResult<{
   relationship: Object;
@@ -102,7 +128,40 @@ export function getRelationships(objectId: string | ObjectId | undefined): UseQu
                 ]
               }
             }
-          }
+          },
+          {
+            $set: {
+              earliestStart: {
+                $min: {
+                  $map: {
+                    input: "$relationship.timeRanges",
+                    as: "r",
+                    in: "$$r.start"
+                  }
+                }
+              },
+              latestEnd: {
+                $max: {
+                  $map: {
+                    input: "$relationship.timeRanges",
+                    as: "r",
+                    in: "$$r.end"
+                  }
+                }
+              }
+            },
+          },
+          {
+            $set: {
+              endOrNow: {$ifNull: ["$latestEnd", new Date()]},
+            },
+          },
+          {
+            $set: {
+              duration: { $subtract: ["$endOrNow", "$earliestStart"] }
+            },
+          },
+          { $sort: { endOrNow: -1, earliestStart: -1  } }
         ]
       });
 
@@ -121,19 +180,33 @@ export function getRelationships(objectId: string | ObjectId | undefined): UseQu
 // Mutation for updating an object
 export function useUpdateObject() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Object> }) => {
-      return await callResource("tech.mycelia.mongo", {
-        action: "updateOne",
-        collection: "objects",
-        query: { _id: { $oid: id } },
-        update: {
+    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Object> | any }) => {
+      let update: any;
+
+      if (updates.$unset || updates.$set || updates.$push || updates.$pull) {
+        update = {
+          ...updates,
+          $set: {
+            ...updates.$set,
+            updatedAt: new Date(),
+          },
+        };
+      } else {
+        update = {
           $set: {
             ...updates,
             updatedAt: new Date(),
           },
-        },
+        };
+      }
+
+      return await callResource("tech.mycelia.mongo", {
+        action: "updateOne",
+        collection: "objects",
+        query: { _id: { $oid: id } },
+        update,
       });
     },
     onSuccess: (_, { id }) => {
@@ -145,10 +218,32 @@ export function useUpdateObject() {
   });
 }
 
+// Mutation for creating an object
+export function useCreateObject() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (doc: Partial<Object>) => {
+      return await callResource("tech.mycelia.mongo", {
+        action: "insertOne",
+        collection: "objects",
+        doc: {
+          ...doc,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: objectKeys.all });
+    },
+  });
+}
+
 // Mutation for deleting an object
 export function useDeleteObject() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: async (id: string) => {
       return await callResource("tech.mycelia.mongo", {

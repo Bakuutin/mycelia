@@ -1,27 +1,16 @@
 import type { Config } from "@/core/core";
 
 import { TimeLayer } from "@/modules/time/index";
-import {
-  AudioLayer,
-  AudioPlayerTool,
-  GainTool,
-  TranscriptLayer,
-  DateTimePickerTool,
-} from "@/modules/audio/index";
-import { EventsLayer, CreateEventTool } from "@/modules/events/index";
+import { ObjectsLayer, CreateObjectTool, RefreshObjectsTool } from "@/modules/objects/index";
 
 
 export const config: Config = {
   layers: [
-    TranscriptLayer(),
     TimeLayer(),
-    EventsLayer(),
-    AudioLayer(),
+    ObjectsLayer(),
   ],
   tools: [
-    AudioPlayerTool,
-    GainTool,
-    DateTimePickerTool,
-    CreateEventTool,
+    CreateObjectTool,
+    RefreshObjectsTool,
   ],
 };

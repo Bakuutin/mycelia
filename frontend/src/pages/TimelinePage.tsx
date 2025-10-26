@@ -1,100 +1,42 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { callResource } from '@/lib/api';
-import type { EventItem } from '@/types/events';
+import type { Object } from '@/types/objects';
 import { formatTime } from '@/lib/formatTime';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Combobox } from '@/components/ui/combobox';
-import { PlusIcon, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { TimelineChart } from '@/components/timeline/TimelineChart';
+import { IconDisplay } from '@/components/IconDisplay';
+import { config } from '@/config';
+import { useObjects } from '@/modules/objects/useObjects';
+import { isTimeRangeShorterThanTranscriptThreshold } from '@/lib/transcriptUtils';
 
 const TimelinePage = () => {
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
-  const [bulkParentId, setBulkParentId] = useState<string | undefined>(undefined);
-  const [isUpdating, setIsUpdating] = useState(false);
+  const { objects, loading } = useObjects();
+  const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set());
   const { timeFormat } = useSettingsStore();
 
-  useEffect(() => {
-    const fetchEvents = async () => {
-      try {
-        const result = await callResource("tech.mycelia.mongo", {
-          action: "find",
-          collection: "events",
-          query: {},
-          options: { sort: { start: -1 } }
-        });
-        setEvents(result);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch events');
-      } finally {
-        setLoading(false);
-      }
-    };
 
-    fetchEvents();
-  }, []);
-
-  const toggleEventSelection = (eventId: string) => {
-    setSelectedEventIds(prev => {
+  const toggleObjectSelection = (objectId: string) => {
+    setSelectedObjectIds(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(eventId)) {
-        newSet.delete(eventId);
+      if (newSet.has(objectId)) {
+        newSet.delete(objectId);
       } else {
-        newSet.add(eventId);
+        newSet.add(objectId);
       }
       return newSet;
     });
   };
 
   const selectAll = () => {
-    setSelectedEventIds(new Set(events.map(e => e._id.toString())));
+    setSelectedObjectIds(new Set(objects.map(o => o._id.toString())));
   };
 
   const clearSelection = () => {
-    setSelectedEventIds(new Set());
-    setBulkParentId(undefined);
-  };
-
-  const handleBulkSetParent = async () => {
-    if (selectedEventIds.size === 0) return;
-
-    setIsUpdating(true);
-    try {
-      await Promise.all(
-        Array.from(selectedEventIds).map(eventId =>
-          callResource("tech.mycelia.mongo", {
-            action: "updateOne",
-            collection: "events",
-            query: { _id: { $oid: eventId } },
-            update: {
-              $set: {
-                parentId: bulkParentId,
-                updatedAt: new Date(),
-              },
-            },
-          })
-        )
-      );
-
-      setEvents(prevEvents =>
-        prevEvents.map(event =>
-          selectedEventIds.has(event._id.toString())
-            ? { ...event, parentId: bulkParentId }
-            : event
-        )
-      );
-
-      clearSelection();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update events');
-    } finally {
-      setIsUpdating(false);
-    }
+    setSelectedObjectIds(new Set());
   };
 
   if (loading) {
@@ -102,97 +44,55 @@ const TimelinePage = () => {
       <div className="space-y-6">
         <h1 className="text-3xl font-bold">Timeline</h1>
         <div className="border rounded-lg p-8 text-center">
-          <p className="text-muted-foreground">Loading events...</p>
+          <p className="text-muted-foreground">Loading objects...</p>
         </div>
       </div>
     );
   }
-
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-3xl font-bold">Timeline</h1>
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error}</p>
-        </div>
-      </div>
-    );
-  }
-
-  const availableParentEvents = events.filter(
-    e => !selectedEventIds.has(e._id.toString())
-  );
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Timeline</h1>
-        <Link to="/events/new">
-          <Button>
-            <PlusIcon className="w-4 h-4 mr-2" />
-            Create Event
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {config.tools.map((tool, i) => (
+            <tool.component key={i} />
+          ))}
+        </div>
       </div>
 
       <div className="border rounded-lg p-2">
         <TimelineChart />
       </div>
 
-      {selectedEventIds.size > 0 && (
+      {selectedObjectIds.size > 0 && (
         <div className="border rounded-lg p-4 bg-muted/30">
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 flex-1">
-              <span className="text-sm font-medium">
-                {selectedEventIds.size} event{selectedEventIds.size !== 1 ? 's' : ''} selected
-              </span>
-              <div className="flex items-center gap-2 flex-1">
-                <span className="text-sm text-muted-foreground">Set parent:</span>
-                <div className="w-64">
-                  <Combobox
-                    options={availableParentEvents.map(e => ({
-                      value: e._id.toString(),
-                      label: e.title,
-                    }))}
-                    value={bulkParentId}
-                    onValueChange={setBulkParentId}
-                    placeholder="Select parent event..."
-                    searchPlaceholder="Search events..."
-                    emptyText="No events found."
-                  />
-                </div>
-                <Button
-                  onClick={handleBulkSetParent}
-                  disabled={isUpdating}
-                  size="sm"
-                >
-                  {isUpdating ? 'Updating...' : 'Apply'}
-                </Button>
-              </div>
-            </div>
+            <span className="text-sm font-medium">
+              {selectedObjectIds.size} object{selectedObjectIds.size !== 1 ? 's' : ''} selected
+            </span>
             <Button
               variant="ghost"
               size="sm"
               onClick={clearSelection}
             >
               <X className="w-4 h-4 mr-2" />
-              Clear
+              Clear Selection
             </Button>
           </div>
         </div>
       )}
 
       <div className="border rounded-lg">
-        {events.length === 0 ? (
+        {objects.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-muted-foreground">No events found</p>
+            <p className="text-muted-foreground">No objects with time ranges found</p>
           </div>
         ) : (
           <>
             <div className="p-4 border-b bg-muted/20">
               <div className="flex items-center gap-4">
                 <Checkbox
-                  checked={selectedEventIds.size === events.length && events.length > 0}
+                  checked={selectedObjectIds.size === objects.length && objects.length > 0}
                   onCheckedChange={(checked) => {
                     if (checked) {
                       selectAll();
@@ -202,63 +102,68 @@ const TimelinePage = () => {
                   }}
                 />
                 <span className="text-sm font-medium">
-                  {selectedEventIds.size === events.length && events.length > 0
+                  {selectedObjectIds.size === objects.length && objects.length > 0
                     ? 'Deselect all'
                     : 'Select all'}
                 </span>
               </div>
             </div>
             <div className="divide-y">
-              {events.map((event) => {
-                const isSelected = selectedEventIds.has(event._id.toString());
-                const parentEvent = event.parentId
-                  ? events.find(e => e._id.toString() === event.parentId)
-                  : null;
+              {objects.map((object) => {
+                const isSelected = selectedObjectIds.has(object._id.toString());
 
                 return (
                   <div
-                    key={event._id.toString()}
-                    className={`flex items-start gap-4 p-4 transition-colors ${
-                      isSelected ? 'bg-muted/50' : 'hover:bg-muted/30'
-                    }`}
+                    key={object._id.toString()}
+                    className={`flex items-start gap-4 p-4 transition-colors ${isSelected ? 'bg-muted/50' : 'hover:bg-muted/30'
+                      }`}
                   >
                     <Checkbox
                       checked={isSelected}
-                      onCheckedChange={() => toggleEventSelection(event._id.toString())}
+                      onCheckedChange={() => toggleObjectSelection(object._id.toString())}
                       onClick={(e) => e.stopPropagation()}
                     />
-                    <div
-                      className="w-3 h-3 rounded-full mt-1 flex-shrink-0"
-                      style={{ backgroundColor: event.color }}
-                    />
+                    <div className="mt-1 flex-shrink-0">
+                      <IconDisplay icon={object.icon} fallback="📦" />
+                    </div>
                     <Link
-                      to={`/events/${event._id.toString()}`}
+                      to={`/objects/${object._id.toString()}`}
                       className="flex-1 min-w-0"
                     >
                       <div className="flex items-baseline gap-2">
                         <h3 className="font-medium hover:text-primary transition-colors">
-                          {event.title}
+                          {object.name || 'Unnamed object'}
                         </h3>
-                        <span className="text-xs text-muted-foreground">
-                          {event.category}
-                        </span>
                       </div>
-                      {parentEvent && (
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Parent: {parentEvent.title}
-                        </div>
-                      )}
-                      {event.description && (
+                      {object.details && (
                         <p className="text-sm text-muted-foreground mt-1">
-                          {event.description}
+                          {object.details}
                         </p>
                       )}
-                      <div className="text-xs text-muted-foreground mt-2">
-                        {formatTime(event.start, timeFormat)}
-                        {event.kind === 'range' && event.end && (
-                          <> → {formatTime(event.end, timeFormat)}</>
-                        )}
-                      </div>
+                      {object.timeRanges && object.timeRanges.length > 0 && (
+                        <div className="space-y-1 mt-2">
+                          {object.timeRanges.map((range, idx) => (
+                            <div key={idx} className="text-xs text-muted-foreground">
+                              <div className="flex items-center justify-between">
+                                <span>
+                                  {range.name && <span className="font-medium">{range.name}: </span>}
+                                  {formatTime(range.start, timeFormat)}
+                                  {range.end && (
+                                    <> → {formatTime(range.end, timeFormat)}</>
+                                  )}
+                                </span>
+                                {range.end && isTimeRangeShorterThanTranscriptThreshold(range.start, range.end) && (
+                                  <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}>
+                                    <Button variant="outline" size="sm" className="h-6 px-2 text-xs">
+                                      Transcript
+                                    </Button>
+                                  </Link>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </Link>
                   </div>
                 );

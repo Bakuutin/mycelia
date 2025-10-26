@@ -29,6 +29,10 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 # Setup logging
 logger = logging.getLogger('convos')
 
+bucketsEntered = set()
+bucketsExited = set()
+
+
 def setup_logging():
     """Setup logging configuration similar to daemon.py"""
     log_dir = os.path.expanduser('~/Library/mycelia/logs')
@@ -207,6 +211,63 @@ def setup_llm_tools():
     
     return tool_llm, system_prompt
 
+def create_conversation_object(conv, conv_start, conv_end, now):
+    """Create a conversation object from extracted conversation data"""
+    return {
+        'name': conv.title,
+        'details': conv.summary,
+        'icon': {'text': conv.emoji},
+        'timeRanges': [{
+            'start': conv_start,
+            'end': conv_end,
+        }],
+        'createdAt': now,
+        'updatedAt': now,
+    }
+
+def create_entity_object(entity_name, now):
+    """Create an entity object"""
+    return {
+        'name': entity_name,
+        'createdAt': now,
+        'updatedAt': now,
+    }
+
+def create_mentioned_relationship(entity_id, conversation_id, entity_name, conversation_title, now):
+    """Create a 'mentioned in' relationship object"""
+    return {
+        'name': 'mentioned in',
+        'isRelationship': True,
+        'relationship': {
+            'subject': entity_id,
+            'object': conversation_id,
+            'symmetrical': False
+        },
+        'createdAt': now,
+        'updatedAt': now,
+    }
+
+def find_or_create_entity(entity_name, now):
+    """Find existing entity or create new one"""
+    # Check if entity already exists
+    existing = call_resource("tech.mycelia.mongo", {
+        "action": "findOne",
+        "collection": "objects",
+        "query": {"name": entity_name}
+    })
+    
+    if existing:
+        return existing['_id']
+    
+    # Create new entity
+    entity_obj = create_entity_object(entity_name, now)
+    result = call_resource("tech.mycelia.mongo", {
+        "action": "insertOne",
+        "collection": "objects",
+        "doc": entity_obj
+    })
+    return result['insertedId']
+
 def process_conversation_chunk(chunk, tool_llm, system_prompt):
     """Process a single conversation chunk and extract conversations."""
     prompt, chunk_start, chunk_end = chunk_to_prompt(chunk)
@@ -231,34 +292,72 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt):
             extracted_conversations = ExtractConversationsInput.model_validate(tool_call["args"]).conversations
             logger.info(f"Found {len(extracted_conversations)} conversations")
             
+            now = datetime.now(pytz.UTC)
+            objects_to_create = []
+            relationships_to_create = []
+            entity_to_id_map = {}  # Track entity names to object IDs
+            
+            # Phase 1: Create conversation objects and collect entities
             for conv in extracted_conversations:
                 conv_start, conv_end = sorted([utc(conv.start), utc(conv.end)])
                 
-                now = datetime.now(pytz.UTC)
+                # Create conversation object
+                conv_obj = create_conversation_object(conv, conv_start, conv_end, now)
+                objects_to_create.append(conv_obj)
                 
-                call_resource(
-                    "tech.mycelia.mongo",
-                    {
-                        "action": "insertOne",
-                        "collection": "conversations",
-                        "doc": {
-                            "title": conv.title,
-                            "summary": conv.summary,
-                            "entities": conv.entities,
-                            "icon": {
-                                "text": conv.emoji,
-                            },
-                            "timeRanges": [
-                                {
-                                    "start": conv_start,
-                                    "end": conv_end,
-                                }
-                            ],
-                            "createdAt": now,
-                            "updatedAt": now,
-                        },
-                    }
-                )
+                # Process entities for this conversation
+                for entity_name in conv.entities:
+                    if not entity_name or not entity_name.strip():
+                        continue
+                    
+                    # Track entity for relationship creation
+                    if entity_name not in entity_to_id_map:
+                        entity_to_id_map[entity_name] = None  # Will be filled after object creation
+                    
+            # Phase 2: Create entity objects
+            for entity_name in entity_to_id_map:
+                entity_id = find_or_create_entity(entity_name, now)
+                entity_to_id_map[entity_name] = entity_id
+                logger.info(f"Entity '{entity_name}' -> Object ID: {entity_id}")
+            
+            # Phase 3: Batch insert all objects
+            if objects_to_create:
+                result = call_resource("tech.mycelia.mongo", {
+                    "action": "insertMany",
+                    "collection": "objects",
+                    "docs": objects_to_create
+                })
+                conversation_ids = result['insertedIds']
+                logger.info(f"Created {len(conversation_ids)} conversation objects")
+            
+            # Phase 4: Create relationships
+            conv_idx = 0
+            for conv in extracted_conversations:
+                conversation_id = conversation_ids[conv_idx]
+                conversation_title = conv.title
+                
+                # Create "mentioned in" relationships for entities
+                for entity_name in conv.entities:
+                    if not entity_name or not entity_name.strip():
+                        continue
+                    
+                    entity_id = entity_to_id_map[entity_name]
+                    relationship = create_mentioned_relationship(
+                        entity_id, conversation_id, entity_name, conversation_title, now
+                    )
+                    relationships_to_create.append(relationship)
+                
+                conv_idx += 1
+            
+            # Phase 5: Batch insert relationships
+            if relationships_to_create:
+                result = call_resource("tech.mycelia.mongo", {
+                    "action": "insertMany",
+                    "collection": "objects",
+                    "docs": relationships_to_create
+                })
+                logger.info(f"Created {len(result['insertedIds'])} entity mention relationships")
+            
             return len(extracted_conversations)
         else:
             logger.info("No conversations found in chunk")
@@ -280,6 +379,7 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
     total_conversations = 0
     cursor = not_later_than
     current_bucket = None
+    previous_bucket = None
     delta = SCALE_TO_RESOLUTION[scale]
 
     try:
@@ -290,6 +390,7 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
                 logger.info(f"Reached limit of {limit} chunks")
                 break
             
+            previous_bucket = current_bucket
             chunk_start = chunk[0]["start"]
             chunk_bucket = date_to_bucket(chunk_start, scale)
             
@@ -309,15 +410,17 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
         
         if current_bucket is not None:
             bucket_end = current_bucket + delta
-            mark_buckets_as("done", "conversations", current_bucket, bucket_end, scale=scale)
-            logger.info(f"Marked final bucket as done: {current_bucket} -> {bucket_end}")
+            if previous_bucket != current_bucket and previous_bucket is not None:
+                bucketsExited.add(previous_bucket)
+                bucketsEntered.add(current_bucket)
+
+                # mark all buckets that had been both entered and exited as done
+                for bucket in bucketsEntered & bucketsExited:
+                    mark_buckets_as("done", "conversations", bucket, bucket + delta, scale=scale)
+                    logger.info(f"Marked bucket as done: {bucket} -> {bucket + delta}")
             
     except Exception as e:
         logger.error(f"Error in conversation extraction: {e}")
-        if current_bucket is not None:
-            bucket_end = current_bucket + delta
-            mark_buckets_as("stale", "conversations", current_bucket, bucket_end, scale=scale)
-            logger.info(f"Marked bucket as stale due to error: {current_bucket} -> {bucket_end}")
         raise
 
     logger.info("=" * 60)

@@ -2,19 +2,16 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { callResource } from '@/lib/api';
 import type { Person } from '@/types/people';
-import type { Conversation } from '@/types/conversations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, Trash2 } from 'lucide-react';
-import { ConversationCard } from '@/components/ConversationCard';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 
 const PersonDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [person, setPerson] = useState<Person | null>(null);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -44,27 +41,6 @@ const PersonDetailPage = () => {
     }
   }, [id]);
 
-  useEffect(() => {
-    const fetchConversations = async () => {
-      if (!id) return;
-
-      try {
-        const result = await callResource("tech.mycelia.mongo", {
-          action: "find",
-          collection: "conversations",
-          query: { "participants.id": { $oid: id } },
-          options: { sort: { updatedAt: -1 } },
-        });
-        setConversations(result);
-      } catch (err) {
-        console.error('Failed to fetch conversations:', err);
-      }
-    };
-
-    if (id) {
-      fetchConversations();
-    }
-  }, [id]);
 
   const autoSave = async (updates: Partial<Person>) => {
     if (!person) return;
@@ -102,7 +78,7 @@ const PersonDetailPage = () => {
         collection: "people",
         query: { _id: person._id },
       });
-      navigate('/conversations');
+      navigate('/people');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete person');
     }
@@ -112,7 +88,7 @@ const PersonDetailPage = () => {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/conversations">
+          <Link to="/people">
             <Button variant="ghost" size="sm">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
@@ -130,7 +106,7 @@ const PersonDetailPage = () => {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/conversations">
+          <Link to="/people">
             <Button variant="ghost" size="sm">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
@@ -147,7 +123,7 @@ const PersonDetailPage = () => {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <Link to="/conversations">
+        <Link to="/people">
           <Button variant="ghost" size="sm">
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
@@ -198,19 +174,6 @@ const PersonDetailPage = () => {
         </div>
       </div>
 
-      {conversations.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Conversations</h2>
-          <div className="grid gap-4">
-            {conversations.map((conversation) => (
-              <ConversationCard
-                key={conversation._id.toString()}
-                conversation={conversation}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

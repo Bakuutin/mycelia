@@ -1,0 +1,199 @@
+import React, { useEffect, useMemo, useState } from "react";
+import type { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
+import { useObjects, useObjectsStore } from "./useObjects.ts";
+import { Button } from "@/components/ui/button.tsx";
+import type { Object } from "@/types/objects.ts";
+import { PlusIcon, RefreshCw } from "lucide-react/icons";
+import { useNavigate } from "react-router-dom";
+import { useTimelineRange } from "../../stores/timelineRange.ts";
+import { useNow } from "@/hooks/useNow.ts";
+
+
+const laneHeight = 16;
+const topMargin = 4;
+
+
+type ExtractedObjectRange = {
+  object: Object & {
+    subjectObject?: Object;
+    objectObject?: Object;
+  };
+  rangeIndex: number;
+  start: Date;
+  end?: Date;
+};
+
+type PlacedObjectRange = {
+  startX: number;
+  endX: number;
+  lane: number;
+} & ExtractedObjectRange;
+
+
+
+function RangeBox({ range }: { range: PlacedObjectRange }) {
+  const navigate = useNavigate();
+  const { start, end, startX, endX, lane, object } = range;
+
+  const handleClick = () => {
+    navigate(`/objects/${object._id.toString()}`);
+  };
+
+  return (
+    <g
+    style={{ cursor: 'pointer' }}
+    onClick={handleClick}
+  >
+    <rect
+      width={endX - startX}
+      height={laneHeight - 2}
+      fill='gray'
+      x={startX}
+      y={topMargin + lane * laneHeight}
+    />
+    {object.name && (
+      <foreignObject
+
+        width={endX - startX}
+        height={laneHeight}
+        className="text-[10px]"
+        x={startX}
+        y={topMargin + lane * laneHeight + 2}
+      >
+        {object.name}
+      </foreignObject>
+    )}
+  </g>
+  );
+}
+
+
+function flattenObjectsToRanges(objects: Object[]): ExtractedObjectRange[] {
+  const ranges: ExtractedObjectRange[] = [];
+
+  for (const object of objects) {
+    if (!object.timeRanges || object.timeRanges.length === 0) continue;
+
+    object.timeRanges.forEach((range, index) => {
+      ranges.push({
+        object,
+        rangeIndex: index,
+        start: range.start,
+        end: range.end,
+      });
+    });
+  }
+
+
+  return ranges;
+}
+
+function useLaneLayout(ranges: ExtractedObjectRange[], xFor: (d: Date) => number) {
+  const now = useNow(100);
+
+  return useMemo(() => {
+    const placed: PlacedObjectRange[] = [];
+
+    const sorted = [...ranges].sort((a, b) => {
+      return a.start.getTime() - b.start.getTime();
+    });
+
+    const laneEnds: number[] = [];
+
+    for (const range of sorted) {
+      const startX = xFor(range.start);
+      const endX = xFor(range.end ?? now);
+
+      let lane = 0;
+      while (lane < laneEnds.length && laneEnds[lane] > startX) lane++;
+
+      if (lane === laneEnds.length) laneEnds.push(endX);
+      else laneEnds[lane] = endX;
+
+      placed.push({
+        startX,
+        endX,
+        lane,
+        ...range,
+      });
+    }
+
+    return { placed, lanes: laneEnds.length };
+  }, [ranges, xFor, now]);
+}
+
+const renderIcon = (icon: any) => {
+  if (!icon) return
+  if ('text' in icon) return icon.text;
+  if ('base64' in icon) return '📷';
+};
+
+
+export const ObjectsLayer: () => Layer = () => {
+  return {
+    component: ({ scale, transform, width }: LayerComponentProps) => {
+      const { objects } = useObjects();
+      const ranges = useMemo(() => flattenObjectsToRanges(objects), [objects]);
+      const { start, end } = useTimelineRange();
+
+      const xFor = useMemo(() => {
+        return (d: Date) => transform.applyX(scale(d));
+      }, [scale, transform]);
+
+      const visibleItems = useMemo(() => {
+        return ranges.filter(range =>
+          range.start < end && // not in the future
+          (range.end ?? range.start) > start  && // not in the past
+          !(range.end &&  xFor(range.end) - xFor(start) < 4) // Wide enough to see
+        );
+      }, [ranges, start, end]);
+
+      const layout = useLaneLayout(visibleItems, xFor);
+
+      const height = topMargin + layout.lanes * laneHeight + 10;
+
+      return (
+        <svg className="w-full h-full zoomable" width={width} height={height}>
+          {layout.placed.map(
+              (range: PlacedObjectRange) => (
+                <RangeBox key={`${range.object._id.toString()}-${range.rangeIndex}`} range={range} />
+              )
+          )}
+        </svg>
+      );
+    },
+  } as Layer;
+};
+
+export const CreateObjectTool: Tool = {
+  component: () => {
+    const navigate = useNavigate();
+    return (
+      <Button onClick={() => navigate("/objects/create")}>
+        <PlusIcon className="w-4 h-4" />
+      </Button>
+    );
+  },
+};
+
+export const RefreshObjectsTool: Tool = {
+  component: () => {
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const refresh = useObjectsStore((state) => state.refresh);
+
+    const handleRefresh = async () => {
+      setIsRefreshing(true);
+      try {
+        await refresh();
+      } finally {
+        setIsRefreshing(false);
+      }
+    };
+
+    return (
+      <Button onClick={handleRefresh} disabled={isRefreshing} variant="outline">
+        <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+      </Button>
+    );
+  },
+};

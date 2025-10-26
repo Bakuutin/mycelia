@@ -69,8 +69,7 @@ The frontend connects to the Mycelia backend API server (default: http://localho
 
 ## Features
 
-- **Timeline View** - Interactive timeline with audio, events, and conversations
-- **Conversations** - Manage conversation summaries with time intervals
+- **Timeline View** - Interactive timeline with audio, events, and objects
 - **Events** - Create and organize life events
 - **Dark Mode** - Built-in dark mode support
 - **Responsive** - Mobile-friendly interface

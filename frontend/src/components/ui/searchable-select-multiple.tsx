@@ -27,26 +27,14 @@ import {
 	CommandSeparator,
 } from "@/components/ui/command";
 
-/**
- * Animation types and configurations
- */
 export interface AnimationConfig {
-	/** Badge animation type */
 	badgeAnimation?: "bounce" | "pulse" | "wiggle" | "fade" | "slide" | "none";
-	/** Popover animation type */
 	popoverAnimation?: "scale" | "slide" | "fade" | "flip" | "none";
-	/** Option hover animation type */
 	optionHoverAnimation?: "highlight" | "scale" | "glow" | "none";
-	/** Animation duration in seconds */
 	duration?: number;
-	/** Animation delay in seconds */
 	delay?: number;
 }
 
-/**
- * Variants for the multi-select component to handle different styles.
- * Uses class-variance-authority (cva) to define different styles based on "variant" prop.
- */
 const multiSelectVariants = cva("m-1 transition-all duration-300 ease-in-out", {
 	variants: {
 		variant: {
@@ -72,247 +60,83 @@ const multiSelectVariants = cva("m-1 transition-all duration-300 ease-in-out", {
 	},
 });
 
-/**
- * Option interface for MultiSelect component
- */
-interface MultiSelectOption {
-	/** The text to display for the option. */
+export interface MultiSelectOption {
 	label: string;
-	/** The unique value associated with the option. */
 	value: string;
-	/** Optional icon component to display alongside the option. */
 	icon?: React.ComponentType<{ className?: string }>;
-	/** Whether this option is disabled */
 	disabled?: boolean;
-	/** Custom styling for the option */
 	style?: {
-		/** Custom badge color */
 		badgeColor?: string;
-		/** Custom icon color */
 		iconColor?: string;
-		/** Gradient background for badge */
 		gradient?: string;
 	};
 }
 
-/**
- * Group interface for organizing options
- */
-interface MultiSelectGroup {
-	/** Group heading */
+export interface MultiSelectGroup {
 	heading: string;
-	/** Options in this group */
 	options: MultiSelectOption[];
 }
 
-/**
- * Props for MultiSelect component
- */
-interface MultiSelectProps
+export interface SearchableSelectMultipleProps
 	extends Omit<
 			React.ButtonHTMLAttributes<HTMLButtonElement>,
 			"animationConfig"
 		>,
 		VariantProps<typeof multiSelectVariants> {
-	/**
-	 * An array of option objects or groups to be displayed in the multi-select component.
-	 */
 	options: MultiSelectOption[] | MultiSelectGroup[];
-	/**
-	 * Callback function triggered when the selected values change.
-	 * Receives an array of the new selected values.
-	 */
 	onValueChange: (value: string[]) => void;
-
-	/** The default selected values when the component mounts. */
 	defaultValue?: string[];
-
-	/**
-	 * Placeholder text to be displayed when no values are selected.
-	 * Optional, defaults to "Select options".
-	 */
 	placeholder?: string;
-
-	/**
-	 * Animation duration in seconds for the visual effects (e.g., bouncing badges).
-	 * Optional, defaults to 0 (no animation).
-	 */
 	animation?: number;
-
-	/**
-	 * Advanced animation configuration for different component parts.
-	 * Optional, allows fine-tuning of various animation effects.
-	 */
 	animationConfig?: AnimationConfig;
-
-	/**
-	 * Maximum number of items to display. Extra selected items will be summarized.
-	 * Optional, defaults to 3.
-	 */
 	maxCount?: number;
-
-	/**
-	 * The modality of the popover. When set to true, interaction with outside elements
-	 * will be disabled and only popover content will be visible to screen readers.
-	 * Optional, defaults to false.
-	 */
 	modalPopover?: boolean;
-
-	/**
-	 * If true, renders the multi-select component as a child of another component.
-	 * Optional, defaults to false.
-	 */
 	asChild?: boolean;
-
-	/**
-	 * Additional class names to apply custom styles to the multi-select component.
-	 * Optional, can be used to add custom styles.
-	 */
 	className?: string;
-
-	/**
-	 * If true, disables the select all functionality.
-	 * Optional, defaults to false.
-	 */
 	hideSelectAll?: boolean;
-
-	/**
-	 * If true, shows search functionality in the popover.
-	 * If false, hides the search input completely.
-	 * Optional, defaults to true.
-	 */
 	searchable?: boolean;
-
-	/**
-	 * Custom empty state message when no options match search.
-	 * Can be a React node or a function that receives the current search value.
-	 * Optional, defaults to "No results found."
-	 */
 	emptyIndicator?: React.ReactNode | ((searchValue: string) => React.ReactNode);
-
-	/**
-	 * If true, allows the component to grow and shrink with its content.
-	 * If false, uses fixed width behavior.
-	 * Optional, defaults to false.
-	 */
 	autoSize?: boolean;
-
-	/**
-	 * If true, shows badges in a single line with horizontal scroll.
-	 * If false, badges wrap to multiple lines.
-	 * Optional, defaults to false.
-	 */
 	singleLine?: boolean;
-
-	/**
-	 * Custom CSS class for the popover content.
-	 * Optional, can be used to customize popover appearance.
-	 */
 	popoverClassName?: string;
-
-	/**
-	 * If true, disables the component completely.
-	 * Optional, defaults to false.
-	 */
 	disabled?: boolean;
-
-	/**
-	 * Responsive configuration for different screen sizes.
-	 * Allows customizing maxCount and other properties based on viewport.
-	 * Can be boolean true for default responsive behavior or an object for custom configuration.
-	 */
 	responsive?:
 		| boolean
 		| {
-				/** Configuration for mobile devices (< 640px) */
 				mobile?: {
 					maxCount?: number;
 					hideIcons?: boolean;
 					compactMode?: boolean;
 				};
-				/** Configuration for tablet devices (640px - 1024px) */
 				tablet?: {
 					maxCount?: number;
 					hideIcons?: boolean;
 					compactMode?: boolean;
 				};
-				/** Configuration for desktop devices (> 1024px) */
 				desktop?: {
 					maxCount?: number;
 					hideIcons?: boolean;
 					compactMode?: boolean;
 				};
 		  };
-
-	/**
-	 * Minimum width for the component.
-	 * Optional, defaults to auto-sizing based on content.
-	 * When set, component will not shrink below this width.
-	 */
 	minWidth?: string;
-
-	/**
-	 * Maximum width for the component.
-	 * Optional, defaults to 100% of container.
-	 * Component will not exceed container boundaries.
-	 */
 	maxWidth?: string;
-
-	/**
-	 * If true, automatically removes duplicate options based on their value.
-	 * Optional, defaults to false (shows warning in dev mode instead).
-	 */
 	deduplicateOptions?: boolean;
-
-	/**
-	 * If true, the component will reset its internal state when defaultValue changes.
-	 * Useful for React Hook Form integration and form reset functionality.
-	 * Optional, defaults to true.
-	 */
 	resetOnDefaultValueChange?: boolean;
-
-	/**
-	 * If true, automatically closes the popover after selecting an option.
-	 * Useful for single-selection-like behavior or mobile UX.
-	 * Optional, defaults to false.
-	 */
-	closeOnSelect?: boolean;
-
-	/**
-	 * If true, enables single-select mode where only one option can be selected at a time.
-	 * Automatically sets closeOnSelect to true unless explicitly overridden.
-	 * Optional, defaults to false.
-	 */
-	singleSelect?: boolean;
 }
 
-/**
- * Imperative methods exposed through ref
- */
-export interface MultiSelectRef {
-	/**
-	 * Programmatically reset the component to its default value
-	 */
+export interface SearchableSelectMultipleRef {
 	reset: () => void;
-	/**
-	 * Get current selected values
-	 */
 	getSelectedValues: () => string[];
-	/**
-	 * Set selected values programmatically
-	 */
 	setSelectedValues: (values: string[]) => void;
-	/**
-	 * Clear all selected values
-	 */
 	clear: () => void;
-	/**
-	 * Focus the component
-	 */
 	focus: () => void;
 }
 
-export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
+export const SearchableSelectMultiple = React.forwardRef<
+	SearchableSelectMultipleRef,
+	SearchableSelectMultipleProps
+>(
 	(
 		{
 			options,
@@ -338,15 +162,11 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 			maxWidth,
 			deduplicateOptions = false,
 			resetOnDefaultValueChange = true,
-			closeOnSelect = false,
-			singleSelect = false,
 			...props
 		},
 		ref
 	) => {
-		const effectiveCloseOnSelect = singleSelect ? true : closeOnSelect;
-		const [selectedValues, setSelectedValues] =
-			React.useState<string[]>(defaultValue);
+		const [selectedValues, setSelectedValues] = React.useState<string[]>(defaultValue);
 		const [isPopoverOpen, setIsPopoverOpen] = React.useState(false);
 		const [isAnimating, setIsAnimating] = React.useState(false);
 		const [searchValue, setSearchValue] = React.useState("");
@@ -564,7 +384,7 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 					? "automatically removed"
 					: "detected";
 				console.warn(
-					`MultiSelect: Duplicate option values ${action}: ${duplicates.join(
+					`SearchableSelectMultiple: Duplicate option values ${action}: ${duplicates.join(
 						", "
 					)}. ` +
 						`${
@@ -582,7 +402,7 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 				const option = getAllOptions().find((option) => option.value === value);
 				if (!option && import.meta.env.DEV) {
 					console.warn(
-						`MultiSelect: Option with value "${value}" not found in options list`
+						`SearchableSelectMultiple: Option with value "${value}" not found in options list`
 					);
 				}
 				return option;
@@ -636,9 +456,6 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 				: [...selectedValues, optionValue];
 			setSelectedValues(newSelectedValues);
 			onValueChange(newSelectedValues);
-			if (closeOnSelect) {
-				setIsPopoverOpen(false);
-			}
 		};
 
 		const handleClear = () => {
@@ -671,10 +488,6 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 				const allValues = allOptions.map((option) => option.value);
 				setSelectedValues(allValues);
 				onValueChange(allValues);
-			}
-
-			if (closeOnSelect) {
-				setIsPopoverOpen(false);
 			}
 		};
 
@@ -1219,5 +1032,5 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 	}
 );
 
-MultiSelect.displayName = "MultiSelect";
-export type { MultiSelectOption, MultiSelectGroup, MultiSelectProps };
+SearchableSelectMultiple.displayName = "SearchableSelectMultiple";
+export type { MultiSelectOption, MultiSelectGroup };

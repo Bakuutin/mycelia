@@ -223,7 +223,7 @@ import { DateTimePicker } from '@/components/ui/datetime-picker';
 - Each settings page is a separate component in `src/pages/settings/`
 
 **Navigation:**
-- Main navigation: Timeline, Conversations, Objects, Settings
+- Main navigation: Timeline, Objects, Settings
 - LLMs moved to Settings sub-page (not in main navigation)
 - Settings uses tab-based sidebar navigation
 

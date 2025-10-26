@@ -128,7 +128,7 @@ const TranscriptPage = () => {
         start: { $lt: rangeEnd },
         end: { $gt: rangeStart },
       },
-      options: { sort: { start: 1 }, limit: 10000 },
+      options: { sort: { start: 1 }, limit: 2000 },
     });
 
     const rendered: RenderSegment[] = [];
@@ -288,6 +288,14 @@ const TranscriptPage = () => {
     }
   }
 
+  function handleGoToLatest15Min() {
+    const now = new Date();
+    const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
+    setFormStartDate(fifteenMinutesAgo);
+    setFormEndDate(now);
+    handleApplyRange();
+  }
+
   useEffect(() => {
     const initialFetch = async () => {
       if (!startDate || !endDate) return;
@@ -355,32 +363,39 @@ const TranscriptPage = () => {
       </div>
 
       <form
-        className="flex flex-col gap-2 sm:flex-row sm:items-center"
+        className="space-y-4 flex flex-col gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           handleApplyRange();
         }}
       >
-        <div className="flex gap-2 w-full sm:w-auto">
+        <div className="flex gap-2">
+          <label htmlFor="start">Start</label>
+
           <DateTimePicker
             value={formStartDate}
-            onChange={(date) => setFormStartDate(date)}
+            onChange={(date) => date && setFormStartDate(date)}
             placeholder="Start"
-          />
-          <DateTimePicker
-            value={formEndDate}
-            onChange={(date) => setFormEndDate(date)}
-            placeholder="End"
-          />
-        </div>
-        <div className="flex-1">
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search transcript (optional)"
           />
         </div>
         <div className="flex gap-2">
+          <label htmlFor="end">End</label>
+          <DateTimePicker
+            value={formEndDate}
+            onChange={(date) => date && setFormEndDate(date)}
+            placeholder="End"
+          />
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search"
+            className="flex-1"
+          />
+          <Button type="button" variant="outline" onClick={handleGoToLatest15Min} disabled={loading || searching}>
+            Latest 15min
+          </Button>
           <Button type="submit" disabled={loading || !formStartDate || !formEndDate || searching}>
             {searching ? 'Applying…' : 'Apply'}
           </Button>

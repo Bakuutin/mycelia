@@ -38,18 +38,6 @@ const HomePage = () => {
           </p>
         </Link>
 
-        <Link
-          to="/conversations"
-          className="p-6 border rounded-lg hover:border-primary transition-colors group"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Conversations</h2>
-            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-          </div>
-          <p className="text-muted-foreground">
-            Browse and manage your conversation summaries with multiple time intervals
-          </p>
-        </Link>
 
         <Link
           to="/people"
@@ -60,7 +48,7 @@ const HomePage = () => {
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            View and manage people from your conversations
+            View and manage people from your objects and events
           </p>
         </Link>
       </div>
@@ -69,9 +57,9 @@ const HomePage = () => {
         <h3 className="text-lg font-semibold mb-2">Getting Started</h3>
         <ul className="space-y-2 text-muted-foreground">
           <li>• Upload audio files through the timeline interface</li>
-          <li>• Create events and conversations to organize your memories</li>
+          <li>• Create events and objects to organize your memories</li>
           <li>• Use the search functionality to find specific moments</li>
-          <li>• Share conversations with others via shareable links</li>
+          <li>• Manage relationships between different objects and events</li>
         </ul>
       </div>
     </div>

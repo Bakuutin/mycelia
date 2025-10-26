@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import type { Object } from '@/types/objects';
+import type { Object, ObjectFormData } from '@/types/objects';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Trash2 } from 'lucide-react';
 import { useObject, useUpdateObject, useDeleteObject } from '@/hooks/useObjectQueries';
@@ -15,11 +15,21 @@ const ObjectDetailPage = () => {
   const updateObjectMutation = useUpdateObject();
   const deleteObjectMutation = useDeleteObject();
 
-  const autoSave = async (updates: Partial<Object>) => {
+  const autoSave = async (updates: Partial<ObjectFormData>) => {
     if (!object || !id) return;
     
     updateObjectMutation.mutate({ id, updates });
   };
+
+  // Convert Object to ObjectFormData for the form
+  const formObject: ObjectFormData = object ? {
+    ...object,
+    relationship: object.relationship ? {
+      object: object.relationship.object,
+      subject: object.relationship.subject,
+      symmetrical: object.relationship.symmetrical
+    } : undefined
+  } : {} as ObjectFormData;
 
   const handleDelete = async () => {
     if (!object || !id) return;
@@ -95,7 +105,7 @@ const ObjectDetailPage = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="border rounded-lg p-6">
           <ObjectForm 
-            object={object} 
+            object={formObject} 
             onUpdate={autoSave} 
           />
         </div>

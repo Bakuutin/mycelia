@@ -19,7 +19,7 @@ const ObjectsPage = () => {
           action: "find",
           collection: "objects",
           query: {},
-          options: { sort: { name: 1 } }
+          options: { sort: { _id: 1 } }
         });
         setObjects(result);
       } catch (err) {

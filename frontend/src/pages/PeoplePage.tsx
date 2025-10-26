@@ -64,7 +64,7 @@ const PeoplePage = () => {
         <Card className="p-8 text-center">
           <Users className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
           <p className="text-muted-foreground">
-            No people found. People are created automatically when you add participants to conversations.
+            No people found. People are created automatically when you add them to objects or events.
           </p>
         </Card>
       ) : (
