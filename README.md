@@ -48,14 +48,33 @@ your own words.
 
 ## 🚀 Quick Start
 
-### 1. Install Deno
+### 1. Prerequisites
 
+Install these system dependencies:
+
+**macOS:**
 ```bash
-# Mac/Linux
-curl -fsSL https://deno.land/x/install/install.sh | sh
+brew install portaudio deno ffmpeg
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install Docker Desktop: https://www.docker.com/products/docker-desktop
+```
 
-# Windows (PowerShell)
+**Linux:**
+```bash
+sudo apt install portaudio19-dev ffmpeg
+curl -fsSL https://deno.land/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install Docker: https://docs.docker.com/engine/install/
+```
+
+**Windows:**
+```powershell
+# Install Deno
 irm https://deno.land/install.ps1 | iex
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install FFmpeg: https://ffmpeg.org/download.html
+# Install Docker Desktop: https://www.docker.com/products/docker-desktop
 ```
 
 ### 2. Setup & Run
@@ -63,63 +82,70 @@ irm https://deno.land/install.ps1 | iex
 ```bash
 # Clone the repo
 git clone https://github.com/your-org/mycelia.git
-cd mycelia/backend
-
-# Install deno deps
-deno install
-
-# Configure environment (edit your .env accordingly)
-cp .env.example .env
+cd mycelia
 
 # Start the services (MongoDB, Redis, Kafka)
-cd ..
-mkdir .docker
 docker compose up -d
 
-# Generate auth credentials (requires services running)
+# Configure environment
 cd backend
+cp .env.example .env
+# Edit .env with your preferred settings
+
+# Generate auth credentials (requires services running)
 deno run -A --env server.ts token create
 # Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
 
-# Start the server
-deno run -A --env server.ts serve
+# Start the backend server
+deno task dev
 ```
 
-## Commands
+The backend will be available at http://localhost:5173/
 
-### Local Server Management (server.ts)
+### 3. Frontend (Optional)
 
-For local development and server management:
-
-```bash
-# Generate auth tokens and put
-# `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN` in .env
-cd backend
-deno run -A --env server.ts token create
-```
-```bash
-# Start the server
-cd backend
-deno run -A --env server.ts serve
-```
-
-Then open http://localhost:5173/ and use generated token to login.
-
-**New Frontend (separate app):**
-
-To use the new frontend, run it separately:
+To use the separate frontend application:
 
 ```bash
 cd frontend
-npm install
-npm run dev
+deno task dev
 ```
 
-The new frontend runs on http://localhost:3000/. In the settings page, configure:
-- Backend URL: `http://localhost:5173`
-- Enter your generated credentials (client ID and token)
+The frontend runs on http://localhost:3001/. Configure the backend URL and credentials in the settings page.
 
-### Setup Recordings Import
+## Commands
+
+### Backend Server
+
+```bash
+cd backend
+
+# Generate auth tokens (put in .env)
+deno run -A --env server.ts token create
+
+# Start the server
+deno task dev
+```
+
+### Frontend Development
+
+```bash
+cd frontend
+
+# Start development server
+deno task dev
+
+# Run tests
+deno task test
+
+# Type checking
+deno task type-check
+
+# Linting
+deno lint
+```
+
+### Audio Import Setup
 
 1. The `python/settings.py` works out-of-the-box and auto-detects:
    - Apple Voice Memos (if `CloudRecordings.db` exists)
@@ -170,6 +196,8 @@ uv run daemon.py
 
 
 ### Speech-to-Text (STT)
+
+**Prerequisites:** Ensure you've installed PortAudio as described in [python/README.md](python/README.md#portaudio-required-for-sttpy).
 
 Configure and run the STT processor:
 
