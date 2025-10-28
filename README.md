@@ -28,23 +28,26 @@ your own words.
 
 😐 OAuth2
 
+😐 Summarizations
+
+😐 Full Text Search
+
+😐 Observability
+
 **In Progress**
 
 🫥 Chat with your memory
 
 🫥 Streaming ingestion (replace batch system)
 
-🫥 Full-text & semantic search
-
 🫥 Other modalities (health, geolocation, photos, etc.)
-
-🫥 Summarizations
 
 🫥 Sharing
 
+🫥 Semantic Search
+
 🫥 Backup Management
 
-🫥 Observability
 
 ## 🚀 Quick Start
 

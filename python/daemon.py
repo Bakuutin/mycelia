@@ -1,5 +1,5 @@
 #%%
-from lib import get_url, client_id, client_secret
+from lib.config import get_url
 from discovery import Importer
 
 from discovery import source_files
