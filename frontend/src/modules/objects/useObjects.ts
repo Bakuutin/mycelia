@@ -35,6 +35,27 @@ async function fetchObjects(): Promise<Object[]> {
             }
           },
           { $match: { hasTimeRanges: true } },
+          // Lookup subject object for relationships
+          {
+            $lookup: {
+              from: "objects",
+              localField: "relationship.subject",
+              foreignField: "_id",
+              as: "subjectObject"
+            }
+          },
+          // Lookup object object for relationships
+          {
+            $lookup: {
+              from: "objects",
+              localField: "relationship.object",
+              foreignField: "_id",
+              as: "objectObject"
+            }
+          },
+          // Unwind the arrays to get single objects
+          { $unwind: { path: "$subjectObject", preserveNullAndEmptyArrays: true } },
+          { $unwind: { path: "$objectObject", preserveNullAndEmptyArrays: true } },
           {
             $addFields: {
               earliestStart: {
@@ -62,7 +83,7 @@ async function fetchObjects(): Promise<Object[]> {
               duration: { $subtract: ["$latestEnd", "$earliestStart"] }
             }
           },
-          { $sort: { duration: -1 } }
+          { $sort: { earliestStart: -1, duration: -1 } }
         ],
       });
 };

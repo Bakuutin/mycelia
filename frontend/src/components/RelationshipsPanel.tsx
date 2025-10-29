@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowLeft, ArrowLeftRight, Plus, X, MoveHorizontal, RefreshCcw } from 'lucide-react';
+import { ArrowRight, ArrowLeft, ArrowLeftRight, Plus, X, MoveHorizontal, RefreshCcw, Trash2 } from 'lucide-react';
 import type { Object } from '@/types/objects';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 import { ObjectSelectionDropdown } from '@/components/ObjectSelectionDropdown';
-import { getRelationships, useCreateObject } from "@/hooks/useObjectQueries.ts";
+import { getRelationships, useCreateObject, useDeleteObject } from "@/hooks/useObjectQueries.ts";
 import { ObjectId } from 'bson';
 import { formatTime, formatTimeRangeDuration } from '@/lib/formatTime';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -36,6 +36,7 @@ const renderIcon = (icon: any) => {
 export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
   const createObjectMutation = useCreateObject();
+  const deleteObjectMutation = useDeleteObject();
   const { timeFormat } = useSettingsStore();
   const now = useNow();
 
@@ -95,6 +96,17 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
       });
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Failed to create relationship');
+    }
+  };
+
+  const handleDeleteRelationship = async (relationshipId: string) => {
+    const confirmed = globalThis.confirm ? globalThis.confirm("Delete this relationship?") : true;
+    if (!confirmed) return;
+
+    try {
+      await deleteObjectMutation.mutateAsync(relationshipId);
+    } catch (err) {
+      console.error('Failed to delete relationship:', err);
     }
   };
 
@@ -280,7 +292,7 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
           </div>
         </div>
       )}
-      {!object.isRelationship && relationships.length > 0 && (
+      {relationships.length > 0 && (
         <div className="space-y-2">
           <div className="grid gap-2">
             {relationships.map(({ other, relationship }) => {
@@ -308,6 +320,22 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                         <span className="font-medium truncate">{other.name}</span>
                       </Link>
                     </div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDeleteRelationship(relationship._id.toString())}
+                          disabled={deleteObjectMutation.isPending}
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Delete relationship</p>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
 
                   {/* Relationship description and time ranges below */}
@@ -351,7 +379,7 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
         </div>
       )}
 
-      {!object.isRelationship && relationships.length === 0 && (
+      {relationships.length === 0 && (
         <div className="text-center py-8 text-muted-foreground">
           <p>No related objects found.</p>
           <p className="text-sm mt-1">Create relationship objects to link this object to others.</p>

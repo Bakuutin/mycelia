@@ -66,6 +66,7 @@ export interface SearchableSelectSingleProps
 		VariantProps<typeof selectVariants> {
 	options: SelectOption[] | SelectGroup[];
 	onValueChange: (value: string | undefined) => void;
+	onSearchChange?: (searchValue: string) => void;
 	defaultValue?: string;
 	placeholder?: string;
 	animation?: number;
@@ -117,6 +118,7 @@ export const SearchableSelectSingle = React.forwardRef<
 		{
 			options,
 			onValueChange,
+			onSearchChange,
 			variant,
 			defaultValue,
 			placeholder = "Select option",
@@ -431,6 +433,10 @@ export const SearchableSelectSingle = React.forwardRef<
 				setSearchValue("");
 			}
 		}, [isPopoverOpen]);
+
+		React.useEffect(() => {
+			onSearchChange?.(searchValue);
+		}, [searchValue, onSearchChange]);
 
 		React.useEffect(() => {
 			const allOptions = getAllOptions();
