@@ -213,17 +213,18 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
       </div>
 
       {object.isRelationship && object.relationship && (
-        <div>
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-end">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Label className="text-xs">Subject</Label>
+        <div className="space-y-4 min-w-0">
+          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-end min-w-0">
+            {/* Subject */}
+            <div className="space-y-2 min-w-0">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs font-medium">Subject</Label>
                 {!object.relationship.symmetrical && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        className="flex items-center gap-1"
+                        className="flex items-center gap-1 p-1 hover:bg-muted rounded"
                         onClick={() => {
                           if (object.relationship) {
                             const newRelationship = {
@@ -244,7 +245,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   </Tooltip>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
                   value={object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}
                   onChange={(value) => {
@@ -257,7 +258,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                     }
                   }}
                   placeholder="Select a subject..."
-                  className="flex-1"
+                  className="min-w-0 flex-1"
                 />
                 {object.relationship.subject && (
                   <Link
@@ -265,7 +266,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <Button variant="outline" size="icon" className="h-9 w-9">
+                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0">
                       <ExternalLink className="w-4 h-4" />
                     </Button>
                   </Link>
@@ -273,6 +274,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </div>
             </div>
 
+            {/* Direction Toggle */}
             <div className="flex items-center justify-center">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -303,10 +305,10 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </Tooltip>
             </div>
 
-
-            <div>
-              <Label className="text-xs mb-1 block">Object</Label>
-              <div className="flex gap-2">
+            {/* Object */}
+            <div className="space-y-2 min-w-0">
+              <Label className="text-xs font-medium">Object</Label>
+              <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
                   value={object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}
                   onChange={(value) => {
@@ -319,7 +321,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                     }
                   }}
                   placeholder="Select an object..."
-                  className="flex-1"
+                  className="min-w-0 flex-1"
                 />
                 {object.relationship.object && (
                   <Link
@@ -327,7 +329,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <Button variant="outline" size="icon" className="h-9 w-9">
+                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0">
                       <ExternalLink className="w-4 h-4" />
                     </Button>
                   </Link>
@@ -335,7 +337,6 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </div>
             </div>
           </div>
-
         </div>
       )}
 
