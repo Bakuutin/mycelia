@@ -508,10 +508,8 @@ export const SearchableSelectSingle = React.forwardRef<
 							aria-describedby={`${triggerDescriptionId} ${selectedLabelId}`}
 							aria-label={`Select: ${selectedOption?.label || placeholder}`}
 							className={cn(
-								"flex px-3 py-2 rounded-md border min-h-10 h-auto items-center justify-between bg-inherit hover:bg-inherit [&_svg]:pointer-events-auto",
+								"flex px-3 py-2 rounded-md border h-8 items-center justify-between bg-inherit hover:bg-inherit [&_svg]:pointer-events-auto",
 								autoSize ? "w-auto" : "w-full",
-								responsiveSettings.compactMode && "min-h-8 text-sm py-1",
-								screenSize === "mobile" && "min-h-12 text-base",
 								disabled && "opacity-50 cursor-not-allowed",
 								className
 							)}

@@ -219,6 +219,27 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
             <div className="space-y-2 min-w-0">
               <div className="flex items-center gap-2">
                 <Label className="text-xs font-medium">Subject</Label>
+                {object.relationship.subject && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        to={`/objects/${object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 p-1 hover:bg-muted rounded"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Open subject</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 {!object.relationship.symmetrical && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -260,17 +281,6 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   placeholder="Select a subject..."
                   className="min-w-0 flex-1"
                 />
-                {object.relationship.subject && (
-                  <Link
-                    to={`/objects/${object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0">
-                      <ExternalLink className="w-4 h-4" />
-                    </Button>
-                  </Link>
-                )}
               </div>
             </div>
 
@@ -290,7 +300,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                         onUpdate({ relationship: newRelationship });
                       }
                     }}
-                    className="h-[40px] w-[40px] p-0"
+                    className="h-8 w-8 p-0"
                   >
                     {object.relationship.symmetrical ? (
                       <MoveHorizontal className="w-4 h-4" />
@@ -307,7 +317,30 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
 
             {/* Object */}
             <div className="space-y-2 min-w-0">
-              <Label className="text-xs font-medium">Object</Label>
+              <div className="flex items-center gap-2">
+                <Label className="text-xs font-medium">Object</Label>
+                {object.relationship.object && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        to={`/objects/${object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 p-1 hover:bg-muted rounded"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Open object</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
               <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
                   value={object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}
@@ -323,17 +356,6 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   placeholder="Select an object..."
                   className="min-w-0 flex-1"
                 />
-                {object.relationship.object && (
-                  <Link
-                    to={`/objects/${object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Button variant="outline" size="icon" className="h-9 w-9 shrink-0">
-                      <ExternalLink className="w-4 h-4" />
-                    </Button>
-                  </Link>
-                )}
               </div>
             </div>
           </div>
