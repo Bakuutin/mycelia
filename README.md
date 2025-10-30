@@ -87,13 +87,17 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/your-org/mycelia.git
 cd mycelia
 
+# Configure Docker Compose environment
+cp .env.example .env
+# Edit .env if you want to change passwords
+
 # Start the services (MongoDB, Redis, Kafka)
 docker compose up -d
 
-# Configure environment
+# Configure backend environment
 cd backend
 cp .env.example .env
-# Edit .env with your preferred settings
+# Edit .env - ensure REDIS_PASSWORD and KAFKA_ADMIN_PASSWORD match root .env
 
 # Generate auth credentials (requires services running)
 deno run -A --env server.ts token create
