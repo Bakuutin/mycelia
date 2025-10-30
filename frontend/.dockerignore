@@ -1,0 +1,32 @@
+# Node & tooling
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-lock.yaml
+
+# Vite outputs
+/dist
+/.vite
+.vite-cache
+
+# Tests and coverage
+coverage
+*.test.*
+*.spec.*
+
+# VCS
+.git
+.gitignore
+
+# Editor & OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Deno caches
+.deno
+
+# Misc
+.env*
