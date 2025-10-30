@@ -1,0 +1,7 @@
+*
+!pyproject.toml
+!uv.lock
+!pyproject.blackwell.toml
+!.env
+!src
+!scripts

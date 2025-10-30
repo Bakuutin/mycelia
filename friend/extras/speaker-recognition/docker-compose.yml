@@ -1,0 +1,111 @@
+services:
+  # Base Speaker Recognition Service Configuration
+  speaker-service:
+    &base-speaker-service
+    profiles: ["cpu"]
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cpu}
+    image: speaker-recognition:latest
+    env_file:
+      - .env
+    ports:
+      - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
+    volumes:
+      - ./src:/app/src
+      - ./model_cache:/models
+      - ./audio_chunks:/app/audio_chunks
+      - ./debug:/app/debug
+      - ./speaker_data:/app/data
+    environment:
+      - HF_HOME=/models
+      - HF_TOKEN=${HF_TOKEN}
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.15}
+      - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-0.0.0.0}
+      - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://speaker-service:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # GPU Profile Configuration
+  speaker-service-gpu:
+    <<: *base-speaker-service
+    profiles: ["gpu"]
+    networks:
+      default:
+        aliases:
+          - speaker-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cu121}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  
+  # React Web UI
+  web-ui:
+    platform: linux/amd64
+    build:
+      context: webui
+      dockerfile: Dockerfile
+    profiles: ["cpu", "gpu"]
+    ports:
+      - "${REACT_UI_PORT:-5173}:${REACT_UI_PORT:-5173}"
+    volumes:
+      - ./webui/src:/app/src
+      - ./webui/public:/app/public
+      - ./webui/package.json:/app/package.json
+      - ./webui/vite.config.ts:/app/vite.config.ts
+      - ./webui/tailwind.config.js:/app/tailwind.config.js
+      - ./webui/postcss.config.js:/app/postcss.config.js
+      - ./webui/tsconfig.json:/app/tsconfig.json
+    environment:
+      - REACT_UI_HOST=${REACT_UI_HOST}
+      - REACT_UI_PORT=${REACT_UI_PORT}
+      - REACT_UI_HTTPS=${REACT_UI_HTTPS}
+      - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST}
+      - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx reverse proxy for unified HTTPS endpoint
+  nginx:
+    image: nginx:alpine
+    profiles: ["cpu", "gpu"]
+    ports:
+      - "8444:443"
+      - "8081:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - web-ui
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Shared network for cross-project communication
+networks:
+  default:
+    name: friend-network
+    external: true
