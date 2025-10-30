@@ -23,9 +23,6 @@ deno install
 # Start development server (http://localhost:3001)
 deno task dev
 
-# Or using npm scripts
-npm run dev
-
 # Build for production
 deno task build
 
