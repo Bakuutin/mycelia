@@ -10,6 +10,7 @@ import express from "express";
 import morgan from "morgan";
 import type { Request, Response } from "express";
 import { createInterface } from "node:readline/promises";
+import cors from "npm:cors@2.8.5";
 
 import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
@@ -34,6 +35,7 @@ async function startProdServer(host: string, port: number) {
   console.log(`Loading server build from ${serverBuildPath}`);
   const build: ServerBuild = await import(pathToFileURL(serverBuildPath).href);
   app.disable("x-powered-by");
+  app.use(cors());
   console.log(`Serving static assets from ${clientAssetsDir} at ${build.publicPath}`);
   app.use(
     build.publicPath,
@@ -93,6 +95,7 @@ async function startDevServer(host: string, port: number) {
     server: {
       host,
       port,
+      cors: true,
     },
   });
 
