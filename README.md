@@ -270,7 +270,23 @@ This will:
 - Store transcriptions back to MongoDB
 
 
-### Remote Operations (cli.ts)
+### Timeline Management
+
+**Web Interface (Recommended)**
+
+The easiest way to manage timeline histograms is through the web interface:
+
+1. Navigate to **Settings** (gear icon in the top right)
+2. Find the **Timeline Management** section
+3. Choose your time range:
+   - **Quick select**: Pick from preset ranges (Last 7 days → now, Last 30 days → now, etc.)
+   - **All time**: Process everything in your database
+   - **Custom range**: Specify exact dates or relative times
+4. Click **Recalculate Timeline**
+
+The interface clearly shows what period will be processed and displays completion time and success status.
+
+**CLI Operations**
 
 For operations against a remote server (requires login & API key), from /backend directory:
 
