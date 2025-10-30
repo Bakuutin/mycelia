@@ -200,12 +200,70 @@ uv run daemon.py
 
 ### Speech-to-Text (STT)
 
+Mycelia uses a Whisper-based transcription server to convert audio chunks into text. You can either run the STT server locally or use a remote instance.
+
 **Prerequisites:** Ensure you've installed PortAudio as described in [python/README.md](python/README.md#portaudio-required-for-sttpy).
 
-Configure and run the STT processor:
+#### Option 1: Run Whisper Server Locally
 
-- Run python/whisper_server/server.py on a gpu machine and set the `STT_SERVER_URL` in .env
-- Run `uv run stt.py` to process the audio chunks
+The local Whisper server uses the faster-whisper library and runs best on a machine with a CUDA-compatible GPU, though CPU mode is also supported.
+
+**Requirements:**
+- Python 3.12+
+- CUDA-compatible GPU (recommended) or CPU
+- FFmpeg (already installed in prerequisites)
+
+**Setup:**
+
+```bash
+cd python/whisper_server
+
+# Install dependencies using uv
+uv sync
+
+# Start the server
+uv run server.py
+```
+
+The server will start on `http://localhost:8081` and use the `large-v3` Whisper model by default.
+
+**Configuration:**
+
+In your `backend/.env` file, set:
+```bash
+STT_SERVER_URL=http://localhost:8081/
+```
+
+#### Option 2: Use Remote STT Server
+
+If you have access to a GPU-enabled machine, you can run the Whisper server there and connect remotely:
+
+1. On the GPU machine, run the Whisper server:
+```bash
+cd python/whisper_server
+uv sync
+uv run server.py
+```
+
+2. In your local `backend/.env` file, set the remote URL:
+```bash
+STT_SERVER_URL=https://your-stt-server.com/
+STT_API_KEY=your_api_key_if_needed
+```
+
+#### Processing Audio Chunks
+
+Once the STT server is running (locally or remotely), process your audio chunks:
+
+```bash
+cd python
+uv run stt.py
+```
+
+This will:
+- Connect to the STT server specified in your `.env`
+- Process audio chunks from the database
+- Store transcriptions back to MongoDB
 
 
 ### Remote Operations (cli.ts)
