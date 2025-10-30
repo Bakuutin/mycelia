@@ -336,9 +336,11 @@ const ObjectsPage = () => {
         </Card>
       ) : (
         <div className="space-y-4">
-          <div className="grid gap-4">
+          <div className="flex flex-wrap items-stretch gap-4">
             {objects.map((object) => (
-              <ObjectCard key={object._id.toString()} object={object} searchQuery={q} />
+              <div key={object._id.toString()} className="flex-1 min-w-0" style={{ minWidth: '300px', maxWidth: '500px' }}>
+                <ObjectCard object={object} searchQuery={q} />
+              </div>
             ))}
           </div>
           {objects.length === 100 && (

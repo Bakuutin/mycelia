@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import type { Object, ObjectFormData } from '@/types/objects';
 import { zObject } from '@/types/objects';
@@ -60,11 +60,64 @@ const formatValue = (value: any): string => {
   return String(value);
 };
 
+// Custom hook for debounced auto-save
+function useDebouncedUpdate(
+  value: string,
+  delay: number,
+  onUpdate: (updates: Partial<ObjectFormData>) => Promise<void>,
+  fieldName: keyof ObjectFormData
+) {
+  const [localValue, setLocalValue] = useState(value);
+  const timeoutRef = useRef<number>();
+
+  // Update local value when prop changes (e.g., from server)
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  // Debounced update
+  useEffect(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    if (localValue !== value) {
+      timeoutRef.current = setTimeout(() => {
+        onUpdate({ [fieldName]: localValue } as Partial<ObjectFormData>);
+      }, delay);
+    }
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [localValue, value, delay, onUpdate, fieldName]);
+
+  return [localValue, setLocalValue] as const;
+}
+
 export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
   const [newFieldType, setNewFieldType] = useState<'string' | 'number' | 'boolean'>('string');
   const [showAddField, setShowAddField] = useState(false);
+
+  // Use debounced auto-save for name field
+  const [nameValue, setNameValue] = useDebouncedUpdate(
+    object.name || '',
+    500, // 500ms delay
+    onUpdate,
+    'name'
+  );
+
+  // Use debounced auto-save for details field
+  const [detailsValue, setDetailsValue] = useDebouncedUpdate(
+    object.details || '',
+    500, // 500ms delay
+    onUpdate,
+    'details'
+  );
 
 
   const extraFields = Object.entries(object).filter(
@@ -114,8 +167,8 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Label htmlFor="name" className="text-sm font-medium">Name</Label>
           <Input
             id="name"
-            value={object.name}
-            onChange={(e) => onUpdate({ name: e.target.value })}
+            value={nameValue}
+            onChange={(e) => setNameValue(e.target.value)}
             placeholder="Object name"
             className="mt-1"
           />
@@ -126,8 +179,8 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
         <Label htmlFor="details">Details</Label>
         <textarea
           id="details"
-          value={object.details || ""}
-          onChange={(e) => onUpdate({ details: e.target.value || undefined })}
+          value={detailsValue}
+          onChange={(e) => setDetailsValue(e.target.value)}
           placeholder="Optional details about this object"
           className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />

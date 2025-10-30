@@ -293,8 +293,7 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
         </div>
       )}
       {relationships.length > 0 && (
-        <div className="space-y-2">
-          <div className="grid gap-2">
+          <div className="flex flex-col gap-2">
             {relationships.map(({ other, relationship }) => {
               // Determine if current object is subject or object in the relationship
               const isCurrentObjectSubject = relationship.relationship?.subject.toString() === object._id.toString();
@@ -308,15 +307,15 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                   {/* Horizontal relationship flow */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <Link to={`/objects/${relationship._id.toString()}`} className="flex items-center gap-2 min-w-0">
-                         
-                          <span className="text-lg">{renderIcon(relationship.icon)}</span>
-                          <span className="font-medium truncate">{relationship.name}</span>
+                      <Link to={`/objects/${relationship._id.toString()}`} className="flex items-center gap-2 flex-shrink-0">
+
+                          <span className="text-md">{renderIcon(relationship.icon)}</span>
+                          <span className="font-medium whitespace-nowrap">{relationship.name}</span>
 
                         <ArrowComponent className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                       </Link>
                       <Link to={`/objects/${other._id.toString()}`} className="flex items-center gap-2 min-w-0">
-                        <span className="text-lg">{renderIcon(other.icon)}</span>
+                        <span className="text-md">{renderIcon(other.icon)}</span>
                         <span className="font-medium truncate">{other.name}</span>
                       </Link>
                     </div>
@@ -376,7 +375,6 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
               );
             })}
           </div>
-        </div>
       )}
 
       {relationships.length === 0 && (
