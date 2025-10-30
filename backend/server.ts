@@ -10,7 +10,6 @@ import express from "express";
 import morgan from "morgan";
 import type { Request, Response } from "express";
 import { createInterface } from "node:readline/promises";
-import cors from "npm:cors@2.8.5";
 
 import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
@@ -26,6 +25,19 @@ import { pathToFileURL } from "node:url";
 async function setup() {
   await setupResources();
   await ensureAllCollectionsExist();
+}
+
+function cors() {
+  return (req: Request, res: Response, next: () => void) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") {
+      res.status(200).end();
+      return;
+    }
+    next();
+  };
 }
 
 async function startProdServer(host: string, port: number) {
@@ -53,10 +65,6 @@ async function startProdServer(host: string, port: number) {
       route: new URL(req.url, "http://localhost").pathname,
     });
     next();
-  });
-
-  app.get("/healthz", (_req: Request, res: Response) => {
-    res.status(200).json({ ok: true });
   });
 
   app.use((req: Request, _res: Response, next: () => void) => {
@@ -95,9 +103,10 @@ async function startDevServer(host: string, port: number) {
     server: {
       host,
       port,
-      cors: true,
     },
   });
+
+  server.middlewares.use(cors());
 
   await server.listen();
 
