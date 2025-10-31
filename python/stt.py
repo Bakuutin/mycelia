@@ -6,12 +6,32 @@ import argparse
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
+import logging
+from logging.handlers import RotatingFileHandler
+from tqdm import tqdm
 from lib.config import get_url
 
 from lib.transcription import known_errors, remove_if_lonely
 from utils import lazy, mongo
 
 STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087').rstrip('/')
+
+LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(
+            os.path.join(LOG_DIR, 'stt.log'),
+            maxBytes=10*1024*1024,
+            backupCount=5
+        ),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 from datetime import datetime
@@ -59,7 +79,7 @@ class SpeechSequence(BaseModel):
 
 
 def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iterator[SpeechSequence]:
-    print('getting speech sequences')
+    logger.info(f'Getting speech sequences (limit={limit})')
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
     yielded = 0
 
@@ -108,7 +128,7 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
                 chunks=[]
             )
             except Exception as e:
-                print(f"Error creating speech sequence for {original_id}: {e}")
+                logger.error(f"Error creating speech sequence for {original_id}: {e}")
                 continue
 
         seq.chunks.append(chunk)
@@ -130,44 +150,102 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
         for seq in sequences_by_id.values():
             yield seq
     else:
-        print(f'{len(sequences_by_id)} sequences left to yield')
+        logger.info(f'{len(sequences_by_id)} sequences left to yield')
         for seq in sequences_by_id.values():
-            print(seq.start.strftime("%Y-%m-%d %H:%M:%S"), len(seq.chunks))
+            logger.info(f'{seq.start.strftime("%Y-%m-%d %H:%M:%S")} {len(seq.chunks)} chunks')
 
 
 def process_sequence(sequence: SpeechSequence):
+    start_time = time.time()
     try:
-        print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started')
-        start = time.time()
+        logger.info(f'Processing sequence: {sequence.start.strftime("%Y-%m-%d %H:%M:%S")} | {len(sequence.chunks)} chunks | ID: {str(sequence.original_id)}')
         result = transcribe_sequence(sequence)
+
         mark_as_transcribed(sequence)
-        end = time.time()
-        print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {end - start}s {"empty" if result is NO_SPEECH_DETECTED else "transcribed"}')
+
+        end_time = time.time()
+        status = "empty" if result is NO_SPEECH_DETECTED else "transcribed"
+        logger.info(f'Completed sequence: {sequence.start.strftime("%Y-%m-%d %H:%M:%S")} | {len(sequence.chunks)} chunks | {end_time - start_time:.2f}s | {status}')
+        return status
     except Exception as e:
-        print(f"Error processing sequence starting at {sequence.start}: {e}")
+        end_time = time.time()
+        logger.error(f"Error processing sequence at {sequence.start} after {end_time - start_time:.2f}s: {e}", exc_info=True)
+        return "error"
 
 
 
 def process_speech_sequences(limit=None, max_workers=1):
-    processed_count = 0
-    batch_size = min(limit, 1000) if limit is not None else 1000
+    base_filters = {
+        'transcribed_at': {'$eq': None},
+        'vad.has_speech': True
+    }
 
-    while True:
-        for sequence in get_speech_sequences(limit=batch_size):
-            process_sequence(sequence)
-            processed_count += 1
-            if limit and processed_count >= limit:
-                return
-    # while limit is None or processed_count < limit:
-    #     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-    #         futures = []
-    #         for sequence in get_speech_sequences(limit=batch_size):
-    #             futures.append(executor.submit(process_sequence, sequence))
-    #             print(f'{len(futures)} futures scheduled')
-    #             while len(futures) >= max_workers:
-    #                 done, not_done = concurrent.futures.wait(futures, timeout=0.1)
-    #                 futures = list(not_done)
-    #                 processed_count += len(done)
+    total_pending = chunks.count_documents(base_filters)
+    logger.info(f'Total pending chunks: {total_pending}')
+    logger.info(f'Using {max_workers} parallel worker(s)')
+
+    if limit is not None:
+        total_to_process = min(limit, total_pending)
+    else:
+        total_to_process = total_pending
+
+    processed_count = 0
+    stats = {'transcribed': 0, 'empty': 0, 'error': 0}
+    batch_size = min(limit if limit else 1000, 1000)
+
+    with tqdm(total=total_to_process, desc="Processing sequences", unit="seq") as pbar:
+        if max_workers == 1:
+            while True:
+                batch_processed = 0
+                for sequence in get_speech_sequences(limit=batch_size):
+                    status = process_sequence(sequence)
+                    if status in stats:
+                        stats[status] += 1
+
+                    processed_count += 1
+                    batch_processed += 1
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        'transcribed': stats['transcribed'],
+                        'empty': stats['empty'],
+                        'errors': stats['error']
+                    })
+
+                    if limit and processed_count >= limit:
+                        logger.info(f"Completed processing. Stats: {stats}")
+                        return
+
+                if batch_processed == 0:
+                    logger.info("No more sequences to process")
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                while True:
+                    sequences = list(get_speech_sequences(limit=batch_size))
+                    if not sequences:
+                        logger.info("No more sequences to process")
+                        break
+
+                    futures = {executor.submit(process_sequence, seq): seq for seq in sequences}
+
+                    for future in concurrent.futures.as_completed(futures):
+                        status = future.result()
+                        if status in stats:
+                            stats[status] += 1
+
+                        processed_count += 1
+                        pbar.update(1)
+                        pbar.set_postfix({
+                            'transcribed': stats['transcribed'],
+                            'empty': stats['empty'],
+                            'errors': stats['error']
+                        })
+
+                        if limit and processed_count >= limit:
+                            logger.info(f"Completed processing. Stats: {stats}")
+                            return
+
+    logger.info(f"Completed processing. Stats: {stats}")
 
 
 def transcribe_sequence(sequence: SpeechSequence):
