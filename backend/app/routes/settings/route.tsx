@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Form, useActionData, useLoaderData } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import { Auth, authenticateOrRedirect } from "../../lib/auth/core.server.ts";
 import React from "react";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
@@ -12,10 +12,12 @@ import {
 } from "@/components/ui/card.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
+import { Loader2 } from "lucide-react";
 import { EJSON, ObjectId } from "bson";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { z } from "zod";
 import type { Policy } from "@/lib/auth/resources.ts";
+import { defaultResourceManager } from "@/lib/auth/resources.ts";
 
 const simplePolicySchema = z.object({
   resource: z.string(),
@@ -115,10 +117,52 @@ export async function action({ request }: ActionFunctionArgs) {
     return { updated: true } as const;
   }
 
+  if (intent === "recalculate-timeline") {
+    const recalculateAll = formData.get("recalculateAll") === "true";
+    const startStr = formData.get("start") as string;
+    const endStr = formData.get("end") as string;
+
+    console.log("Timeline recalculation requested:", { recalculateAll, startStr, endStr });
+
+    try {
+      const timelineResource = await defaultResourceManager.getResource(
+        "tech.mycelia.timeline",
+        auth
+      );
+
+      const requestData: any = { action: "recalculate" };
+
+      if (recalculateAll) {
+        requestData.all = true;
+      } else {
+        if (startStr) requestData.start = startStr;
+        if (endStr && endStr !== "now") {
+          requestData.end = endStr;
+        }
+      }
+
+      console.log("Calling timeline resource with:", requestData);
+      const result = await timelineResource(requestData);
+      console.log("Timeline recalculation completed:", result);
+
+      return { timelineRecalculated: result } as const;
+    } catch (error) {
+      console.error("Timeline recalculation error:", error);
+      return { error: error instanceof Error ? error.message : "Timeline recalculation failed" } as const;
+    }
+  }
+
   return { error: "Unknown action" } as const;
 }
 
 export default function Layout() {
+  const [timeRange, setTimeRange] = React.useState<"all" | "preset" | "custom">("preset");
+  const [presetRange, setPresetRange] = React.useState("7d");
+  const navigation = useNavigation();
+
+  const isRecalculating = navigation.state === "submitting" &&
+    navigation.formData?.get("intent") === "recalculate-timeline";
+
   const { auth, keys } = useLoaderData<
     {
       auth: Auth;
@@ -135,7 +179,13 @@ export default function Layout() {
     }
   >();
   const actionData = useActionData<
-    { created?: string; revoked?: boolean; updated?: boolean; error?: string }
+    {
+      created?: string;
+      revoked?: boolean;
+      updated?: boolean;
+      timelineRecalculated?: { success: boolean; duration: string; message: string };
+      error?: string;
+    }
   >();
 
   return (
@@ -145,6 +195,182 @@ export default function Layout() {
           <div className="text-xl font-semibold">Settings</div>
           <div className="text-sm text-gray-400">{auth.principal}</div>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Timeline Management</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-4">
+              <div className="text-sm text-gray-400">
+                Recalculate timeline histograms to update visualization data. This process updates the timeline charts from your selected time period up to now.
+              </div>
+
+              <Form method="post" className="flex flex-col gap-4">
+                <input type="hidden" name="intent" value="recalculate-timeline" />
+
+                <div className="grid gap-3">
+                  <Label>Time Range</Label>
+
+                  <div className="flex flex-col gap-2">
+                    <Label className="flex items-center gap-2 font-normal">
+                      <input
+                        type="radio"
+                        name="rangeType"
+                        value="preset"
+                        checked={timeRange === "preset"}
+                        onChange={(e) => e.target.checked && setTimeRange("preset")}
+                        className="rounded-full"
+                      />
+                      Quick select
+                    </Label>
+
+                    {timeRange === "preset" && (
+                      <select
+                        name="preset"
+                        value={presetRange}
+                        onChange={(e) => setPresetRange(e.target.value)}
+                        className="ml-6 rounded-md border bg-background p-2 text-sm"
+                      >
+                        <option value="1d">Last 24 hours → now</option>
+                        <option value="7d">Last 7 days → now</option>
+                        <option value="30d">Last 30 days → now</option>
+                        <option value="90d">Last 3 months → now</option>
+                        <option value="1y">Last year → now</option>
+                      </select>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <Label className="flex items-center gap-2 font-normal">
+                      <input
+                        type="radio"
+                        name="rangeType"
+                        value="all"
+                        checked={timeRange === "all"}
+                        onChange={(e) => e.target.checked && setTimeRange("all")}
+                        className="rounded-full"
+                      />
+                      All time (everything in database → now)
+                    </Label>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <Label className="flex items-center gap-2 font-normal">
+                      <input
+                        type="radio"
+                        name="rangeType"
+                        value="custom"
+                        checked={timeRange === "custom"}
+                        onChange={(e) => e.target.checked && setTimeRange("custom")}
+                        className="rounded-full"
+                      />
+                      Custom range
+                    </Label>
+
+                    {timeRange === "custom" && (
+                      <div className="ml-6 grid gap-3">
+                        <div className="grid gap-2">
+                          <Label htmlFor="start" className="text-sm">
+                            From (how far back)
+                          </Label>
+                          <Input
+                            id="start"
+                            name="start"
+                            placeholder="e.g. 7d, 1month, 2024-01-01"
+                          />
+                          <span className="text-xs text-gray-500">
+                            Use relative time (7d, 30d, 1month) or ISO date
+                          </span>
+                        </div>
+
+                        <div className="grid gap-2">
+                          <Label htmlFor="end" className="text-sm">
+                            To (usually "now")
+                          </Label>
+                          <Input
+                            id="end"
+                            name="end"
+                            placeholder="now or 2024-12-31"
+                            defaultValue="now"
+                          />
+                          <span className="text-xs text-gray-500">
+                            Leave as "now" or specify end date
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <input
+                  type="hidden"
+                  name="recalculateAll"
+                  value={timeRange === "all" ? "true" : "false"}
+                />
+                {timeRange === "preset" && (
+                  <>
+                    <input type="hidden" name="start" value={presetRange} />
+                    <input type="hidden" name="end" value="now" />
+                  </>
+                )}
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Button type="submit" disabled={isRecalculating}>
+                      {isRecalculating && (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      )}
+                      {isRecalculating ? "Recalculating..." : "Recalculate Timeline"}
+                    </Button>
+                    {!isRecalculating && (
+                      <span className="text-xs text-gray-500">
+                        {timeRange === "all" && "Will process all data"}
+                        {timeRange === "preset" && `Will process ${presetRange === "1d" ? "last 24 hours" : presetRange === "7d" ? "last 7 days" : presetRange === "30d" ? "last 30 days" : presetRange === "90d" ? "last 3 months" : "last year"}`}
+                        {timeRange === "custom" && "Will process custom range"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </Form>
+
+              {isRecalculating && (
+                <div className="rounded border bg-blue-500/10 border-blue-500/20 p-3">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                    <div className="text-sm text-blue-600">
+                      Processing timeline histograms...
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {timeRange === "all" && "Recalculating all data. This may take a while."}
+                    {timeRange === "preset" && `Recalculating ${presetRange === "1d" ? "last 24 hours" : presetRange === "7d" ? "last 7 days" : presetRange === "30d" ? "last 30 days" : presetRange === "90d" ? "last 3 months" : "last year"} of data.`}
+                    {timeRange === "custom" && "Recalculating custom range. This may take a while."}
+                  </div>
+                </div>
+              )}
+
+              {actionData?.timelineRecalculated && !isRecalculating && (
+                <div className="rounded border bg-emerald-500/10 border-emerald-500/20 p-3">
+                  <div className="text-sm text-emerald-600">
+                    ✓ {actionData.timelineRecalculated.message}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    Completed in {actionData.timelineRecalculated.duration}
+                  </div>
+                </div>
+              )}
+
+              {actionData?.error && !isRecalculating && (
+                <div className="rounded border bg-red-500/10 border-red-500/20 p-3">
+                  <div className="text-sm text-red-600">
+                    ✗ Error: {actionData.error}
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
