@@ -212,7 +212,6 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
         worker_id = f"{socket.gethostname()}_{os.getpid()}"
 
     tqdm.write(f'Worker ID: {worker_id}')
-
     tqdm.write(f'Using {max_workers} parallel worker(s)')
 
     processed_count = 0
@@ -221,9 +220,9 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
     batch_size = min(limit if limit else 1000, 1000)
 
     total = limit if limit else None
+    bar_format = '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}, {postfix}]' if total else '{n_fmt} [{elapsed}, {rate_fmt}, {postfix}]'
 
-    with tqdm(total=total, desc="Processing", unit="seq",
-              bar_format='{n_fmt}' + ('/{total_fmt}' if total else '') + ' [{elapsed}, {rate_fmt}, {postfix}]') as pbar:
+    with tqdm(total=total, desc="Processing", unit="seq", bar_format=bar_format) as pbar:
 
         if max_workers == 1:
             while True:
