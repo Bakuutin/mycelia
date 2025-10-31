@@ -78,13 +78,14 @@ class SpeechSequence(BaseModel):
 
 
 
-def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iterator[SpeechSequence]:
+def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_id=None) -> Iterator[SpeechSequence]:
     logger.info(f'Getting speech sequences (limit={limit})')
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
     yielded = 0
 
     base_filters = {
         'transcribed_at': {'$eq': None},
+        'processing_by': {'$eq': None},
         'vad.has_speech': True
     }
 
@@ -155,9 +156,33 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
             logger.info(f'{seq.start.strftime("%Y-%m-%d %H:%M:%S")} {len(seq.chunks)} chunks')
 
 
-def process_sequence(sequence: SpeechSequence):
+def claim_sequence(seq: SpeechSequence, worker_id: str) -> bool:
+    result = chunks.update_many(
+        {
+            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
+            'processing_by': None
+        },
+        {'$set': {'processing_by': worker_id, 'claimed_at': datetime.now(tz=UTC)}}
+    )
+    return result.modified_count == len(seq.chunks)
+
+
+def release_sequence(seq: SpeechSequence):
+    chunks.update_many(
+        {
+            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]}
+        },
+        {'$set': {'processing_by': None, 'claimed_at': None}}
+    )
+
+
+def process_sequence(sequence: SpeechSequence, worker_id: str):
     start_time = time.time()
     try:
+        if not claim_sequence(sequence, worker_id):
+            logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t already claimed by another worker')
+            return "skipped"
+
         logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started')
         result = transcribe_sequence(sequence)
 
@@ -169,12 +194,14 @@ def process_sequence(sequence: SpeechSequence):
         return status
     except requests.exceptions.ReadTimeout as e:
         end_time = time.time()
+        release_sequence(sequence)
         logger.error(f'\n{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started\n')
         logger.error(f'Error processing sequence starting at {sequence.start}: {e}')
         logger.error(f'Fix: Increase timeout in transcribe_sequence() or check if STT server at {STT_SERVER_URL} is responding slowly\n')
         return "error"
     except Exception as e:
         end_time = time.time()
+        release_sequence(sequence)
         logger.error(f'\n{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started\n')
         logger.error(f'Error processing sequence starting at {sequence.start}: {e}')
         logger.error(f'Duration: {end_time - start_time:.2f}s\n')
@@ -182,7 +209,13 @@ def process_sequence(sequence: SpeechSequence):
 
 
 
-def process_speech_sequences(limit=None, max_workers=1):
+def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
+    import socket
+    if worker_id is None:
+        worker_id = f"{socket.gethostname()}_{os.getpid()}"
+
+    logger.info(f'Worker ID: {worker_id}')
+
     base_filters = {
         'transcribed_at': {'$eq': None},
         'vad.has_speech': True
@@ -198,25 +231,28 @@ def process_speech_sequences(limit=None, max_workers=1):
         total_to_process = total_pending
 
     processed_count = 0
-    stats = {'transcribed': 0, 'empty': 0, 'error': 0}
+    stats = {'transcribed': 0, 'empty': 0, 'error': 0, 'skipped': 0}
     batch_size = min(limit if limit else 1000, 1000)
 
     with tqdm(total=total_to_process, desc="Processing sequences", unit="seq") as pbar:
         if max_workers == 1:
             while True:
                 batch_processed = 0
-                for sequence in get_speech_sequences(limit=batch_size):
-                    status = process_sequence(sequence)
+                for sequence in get_speech_sequences(limit=batch_size, worker_id=worker_id):
+                    status = process_sequence(sequence, worker_id)
                     if status in stats:
                         stats[status] += 1
 
-                    processed_count += 1
-                    batch_processed += 1
+                    if status != "skipped":
+                        processed_count += 1
+                        batch_processed += 1
+
                     pbar.update(1)
                     pbar.set_postfix({
                         'transcribed': stats['transcribed'],
                         'empty': stats['empty'],
-                        'errors': stats['error']
+                        'errors': stats['error'],
+                        'skipped': stats['skipped']
                     })
 
                     if limit and processed_count >= limit:
@@ -229,24 +265,27 @@ def process_speech_sequences(limit=None, max_workers=1):
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 while True:
-                    sequences = list(get_speech_sequences(limit=batch_size))
+                    sequences = list(get_speech_sequences(limit=batch_size, worker_id=worker_id))
                     if not sequences:
                         logger.info("No more sequences to process")
                         break
 
-                    futures = {executor.submit(process_sequence, seq): seq for seq in sequences}
+                    futures = {executor.submit(process_sequence, seq, worker_id): seq for seq in sequences}
 
                     for future in concurrent.futures.as_completed(futures):
                         status = future.result()
                         if status in stats:
                             stats[status] += 1
 
-                        processed_count += 1
+                        if status != "skipped":
+                            processed_count += 1
+
                         pbar.update(1)
                         pbar.set_postfix({
                             'transcribed': stats['transcribed'],
                             'empty': stats['empty'],
-                            'errors': stats['error']
+                            'errors': stats['error'],
+                            'skipped': stats['skipped']
                         })
 
                         if limit and processed_count >= limit:
