@@ -50,17 +50,17 @@ def wav_to_array(source: io.BytesIO) -> np.ndarray:
     if wav_file.getnchannels() != 1:
         raise ValueError("WAV file must be mono")
     frames = wav_file.readframes(wav_file.getnframes())
-    
-    # Get sample width to determine dtype
+
     if wav_file.getsampwidth() == 2:
         data = np.frombuffer(frames, dtype=np.int16)
+        max_val = np.iinfo(np.int16).max
     elif wav_file.getsampwidth() == 4:
         data = np.frombuffer(frames, dtype=np.int32)
+        max_val = np.iinfo(np.int32).max
     else:
         raise ValueError("Unsupported sample width")
-        
-    # Normalize to float between -1.0 and 1.0
-    return data.astype(np.float32) / np.info(data.dtype).max
+
+    return data.astype(np.float32) / max_val
 
 def read_codec(source: bytes, codec: str = "opus", sample_rate: int = sample_rate) -> np.ndarray:
     process: subprocess.Popen = (
@@ -80,7 +80,7 @@ def read_codec(source: bytes, codec: str = "opus", sample_rate: int = sample_rat
             pipe_stderr=True  # Capture any errors
         )
     )
-            
+
     output_data, stderr = process.communicate(input=source)
 
     if process.returncode != 0:
@@ -92,7 +92,7 @@ async def file_to_array(file: UploadFile) -> np.ndarray:
     contents = await file.read()
     if not contents:
         return np.array([])
-    
+
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, read_codec, contents)
 
@@ -106,14 +106,14 @@ app = FastAPI(
 async def transcribe(files: list[UploadFile] = File(...)):
     try:
         tasks = [file_to_array(file) for file in files]
-        
+
         if not tasks:
             raise HTTPException(status_code=400, detail="No files provided")
 
         sound = np.concatenate(await asyncio.gather(*tasks))
 
         segments, info = model.transcribe(sound, multilingual=True)
-        
+
         return {
             'language': info.language,
             'top_language_probs': info.all_language_probs[:5],
