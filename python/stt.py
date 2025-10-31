@@ -327,4 +327,4 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=None)
     args = parser.parse_args()
-    process_speech_sequences(limit=args.limit, max_workers=5)
+    process_speech_sequences(limit=args.limit, max_workers=1)
