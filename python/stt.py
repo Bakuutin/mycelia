@@ -21,7 +21,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(message)s',
     handlers=[
         RotatingFileHandler(
             os.path.join(LOG_DIR, 'stt.log'),
@@ -158,18 +158,26 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
 def process_sequence(sequence: SpeechSequence):
     start_time = time.time()
     try:
-        logger.info(f'Processing sequence: {sequence.start.strftime("%Y-%m-%d %H:%M:%S")} | {len(sequence.chunks)} chunks | ID: {str(sequence.original_id)}')
+        logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started')
         result = transcribe_sequence(sequence)
 
         mark_as_transcribed(sequence)
 
         end_time = time.time()
         status = "empty" if result is NO_SPEECH_DETECTED else "transcribed"
-        logger.info(f'Completed sequence: {sequence.start.strftime("%Y-%m-%d %H:%M:%S")} | {len(sequence.chunks)} chunks | {end_time - start_time:.2f}s | {status}')
+        logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {end_time - start_time}s {status}')
         return status
+    except requests.exceptions.ReadTimeout as e:
+        end_time = time.time()
+        logger.error(f'\n{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started\n')
+        logger.error(f'Error processing sequence starting at {sequence.start}: {e}')
+        logger.error(f'Fix: Increase timeout in transcribe_sequence() or check if STT server at {STT_SERVER_URL} is responding slowly\n')
+        return "error"
     except Exception as e:
         end_time = time.time()
-        logger.error(f"Error processing sequence at {sequence.start} after {end_time - start_time:.2f}s: {e}", exc_info=True)
+        logger.error(f'\n{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started\n')
+        logger.error(f'Error processing sequence starting at {sequence.start}: {e}')
+        logger.error(f'Duration: {end_time - start_time:.2f}s\n')
         return "error"
 
 
@@ -260,7 +268,7 @@ def transcribe_sequence(sequence: SpeechSequence):
                                 for i, chunk in enumerate(reversed(sequence.chunks))
                             ],
                             headers=headers,
-                            timeout=5 + len(sequence.chunks) * 3
+                            timeout=30 + len(sequence.chunks) * 10
     )
     response.raise_for_status()  # Raise an exception for bad status codes
 
