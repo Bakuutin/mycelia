@@ -8,7 +8,6 @@ import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from logging.handlers import RotatingFileHandler
-from tqdm import tqdm
 from lib.config import get_url
 
 from lib.transcription import known_errors, remove_if_lonely
@@ -225,72 +224,56 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
     logger.info(f'Total pending chunks: {total_pending}')
     logger.info(f'Using {max_workers} parallel worker(s)')
 
-    if limit is not None:
-        total_to_process = min(limit, total_pending)
-    else:
-        total_to_process = total_pending
-
     processed_count = 0
     stats = {'transcribed': 0, 'empty': 0, 'error': 0, 'skipped': 0}
     batch_size = min(limit if limit else 1000, 1000)
 
-    with tqdm(total=total_to_process, desc="Processing sequences", unit="seq") as pbar:
-        if max_workers == 1:
+    if max_workers == 1:
+        while True:
+            batch_processed = 0
+            for sequence in get_speech_sequences(limit=batch_size, worker_id=worker_id):
+                status = process_sequence(sequence, worker_id)
+                if status in stats:
+                    stats[status] += 1
+
+                if status != "skipped":
+                    processed_count += 1
+                    batch_processed += 1
+
+                if processed_count % 10 == 0:
+                    logger.info(f"Progress: {processed_count} sequences processed. Stats: {stats}")
+
+                if limit and processed_count >= limit:
+                    logger.info(f"Completed processing. Stats: {stats}")
+                    return
+
+            if batch_processed == 0:
+                logger.info("No more sequences to process")
+                break
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             while True:
-                batch_processed = 0
-                for sequence in get_speech_sequences(limit=batch_size, worker_id=worker_id):
-                    status = process_sequence(sequence, worker_id)
+                sequences = list(get_speech_sequences(limit=batch_size, worker_id=worker_id))
+                if not sequences:
+                    logger.info("No more sequences to process")
+                    break
+
+                futures = {executor.submit(process_sequence, seq, worker_id): seq for seq in sequences}
+
+                for future in concurrent.futures.as_completed(futures):
+                    status = future.result()
                     if status in stats:
                         stats[status] += 1
 
                     if status != "skipped":
                         processed_count += 1
-                        batch_processed += 1
 
-                    pbar.update(1)
-                    pbar.set_postfix({
-                        'transcribed': stats['transcribed'],
-                        'empty': stats['empty'],
-                        'errors': stats['error'],
-                        'skipped': stats['skipped']
-                    })
+                    if processed_count % 10 == 0:
+                        logger.info(f"Progress: {processed_count} sequences processed. Stats: {stats}")
 
                     if limit and processed_count >= limit:
                         logger.info(f"Completed processing. Stats: {stats}")
                         return
-
-                if batch_processed == 0:
-                    logger.info("No more sequences to process")
-                    break
-        else:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                while True:
-                    sequences = list(get_speech_sequences(limit=batch_size, worker_id=worker_id))
-                    if not sequences:
-                        logger.info("No more sequences to process")
-                        break
-
-                    futures = {executor.submit(process_sequence, seq, worker_id): seq for seq in sequences}
-
-                    for future in concurrent.futures.as_completed(futures):
-                        status = future.result()
-                        if status in stats:
-                            stats[status] += 1
-
-                        if status != "skipped":
-                            processed_count += 1
-
-                        pbar.update(1)
-                        pbar.set_postfix({
-                            'transcribed': stats['transcribed'],
-                            'empty': stats['empty'],
-                            'errors': stats['error'],
-                            'skipped': stats['skipped']
-                        })
-
-                        if limit and processed_count >= limit:
-                            logger.info(f"Completed processing. Stats: {stats}")
-                            return
 
     logger.info(f"Completed processing. Stats: {stats}")
 
