@@ -8,6 +8,7 @@ import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from logging.handlers import RotatingFileHandler
+from tqdm import tqdm
 from lib.config import get_url
 
 from lib.transcription import known_errors, remove_if_lonely
@@ -78,7 +79,6 @@ class SpeechSequence(BaseModel):
 
 
 def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_id=None) -> Iterator[SpeechSequence]:
-    logger.info(f'Getting speech sequences (limit={limit})')
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
     yielded = 0
 
@@ -128,7 +128,7 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_
                 chunks=[]
             )
             except Exception as e:
-                logger.error(f"Error creating speech sequence for {original_id}: {e}")
+                tqdm.write(f"ERROR: Creating speech sequence for {original_id}: {e}")
                 continue
 
         seq.chunks.append(chunk)
@@ -149,10 +149,6 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_
     if limit is None or yielded < limit:
         for seq in sequences_by_id.values():
             yield seq
-    else:
-        logger.info(f'{len(sequences_by_id)} sequences left to yield')
-        for seq in sequences_by_id.values():
-            logger.info(f'{seq.start.strftime("%Y-%m-%d %H:%M:%S")} {len(seq.chunks)} chunks')
 
 
 def claim_sequence(seq: SpeechSequence, worker_id: str) -> bool:
@@ -177,34 +173,35 @@ def release_sequence(seq: SpeechSequence):
 
 def process_sequence(sequence: SpeechSequence, worker_id: str):
     start_time = time.time()
+    timestamp = sequence.start.strftime("%Y-%m-%d %H:%M:%S")
+    chunks_count = len(sequence.chunks)
+    original_id = str(sequence.original_id)
+
     try:
         if not claim_sequence(sequence, worker_id):
-            logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t already claimed by another worker')
+            tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  skipped (claimed)')
             return {"status": "skipped", "chunks": 0, "duration": 0}
 
-        logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started')
         result = transcribe_sequence(sequence)
-
         mark_as_transcribed(sequence)
 
         end_time = time.time()
         duration = end_time - start_time
         status = "empty" if result is NO_SPEECH_DETECTED else "transcribed"
-        logger.info(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {duration:.2f}s {status}')
-        return {"status": status, "chunks": len(sequence.chunks), "duration": duration}
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  {duration:5.2f}s  {status}')
+        return {"status": status, "chunks": chunks_count, "duration": duration}
+
     except requests.exceptions.ReadTimeout as e:
         end_time = time.time()
         release_sequence(sequence)
-        logger.error(f'\n{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started\n')
-        logger.error(f'Error processing sequence starting at {sequence.start}: {e}')
-        logger.error(f'Fix: Increase timeout in transcribe_sequence() or check if STT server at {STT_SERVER_URL} is responding slowly\n')
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout')
+        tqdm.write(f'  → Increase timeout or check STT server at {STT_SERVER_URL}')
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
+
     except Exception as e:
         end_time = time.time()
         release_sequence(sequence)
-        logger.error(f'\n{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started\n')
-        logger.error(f'Error processing sequence starting at {sequence.start}: {e}')
-        logger.error(f'Duration: {end_time - start_time:.2f}s\n')
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)}')
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
 
@@ -214,82 +211,44 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
     if worker_id is None:
         worker_id = f"{socket.gethostname()}_{os.getpid()}"
 
-    logger.info(f'Worker ID: {worker_id}')
+    tqdm.write(f'Worker ID: {worker_id}')
 
-    base_filters = {
-        'transcribed_at': {'$eq': None},
-        'vad.has_speech': True
-    }
+    tqdm.write(f'Using {max_workers} parallel worker(s)')
 
-    total_pending = chunks.count_documents(base_filters)
-    logger.info(f'Total pending chunks: {total_pending}')
-    logger.info(f'Using {max_workers} parallel worker(s)')
-
-    start_time = time.time()
     processed_count = 0
     stats = {'transcribed': 0, 'empty': 0, 'error': 0, 'skipped': 0}
     total_chunks = 0
-    total_duration = 0.0
     batch_size = min(limit if limit else 1000, 1000)
 
-    if max_workers == 1:
-        while True:
-            batch_processed = 0
-            for sequence in get_speech_sequences(limit=batch_size, worker_id=worker_id):
-                result = process_sequence(sequence, worker_id)
-                status = result["status"]
+    total = limit if limit else None
 
-                if status in stats:
-                    stats[status] += 1
+    with tqdm(total=total, desc="Processing", unit="seq",
+              bar_format='{n_fmt}' + ('/{total_fmt}' if total else '') + ' [{elapsed}, {rate_fmt}, {postfix}]') as pbar:
 
-                total_chunks += result["chunks"]
-                total_duration += result["duration"]
-
-                if status != "skipped":
-                    processed_count += 1
-                    batch_processed += 1
-
-                if processed_count % 10 == 0:
-                    elapsed = time.time() - start_time
-                    avg_per_seq = elapsed / processed_count if processed_count > 0 else 0
-                    logger.info(f"Progress: {processed_count} sequences, {total_chunks} chunks, {elapsed:.1f}s elapsed, {avg_per_seq:.2f}s/seq. Stats: {stats}")
-
-                if limit and processed_count >= limit:
-                    break
-
-            if limit and processed_count >= limit:
-                break
-
-            if batch_processed == 0:
-                logger.info("No more sequences to process")
-                break
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        if max_workers == 1:
             while True:
-                sequences = list(get_speech_sequences(limit=batch_size, worker_id=worker_id))
-                if not sequences:
-                    logger.info("No more sequences to process")
-                    break
-
-                futures = {executor.submit(process_sequence, seq, worker_id): seq for seq in sequences}
-
-                for future in concurrent.futures.as_completed(futures):
-                    result = future.result()
+                batch_processed = 0
+                for sequence in get_speech_sequences(limit=batch_size, worker_id=worker_id):
+                    result = process_sequence(sequence, worker_id)
                     status = result["status"]
 
                     if status in stats:
                         stats[status] += 1
 
                     total_chunks += result["chunks"]
-                    total_duration += result["duration"]
 
                     if status != "skipped":
                         processed_count += 1
+                        batch_processed += 1
 
-                    if processed_count % 10 == 0:
-                        elapsed = time.time() - start_time
-                        avg_per_seq = elapsed / processed_count if processed_count > 0 else 0
-                        logger.info(f"Progress: {processed_count} sequences, {total_chunks} chunks, {elapsed:.1f}s elapsed, {avg_per_seq:.2f}s/seq. Stats: {stats}")
+                    pbar.update(1)
+                    pbar.set_postfix(
+                        transcribed=stats['transcribed'],
+                        empty=stats['empty'],
+                        errors=stats['error'],
+                        skipped=stats['skipped'],
+                        chunks=total_chunks
+                    )
 
                     if limit and processed_count >= limit:
                         break
@@ -297,24 +256,50 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
                 if limit and processed_count >= limit:
                     break
 
-    elapsed = time.time() - start_time
+                if batch_processed == 0:
+                    tqdm.write("\nNo more sequences to process")
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                while True:
+                    sequences = list(get_speech_sequences(limit=batch_size, worker_id=worker_id))
+                    if not sequences:
+                        tqdm.write("\nNo more sequences to process")
+                        break
 
-    logger.info("=" * 80)
-    logger.info(f"Processing completed")
-    logger.info(f"Total sequences processed: {processed_count}")
-    logger.info(f"Total chunks processed: {total_chunks}")
-    logger.info(f"Total elapsed time: {elapsed:.1f}s ({elapsed/60:.1f} min)")
-    logger.info(f"Status breakdown: {stats}")
+                    futures = {executor.submit(process_sequence, seq, worker_id): seq for seq in sequences}
 
-    if processed_count > 0:
-        logger.info(f"Average time per sequence: {elapsed/processed_count:.2f}s")
-        logger.info(f"Sequences per minute: {processed_count/(elapsed/60):.1f}")
+                    for future in concurrent.futures.as_completed(futures):
+                        result = future.result()
+                        status = result["status"]
 
-    if total_chunks > 0:
-        logger.info(f"Average time per chunk: {elapsed/total_chunks:.2f}s")
-        logger.info(f"Chunks per minute: {total_chunks/(elapsed/60):.1f}")
+                        if status in stats:
+                            stats[status] += 1
 
-    logger.info("=" * 80)
+                        total_chunks += result["chunks"]
+
+                        if status != "skipped":
+                            processed_count += 1
+
+                        pbar.update(1)
+                        pbar.set_postfix(
+                            transcribed=stats['transcribed'],
+                            empty=stats['empty'],
+                            errors=stats['error'],
+                            skipped=stats['skipped'],
+                            chunks=total_chunks
+                        )
+
+                        if limit and processed_count >= limit:
+                            break
+
+                    if limit and processed_count >= limit:
+                        break
+
+    tqdm.write("\n" + "=" * 80)
+    tqdm.write(f"Completed: {processed_count} sequences, {total_chunks} chunks")
+    tqdm.write(f"Stats: transcribed={stats['transcribed']}, empty={stats['empty']}, errors={stats['error']}, skipped={stats['skipped']}")
+    tqdm.write("=" * 80)
 
 
 def transcribe_sequence(sequence: SpeechSequence):
