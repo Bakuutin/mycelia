@@ -66,6 +66,7 @@ export interface SearchableSelectSingleProps
 		VariantProps<typeof selectVariants> {
 	options: SelectOption[] | SelectGroup[];
 	onValueChange: (value: string | undefined) => void;
+	onSearchChange?: (searchValue: string) => void;
 	defaultValue?: string;
 	placeholder?: string;
 	animation?: number;
@@ -117,6 +118,7 @@ export const SearchableSelectSingle = React.forwardRef<
 		{
 			options,
 			onValueChange,
+			onSearchChange,
 			variant,
 			defaultValue,
 			placeholder = "Select option",
@@ -433,6 +435,10 @@ export const SearchableSelectSingle = React.forwardRef<
 		}, [isPopoverOpen]);
 
 		React.useEffect(() => {
+			onSearchChange?.(searchValue);
+		}, [searchValue, onSearchChange]);
+
+		React.useEffect(() => {
 			const allOptions = getAllOptions();
 			const totalOptions = allOptions.filter((opt) => !opt.disabled).length;
 
@@ -508,10 +514,8 @@ export const SearchableSelectSingle = React.forwardRef<
 							aria-describedby={`${triggerDescriptionId} ${selectedLabelId}`}
 							aria-label={`Select: ${selectedOption?.label || placeholder}`}
 							className={cn(
-								"flex px-3 py-2 rounded-md border min-h-10 h-auto items-center justify-between bg-inherit hover:bg-inherit [&_svg]:pointer-events-auto",
+								"flex px-3 py-2 rounded-md border h-8 items-center justify-between bg-inherit hover:bg-inherit [&_svg]:pointer-events-auto",
 								autoSize ? "w-auto" : "w-full",
-								responsiveSettings.compactMode && "min-h-8 text-sm py-1",
-								screenSize === "mobile" && "min-h-12 text-base",
 								disabled && "opacity-50 cursor-not-allowed",
 								className
 							)}
@@ -520,19 +524,16 @@ export const SearchableSelectSingle = React.forwardRef<
 								maxWidth: `min(${widthConstraints.maxWidth}, 100%)`,
 							}}>
 							{selectedOption ? (
-								<div className="flex items-center justify-between w-full">
+								<div className="flex items-center w-full">
 									<div className="flex items-center gap-2 flex-1 min-w-0">
 										{selectedOption.icon && !responsiveSettings.hideIcon && (
-											<selectedOption.icon className="h-4 w-4 text-muted-foreground" />
+											<selectedOption.icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
 										)}
-										<span className={cn(
-											"text-foreground flex-1 min-w-0",
-											screenSize === "mobile" && "truncate max-w-[200px]"
-										)}>
+										<span className="text-foreground flex-1 min-w-0 truncate">
 											{selectedOption.label}
 										</span>
 									</div>
-									<div className="flex items-center gap-2">
+									<div className="flex items-center gap-2 flex-shrink-0">
 										{allowClear && (
 											<>
 												<div
@@ -550,27 +551,27 @@ export const SearchableSelectSingle = React.forwardRef<
 														}
 													}}
 													aria-label="Clear selection"
-													className="flex items-center justify-center h-4 w-4 cursor-pointer text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 rounded-sm">
+													className="flex items-center justify-center h-4 w-4 cursor-pointer text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 rounded-sm flex-shrink-0">
 													<XIcon className="h-4 w-4" />
 												</div>
 												<Separator
 													orientation="vertical"
-													className="h-4"
+													className="h-4 flex-shrink-0"
 												/>
 											</>
 										)}
 										<ChevronDown
-											className="h-4 cursor-pointer text-muted-foreground"
+											className="h-4 cursor-pointer text-muted-foreground flex-shrink-0"
 											aria-hidden="true"
 										/>
 									</div>
 								</div>
 							) : (
-								<div className="flex items-center justify-between w-full">
-									<span className="text-sm text-muted-foreground">
+								<div className="flex items-center w-full">
+									<span className="text-sm text-muted-foreground flex-1 min-w-0 truncate">
 										{placeholder}
 									</span>
-									<ChevronDown className="h-4 cursor-pointer text-muted-foreground" />
+									<ChevronDown className="h-4 cursor-pointer text-muted-foreground flex-shrink-0" />
 								</div>
 							)}
 						</Button>

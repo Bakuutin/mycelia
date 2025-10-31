@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import type { Object, ObjectFormData } from '@/types/objects';
 import { zObject } from '@/types/objects';
@@ -60,11 +60,64 @@ const formatValue = (value: any): string => {
   return String(value);
 };
 
+// Custom hook for debounced auto-save
+function useDebouncedUpdate(
+  value: string,
+  delay: number,
+  onUpdate: (updates: Partial<ObjectFormData>) => Promise<void>,
+  fieldName: keyof ObjectFormData
+) {
+  const [localValue, setLocalValue] = useState(value);
+  const timeoutRef = useRef<number>();
+
+  // Update local value when prop changes (e.g., from server)
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  // Debounced update
+  useEffect(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    if (localValue !== value) {
+      timeoutRef.current = setTimeout(() => {
+        onUpdate({ [fieldName]: localValue } as Partial<ObjectFormData>);
+      }, delay);
+    }
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [localValue, value, delay, onUpdate, fieldName]);
+
+  return [localValue, setLocalValue] as const;
+}
+
 export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
   const [newFieldType, setNewFieldType] = useState<'string' | 'number' | 'boolean'>('string');
   const [showAddField, setShowAddField] = useState(false);
+
+  // Use debounced auto-save for name field
+  const [nameValue, setNameValue] = useDebouncedUpdate(
+    object.name || '',
+    500, // 500ms delay
+    onUpdate,
+    'name'
+  );
+
+  // Use debounced auto-save for details field
+  const [detailsValue, setDetailsValue] = useDebouncedUpdate(
+    object.details || '',
+    500, // 500ms delay
+    onUpdate,
+    'details'
+  );
 
 
   const extraFields = Object.entries(object).filter(
@@ -114,8 +167,8 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Label htmlFor="name" className="text-sm font-medium">Name</Label>
           <Input
             id="name"
-            value={object.name}
-            onChange={(e) => onUpdate({ name: e.target.value })}
+            value={nameValue}
+            onChange={(e) => setNameValue(e.target.value)}
             placeholder="Object name"
             className="mt-1"
           />
@@ -126,8 +179,8 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
         <Label htmlFor="details">Details</Label>
         <textarea
           id="details"
-          value={object.details || ""}
-          onChange={(e) => onUpdate({ details: e.target.value || undefined })}
+          value={detailsValue}
+          onChange={(e) => setDetailsValue(e.target.value)}
           placeholder="Optional details about this object"
           className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
@@ -213,17 +266,39 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
       </div>
 
       {object.isRelationship && object.relationship && (
-        <div>
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-end">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Label className="text-xs">Subject</Label>
+        <div className="space-y-4 min-w-0">
+          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-end min-w-0">
+            {/* Subject */}
+            <div className="space-y-2 min-w-0">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs font-medium">Subject</Label>
+                {object.relationship.subject && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        to={`/objects/${object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 p-1 hover:bg-muted rounded"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Open subject</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 {!object.relationship.symmetrical && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        className="flex items-center gap-1"
+                        className="flex items-center gap-1 p-1 hover:bg-muted rounded"
                         onClick={() => {
                           if (object.relationship) {
                             const newRelationship = {
@@ -244,7 +319,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   </Tooltip>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
                   value={object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}
                   onChange={(value) => {
@@ -257,22 +332,12 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                     }
                   }}
                   placeholder="Select a subject..."
-                  className="flex-1"
+                  className="min-w-0 flex-1"
                 />
-                {object.relationship.subject && (
-                  <Link
-                    to={`/objects/${object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Button variant="outline" size="icon" className="h-9 w-9">
-                      <ExternalLink className="w-4 h-4" />
-                    </Button>
-                  </Link>
-                )}
               </div>
             </div>
 
+            {/* Direction Toggle */}
             <div className="flex items-center justify-center">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -288,7 +353,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                         onUpdate({ relationship: newRelationship });
                       }
                     }}
-                    className="h-[40px] w-[40px] p-0"
+                    className="h-8 w-8 p-0"
                   >
                     {object.relationship.symmetrical ? (
                       <MoveHorizontal className="w-4 h-4" />
@@ -303,10 +368,33 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </Tooltip>
             </div>
 
-
-            <div>
-              <Label className="text-xs mb-1 block">Object</Label>
-              <div className="flex gap-2">
+            {/* Object */}
+            <div className="space-y-2 min-w-0">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs font-medium">Object</Label>
+                {object.relationship.object && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        to={`/objects/${object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 p-1 hover:bg-muted rounded"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Open object</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+              <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
                   value={object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}
                   onChange={(value) => {
@@ -319,23 +407,11 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                     }
                   }}
                   placeholder="Select an object..."
-                  className="flex-1"
+                  className="min-w-0 flex-1"
                 />
-                {object.relationship.object && (
-                  <Link
-                    to={`/objects/${object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Button variant="outline" size="icon" className="h-9 w-9">
-                      <ExternalLink className="w-4 h-4" />
-                    </Button>
-                  </Link>
-                )}
               </div>
             </div>
           </div>
-
         </div>
       )}
 

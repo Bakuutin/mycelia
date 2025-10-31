@@ -60,6 +60,42 @@ async function ensureGridFSBucketExists(
   await ensureCollectionExists(db, chunksCollectionName);
 }
 
+async function ensureIndexExists(
+  db: Db,
+  collectionName: string,
+  indexSpec: Record<string, any>,
+  indexName?: string,
+): Promise<void> {
+  const collection = db.collection(collectionName);
+  const indexes = await collection.listIndexes().toArray();
+  
+  const indexExists = indexes.some(index => {
+    if (indexName) {
+      return index.name === indexName;
+    }
+    // Compare index keys
+    return JSON.stringify(index.key) === JSON.stringify(indexSpec);
+  });
+
+  if (!indexExists) {
+    await collection.createIndex(indexSpec, { name: indexName });
+    console.log(`Created index on ${collectionName}: ${indexName || JSON.stringify(indexSpec)}`);
+  }
+}
+
+async function ensureObjectsIndexes(db: Db): Promise<void> {
+  await ensureIndexExists(
+    db,
+    "objects",
+    {
+      name: "text",
+      aliases: "text", 
+      details: "text"
+    },
+    "text_search_index"
+  );
+}
+
 export async function ensureAllCollectionsExist(): Promise<void> {
   const db = await getRootDB();
 
@@ -75,7 +111,12 @@ export async function ensureAllCollectionsExist(): Promise<void> {
     await ensureGridFSBucketExists(db, bucketName);
   }
 
+  console.log("Ensuring indexes exist...");
+  
+  // Ensure indexes for specific collections
+  await ensureObjectsIndexes(db);
+
   console.log(
-    `All collections verified (${regularCollections.length} regular collections, ${gridFSBuckets.length} GridFS buckets)`,
+    `All collections and indexes verified (${regularCollections.length} regular collections, ${gridFSBuckets.length} GridFS buckets)`,
   );
 }

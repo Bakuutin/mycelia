@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowLeft, ArrowLeftRight, Plus, X, MoveHorizontal, RefreshCcw } from 'lucide-react';
+import { ArrowRight, ArrowLeft, ArrowLeftRight, Plus, X, MoveHorizontal, RefreshCcw, Trash2 } from 'lucide-react';
 import type { Object } from '@/types/objects';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { EmojiPickerButton } from '@/components/ui/emoji-picker';
 import { ObjectSelectionDropdown } from '@/components/ObjectSelectionDropdown';
-import { getRelationships, useCreateObject } from "@/hooks/useObjectQueries.ts";
+import { getRelationships, useCreateObject, useDeleteObject } from "@/hooks/useObjectQueries.ts";
 import { ObjectId } from 'bson';
 import { formatTime, formatTimeRangeDuration } from '@/lib/formatTime';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -36,6 +36,7 @@ const renderIcon = (icon: any) => {
 export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
   const createObjectMutation = useCreateObject();
+  const deleteObjectMutation = useDeleteObject();
   const { timeFormat } = useSettingsStore();
   const now = useNow();
 
@@ -95,6 +96,17 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
       });
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Failed to create relationship');
+    }
+  };
+
+  const handleDeleteRelationship = async (relationshipId: string) => {
+    const confirmed = globalThis.confirm ? globalThis.confirm("Delete this relationship?") : true;
+    if (!confirmed) return;
+
+    try {
+      await deleteObjectMutation.mutateAsync(relationshipId);
+    } catch (err) {
+      console.error('Failed to delete relationship:', err);
     }
   };
 
@@ -280,9 +292,8 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
           </div>
         </div>
       )}
-      {!object.isRelationship && relationships.length > 0 && (
-        <div className="space-y-2">
-          <div className="grid gap-2">
+      {relationships.length > 0 && (
+          <div className="flex flex-col gap-2">
             {relationships.map(({ other, relationship }) => {
               // Determine if current object is subject or object in the relationship
               const isCurrentObjectSubject = relationship.relationship?.subject.toString() === object._id.toString();
@@ -296,18 +307,34 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                   {/* Horizontal relationship flow */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <Link to={`/objects/${relationship._id.toString()}`} className="flex items-center gap-2 min-w-0">
-                         
-                          <span className="text-lg">{renderIcon(relationship.icon)}</span>
-                          <span className="font-medium truncate">{relationship.name}</span>
+                      <Link to={`/objects/${relationship._id.toString()}`} className="flex items-center gap-2 flex-shrink-0">
+
+                          <span className="text-md">{renderIcon(relationship.icon)}</span>
+                          <span className="font-medium whitespace-nowrap">{relationship.name}</span>
 
                         <ArrowComponent className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                       </Link>
                       <Link to={`/objects/${other._id.toString()}`} className="flex items-center gap-2 min-w-0">
-                        <span className="text-lg">{renderIcon(other.icon)}</span>
+                        <span className="text-md">{renderIcon(other.icon)}</span>
                         <span className="font-medium truncate">{other.name}</span>
                       </Link>
                     </div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDeleteRelationship(relationship._id.toString())}
+                          disabled={deleteObjectMutation.isPending}
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Delete relationship</p>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
 
                   {/* Relationship description and time ranges below */}
@@ -348,10 +375,9 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
               );
             })}
           </div>
-        </div>
       )}
 
-      {!object.isRelationship && relationships.length === 0 && (
+      {relationships.length === 0 && (
         <div className="text-center py-8 text-muted-foreground">
           <p>No related objects found.</p>
           <p className="text-sm mt-1">Create relationship objects to link this object to others.</p>

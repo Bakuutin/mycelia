@@ -3,13 +3,15 @@ import type { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
 import { useObjects, useObjectsStore } from "./useObjects.ts";
 import { Button } from "@/components/ui/button.tsx";
 import type { Object } from "@/types/objects.ts";
-import { PlusIcon, RefreshCw } from "lucide-react";
+import { PlusIcon, RefreshCw, ArrowRight, ArrowLeft, ArrowLeftRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTimelineRange } from "../../stores/timelineRange.ts";
 import { useNow } from "@/hooks/useNow.ts";
+import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime.ts";
+import { useSettingsStore } from "@/stores/settingsStore.ts";
+import { getRelationships } from "@/hooks/useObjectQueries.ts";
 
-
-const laneHeight = 16;
+const laneHeight = 40; // Half the previous height for more compact display
 const topMargin = 4;
 
 
@@ -34,36 +36,92 @@ type PlacedObjectRange = {
 function RangeBox({ range }: { range: PlacedObjectRange }) {
   const navigate = useNavigate();
   const { start, end, startX, endX, lane, object } = range;
+  const { timeFormat } = useSettingsStore();
+  const now = useNow();
 
   const handleClick = () => {
     navigate(`/objects/${object._id.toString()}`);
   };
 
+  const renderIcon = (icon: any) => {
+    if (!icon) return '';
+    if (typeof icon === 'string') return icon;
+    if (icon.text) return icon.text;
+    if (icon.base64) return '📷';
+    return '';
+  };
+
+  const isRelationship = object.isRelationship;
+  const hasRelationshipData = object.relationship && object.subjectObject && object.objectObject;
+
   return (
     <g
-    style={{ cursor: 'pointer' }}
-    onClick={handleClick}
-  >
-    <rect
-      width={endX - startX}
-      height={laneHeight - 2}
-      fill='gray'
-      x={startX}
-      y={topMargin + lane * laneHeight}
-    />
-    {object.name && (
-      <foreignObject
-
+      style={{ cursor: 'pointer' }}
+      onClick={handleClick}
+    >
+      {/* Background rectangle */}
+      <rect
         width={endX - startX}
-        height={laneHeight}
-        className="text-[10px]"
+        height={laneHeight - 2}
+        fill={ object.color as string || '#6b7280'}
         x={startX}
-        y={topMargin + lane * laneHeight + 2}
+        y={topMargin + lane * laneHeight}
+        rx="4"
+        ry="4"
+      />
+      
+      {/* Content container */}
+      <foreignObject
+        width={endX - startX}
+        height={laneHeight - 2}
+        x={startX}
+        y={topMargin + lane * laneHeight}
+        className="p-2"
       >
-        {object.name}
+        <div className="h-full flex flex-col justify-center text-white">
+          {isRelationship && hasRelationshipData ? (
+            // Relationship display
+            <div className="space-y-0.5">
+              {/* Relationship name and icon */}
+              <div className="flex items-center gap-1 text-xs font-medium">
+                <span className="text-sm">{renderIcon(object.icon)}</span>
+                <span className="truncate">{object.name}</span>
+              </div>
+              
+              {/* Subject and Object with arrow - keep them close together */}
+              <div className="flex items-center gap-1 text-xs justify-start">
+                <div className="flex items-center gap-0.5">
+                  <span className="text-sm">{renderIcon(object.subjectObject?.icon)}</span>
+                  <span className="font-medium max-w-[80px]">{object.subjectObject?.name}</span>
+                </div>
+                
+                <div className="flex-shrink-0">
+                  {object.relationship?.symmetrical ? (
+                    <ArrowLeftRight className="w-2.5 h-2.5" />
+                  ) : (
+                    <ArrowRight className="w-2.5 h-2.5" />
+                  )}
+                </div>
+                
+                <div className="flex items-center gap-0.5">
+                  <span className="text-sm">{renderIcon(object.objectObject?.icon)}</span>
+                  <span className="font-medium max-w-[80px]">{object.objectObject?.name}</span>
+                </div>
+              </div>
+              
+            </div>
+          ) : (
+            // Regular object display
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-1 text-xs font-medium">
+                <span className="text-sm">{renderIcon(object.icon)}</span>
+                <span className="truncate">{object.name}</span>
+              </div>
+            </div>
+          )}
+        </div>
       </foreignObject>
-    )}
-  </g>
+    </g>
   );
 }
 
@@ -83,7 +141,6 @@ function flattenObjectsToRanges(objects: Object[]): ExtractedObjectRange[] {
       });
     });
   }
-
 
   return ranges;
 }
@@ -133,6 +190,8 @@ export const ObjectsLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { objects } = useObjects();
+      const { timeFormat } = useSettingsStore();
+      
       const ranges = useMemo(() => flattenObjectsToRanges(objects), [objects]);
       const { start, end } = useTimelineRange();
 

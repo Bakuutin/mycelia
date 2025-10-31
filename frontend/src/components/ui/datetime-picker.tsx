@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useMemo, useCallback, useEffect } from "react"
-import { X, Calendar as CalendarIcon } from "lucide-react"
+import { X, Calendar as CalendarIcon, Copy } from "lucide-react"
 
 import { useSettingsStore } from "@/stores/settingsStore"
 import { formatTime } from "@/lib/formatTime"
@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface NumberInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   id: string;
@@ -133,6 +134,18 @@ export function DateTimePicker({
     // If value is empty string, don't update
     if (value === '') return;
     
+    // Special handling for year field - check if it looks like a timestamp
+    if (field === 'year') {
+      const numValue = Number(value);
+      // Check if the value looks like a Unix timestamp (not in reasonable year range)
+      if (numValue > 1000000 || numValue < -1000000) {
+        // Treat as timestamp - convert to milliseconds and set directly
+        const timestampMs = numValue > 1000000000 ? numValue * 1000 : numValue;
+        setDate(timestampMs);
+        return;
+      }
+    }
+    
     const baseDate = selectedDate || new Date();
     const newDate = new Date(baseDate);
     
@@ -155,6 +168,16 @@ export function DateTimePicker({
     if (isoTS === 0) return "THE BEGINNING OF UNIX TIME!";
     return formatTime(selectedDate, timeFormat);
   }, [isoTS, timeFormat, selectedDate]);
+
+  const handleCopyTimestamp = useCallback(async () => {
+    if (isoTS === null) return;
+    
+    try {
+      await navigator.clipboard.writeText(isoTS.toString());
+    } catch (error) {
+      console.error('Failed to copy timestamp:', error);
+    }
+  }, [isoTS]);
 
   return (
     <div className="space-y-2 min-w-[250px]">
@@ -262,6 +285,27 @@ export function DateTimePicker({
           </PopoverContent>
           </Popover>
         </div>
+        {isoTS !== null && (
+          <div className="flex flex-col justify-end">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 w-8 p-0"
+                    onClick={handleCopyTimestamp}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Copy timestamp: {isoTS}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+        )}
         {nullable && (
           <div className="flex flex-col justify-end">
             <Button

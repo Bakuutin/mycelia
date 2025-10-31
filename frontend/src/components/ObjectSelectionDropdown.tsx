@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ObjectId } from 'bson';
 import { SearchableSelectSingle, type SelectOption } from '@/components/ui/searchable-select-single';
 import { Button } from '@/components/ui/button';
@@ -29,6 +29,7 @@ export function ObjectSelectionDropdown({
   className
 }: ObjectSelectionDropdownProps) {
   const createObjectMutation = useCreateObject();
+  const [searchValue, setSearchValue] = useState('');
 
   // Use search hook - always fetch all objects for dropdown
   const { data: searchResults = [] } = useObjectSearch('', 50);
@@ -49,8 +50,22 @@ export function ObjectSelectionDropdown({
       };
     });
 
+    // Add create option if there's a search value and no exact match
+    if (searchValue.trim()) {
+      const hasExactMatch = objectOptions.some((option: SelectOption) => 
+        option.label.toLowerCase() === searchValue.toLowerCase()
+      );
+      
+      if (!hasExactMatch) {
+        objectOptions.push({
+          label: `➕ Create "${searchValue}"`,
+          value: `__create__${searchValue}`,
+        });
+      }
+    }
+
     return objectOptions;
-  }, [searchResults]);
+  }, [searchResults, searchValue]);
 
   const handleCreateObject = async (objectName: string) => {
     if (!objectName.trim()) return;
@@ -71,7 +86,16 @@ export function ObjectSelectionDropdown({
   };
 
   const handleChange = (selectedValue: string) => {
-    onChange(selectedValue);
+    if (selectedValue.startsWith('__create__')) {
+      const objectName = selectedValue.replace('__create__', '');
+      handleCreateObject(objectName);
+    } else {
+      onChange(selectedValue);
+    }
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchValue(value);
   };
 
   const emptyIndicator = (searchValue: string) => {
@@ -108,6 +132,7 @@ export function ObjectSelectionDropdown({
         options={options}
         defaultValue={value}
         onValueChange={(value) => handleChange(value || '')}
+        onSearchChange={handleSearchChange}
         placeholder={placeholder}
         searchable
         className="w-full"
