@@ -26,6 +26,56 @@ import { shutdownTelemetry } from "@/lib/telemetry.ts";
 import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { pathToFileURL } from "node:url";
 
+let logFile: Deno.FsFile | null = null;
+
+function setupLogging() {
+  try {
+    logFile = Deno.openSync("server.log", { create: true, write: true, append: true });
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    const writeToLog = (args: any[], isError = false) => {
+      const timestamp = new Date().toISOString();
+      const message = args.map(arg => {
+        if (typeof arg === 'object') {
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        }
+        return String(arg);
+      }).join(' ');
+
+      const logLine = `[${timestamp}] ${isError ? 'ERROR' : 'INFO'}: ${message}\n`;
+
+      try {
+        originalLog(...args);
+        if (logFile) {
+          logFile.writeSync(new TextEncoder().encode(logLine));
+          logFile.syncDataSync();
+        }
+      } catch (e) {
+        originalError("Failed to write to log file:", e);
+      }
+    };
+
+    console.log = (...args: any[]) => writeToLog(args, false);
+    console.error = (...args: any[]) => writeToLog(args, true);
+
+    console.log("Logging initialized - logs will be written to server.log");
+  } catch (error) {
+    console.error("Failed to setup logging:", error);
+  }
+}
+
+function cleanupLogging() {
+  if (logFile) {
+    logFile.close();
+    logFile = null;
+  }
+}
+
 async function setup() {
   await setupResources();
   await ensureAllCollectionsExist();
@@ -157,6 +207,7 @@ async function startServer(host: string, port: number, isProduction: boolean) {
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await shutdownTelemetry();
+      cleanupLogging();
     });
   });
 }
@@ -284,8 +335,10 @@ async function configureCli() {
 }
 
 async function main() {
+  setupLogging();
   await setup();
   await configureCli();
+  cleanupLogging();
   exit(0);
 }
 
