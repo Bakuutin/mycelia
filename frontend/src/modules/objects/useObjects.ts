@@ -1,6 +1,5 @@
-import { create } from "zustand";
-import _ from "lodash";
 import { useEffect } from "react";
+import { create } from "zustand";
 import { Object } from "@/types/objects.ts";
 import { callResource } from "@/lib/api";
 
@@ -8,14 +7,26 @@ type ObjectsState = {
   objects: Object[];
   loading: boolean;
   refresh: () => Promise<void>;
+  fetchInitial: () => Promise<void>;
 };
 
-export const useObjectsStore = create<ObjectsState>((set) => ({
+export const useObjectsStore = create<ObjectsState>((set, get) => ({
   objects: [],
   loading: false,
   refresh: async () => {
     try {
       set({ loading: true });
+      const objects = await fetchObjects();
+      set({ objects });
+    } finally {
+      set({loading: false});
+    }
+  },
+  fetchInitial: async () => {
+    const state = get();
+    if (state.loading || state.objects.length > 0) return;
+    set({ loading: true });
+    try {
       const objects = await fetchObjects();
       set({ objects });
     } finally {
@@ -89,16 +100,13 @@ async function fetchObjects(): Promise<Object[]> {
 };
 
 export function useObjects() {
-  const { objects, refresh, loading } = useObjectsStore();
+  const { objects, loading } = useObjectsStore();
+  const refresh = useObjectsStore((state) => state.refresh);
+  const fetchInitial = useObjectsStore((state) => state.fetchInitial);
 
   useEffect(() => {
-    const run = _.debounce(async () => {
-      if (loading || objects.length > 0) return;
-      await refresh();
-    }, 100);
-    run();
-    return () => run.cancel();
-  }, [refresh, objects.length]);
+    fetchInitial();
+  }, [fetchInitial]);
 
   return { objects, refresh, loading };
 }
