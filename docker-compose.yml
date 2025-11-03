@@ -19,6 +19,14 @@ services:
     # command: ["mongod", "--keyFile", "/data/db/mongo-keyfile", "--bind_ip_all"]
     networks:
       - a5t
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    networks:
+      - a5t
   # app:
   #   build:
   #     context: ./backend
