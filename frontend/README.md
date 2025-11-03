@@ -36,6 +36,18 @@ deno task type-check
 deno lint
 ```
 
+## Docker (Production)
+
+Build and run via the root docker-compose (recommended):
+
+```bash
+# From repo root
+docker compose build frontend
+docker compose up -d frontend
+```
+
+Served at http://localhost:8080.
+
 ## Project Structure
 
 ```

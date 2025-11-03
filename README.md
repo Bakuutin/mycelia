@@ -105,16 +105,26 @@ deno task dev
 
 The backend will be available at http://localhost:5173/
 
-### 3. Frontend (Optional)
+### 3. Frontend
 
-To use the separate frontend application:
+#### Option A: Run via Docker Compose (production build)
+
+```bash
+# From repo root
+docker compose build frontend
+docker compose up -d frontend
+```
+
+Open http://localhost:8080.
+
+#### Option B: Run in dev mode (Deno + Vite)
 
 ```bash
 cd frontend
 deno task dev
 ```
 
-The frontend runs on http://localhost:3001/. Configure the backend URL and credentials in the settings page.
+Open http://localhost:3001. Configure backend URL and credentials in the settings page.
 
 ## Commands
 
