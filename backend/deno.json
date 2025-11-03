@@ -35,7 +35,8 @@
   "compilerOptions": {
     "lib": [
       "DOM",
-      "deno.window"
+      "deno.window",
+      "deno.ns"
     ],
     "types": [
       "@remix-run/node",

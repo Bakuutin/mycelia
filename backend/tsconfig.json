@@ -8,7 +8,7 @@
     "**/.client/**/*.tsx"
   ],
   "compilerOptions": {
-    "lib": ["DOM", "deno.window"],
+    "lib": ["DOM", "deno.window", "deno.ns"],
     "types": ["@remix-run/node", "vite/client"],
     "isolatedModules": true,
     "esModuleInterop": true,
