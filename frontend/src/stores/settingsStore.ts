@@ -39,7 +39,14 @@ interface SettingsState {
   clearSettings: () => void;
 }
 
-const DEFAULT_API_ENDPOINT = 'http://localhost:5173';
+function getDefaultApiEndpoint(): string {
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '8080') {
+    return 'http://host.docker.internal:5173';
+  }
+  return 'http://localhost:5173';
+}
+
+const DEFAULT_API_ENDPOINT = getDefaultApiEndpoint();
 const DEFAULT_TIME_FORMAT: TimeFormat = 'gregorian-local-iso';
 const DEFAULT_TRANSCRIPT_THRESHOLD_HOURS = 12;
 
