@@ -6,6 +6,7 @@ from datetime import timedelta, datetime
 from pathlib import Path
 from time import sleep
 from typing import Literal
+import argparse
 
 import pytz
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -13,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from lib import call_resource
-from lib.llm import small_llm
+from lib.llm import get_llm
 from lib.transcription import known_errors, asterisk_pattern, remove_if_lonely
 from lib.hist import Scale, SCALE_TO_RESOLUTION, date_to_bucket
 
@@ -29,7 +30,7 @@ def find_histogram_without_topics(scale: Scale, no_later_than: datetime | None =
     query = {"topics": {"$exists": False}}
     if no_later_than:
         query["start"] = {"$lte": no_later_than}
-        
+
     return call_resource(
         "tech.mycelia.mongo",
         {
@@ -45,7 +46,7 @@ def find_latest_transcript(no_later_than: datetime | None = None):
     query = {}
     if no_later_than:
         query["start"] = {"$lt": no_later_than}
-        
+
     return call_resource(
         "tech.mycelia.mongo",
         {
@@ -106,7 +107,7 @@ def get_segments(start, scale: Scale):
                 'text': s["text"].replace("\n", " "),
             })
             if s["text"].strip() in remove_if_lonely:
-                segments[-1]['suspect'] = True 
+                segments[-1]['suspect'] = True
 
     segments = sorted(segments, key=lambda x: x["start"])
 
@@ -153,7 +154,7 @@ def split_segments_into_blocks(segments, scale: Scale):
     if block:
         blocks.append(block)
 
-    print(f"Split into {len(blocks)} blocks") 
+    print(f"Split into {len(blocks)} blocks")
     return blocks
 
 #%%
@@ -173,7 +174,7 @@ extract_topics_tool = {
     "parameters": ExtractTopicsInput.model_json_schema()
 }
 
-tool_llm = small_llm.bind_tools([extract_topics_tool], tool_choice="extract_topics")
+tool_llm = get_llm("small").bind_tools([extract_topics_tool], tool_choice="extract_topics")
 
 prompts_path = Path(__file__).parent / "prompts.yml"
 with open(prompts_path, "r") as f:
@@ -188,50 +189,53 @@ def render_segments_for_llm(segments):
 
 scale = "5min"
 
-# %%
+def run(model: Literal["small", "medium", "large"]) -> None:
+    global tool_llm
+    tool_llm = get_llm(model).bind_tools([extract_topics_tool], tool_choice="extract_topics")
+    while True:
+        try:
+            current_time = find_next_interval_without_topics(scale)
 
-while True:
-    try:
-        current_time = find_next_interval_without_topics(scale)
-        
-        if current_time is None:
-            print("No intervals without topics found, waiting...")
+            if current_time is None:
+                print("No intervals without topics found, waiting...")
+                sleep(5)
+                continue
+
+            segments = get_segments(current_time, scale)
+            print(f"Processing interval starting at {current_time} with {len(segments)} segments")
+
+            topics = []
+            if segments:
+                response = tool_llm.invoke([
+                    SystemMessage(content=SYSTEM_PROMPT),
+                    HumanMessage(content=render_segments_for_llm(segments))
+                ])
+                if response.tool_calls:
+                    tool_call = response.tool_calls[0]
+                    extracted_topics = ExtractTopicsInput.model_validate(tool_call["args"])
+                    topics = [topic.model_dump() for topic in extracted_topics.topics]
+                print(f"Found {len(topics)} topics for {segments[0]['start'].isoformat()} - {segments[-1]['end'].isoformat()}")
+            else:
+                print("No segments in interval, marking as processed with zero topics")
+
+            call_resource(
+                "tech.mycelia.mongo",
+                {
+                    "action": "updateOne",
+                    "collection": f"histogram_{scale}",
+                    "query": {"start": date_to_bucket(current_time, scale)},
+                    "update": {"$set": {"topics": topics}},
+                }
+            )
+
+        except Exception as e:
+            print(f"Error in main loop: {e}")
+            errors.append(e)
             sleep(5)
-            continue
-            
-        segments = get_segments(current_time, scale)
-        print(f"Processing interval starting at {current_time} with {len(segments)} segments")
 
-        response = tool_llm.invoke([
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=render_segments_for_llm(segments))
-        ])
-        
-        topics = []
-        if response.tool_calls:
-            tool_call = response.tool_calls[0]
-            extracted_topics = ExtractTopicsInput.model_validate(tool_call["args"])
-            topics = [topic.model_dump() for topic in extracted_topics.topics]
-            
-        print(f"Found {len(topics)} topics for {segments[0]['start'].isoformat()} - {segments[-1]['end'].isoformat()}")
-        
-        call_resource(
-            "tech.mycelia.mongo",
-            {
-                "action": "updateOne",
-                "collection": f"histogram_{scale}",
-                "query": {"start": date_to_bucket(current_time, scale)},
-                "update": {"$set": {"topics": topics}},
-            }
-        )
 
-    except Exception as e:
-        print(f"Error in main loop: {e}")
-        errors.append(e)
-        sleep(5)
-
-# %%
-render_segments_for_llm(segments)
-# %%
-SYSTEM_PROMPT
-# %%
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Extract important topics for histogram intervals")
+    parser.add_argument("--model", choices=["small", "medium", "large"], default="small")
+    args = parser.parse_args()
+    run(args.model)
