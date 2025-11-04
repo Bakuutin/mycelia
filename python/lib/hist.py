@@ -30,25 +30,29 @@ def date_to_bucket(date: datetime, scale: Scale) -> datetime:
 
 def ensure_buckets_exist(start: datetime, end: datetime, scale: Scale):
     step = SCALE_TO_RESOLUTION[scale].total_seconds()
+    operations = [
+        {
+            "updateOne": {
+                "filter": {"start": datetime.fromtimestamp(bucket * step, tz=pytz.UTC)},
+                "update": {"$set": {"start": datetime.fromtimestamp(bucket * step, tz=pytz.UTC)}},
+                "upsert": True,
+            }
+        }
+        for bucket in range(
+            int(start.timestamp() // step) + 1,
+            int(end.timestamp() // step) - 1,
+        )
+    ]
+
+    if not operations:
+        return
 
     call_resource(
         "tech.mycelia.mongo",
         {
             "action": "bulkWrite",
             "collection": f"histogram_{scale}",
-            "operations": [
-                {
-                    "updateOne": {
-                        "filter": {"start": datetime.fromtimestamp(bucket * step, tz=pytz.UTC)},
-                        "update": {"$set": {"start": datetime.fromtimestamp(bucket * step, tz=pytz.UTC)}},
-                        "upsert": True,
-                    }
-                }
-                for bucket in range(
-                    int(start.timestamp() // step) + 1,
-                    int(end.timestamp() // step) - 1,
-                )
-            ]
+            "operations": operations,
         }
     )
 
@@ -63,7 +67,7 @@ def mark_buckets_as(
     ):
 
     delta = SCALE_TO_RESOLUTION[scale]
-    
+
     ensure_buckets_exist(start, end, scale)
 
     if status == "stale":
@@ -72,9 +76,9 @@ def mark_buckets_as(
 
     now = datetime.now(tz=pytz.UTC)
     now_bucket = date_to_bucket(now, scale)
-    
+
     query = {"start": {"$gte": start, "$lte": end - delta}}
-    
+
     if status == "done":
         query["start"]["$lt"] = now_bucket
 
@@ -154,7 +158,7 @@ def get_ranges(worker: str, scale: Scale, *, start: datetime | None = None, end:
                 done=False,
             ))
             break
-        
+
 
 
         intervals.append(Range(

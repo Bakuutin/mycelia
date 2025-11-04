@@ -190,52 +190,9 @@ def render_segments_for_llm(segments):
 scale = "5min"
 
 def run(model: Literal["small", "medium", "large"]) -> None:
-    global tool_llm
-    tool_llm = get_llm(model).bind_tools([extract_topics_tool], tool_choice="extract_topics")
-    while True:
-        try:
-            current_time = find_next_interval_without_topics(scale)
-
-            if current_time is None:
-                print("No intervals without topics found, waiting...")
-                sleep(5)
-                continue
-
-            segments = get_segments(current_time, scale)
-            print(f"Processing interval starting at {current_time} with {len(segments)} segments")
-
-            topics = []
-            if segments:
-                response = tool_llm.invoke([
-                    SystemMessage(content=SYSTEM_PROMPT),
-                    HumanMessage(content=render_segments_for_llm(segments))
-                ])
-                if response.tool_calls:
-                    tool_call = response.tool_calls[0]
-                    extracted_topics = ExtractTopicsInput.model_validate(tool_call["args"])
-                    topics = [topic.model_dump() for topic in extracted_topics.topics]
-                print(f"Found {len(topics)} topics for {segments[0]['start'].isoformat()} - {segments[-1]['end'].isoformat()}")
-            else:
-                print("No segments in interval, marking as processed with zero topics")
-
-            call_resource(
-                "tech.mycelia.mongo",
-                {
-                    "action": "updateOne",
-                    "collection": f"histogram_{scale}",
-                    "query": {"start": date_to_bucket(current_time, scale)},
-                    "update": {"$set": {"topics": topics}},
-                }
-            )
-
-        except Exception as e:
-            print(f"Error in main loop: {e}")
-            errors.append(e)
-            sleep(5)
+    raise SystemExit("python/topics.py is deprecated. Use python/convos.py instead.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract important topics for histogram intervals")
-    parser.add_argument("--model", choices=["small", "medium", "large"], default="small")
-    args = parser.parse_args()
-    run(args.model)
+    print("python/topics.py is deprecated. Use python/convos.py instead.")
+    exit(1)

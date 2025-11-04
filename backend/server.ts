@@ -21,8 +21,10 @@ import { setupResources } from "@/lib/resources/registry.ts";
 import { shutdownTelemetry } from "@/lib/telemetry.ts";
 import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { pathToFileURL } from "node:url";
+import { load } from "@std/dotenv";
 
 async function setup() {
+  await load({ envPath: ".env", export: true });
   await setupResources();
   await ensureAllCollectionsExist();
 }
