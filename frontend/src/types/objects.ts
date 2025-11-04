@@ -39,6 +39,12 @@ export const zObject = z.object({
     end: z.date().optional(),
     name: z.string().optional(),
   })).optional(),
+  metadata: z.object({
+    extractedWith: z.object({
+      model: z.string(),
+      timestamp: z.date(),
+    }).optional(),
+  }).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 }).passthrough().refine(

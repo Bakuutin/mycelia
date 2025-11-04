@@ -5,6 +5,7 @@ import { ArrowLeft, Trash2 } from 'lucide-react';
 import { useObject, useUpdateObject, useDeleteObject } from '@/hooks/useObjectQueries';
 import { ObjectForm } from '@/components/ObjectForm';
 import { RelationshipsPanel } from '@/components/RelationshipsPanel';
+import { MetadataDisplay } from '@/components/MetadataDisplay';
 import { ObjectId } from "bson";
 
 const ObjectDetailPage = () => {
@@ -110,8 +111,11 @@ const ObjectDetailPage = () => {
           />
         </div>
 
-        <div className="border rounded-lg p-6">
-          <RelationshipsPanel object={object} />
+        <div className="space-y-6">
+          <div className="border rounded-lg p-6">
+            <RelationshipsPanel object={object} />
+          </div>
+          <MetadataDisplay object={object} />
         </div>
       </div>
     </div>

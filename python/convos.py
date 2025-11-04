@@ -18,6 +18,9 @@ import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+import json
+import re
+
 from lib.resources import call_resource
 from lib.llm import get_llm
 from lib.hist import mark_buckets_as, get_ranges, date_to_bucket, SCALE_TO_RESOLUTION
@@ -299,81 +302,164 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "sma
         logger.info(f"LLM Response content: {response.content if hasattr(response, 'content') else 'N/A'}")
         logger.info(f"LLM Response tool_calls: {response.tool_calls if hasattr(response, 'tool_calls') else 'N/A'}")
 
-        if response.tool_calls:
+        extracted_conversations = []
+        if response.tool_calls and len(response.tool_calls) > 0:
             tool_call = response.tool_calls[0]
             extracted_conversations = ExtractConversationsInput.model_validate(tool_call["args"]).conversations
-            logger.info(f"Found {len(extracted_conversations)} conversations")
+            logger.info(f"Found {len(extracted_conversations)} conversations from tool_calls")
+        elif hasattr(response, 'content') and response.content:
+            try:
+                json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
+                if json_match:
+                    json_data = json.loads(json_match.group(0))
+                    for conv_dict in json_data:
+                        try:
+                            start_time = conv_dict.get("start_time") or conv_dict.get("start") or datetime.now(pytz.UTC).isoformat()
+                            end_time = conv_dict.get("end_time") or conv_dict.get("end") or datetime.now(pytz.UTC).isoformat()
+                            entities = conv_dict.get("entities", [])
+                            if not entities:
+                                people = conv_dict.get("people", [])
+                                places = conv_dict.get("places", [])
+                                things = conv_dict.get("things", [])
+                                entities = people + places + things
+                            if entities and isinstance(entities[0], dict):
+                                entities = [e.get("name", e.get("text", str(e))) for e in entities]
+                            extracted_conversations.append(Conversation(
+                                title=conv_dict.get("title", ""),
+                                summary=conv_dict.get("summary", ""),
+                                entities=entities,
+                                start=start_time,
+                                end=end_time,
+                                emoji=conv_dict.get("emoji", "💬")
+                            ))
+                        except Exception as e:
+                            logger.debug(f"Failed to parse conversation: {e}")
+                    if extracted_conversations:
+                        logger.info(f"Parsed {len(extracted_conversations)} conversations from JSON")
+            except Exception as e:
+                logger.debug(f"Failed to parse JSON from content: {e}")
 
-            now = datetime.now(pytz.UTC)
-            objects_to_create = []
-            relationships_to_create = []
-            entity_to_id_map = {}  # Track entity names to object IDs
+        if not extracted_conversations:
+            try:
+                sections = re.split(r'^## ', response.content, flags=re.MULTILINE)
+                for section in sections[1:]:
+                    try:
+                        lines = section.strip().split('\n')
+                        title_line = lines[0] if lines else ""
 
-            # Phase 1: Create conversation objects and collect entities
-            for conv in extracted_conversations:
-                conv_start, conv_end = sorted([utc(conv.start), utc(conv.end)])
+                        start_time = None
+                        end_time = None
+                        entities_list = []
+                        summary_text = ""
 
-                # Create conversation object
-                conv_obj = create_conversation_object(conv, conv_start, conv_end, now, model)
-                objects_to_create.append(conv_obj)
+                        for i, line in enumerate(lines[1:], 1):
+                            if 'Summary:' in line:
+                                summary_text = line.split(':', 1)[1].strip() if ':' in line else ""
+                            elif 'Start Time:' in line:
+                                start_time = line.split(':', 1)[1].strip() if ':' in line else None
+                            elif 'End Time:' in line:
+                                end_time = line.split(':', 1)[1].strip() if ':' in line else None
+                            elif line.strip().startswith('*'):
+                                entity = line.strip().replace('*', '').split(':', 1)[0].strip()
+                                if entity:
+                                    entities_list.append(entity)
 
-                # Process entities for this conversation
-                for entity_name in conv.entities:
-                    if not entity_name or not entity_name.strip():
-                        continue
+                        if title_line and (start_time or end_time):
+                            extracted_conversations.append(Conversation(
+                                title=title_line,
+                                summary=summary_text or "No summary available",
+                                entities=entities_list,
+                                start=start_time or datetime.now(pytz.UTC).isoformat(),
+                                end=end_time or datetime.now(pytz.UTC).isoformat(),
+                                emoji="💬"
+                            ))
+                    except Exception as md_e:
+                        logger.debug(f"Failed to parse markdown section: {md_e}")
+                if extracted_conversations:
+                    logger.info(f"Parsed {len(extracted_conversations)} conversations from markdown")
+            except Exception as md_error:
+                logger.debug(f"Failed to parse markdown from content: {md_error}")
 
-                    # Track entity for relationship creation
-                    if entity_name not in entity_to_id_map:
-                        entity_to_id_map[entity_name] = None  # Will be filled after object creation
+        if not extracted_conversations:
+            logger.warning("No conversations found in chunk. LLM response:")
+            logger.warning(f"LLM Response type: {type(response)}")
+            logger.warning(f"LLM Response attributes: {dir(response)}")
+            logger.warning(f"LLM Response content: {response.content if hasattr(response, 'content') else 'N/A'}")
+            logger.warning(f"LLM Response tool_calls: {response.tool_calls if hasattr(response, 'tool_calls') else 'N/A'}")
+            return 0
 
-            # Phase 2: Create entity objects
-            for entity_name in entity_to_id_map:
-                entity_id = find_or_create_entity(entity_name, now)
-                entity_to_id_map[entity_name] = entity_id
-                logger.info(f"Entity '{entity_name}' -> Object ID: {entity_id}")
+        now = datetime.now(pytz.UTC)
+        objects_to_create = []
+        relationships_to_create = []
+        entity_to_id_map = {}  # Track entity names to object IDs
 
-            # Phase 3: Batch insert all objects
-            if objects_to_create:
-                result = call_resource("tech.mycelia.mongo", {
-                    "action": "insertMany",
-                    "collection": "objects",
-                    "docs": objects_to_create
-                })
-                conversation_ids = result['insertedIds']
-                logger.info(f"Created {len(conversation_ids)} conversation objects")
+        # Phase 1: Create conversation objects and collect entities
+        for conv in extracted_conversations:
+            conv_start, conv_end = sorted([utc(conv.start), utc(conv.end)])
 
-            # Phase 4: Create relationships
-            conv_idx = 0
-            for conv in extracted_conversations:
-                conversation_id = conversation_ids[conv_idx]
-                conversation_title = conv.title
+            # Create conversation object
+            conv_obj = create_conversation_object(conv, conv_start, conv_end, now, model)
+            objects_to_create.append(conv_obj)
 
-                # Create "mentioned in" relationships for entities
-                for entity_name in conv.entities:
-                    if not entity_name or not entity_name.strip():
-                        continue
+            # Process entities for this conversation
+            for entity_name in conv.entities:
+                if not entity_name or not entity_name.strip():
+                    continue
 
-                    entity_id = entity_to_id_map[entity_name]
+                # Track entity for relationship creation
+                if entity_name not in entity_to_id_map:
+                    entity_to_id_map[entity_name] = None  # Will be filled after object creation
+
+        # Phase 2: Create entity objects
+        for entity_name in entity_to_id_map:
+            entity_id = find_or_create_entity(entity_name, now)
+            entity_to_id_map[entity_name] = entity_id
+            logger.info(f"Entity '{entity_name}' -> Object ID: {entity_id}")
+
+        # Phase 3: Batch insert all objects
+        conversation_ids = []
+        if objects_to_create:
+            result = call_resource("tech.mycelia.mongo", {
+                "action": "insertMany",
+                "collection": "objects",
+                "docs": objects_to_create
+            })
+            conversation_ids = result['insertedIds']
+            logger.info(f"Created {len(conversation_ids)} conversation objects")
+
+        # Phase 4: Create relationships
+        conv_idx = 0
+        for conv in extracted_conversations:
+            if conv_idx >= len(conversation_ids):
+                logger.warning(f"Conversation {conv_idx} not in conversation_ids")
+                break
+            conversation_id = conversation_ids[conv_idx]
+            conversation_title = conv.title
+
+            # Create "mentioned in" relationships for entities
+            for entity_name in conv.entities:
+                if not entity_name or not entity_name.strip():
+                    continue
+
+                entity_id = entity_to_id_map[entity_name]
+                if entity_id is not None: # Only create relationship if entity was found
                     relationship = create_mentioned_relationship(
                         entity_id, conversation_id, entity_name, conversation_title, now
                     )
                     relationships_to_create.append(relationship)
 
-                conv_idx += 1
+            conv_idx += 1
 
-            # Phase 5: Batch insert relationships
-            if relationships_to_create:
-                result = call_resource("tech.mycelia.mongo", {
-                    "action": "insertMany",
-                    "collection": "objects",
-                    "docs": relationships_to_create
-                })
-                logger.info(f"Created {len(result['insertedIds'])} entity mention relationships")
+        # Phase 5: Batch insert relationships
+        if relationships_to_create:
+            result = call_resource("tech.mycelia.mongo", {
+                "action": "insertMany",
+                "collection": "objects",
+                "docs": relationships_to_create
+            })
+            logger.info(f"Created {len(result['insertedIds'])} entity mention relationships")
 
-            return len(extracted_conversations)
-        else:
-            logger.info("No conversations found in chunk")
-            return 0
+        return len(extracted_conversations)
 
     except Exception as e:
         logger.error(f"Error processing chunk: {e}")
