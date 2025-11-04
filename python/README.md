@@ -106,6 +106,43 @@ uv run manage_errors.py clear <file_id>
 
 Removes the error flag from a specific file without retrying ingestion.
 
+### Conversation Extraction (`convos.py`)
+
+Extracts conversations from existing transcripts using an LLM and writes conversation objects plus entity mention relationships to MongoDB.
+
+#### When to run
+
+- After transcripts exist in the `transcriptions` collection (produced by your ingestion/transcription pipeline)
+- Ad hoc to backfill older data or periodically (e.g., via cron) to keep conversations up to date
+
+#### Running
+
+```bash
+uv run convos.py
+```
+
+Optional flags:
+
+- `--limit <N>`: process at most N conversation chunks
+- `--not-later-than <UNIX_TS>`: only process transcripts earlier than the given UNIX timestamp (seconds)
+
+Examples:
+
+```bash
+# Process everything available
+uv run convos.py
+
+# Process only 5 chunks
+uv run convos.py --limit 5
+
+# Process items not later than a specific time
+uv run convos.py --not-later-than 1730500000
+```
+
+#### Logs
+
+Writes logs to `~/Library/mycelia/logs/convos.log` and also prints progress to the console.
+
 ## Improved Logging
 
 The daemon now provides detailed progress information:
