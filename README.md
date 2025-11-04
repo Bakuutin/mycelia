@@ -96,7 +96,7 @@ cp .env.example .env
 # Edit .env with your preferred settings
 
 # Generate auth credentials (requires services running)
-deno run -A --env server.ts token create
+deno run -A --env server.ts token-create
 # Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
 
 # Start the backend server
@@ -134,7 +134,7 @@ Open http://localhost:3001. Configure backend URL and credentials in the setting
 cd backend
 
 # Generate auth tokens (put in .env)
-deno run -A --env server.ts token create
+deno run -A --env server.ts token-create
 
 # Start the server
 deno task dev

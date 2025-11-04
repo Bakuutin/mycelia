@@ -166,19 +166,8 @@ async function configureCli() {
     .scriptName("deno run -A --env server.ts")
     .usage("$0 <command> [options]")
     .command(
-      "audio worker",
-      "Start the audio processing worker.",
-      (y: Argv) => y,
-      async () => {
-        console.log("Starting audio processing worker...");
-        await spawnAudioProcessingWorker();
-        console.log("Audio processing worker started successfully!");
-        await new Promise(() => {});
-      },
-    )
-    .command(
       "serve",
-      "Start the development server.",
+      "Start web server.",
       (y: Argv) =>
         y
           .option("port", {
@@ -216,7 +205,7 @@ async function configureCli() {
       },
     )
     .command(
-      "token create",
+      "token-create",
       "Create a new token.",
       (y: Argv) =>
         y
@@ -245,7 +234,7 @@ async function configureCli() {
       },
     )
     .command(
-      "token validate",
+      "token-validate",
       "Validate a token.",
       (y: Argv) =>
         y.option("token", {
