@@ -19,7 +19,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from lib.resources import call_resource
-from lib.llm import small_llm
+from lib.llm import get_llm
 from lib.hist import mark_buckets_as, get_ranges, date_to_bucket, SCALE_TO_RESOLUTION
 
 
@@ -115,17 +115,17 @@ def iterate_transcripts(not_later_than: datetime | None = None, batch_size: int 
             }
         )
         logger.debug(f"Fetched {len(transcripts)} transcripts")
-        
+
         if len(transcripts) < 2:
             return
-            
+
         # Handle edge case where last few transcripts have same timestamp
         while len(transcripts) >= 2 and transcripts[-1]["start"] == transcripts[-2]["start"]:
             transcripts = transcripts[:-1]
-        
+
         if len(transcripts) < 2:
             return
-            
+
         cursor = transcripts[-1]["start"]
 
         for transcript in transcripts:
@@ -175,8 +175,8 @@ def chunk_to_prompt(chunk: list[dict]):
             strings.append(get_silence_message(gap))
             strings.append(get_timestamp_message(c["start"]))
         strings.append(c["text"])
-        latest = max(latest, c["end"]) 
-    
+        latest = max(latest, c["end"])
+
     strings.append(get_timestamp_message(latest))
     return "\n".join(strings), earliest, latest
 
@@ -193,7 +193,7 @@ class ExtractConversationsInput(BaseModel):
     """Input model for conversation extraction."""
     conversations: List[Conversation] = Field(description="List of conversations extracted from the transcript")
 
-def setup_llm_tools():
+def setup_llm_tools(model: str = "small"):
     """Setup LLM tools and prompts for conversation extraction."""
     extract_conversations_tool = {
         "name": "extract_conversations",
@@ -201,14 +201,15 @@ def setup_llm_tools():
         "parameters": ExtractConversationsInput.model_json_schema()
     }
 
-    tool_llm = small_llm.bind_tools([extract_conversations_tool], tool_choice="extract_conversations")
+    llm = get_llm(model)
+    tool_llm = llm.bind_tools([extract_conversations_tool], tool_choice="extract_conversations")
 
     prompts_path = Path(__file__).parent / "prompts.yml"
     with open(prompts_path, "r") as f:
         prompts = yaml.safe_load(f)
 
     system_prompt = prompts["topics"]["system"]
-    
+
     return tool_llm, system_prompt
 
 def create_conversation_object(conv, conv_start, conv_end, now):
@@ -255,10 +256,10 @@ def find_or_create_entity(entity_name, now):
         "collection": "objects",
         "query": {"name": entity_name}
     })
-    
+
     if existing:
         return existing['_id']
-    
+
     # Create new entity
     entity_obj = create_entity_object(entity_name, now)
     result = call_resource("tech.mycelia.mongo", {
@@ -291,35 +292,35 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt):
             tool_call = response.tool_calls[0]
             extracted_conversations = ExtractConversationsInput.model_validate(tool_call["args"]).conversations
             logger.info(f"Found {len(extracted_conversations)} conversations")
-            
+
             now = datetime.now(pytz.UTC)
             objects_to_create = []
             relationships_to_create = []
             entity_to_id_map = {}  # Track entity names to object IDs
-            
+
             # Phase 1: Create conversation objects and collect entities
             for conv in extracted_conversations:
                 conv_start, conv_end = sorted([utc(conv.start), utc(conv.end)])
-                
+
                 # Create conversation object
                 conv_obj = create_conversation_object(conv, conv_start, conv_end, now)
                 objects_to_create.append(conv_obj)
-                
+
                 # Process entities for this conversation
                 for entity_name in conv.entities:
                     if not entity_name or not entity_name.strip():
                         continue
-                    
+
                     # Track entity for relationship creation
                     if entity_name not in entity_to_id_map:
                         entity_to_id_map[entity_name] = None  # Will be filled after object creation
-                    
+
             # Phase 2: Create entity objects
             for entity_name in entity_to_id_map:
                 entity_id = find_or_create_entity(entity_name, now)
                 entity_to_id_map[entity_name] = entity_id
                 logger.info(f"Entity '{entity_name}' -> Object ID: {entity_id}")
-            
+
             # Phase 3: Batch insert all objects
             if objects_to_create:
                 result = call_resource("tech.mycelia.mongo", {
@@ -329,26 +330,26 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt):
                 })
                 conversation_ids = result['insertedIds']
                 logger.info(f"Created {len(conversation_ids)} conversation objects")
-            
+
             # Phase 4: Create relationships
             conv_idx = 0
             for conv in extracted_conversations:
                 conversation_id = conversation_ids[conv_idx]
                 conversation_title = conv.title
-                
+
                 # Create "mentioned in" relationships for entities
                 for entity_name in conv.entities:
                     if not entity_name or not entity_name.strip():
                         continue
-                    
+
                     entity_id = entity_to_id_map[entity_name]
                     relationship = create_mentioned_relationship(
                         entity_id, conversation_id, entity_name, conversation_title, now
                     )
                     relationships_to_create.append(relationship)
-                
+
                 conv_idx += 1
-            
+
             # Phase 5: Batch insert relationships
             if relationships_to_create:
                 result = call_resource("tech.mycelia.mongo", {
@@ -357,24 +358,24 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt):
                     "docs": relationships_to_create
                 })
                 logger.info(f"Created {len(result['insertedIds'])} entity mention relationships")
-            
+
             return len(extracted_conversations)
         else:
             logger.info("No conversations found in chunk")
             return 0
-            
+
     except Exception as e:
         logger.error(f"Error processing chunk: {e}")
         return 0
 
-def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[datetime] = None):
+def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[datetime] = None, model: str = "small"):
     """Main function to extract conversations from transcripts."""
     logger.info("=" * 60)
     logger.info("Starting conversation extraction")
     logger.info("=" * 60)
 
-    tool_llm, system_prompt = setup_llm_tools()
-    
+    tool_llm, system_prompt = setup_llm_tools(model)
+
     processed = 0
     total_conversations = 0
     cursor = not_later_than
@@ -384,30 +385,30 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
 
     try:
         conv_iterator = iterate_conversations(cursor)
-        
+
         for chunk in conv_iterator:
             if limit and processed >= limit:
                 logger.info(f"Reached limit of {limit} chunks")
                 break
-            
+
             previous_bucket = current_bucket
             chunk_start = chunk[0]["start"]
             chunk_bucket = date_to_bucket(chunk_start, scale)
-            
+
             if current_bucket is not None and chunk_bucket < current_bucket:
                 bucket_end = current_bucket + delta
                 mark_buckets_as("done", "conversations", current_bucket, bucket_end, scale=scale)
                 logger.info(f"Marked bucket as done: {current_bucket} -> {bucket_end}")
-                
+
             current_bucket = chunk_bucket
-                
+
             conversations_found = process_conversation_chunk(chunk, tool_llm, system_prompt)
             total_conversations += conversations_found
             processed += 1
             cursor = chunk_start
-            
+
             logger.info(f"Processed {processed} chunks, found {total_conversations} total conversations")
-        
+
         if current_bucket is not None:
             bucket_end = current_bucket + delta
             if previous_bucket != current_bucket and previous_bucket is not None:
@@ -418,7 +419,7 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
                 for bucket in bucketsEntered & bucketsExited:
                     mark_buckets_as("done", "conversations", bucket, bucket + delta, scale=scale)
                     logger.info(f"Marked bucket as done: {bucket} -> {bucket + delta}")
-            
+
     except Exception as e:
         logger.error(f"Error in conversation extraction: {e}")
         raise
@@ -433,10 +434,11 @@ def main():
     parser = argparse.ArgumentParser(description="Extract conversations from transcripts")
     parser.add_argument('--limit', type=int, default=None, help='Limit number of conversation chunks to process')
     parser.add_argument('--not-later-than', type=int, help='Process transcripts not later than this timestamp')
+    parser.add_argument('--model', type=str, choices=['small', 'medium', 'large'], default='small', help='LLM size to use for extraction')
     args = parser.parse_args()
-    
+
     setup_logging()
-    
+
     not_later_than = None
     if args.not_later_than:
         try:
@@ -444,13 +446,13 @@ def main():
         except ValueError:
             logger.error(f"Invalid datetime format: {args.not_later_than}")
             return 1
-    
+
     try:
-        extract_conversations(limit=args.limit, not_later_than=not_later_than)    
+        extract_conversations(limit=args.limit, not_later_than=not_later_than, model=args.model)
     except Exception as e:
         logger.exception(f"Error in main: {e}")
         return 1
-    
+
     return 0
 
 if __name__ == '__main__':
