@@ -18,7 +18,7 @@ const ObjectDetailPage = () => {
 
   const autoSave = async (updates: Partial<ObjectFormData>) => {
     if (!object || !id) return;
-    
+
     updateObjectMutation.mutate({ id, updates });
   };
 
@@ -91,9 +91,9 @@ const ObjectDetailPage = () => {
         </Link>
         <div className="flex items-center gap-2">
           {updateObjectMutation.isPending && <span className="text-xs text-muted-foreground">Saving...</span>}
-          <Button 
-            variant="destructive" 
-            size="sm" 
+          <Button
+            variant="destructive"
+            size="sm"
             onClick={handleDelete}
             disabled={deleteObjectMutation.isPending}
           >
@@ -105,9 +105,9 @@ const ObjectDetailPage = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="border rounded-lg p-6">
-          <ObjectForm 
-            object={formObject} 
-            onUpdate={autoSave} 
+          <ObjectForm
+            object={formObject}
+            onUpdate={autoSave}
           />
         </div>
 
@@ -123,4 +123,3 @@ const ObjectDetailPage = () => {
 };
 
 export default ObjectDetailPage;
-

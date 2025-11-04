@@ -116,4 +116,3 @@ export function validateObjectForSave(obj: ObjectFormData): { valid: boolean; er
 
   return { valid: true };
 }
-
