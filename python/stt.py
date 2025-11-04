@@ -313,7 +313,7 @@ def transcribe_sequence(sequence: SpeechSequence):
                                 for i, chunk in enumerate(reversed(sequence.chunks))
                             ],
                             headers=headers,
-                            timeout=30 + len(sequence.chunks) * 10
+                            timeout=300 + len(sequence.chunks) * 3
     )
     response.raise_for_status()  # Raise an exception for bad status codes
 
