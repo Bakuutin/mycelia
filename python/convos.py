@@ -212,7 +212,7 @@ def setup_llm_tools(model: str = "small"):
 
     return tool_llm, system_prompt
 
-def create_conversation_object(conv, conv_start, conv_end, now):
+def create_conversation_object(conv, conv_start, conv_end, now, model: str = "small"):
     """Create a conversation object from extracted conversation data"""
     return {
         'name': conv.title,
@@ -224,6 +224,12 @@ def create_conversation_object(conv, conv_start, conv_end, now):
         }],
         'createdAt': now,
         'updatedAt': now,
+        'metadata': {
+            'extractedWith': {
+                'model': model,
+                'timestamp': now,
+            }
+        }
     }
 
 def create_entity_object(entity_name, now):
@@ -269,7 +275,7 @@ def find_or_create_entity(entity_name, now):
     })
     return result['insertedId']
 
-def process_conversation_chunk(chunk, tool_llm, system_prompt):
+def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "small"):
     """Process a single conversation chunk and extract conversations."""
     prompt, chunk_start, chunk_end = chunk_to_prompt(chunk)
 
@@ -288,6 +294,11 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt):
             HumanMessage(content=prompt)
         ])
 
+        logger.info(f"LLM Response type: {type(response)}")
+        logger.info(f"LLM Response attributes: {dir(response)}")
+        logger.info(f"LLM Response content: {response.content if hasattr(response, 'content') else 'N/A'}")
+        logger.info(f"LLM Response tool_calls: {response.tool_calls if hasattr(response, 'tool_calls') else 'N/A'}")
+
         if response.tool_calls:
             tool_call = response.tool_calls[0]
             extracted_conversations = ExtractConversationsInput.model_validate(tool_call["args"]).conversations
@@ -303,7 +314,7 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt):
                 conv_start, conv_end = sorted([utc(conv.start), utc(conv.end)])
 
                 # Create conversation object
-                conv_obj = create_conversation_object(conv, conv_start, conv_end, now)
+                conv_obj = create_conversation_object(conv, conv_start, conv_end, now, model)
                 objects_to_create.append(conv_obj)
 
                 # Process entities for this conversation
@@ -402,7 +413,7 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
 
             current_bucket = chunk_bucket
 
-            conversations_found = process_conversation_chunk(chunk, tool_llm, system_prompt)
+            conversations_found = process_conversation_chunk(chunk, tool_llm, system_prompt, model)
             total_conversations += conversations_found
             processed += 1
             cursor = chunk_start
