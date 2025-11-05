@@ -14,7 +14,7 @@ import { useObjects } from '@/modules/objects/useObjects';
 import { isTimeRangeShorterThanTranscriptThreshold } from '@/lib/transcriptUtils';
 
 const TimelinePage = () => {
-  const { objects, loading } = useObjects();
+  const { objects, loading, error } = useObjects();
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set());
   const { timeFormat } = useSettingsStore();
 
@@ -49,6 +49,19 @@ const TimelinePage = () => {
       </div>
     );
   }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold">Timeline</h1>
+        <div className="border rounded-lg p-8 text-center">
+          <p className="text-red-500 mb-2">Error loading objects: {error}</p>
+          <p className="text-sm text-muted-foreground">Check browser console for details</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">

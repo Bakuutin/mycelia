@@ -1,23 +1,44 @@
-import { create } from "zustand";
-import _ from "lodash";
 import { useEffect } from "react";
+import { create } from "zustand";
 import { Object } from "@/types/objects.ts";
 import { callResource } from "@/lib/api";
 
 type ObjectsState = {
   objects: Object[];
   loading: boolean;
+  error: string | null;
   refresh: () => Promise<void>;
+  fetchInitial: () => Promise<void>;
 };
 
-export const useObjectsStore = create<ObjectsState>((set) => ({
+export const useObjectsStore = create<ObjectsState>((set, get) => ({
   objects: [],
   loading: false,
+  error: null,
   refresh: async () => {
     try {
-      set({ loading: true });
+      set({ loading: true, error: null });
       const objects = await fetchObjects();
       set({ objects });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Failed to fetch objects';
+      console.error('Failed to fetch objects:', err);
+      set({ error });
+    } finally {
+      set({loading: false});
+    }
+  },
+  fetchInitial: async () => {
+    const state = get();
+    if (state.loading || state.objects.length > 0) return;
+    set({ loading: true, error: null });
+    try {
+      const objects = await fetchObjects();
+      set({ objects });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Failed to fetch objects';
+      console.error('Failed to fetch objects:', err);
+      set({ error });
     } finally {
       set({loading: false});
     }
@@ -89,16 +110,13 @@ async function fetchObjects(): Promise<Object[]> {
 };
 
 export function useObjects() {
-  const { objects, refresh, loading } = useObjectsStore();
+  const { objects, loading, error } = useObjectsStore();
+  const refresh = useObjectsStore((state) => state.refresh);
+  const fetchInitial = useObjectsStore((state) => state.fetchInitial);
 
   useEffect(() => {
-    const run = _.debounce(async () => {
-      if (loading || objects.length > 0) return;
-      await refresh();
-    }, 100);
-    run();
-    return () => run.cancel();
-  }, [refresh, objects.length]);
+    fetchInitial();
+  }, [fetchInitial]);
 
-  return { objects, refresh, loading };
+  return { objects, refresh, loading, error };
 }
