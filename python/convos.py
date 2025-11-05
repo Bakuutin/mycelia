@@ -278,7 +278,61 @@ def find_or_create_entity(entity_name, now):
     })
     return result['insertedId']
 
-def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "small"):
+def check_conversations_exist(start: datetime, end: datetime) -> bool:
+    """Check if conversations already exist for this time range."""
+    existing = call_resource("tech.mycelia.mongo", {
+        "action": "findOne",
+        "collection": "objects",
+        "query": {
+            "timeRanges": {
+                "$elemMatch": {
+                    "start": {"$gte": start, "$lte": end},
+                    "end": {"$gte": start, "$lte": end}
+                }
+            }
+        }
+    })
+    return existing is not None
+
+def delete_conversations_in_range(start: datetime, end: datetime) -> int:
+    """Delete existing conversations and their relationships in a time range."""
+    conversations = call_resource("tech.mycelia.mongo", {
+        "action": "find",
+        "collection": "objects",
+        "query": {
+            "timeRanges": {
+                "$elemMatch": {
+                    "start": {"$gte": start, "$lte": end},
+                    "end": {"$gte": start, "$lte": end}
+                }
+            }
+        }
+    })
+    
+    if not conversations:
+        return 0
+    
+    conversation_ids = [conv['_id'] for conv in conversations]
+    
+    call_resource("tech.mycelia.mongo", {
+        "action": "deleteMany",
+        "collection": "objects",
+        "query": {"_id": {"$in": conversation_ids}}
+    })
+    
+    call_resource("tech.mycelia.mongo", {
+        "action": "deleteMany",
+        "collection": "objects",
+        "query": {
+            "isRelationship": True,
+            "relationship.object": {"$in": conversation_ids}
+        }
+    })
+    
+    logger.info(f"Deleted {len(conversation_ids)} existing conversations and their relationships")
+    return len(conversation_ids)
+
+def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "small", force: bool = False):
     """Process a single conversation chunk and extract conversations."""
     prompt, chunk_start, chunk_end = chunk_to_prompt(chunk)
 
@@ -290,6 +344,15 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "sma
 
     logger.info(f"Processing chunk: {chunk_start.strftime('%Y-%m-%d %H:%M')} -> {chunk_end.strftime('%Y-%m-%d %H:%M')}")
     logger.info(f"Duration: {dur_str}, Length: {len(prompt)} chars")
+    
+    if not force and check_conversations_exist(chunk_start, chunk_end):
+        logger.info("Conversations already exist for this time range, skipping (use --force to recreate)")
+        return -1
+    
+    if force:
+        deleted_count = delete_conversations_in_range(chunk_start, chunk_end)
+        if deleted_count > 0:
+            logger.info(f"Force mode: recreating conversations for this time range")
 
     try:
         response = tool_llm.invoke([
@@ -297,49 +360,50 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "sma
             HumanMessage(content=prompt)
         ])
 
-        logger.info(f"LLM Response type: {type(response)}")
-        logger.info(f"LLM Response attributes: {dir(response)}")
-        logger.info(f"LLM Response content: {response.content if hasattr(response, 'content') else 'N/A'}")
-        logger.info(f"LLM Response tool_calls: {response.tool_calls if hasattr(response, 'tool_calls') else 'N/A'}")
-
         extracted_conversations = []
         if response.tool_calls and len(response.tool_calls) > 0:
             tool_call = response.tool_calls[0]
             extracted_conversations = ExtractConversationsInput.model_validate(tool_call["args"]).conversations
             logger.info(f"Found {len(extracted_conversations)} conversations from tool_calls")
-        elif hasattr(response, 'content') and response.content:
-            try:
-                json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
-                if json_match:
-                    json_data = json.loads(json_match.group(0))
-                    for conv_dict in json_data:
-                        try:
-                            start_time = conv_dict.get("start_time") or conv_dict.get("start") or datetime.now(pytz.UTC).isoformat()
-                            end_time = conv_dict.get("end_time") or conv_dict.get("end") or datetime.now(pytz.UTC).isoformat()
-                            entities = conv_dict.get("entities", [])
-                            if not entities:
-                                people = conv_dict.get("people", [])
-                                places = conv_dict.get("places", [])
-                                things = conv_dict.get("things", [])
-                                entities = people + places + things
-                            if entities and isinstance(entities[0], dict):
-                                entities = [e.get("name", e.get("text", str(e))) for e in entities]
-                            extracted_conversations.append(Conversation(
-                                title=conv_dict.get("title", ""),
-                                summary=conv_dict.get("summary", ""),
-                                entities=entities,
-                                start=start_time,
-                                end=end_time,
-                                emoji=conv_dict.get("emoji", "💬")
-                            ))
-                        except Exception as e:
-                            logger.debug(f"Failed to parse conversation: {e}")
-                    if extracted_conversations:
-                        logger.info(f"Parsed {len(extracted_conversations)} conversations from JSON")
-            except Exception as e:
-                logger.debug(f"Failed to parse JSON from content: {e}")
+        else:
+            logger.error(f"No tool_calls returned from LLM despite tool_choice='extract_conversations'")
+            logger.error(f"Response type: {type(response).__name__}, has content: {hasattr(response, 'content')}")
+
+            if hasattr(response, 'content') and response.content:
+                logger.warning("Attempting to parse conversations from response content as fallback")
+                try:
+                    json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
+                    if json_match:
+                        json_data = json.loads(json_match.group(0))
+                        for conv_dict in json_data:
+                            try:
+                                start_time = conv_dict.get("start_time") or conv_dict.get("start") or datetime.now(pytz.UTC).isoformat()
+                                end_time = conv_dict.get("end_time") or conv_dict.get("end") or datetime.now(pytz.UTC).isoformat()
+                                entities = conv_dict.get("entities", [])
+                                if not entities:
+                                    people = conv_dict.get("people", [])
+                                    places = conv_dict.get("places", [])
+                                    things = conv_dict.get("things", [])
+                                    entities = people + places + things
+                                if entities and isinstance(entities[0], dict):
+                                    entities = [e.get("name", e.get("text", str(e))) for e in entities]
+                                extracted_conversations.append(Conversation(
+                                    title=conv_dict.get("title", ""),
+                                    summary=conv_dict.get("summary", ""),
+                                    entities=entities,
+                                    start=start_time,
+                                    end=end_time,
+                                    emoji=conv_dict.get("emoji", "💬")
+                                ))
+                            except Exception as e:
+                                logger.debug(f"Failed to parse conversation: {e}")
+                        if extracted_conversations:
+                            logger.info(f"Parsed {len(extracted_conversations)} conversations from JSON")
+                except Exception as e:
+                    logger.debug(f"Failed to parse JSON from content: {e}")
 
         if not extracted_conversations:
+            logger.warning("Attempting to parse conversations from markdown format as fallback")
             try:
                 sections = re.split(r'^## ', response.content, flags=re.MULTILINE)
                 for section in sections[1:]:
@@ -381,11 +445,9 @@ def process_conversation_chunk(chunk, tool_llm, system_prompt, model: str = "sma
                 logger.debug(f"Failed to parse markdown from content: {md_error}")
 
         if not extracted_conversations:
-            logger.warning("No conversations found in chunk. LLM response:")
-            logger.warning(f"LLM Response type: {type(response)}")
-            logger.warning(f"LLM Response attributes: {dir(response)}")
-            logger.warning(f"LLM Response content: {response.content if hasattr(response, 'content') else 'N/A'}")
-            logger.warning(f"LLM Response tool_calls: {response.tool_calls if hasattr(response, 'tool_calls') else 'N/A'}")
+            logger.error("No conversations found in chunk after all parsing attempts")
+            if hasattr(response, 'content') and response.content:
+                logger.debug(f"Response content preview: {response.content[:500]}...")
             return 0
 
         now = datetime.now(pytz.UTC)
