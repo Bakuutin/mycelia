@@ -222,21 +222,32 @@ export async function invalidateTimelineForData(
   }
 }
 
-async function convertPcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
-  const tempInputPath = await Deno.makeTempFile({ suffix: ".pcm" });
-  const tempOutputPath = await Deno.makeTempFile({ suffix: ".opus" });
+async function ffmpeg(inputData: Uint8Array, args: string[]): Promise<Uint8Array> {
+  const tempInputPath = await Deno.makeTempFile();
+  const tempOutputPath = await Deno.makeTempFile();
   try {
-    await Deno.writeFile(tempInputPath, audioData);
+    await Deno.writeFile(tempInputPath, inputData);
     const process = new Deno.Command("ffmpeg", {
-      args: ["-i", tempInputPath, "-c:a", "libopus", "-b:a", "64k", "-map_metadata", "-1", tempOutputPath],
+      args: ["-i", tempInputPath, ...args, "-map_metadata", "-1", tempOutputPath],
+      stdout: "piped",
+      stderr: "piped",
     });
     const child = process.spawn();
     const status = await child.status;
     if (!status.success) {
-      throw new Error("Failed to convert PCM to Opus");
+      const stderrReader = child.stderr.getReader();
+      const stderr = await stderrReader.read();
+      const errorOutput = new TextDecoder().decode(
+        stderr.value || new Uint8Array(),
+      );
+      stderrReader.releaseLock();
+      await child.stderr.cancel();
+      await child.stdout.cancel();
+      throw new Error(`FFmpeg conversion failed: ${errorOutput}`);
     }
-    const outputData = await Deno.readFile(tempOutputPath);
-    return outputData;
+    await child.stderr.cancel();
+    await child.stdout.cancel();
+    return Deno.readFile(tempOutputPath);
   } finally {
     try {
       await Promise.all([
@@ -249,6 +260,14 @@ async function convertPcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
   }
 }
 
+async function pcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
+  return await ffmpeg(audioData, ["-c:a", "libopus", "-b:a", "64k"]);
+}
+
+async function float32ToOpus(audioData: Uint8Array): Promise<Uint8Array> {
+  return await ffmpeg(audioData, ["-c:a", "libopus", "-b:a", "64k", "-f", "f32le", "-ar", "16000", "-ac", "1"]);
+}
+
 export async function createAudioChunk(
   audioData: Uint8Array,
   startTime: Date,
@@ -257,17 +276,22 @@ export async function createAudioChunk(
   format: "opus" | "pcm" | "float32" = "opus",
 ): Promise<ObjectId> {
 
-  if (format !== "opus") {
+  await Deno.writeFile(
+    `debug.${format}`,
+    audioData,
+  );
 
-    // debug: save to file
-    await Deno.writeFile(
-      `debug.pcm`,
-      audioData,
-    );
-
-    return new ObjectId(); // debug
-    // audioData = await convertPcmToOpus(audioData);
+  if (format == "pcm") {
+    audioData = await pcmToOpus(audioData);
+  } else if (format == "float32") {
+    audioData = await float32ToOpus(audioData);
   }
+
+  await Deno.writeFile(
+    `debug.opus`,
+    audioData,
+  );
+  return new ObjectId(); // debug
 
   const auth = await getServerAuth();
   const mongoResource = await auth.getResource("tech.mycelia.mongo");
