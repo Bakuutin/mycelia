@@ -222,13 +222,30 @@ export async function invalidateTimelineForData(
   }
 }
 
-async function ffmpeg(inputData: Uint8Array, args: string[]): Promise<Uint8Array> {
-  const tempInputPath = await Deno.makeTempFile();
-  const tempOutputPath = await Deno.makeTempFile();
+async function ffmpeg(
+  inputData: Uint8Array,
+  { inputOptions = [], outputOptions }: {
+    inputOptions?: string[],
+    outputOptions: string[],
+  }
+): Promise<Uint8Array> {
+  const tempInputPath = await Deno.makeTempFile({ suffix: ".bin" });
+  const tempOutputPath = await Deno.makeTempFile({ suffix: ".opus" });
+  const finalArgs = [
+    ...inputOptions,
+    "-i",
+    tempInputPath,
+    ...outputOptions,
+    "-map_metadata",
+    "-1",
+    "-y",
+    tempOutputPath,
+  ];
   try {
     await Deno.writeFile(tempInputPath, inputData);
+    console.log(`Running FFmpeg: ffmpeg ${finalArgs.join(" ")}`);
     const process = new Deno.Command("ffmpeg", {
-      args: ["-i", tempInputPath, ...args, "-map_metadata", "-1", tempOutputPath],
+      args: finalArgs,
       stdout: "piped",
       stderr: "piped",
     });
@@ -261,11 +278,17 @@ async function ffmpeg(inputData: Uint8Array, args: string[]): Promise<Uint8Array
 }
 
 async function pcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
-  return await ffmpeg(audioData, ["-c:a", "libopus", "-b:a", "64k"]);
+  return await ffmpeg(
+    audioData,
+    { outputOptions: ["-c:a", "libopus", "-b:a", "64k"] },
+  );
 }
 
 async function float32ToOpus(audioData: Uint8Array): Promise<Uint8Array> {
-  return await ffmpeg(audioData, ["-c:a", "libopus", "-b:a", "64k", "-f", "f32le", "-ar", "16000", "-ac", "1"]);
+  return await ffmpeg(
+    audioData,
+    { inputOptions: ["-f", "f32le", "-ar", "16000", "-ac", "1"], outputOptions: ["-c:a", "libopus", "-b:a", "64k"] },
+  );
 }
 
 export async function createAudioChunk(
@@ -287,11 +310,6 @@ export async function createAudioChunk(
     audioData = await float32ToOpus(audioData);
   }
 
-  await Deno.writeFile(
-    `debug.opus`,
-    audioData,
-  );
-  return new ObjectId(); // debug
 
   const auth = await getServerAuth();
   const mongoResource = await auth.getResource("tech.mycelia.mongo");
