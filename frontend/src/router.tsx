@@ -17,6 +17,7 @@ import TranscriptPage from './pages/TranscriptPage';
 import ObjectsPage from './pages/ObjectsPage';
 import ObjectDetailPage from './pages/ObjectDetailPage';
 import CreateObjectPage from './pages/CreateObjectPage';
+import CreateAudioRecordPage from './pages/CreateAudioRecordPage';
 
 export const router = createBrowserRouter([
   {
@@ -34,6 +35,10 @@ export const router = createBrowserRouter([
       {
         path: 'transcript',
         element: <TranscriptPage />,
+      },
+      {
+        path: 'audio/record',
+        element: <CreateAudioRecordPage />,
       },
       {
         path: 'events/new',

@@ -40,7 +40,7 @@ export default defineConfig({
     },
   },
   server: {
-    allowedHosts: ["mycelia.tigor.net", "localhost", "127.0.0.1"],
+    allowedHosts: ["mycelia.tigor.net", "localhost", "127.0.0.1", "a", "d"],
   },
   build: {
     target: "esnext",

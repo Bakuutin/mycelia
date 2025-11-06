@@ -134,7 +134,18 @@ export const useAudioRecording = (): UseAudioRecordingReturn => {
       // Build WebSocket URL using same logic as API service
               let wsUrl: string
         const { protocol, port } = window.location
-                 // Check if we have a backend URL from environment
+        
+        const normalizeBackendUrl = (url: string): string => {
+          if (!url) return url
+          try {
+            const urlObj = new URL(url.startsWith('http') ? url : `http://${url}`)
+            return urlObj.host
+          } catch {
+            return url.replace(/^https?:\/\//, '')
+          }
+        }
+        
+        // Check if we have a backend URL from environment
         if (import.meta.env.VITE_BACKEND_URL) {
           const backendUrl = import.meta.env.VITE_BACKEND_URL
           const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
@@ -146,7 +157,8 @@ export const useAudioRecording = (): UseAudioRecordingReturn => {
             // Use same origin for Ingress access
             wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-recorder`
           } else if (backendUrl != undefined && backendUrl != '') {
-            wsUrl = `${wsProtocol}//${backendUrl}/ws_pcm?token=${token}&device_name=webui-recorder`
+            const normalizedBackendUrl = normalizeBackendUrl(backendUrl)
+            wsUrl = `${wsProtocol}//${normalizedBackendUrl}/ws_pcm?token=${token}&device_name=webui-recorder`
           }    
           else if (port === '5173') {
             // Development mode

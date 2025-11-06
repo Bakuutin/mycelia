@@ -56,9 +56,9 @@ RQ_WORKER_3_PID=$!
 
 # Start 1 audio stream worker for Deepgram
 # Single worker ensures sequential processing of audio chunks
-echo "🎵 Starting audio stream Deepgram worker (1 worker for sequential processing)..."
-uv run python -m advanced_omi_backend.workers.audio_stream_deepgram_worker &
-AUDIO_WORKER_1_PID=$!
+# echo "🎵 Starting audio stream Deepgram worker (1 worker for sequential processing)..."
+# uv run python -m advanced_omi_backend.workers.audio_stream_deepgram_worker &
+# AUDIO_WORKER_1_PID=$!
 
 echo "✅ All workers started:"
 echo "  - RQ worker 1: PID $RQ_WORKER_1_PID (transcription, memory, default)"

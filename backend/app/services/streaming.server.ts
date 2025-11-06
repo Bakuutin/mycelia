@@ -6,7 +6,6 @@ export interface AudioChunk {
   _id?: ObjectId;
   format: string;
   original_id?: ObjectId;
-  source_file_id?: ObjectId;
   index: number;
   ingested_at: Date;
   start: Date;
@@ -16,7 +15,7 @@ export interface AudioChunk {
 export interface SourceFile {
   _id: ObjectId;
   start: Date;
-  size: number;
+  size?: number;
   extension: string;
   ingested: boolean;
   importer: string;
@@ -32,7 +31,7 @@ export interface SourceFile {
 
 export async function createSourceFile(
   startTime: Date,
-  fileSize: number,
+  fileSize: number | undefined,
   filename: string,
   metadata: Record<string, any>,
   createdBy: string,
@@ -223,20 +222,59 @@ export async function invalidateTimelineForData(
   }
 }
 
+async function convertPcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
+  const tempInputPath = await Deno.makeTempFile({ suffix: ".pcm" });
+  const tempOutputPath = await Deno.makeTempFile({ suffix: ".opus" });
+  try {
+    await Deno.writeFile(tempInputPath, audioData);
+    const process = new Deno.Command("ffmpeg", {
+      args: ["-i", tempInputPath, "-c:a", "libopus", "-b:a", "64k", "-map_metadata", "-1", tempOutputPath],
+    });
+    const child = process.spawn();
+    const status = await child.status;
+    if (!status.success) {
+      throw new Error("Failed to convert PCM to Opus");
+    }
+    const outputData = await Deno.readFile(tempOutputPath);
+    return outputData;
+  } finally {
+    try {
+      await Promise.all([
+        Deno.remove(tempInputPath),
+        Deno.remove(tempOutputPath),
+      ]);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
 export async function createAudioChunk(
   audioData: Uint8Array,
   startTime: Date,
   index: number,
-  sourceFileId?: ObjectId,
-  originalId?: ObjectId,
+  originalId: ObjectId,
+  format: "opus" | "pcm" | "float32" = "opus",
 ): Promise<ObjectId> {
+
+  if (format !== "opus") {
+
+    // debug: save to file
+    await Deno.writeFile(
+      `debug.pcm`,
+      audioData,
+    );
+
+    return new ObjectId(); // debug
+    // audioData = await convertPcmToOpus(audioData);
+  }
+
   const auth = await getServerAuth();
   const mongoResource = await auth.getResource("tech.mycelia.mongo");
 
   const chunk: AudioChunk = {
     format: "opus",
     original_id: originalId,
-    source_file_id: sourceFileId,
     index,
     ingested_at: new Date(),
     start: startTime,
@@ -251,7 +289,7 @@ export async function createAudioChunk(
 
   console.log(
     `Audio chunk created: ${result.insertedId}, index: ${index}, start: ${startTime.toISOString()}, size: ${audioData.length} bytes${
-      sourceFileId ? `, source_file_id: ${sourceFileId}` : ""
+      originalId ? `, original_id: ${originalId}` : ""
     }`,
   );
 

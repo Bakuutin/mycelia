@@ -9,6 +9,7 @@ services:
       - .env
     volumes:
       - ./src:/app/src  # Mount source code for development
+      - ./memory_config.yaml:/app/memory_config.yaml:ro
       - ./data/audio_chunks:/app/audio_chunks
       - ./data/debug_dir:/app/debug_dir
       - ./data:/app/data
@@ -90,11 +91,11 @@ services:
       dockerfile: Dockerfile
       args:
         # Direct access (http://localhost:3010):
-        # - VITE_BACKEND_URL=http://localhost:8000
-        # - BACKEND_URL=http://localhost:8000
+        - VITE_BACKEND_URL=http://localhost:8000
+        - BACKEND_URL=http://localhost:8000
         # For Caddy HTTPS (https://localhost), use:
-        - VITE_BACKEND_URL=
-        - BACKEND_URL=
+        # - VITE_BACKEND_URL=
+        # - BACKEND_URL=
     ports:
       # - "${WEBUI_PORT:-3010}:80"
       - 3010:80
@@ -177,20 +178,20 @@ services:
 
   ##  Additional
 
-  # neo4j-mem0:
-  #   image: neo4j:5.15-community
-  #   ports:
-  #     - "7474:7474" # HTTP
-  #     - "7687:7687" # Bolt
-  #   environment:
-  #     - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
-  #     - NEO4J_PLUGINS=["apoc"]
-  #     - NEO4J_dbms_security_procedures_unrestricted=apoc.*
-  #     - NEO4J_dbms_security_procedures_allowlist=apoc.*
-  #   volumes:
-  #     - ./data/neo4j_data:/data
-  #     - ./data/neo4j_logs:/logs
-  #   restart: unless-stopped
+  neo4j-mem0:
+    image: neo4j:5.15-community
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+    volumes:
+      - ./data/neo4j_data:/data
+      - ./data/neo4j_logs:/logs
+    restart: unless-stopped
 
   # ollama:
   #   image: ollama/ollama:latest

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Friend-Lite is a project to be ported into Mycelia
 
 ## Project Overview
 

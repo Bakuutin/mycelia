@@ -160,19 +160,6 @@ Deno.test(
 );
 
 Deno.test(
-  "createAudioChunk should handle chunk creation without source file ID",
-  withFixtures(["Admin", "Mongo", "ServerAuth"], async (auth: Auth) => {
-    const audioData = new Uint8Array([1, 2, 3, 4, 5]);
-    const startTime = new Date();
-    const index = 0;
-
-    const chunkId = await createAudioChunk(audioData, startTime, index);
-
-    expect(chunkId).toBeInstanceOf(ObjectId);
-  }),
-);
-
-Deno.test(
   "processAudioFile should handle large audio files efficiently",
   withFixtures(["SampleAudioFile"], async (audioFile: File) => {
     const startTime = performance.now();

@@ -48,7 +48,7 @@
     "npm:@opentelemetry/instrumentation-http@0.205": "0.205.0_@opentelemetry+api@1.9.0",
     "npm:@opentelemetry/instrumentation-ioredis@~0.53.3": "0.53.3_@opentelemetry+api@1.9.0",
     "npm:@opentelemetry/instrumentation-mongodb@~0.58.3": "0.58.3_@opentelemetry+api@1.9.0",
-    "npm:@opentelemetry/resources@^2.0.1": "2.1.0_@opentelemetry+api@1.9.0",
+    "npm:@opentelemetry/resources@^2.0.1": "2.2.0_@opentelemetry+api@1.9.0",
     "npm:@opentelemetry/sdk-metrics@^2.1.0": "2.1.0_@opentelemetry+api@1.9.0",
     "npm:@opentelemetry/sdk-node@0.205": "0.205.0_@opentelemetry+api@1.9.0",
     "npm:@opentelemetry/sdk-trace-base@^2.2.0": "2.2.0_@opentelemetry+api@1.9.0",
@@ -94,8 +94,10 @@
     "npm:chokidar@^4.0.3": "4.0.3",
     "npm:class-variance-authority@~0.7.1": "0.7.1",
     "npm:clsx@^2.1.1": "2.1.1",
+    "npm:cors@2.8.5": "2.8.5",
     "npm:crossfilter2@^1.5.4": "1.5.4",
     "npm:d3@^7.9.0": "7.9.0_d3-selection@3.0.0",
+    "npm:denque@^2.1.0": "2.1.0",
     "npm:detect-libc@^2.0.4": "2.1.2",
     "npm:eslint-import-resolver-typescript@^3.6.1": "3.10.1_eslint@8.57.1_eslint-plugin-import@2.32.0__eslint@8.57.1",
     "npm:eslint-plugin-import@^2.28.1": "2.32.0_eslint@8.57.1",
@@ -103,7 +105,7 @@
     "npm:eslint-plugin-react-hooks@^4.6.0": "4.6.2_eslint@8.57.1",
     "npm:eslint-plugin-react@^7.33.2": "7.37.5_eslint@8.57.1",
     "npm:eslint@^8.38.0": "8.57.1",
-    "npm:express@*": "4.21.2",
+    "npm:express@*": "5.1.0",
     "npm:express@^4.21.2": "4.21.2",
     "npm:formdata-node@6": "6.0.3",
     "npm:ioredis@^5.6.1": "5.8.1",
@@ -144,6 +146,7 @@
     "npm:vite-plugin-devtools-json@~0.2.1": "0.2.1_vite@6.3.6__@types+node@24.7.1__tsx@4.20.6__picomatch@4.0.3_@types+node@24.7.1_tsx@4.20.6",
     "npm:vite-tsconfig-paths@^5.1.4": "5.1.4_vite@6.3.6__@types+node@24.7.1__tsx@4.20.6__picomatch@4.0.3_typescript@5.9.3_@types+node@24.7.1_tsx@4.20.6",
     "npm:vite@^6.3.5": "6.3.6_@types+node@24.7.1_tsx@4.20.6_picomatch@4.0.3",
+    "npm:ws@^8.18.0": "8.18.3",
     "npm:yargs@18": "18.0.0",
     "npm:zod-to-json-schema@^3.24.6": "3.24.6_zod@3.25.76",
     "npm:zod@^3.24.1": "3.25.76",
@@ -1521,7 +1524,7 @@
       "integrity": "sha512-bJeZ5Mtt7medH7i2iTbLdWUKdtrhllJh4Wzf7lonE2VyTxRt848hXn+ZsCjgvtPXCIH5pVF0bgtMCwpI1z+01A==",
       "dependencies": [
         "@opentelemetry/api",
-        "@opentelemetry/core@2.1.0_@opentelemetry+api@1.9.0",
+        "@opentelemetry/core@2.2.0_@opentelemetry+api@1.9.0",
         "@opentelemetry/instrumentation",
         "@opentelemetry/semantic-conventions"
       ]
@@ -2415,7 +2418,7 @@
         "valibot@0.41.0_typescript@5.9.3",
         "vite@6.3.6_@types+node@24.7.1_tsx@4.20.6_picomatch@4.0.3",
         "vite-node@3.2.4_@types+node@24.7.1_tsx@4.20.6",
-        "ws"
+        "ws@7.5.10"
       ],
       "optionalPeers": [
         "@remix-run/serve",
@@ -2979,7 +2982,7 @@
       "integrity": "sha512-yKpAGEuKRSS8wwx0joknWxsmLha78wNMe9R2S3UNsVOkZded8UqOrV8KoeDXoXsjndxwyF3eIhyClGbO1SEhEg==",
       "dependencies": [
         "@types/node@24.2.0",
-        "@types/ssh2@1.15.5"
+        "@types/ssh2"
       ]
     },
     "@types/dockerode@3.3.44": {
@@ -2987,7 +2990,7 @@
       "dependencies": [
         "@types/docker-modem",
         "@types/node@24.2.0",
-        "@types/ssh2@1.15.5"
+        "@types/ssh2"
       ]
     },
     "@types/estree-jsx@1.0.5": {
@@ -3045,12 +3048,6 @@
     "@types/ms@2.1.0": {
       "integrity": "sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA=="
     },
-    "@types/node@18.19.130": {
-      "integrity": "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg==",
-      "dependencies": [
-        "undici-types@5.26.5"
-      ]
-    },
     "@types/node@24.2.0": {
       "integrity": "sha512-3xyG3pMCq3oYCNg7/ZP+E1ooTaGB4cG8JWRsqqOYQdbWNY4zbaV0Ennrd7stjiJEFZCaybcIgpTjJWHRfBSIDw==",
       "dependencies": [
@@ -3093,12 +3090,6 @@
       "dependencies": [
         "@types/node@24.2.0",
         "@types/ssh2-streams"
-      ]
-    },
-    "@types/ssh2@1.15.5": {
-      "integrity": "sha512-N1ASjp/nXH3ovBHddRJpli4ozpk6UdDYIX4RJWFa9L1YKnzdhTlVmiGHm4DZnj/jLbqZpes4aeR30EFGQtvhQQ==",
-      "dependencies": [
-        "@types/node@18.19.130"
       ]
     },
     "@types/statuses@2.0.6": {
@@ -5232,7 +5223,7 @@
         "body-parser@2.2.0",
         "content-disposition@1.0.0",
         "content-type",
-        "cookie@0.7.1",
+        "cookie@0.7.2",
         "cookie-signature@1.2.2",
         "debug@4.4.3",
         "encodeurl@2.0.0",
@@ -5252,7 +5243,7 @@
         "router",
         "send@1.2.0",
         "serve-static@2.2.0",
-        "statuses@2.0.1",
+        "statuses@2.0.2",
         "type-is@2.0.1",
         "vary"
       ]
@@ -8506,7 +8497,7 @@
     "ssh-remote-port-forward@1.0.4": {
       "integrity": "sha512-x0LV1eVDwjf1gmG7TTnfqIzf+3VPRz7vrNIjX6oYLbeCrf/PeVY6hkT68Mg+q02qXxQhrLjB0jfgvhevoCRmLQ==",
       "dependencies": [
-        "@types/ssh2@0.5.52",
+        "@types/ssh2",
         "ssh2"
       ]
     },
@@ -9050,9 +9041,6 @@
         "which-boxed-primitive"
       ]
     },
-    "undici-types@5.26.5": {
-      "integrity": "sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA=="
-    },
     "undici-types@7.10.0": {
       "integrity": "sha512-t5Fy/nfn+14LuOc2KNYg75vZqClpAiqscVvMygNnlsHBFpSXdJaYtXMcdNLpl/Qvc3P2cB3s6lOV51nqsFq4ag=="
     },
@@ -9557,6 +9545,9 @@
     "ws@7.5.10": {
       "integrity": "sha512-+dbF1tHwZpXcbOJdVOkzLDxZP1ailvSxM6ZweXTegylPny803bFhA+vqBYw4s31NSAk4S2Qz+AKXK9a4wkdjcQ=="
     },
+    "ws@8.18.3": {
+      "integrity": "sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg=="
+    },
     "xss@1.0.15": {
       "integrity": "sha512-FVdlVVC67WOIPvfOwhoMETV72f6GbW7aOabBC3WxN/oUdoEMDyLz4OgRv5/gck2ZeNqEQu+Tb0kloovXOfpYVg==",
       "dependencies": [
@@ -9731,6 +9722,7 @@
         "npm:clsx@^2.1.1",
         "npm:crossfilter2@^1.5.4",
         "npm:d3@^7.9.0",
+        "npm:denque@^2.1.0",
         "npm:detect-libc@^2.0.4",
         "npm:eslint-import-resolver-typescript@^3.6.1",
         "npm:eslint-plugin-import@^2.28.1",

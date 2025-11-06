@@ -52,14 +52,14 @@ export async function extractClientCredentials(
   const authHeader = request.headers.get("authorization");
   const basic = parseBasicAuthHeader(authHeader);
   const params = await parseRequestParams(request);
-  const grantType = params.get("grant_type");
+  const grantType = params.get("grant_type") || "client_credentials";
   const scope = params.get("scope");
   const clientIdFromHeader = basic?.clientId || "";
   const clientSecretFromHeader = basic?.clientSecret || "";
-  const clientIdFromBody = params.get("client_id") || "";
-  const clientSecretFromBody = params.get("client_secret") || "";
-  const clientId = clientIdFromBody || clientIdFromHeader;
-  const clientSecret = clientSecretFromBody || clientSecretFromHeader;
+  const clientIdFromQuery = params.get("client_id") || params.get("username") || "";
+  const clientSecretFromQuery = params.get("client_secret") || params.get("password") || "";
+  const clientId = clientIdFromQuery || clientIdFromHeader;
+  const clientSecret = clientSecretFromQuery || clientSecretFromHeader;
   return { clientId, clientSecret, grantType, scope };
 }
 

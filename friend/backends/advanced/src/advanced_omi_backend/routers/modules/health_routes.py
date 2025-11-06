@@ -33,7 +33,7 @@ MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
 mongo_client = AsyncIOMotorClient(MONGODB_URI)
 
 # Memory service
-memory_service = get_memory_service()
+memory_service = None
 
 # Transcription provider
 transcription_provider = get_transcription_provider()

@@ -22,12 +22,20 @@ interface SettingsState {
   theme: Theme;
   timeFormat: TimeFormat;
   transcriptThresholdHours: number;
+  preferredAudioDeviceId: string | null;
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
   setApiEndpoint: (endpoint: string) => void;
   setClientId: (id: string) => void;
   setClientSecret: (secret: string) => void;
   setTheme: (theme: Theme) => void;
   setTimeFormat: (format: TimeFormat) => void;
   setTranscriptThresholdHours: (hours: number) => void;
+  setPreferredAudioDeviceId: (deviceId: string | null) => void;
+  setEchoCancellation: (enabled: boolean) => void;
+  setNoiseSuppression: (enabled: boolean) => void;
+  setAutoGainControl: (enabled: boolean) => void;
   clearSettings: () => void;
 }
 
@@ -44,12 +52,20 @@ export const useSettingsStore = create<SettingsState>()(
       theme: 'system',
       timeFormat: DEFAULT_TIME_FORMAT,
       transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
+      preferredAudioDeviceId: null,
+      echoCancellation: true,
+      noiseSuppression: false,
+      autoGainControl: false,
       setApiEndpoint: (endpoint) => set({ apiEndpoint: endpoint }),
       setClientId: (id) => set({ clientId: id }),
       setClientSecret: (secret) => set({ clientSecret: secret }),
       setTheme: (theme) => set({ theme }),
       setTimeFormat: (format) => set({ timeFormat: format }),
       setTranscriptThresholdHours: (hours) => set({ transcriptThresholdHours: hours }),
+      setPreferredAudioDeviceId: (deviceId) => set({ preferredAudioDeviceId: deviceId }),
+      setEchoCancellation: (enabled) => set({ echoCancellation: enabled }),
+      setNoiseSuppression: (enabled) => set({ noiseSuppression: enabled }),
+      setAutoGainControl: (enabled) => set({ autoGainControl: enabled }),
       clearSettings: () => set({
         apiEndpoint: DEFAULT_API_ENDPOINT,
         clientId: '',
@@ -57,6 +73,10 @@ export const useSettingsStore = create<SettingsState>()(
         theme: 'system',
         timeFormat: DEFAULT_TIME_FORMAT,
         transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
+        preferredAudioDeviceId: null,
+        echoCancellation: true,
+        noiseSuppression: false,
+        autoGainControl: false,
       }),
     }),
     {

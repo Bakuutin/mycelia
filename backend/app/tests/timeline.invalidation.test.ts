@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import { createAudioChunk } from "@/services/streaming.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
+import { ObjectId } from "bson";
 
 Deno.test(
   "Timeline should be automatically invalidated when audio chunk is created",
@@ -38,9 +38,19 @@ Deno.test(
     });
     expect(beforeData.length).toBe(1);
 
-    // Create an audio chunk at the same time
-    const audioData = new Uint8Array([1, 2, 3, 4]);
-    await createAudioChunk(audioData, testTime, 0);
+    await mongo({
+      action: "insertOne",
+      collection: "audio_chunks",
+      doc: {
+        format: "opus",
+        original_id: new ObjectId(),
+        source_file_id: new ObjectId(),
+        index: 0,
+        ingested_at: new Date(),
+        start: testTime,
+        data: new Uint8Array([1, 2, 3, 4]),
+      },
+    });
 
     // Verify histogram data was invalidated (marked as stale)
     const afterData = await mongo({

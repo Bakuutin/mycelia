@@ -1,6 +1,7 @@
 import { EJSON } from 'bson';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { getCurrentJWT } from './auth';
+import { object } from "zod";
 
 export class ApiClient {
   private jwtCache: { token: string | null; expiry: number } | null = null;
@@ -10,7 +11,7 @@ export class ApiClient {
     return { apiEndpoint, clientId, clientSecret };
   }
 
-  private async getJWT(): Promise<string | null> {
+  async getJWT(): Promise<string | null> {
     if (this.jwtCache && this.jwtCache.expiry > Date.now()) {
       return this.jwtCache.token;
     }
@@ -26,18 +27,15 @@ export class ApiClient {
 
     return jwt;
   }
-
-  private async getHeaders(): Promise<HeadersInit> {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-
+  
+  async getAuthHeaders(): Promise<HeadersInit> {
     const jwt = await this.getJWT();
-    if (jwt) {
-      headers['Authorization'] = `Bearer ${jwt}`;
+    if (!jwt) {
+      return {};
     }
-
-    return headers;
+    return {
+      'Authorization': `Bearer ${jwt}`,
+    };
   }
 
   get baseURL(): string {
@@ -49,7 +47,10 @@ export class ApiClient {
     const { apiEndpoint } = this.getConfig();
     const url = `${apiEndpoint}${path}`;
 
-    const headers = await this.getHeaders();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...await this.getAuthHeaders(),
+    };
 
     const response = await fetch(url, {
       ...options,

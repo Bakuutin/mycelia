@@ -162,6 +162,16 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
     let wsUrl: string
     const { protocol, port } = window.location
     
+    const normalizeBackendUrl = (url: string): string => {
+      if (!url) return url
+      try {
+        const urlObj = new URL(url.startsWith('http') ? url : `http://${url}`)
+        return urlObj.host
+      } catch {
+        return url.replace(/^https?:\/\//, '')
+      }
+    }
+    
     // Check if we have a backend URL from environment
     if (import.meta.env.VITE_BACKEND_URL) {
       const backendUrl = import.meta.env.VITE_BACKEND_URL
@@ -174,7 +184,8 @@ export const useSimpleAudioRecording = (): SimpleAudioRecordingReturn => {
         // Use same origin for Ingress access
         wsUrl = `${wsProtocol}//${window.location.host}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
       } else if (backendUrl != undefined && backendUrl != '') {
-        wsUrl = `${wsProtocol}//${backendUrl}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
+        const normalizedBackendUrl = normalizeBackendUrl(backendUrl)
+        wsUrl = `${wsProtocol}//${normalizedBackendUrl}/ws_pcm?token=${token}&device_name=webui-simple-recorder`
       }    
       else if (port === '5173') {
         // Development mode
