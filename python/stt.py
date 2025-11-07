@@ -153,11 +153,15 @@ def process_speech_sequences(limit=None, max_workers=1):
     batch_size = min(limit, 1000) if limit is not None else 1000
 
     while True:
-        for sequence in get_speech_sequences(limit=batch_size):
-            process_sequence(sequence)
-            processed_count += 1
-            if limit and processed_count >= limit:
-                return
+        try:
+            for sequence in get_speech_sequences(limit=batch_size):
+                process_sequence(sequence)
+                processed_count += 1
+                if limit and processed_count >= limit:
+                    return
+        except Exception as e:
+            print(f"Error processing speech sequences: {e}")
+            time.sleep(10)
     # while limit is None or processed_count < limit:
     #     with ThreadPoolExecutor(max_workers=max_workers) as executor:
     #         futures = []

@@ -11,6 +11,31 @@ import { Auth } from "../auth/index.ts";
 
 let client: MongoClient | null = null;
 
+interface CursorEntry {
+  cursor: any;
+  expiresAt: number;
+}
+
+const cursorMap = new Map<string, CursorEntry>();
+
+const CURSOR_TTL_MS = 30 * 60 * 1000;
+
+let cursorIdCounter = 0;
+
+function generateCursorId(principal: string): string {
+  return `${principal}:${Date.now()}:${++cursorIdCounter}`;
+}
+
+function cleanupExpiredCursors(): void {
+  const now = Date.now();
+  for (const [key, entry] of cursorMap.entries()) {
+    if (entry.expiresAt < now) {
+      cursorMap.delete(key);
+      entry.cursor.close().catch(() => {});
+    }
+  }
+}
+
 export const getRootDB = async (): Promise<Db> => {
   if (!client) {
     client = new MongoClient(Deno.env.get("MONGO_URL") as string);
@@ -34,6 +59,26 @@ const findSchema = z.object({
     limit: z.number().optional(),
     skip: z.number().optional(),
   }).optional(),
+});
+
+const getFirstBatchSchema = z.object({
+  action: z.literal("getFirstBatch"),
+  collection: z.string(),
+  query: z.record(z.string(), z.any()),
+  options: z.object({
+    projection: z.record(z.string(), z.any()).optional(),
+    sort: z.record(z.string(), z.any()).optional(),
+    limit: z.number().optional(),
+    skip: z.number().optional(),
+  }).optional(),
+  batchSize: z.number(),
+});
+
+const getMoreSchema = z.object({
+  action: z.literal("getMore"),
+  collection: z.string(),
+  cursorId: z.string(),
+  batchSize: z.number(),
 });
 
 const countSchema = z.object({
@@ -110,6 +155,8 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
   bulkWriteSchema,
   createIndexSchema,
   listIndexesSchema,
+  getFirstBatchSchema,
+  getMoreSchema,
 ]);
 
 export type MongoRequest = z.infer<typeof mongoRequestSchema>;
@@ -129,6 +176,8 @@ const actionMap = {
   bulkWrite: ["write", "update", "delete"],
   createIndex: ["write"],
   listIndexes: ["read"],
+  getFirstBatch: ["read"],
+  getMore: ["read"],
 } satisfies { [K in MongoRequest["action"]]: string[] };
 
 export class MongoResource implements Resource<MongoRequest, MongoResponse> {
@@ -140,12 +189,110 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     response: z.any(),
   };
 
-  // Cache for collection existence checks to avoid repeated database calls
   private collectionExistsCache = new Set<string>();
 
-  // Method to clear the cache (useful for testing or if collections are dropped externally)
   clearCollectionCache(): void {
     this.collectionExistsCache.clear();
+  }
+
+  private async executeFindWithCursor(
+    collection: any,
+    query: Record<string, any>,
+    options: any,
+    batchSize: number,
+    principal: string,
+  ): Promise<{ cursorId: string; data: any[]; hasMore: boolean }> {
+    cleanupExpiredCursors();
+
+    const cursorOptions: any = {
+      ...options,
+      batchSize,
+    };
+    delete cursorOptions.maxTimeMS;
+
+    const cursor = collection.find(query, cursorOptions);
+
+    const results: any[] = [];
+    let count = 0;
+    while (count < batchSize && await cursor.hasNext()) {
+      const doc = await cursor.next();
+      if (doc) {
+        results.push(doc);
+        count++;
+      }
+    }
+
+    const hasMore = await cursor.hasNext();
+
+    if (!hasMore) {
+      await cursor.close();
+      return {
+        cursorId: "",
+        data: results,
+        hasMore: false,
+      };
+    }
+
+    const cursorId = generateCursorId(principal);
+    cursorMap.set(cursorId, {
+      cursor,
+      expiresAt: Date.now() + CURSOR_TTL_MS,
+    });
+
+    return { cursorId, data: results, hasMore };
+  }
+
+  private async continueCursor(
+    collection: string,
+    cursorId: string,
+    batchSize: number,
+    principal: string,
+  ): Promise<{ data: any[]; hasMore: boolean }> {
+    cleanupExpiredCursors();
+
+    const cursorEntry = cursorMap.get(cursorId);
+
+    if (!cursorEntry) {
+      return { data: [], hasMore: false };
+    }
+
+    if (cursorEntry.expiresAt < Date.now()) {
+      cursorMap.delete(cursorId);
+      await cursorEntry.cursor.close();
+      return { data: [], hasMore: false };
+    }
+
+    const cursor = cursorEntry.cursor;
+
+    try {
+      const results: any[] = [];
+      let count = 0;
+      while (count < batchSize && await cursor.hasNext()) {
+        const doc = await cursor.next();
+        if (doc) {
+          results.push(doc);
+          count++;
+        }
+      }
+
+      const hasMore = await cursor.hasNext();
+
+      if (!hasMore) {
+        cursorMap.delete(cursorId);
+        await cursor.close();
+      } else {
+        cursorEntry.expiresAt = Date.now() + CURSOR_TTL_MS;
+      }
+
+      return { data: results, hasMore };
+    } catch (error) {
+      cursorMap.delete(cursorId);
+      try {
+        await cursor.close();
+      } catch {
+      }
+      throw error;
+    }
   }
   async getRootDB(): Promise<Db> {
     return getRootDB();
@@ -178,10 +325,9 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
       // The operation will fail gracefully if the collection truly doesn't exist
     }
   }
-  async use(input: MongoRequest): Promise<MongoResponse> {
+  async use(input: MongoRequest, auth: Auth): Promise<MongoResponse> {
     const db = await this.getRootDB();
 
-    // Check if collection exists and create if it doesn't
     await this.ensureCollectionExists(db, input.collection);
 
     const collection = db.collection(input.collection);
@@ -192,6 +338,23 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
           return collection.find(input.query, input.options).toArray();
         case "findOne":
           return collection.findOne(input.query, input.options);
+        case "getFirstBatch": {
+          return this.executeFindWithCursor(
+            collection,
+            input.query,
+            input.options,
+            input.batchSize,
+            auth.principal,
+          );
+        }
+        case "getMore": {
+          return this.continueCursor(
+            input.collection,
+            input.cursorId,
+            input.batchSize,
+            auth.principal,
+          );
+        }
         case "insertOne":
           return collection.insertOne(input.doc);
         case "insertMany":
@@ -247,6 +410,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     ) {
       actions.push("update");
     }
+    
     return [
       {
         path: ["db", input.collection],
