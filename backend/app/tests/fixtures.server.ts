@@ -10,10 +10,8 @@ import { redis } from "@/lib/redis.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
-import { KafkaResource } from "@/lib/kafka/index.ts";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import { ProcessorResource } from "../lib/processors/core.server.ts";
-import RequestQueue from "kafkajs/src/network/requestQueue/index.js";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
 import { accessLogger } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
@@ -64,36 +62,11 @@ const mongoContainer = await new GenericContainer("mongo:8.0")
   .withReuse()
   .start();
 
-console.log("Starting kafka container");
-const kafkaPort = 9992;
-const kafkaContainer = await new GenericContainer("bitnamilegacy/kafka:latest")
-  .withExposedPorts({
-    container: 9092,
-    host: kafkaPort,
-  })
-  .withEnvironment({
-    KAFKA_CFG_NODE_ID: "0",
-    KAFKA_CFG_PROCESS_ROLES: "controller,broker",
-    KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER",
-    KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP:
-      "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-    KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@localhost:9093",
-    KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093",
-    KAFKA_CFG_ADVERTISED_LISTENERS:
-      `PLAINTEXT://localhost:${kafkaPort},CONTROLLER://:9093`,
-    KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true",
-  })
-  .withReuse()
-  .start();
-
-RequestQueue.prototype.scheduleCheckPendingRequests = () => {};
-
 const sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
 
 addEventListener("unload", async () => {
   await redisContainer.stop();
   await mongoContainer.stop();
-  await kafkaContainer.stop();
 });
 
 defineFixture({
@@ -192,41 +165,6 @@ defineFixture({
   teardown: async ({ client, db }) => {
     await db.dropDatabase();
     await client.close();
-  },
-});
-
-defineFixture({
-  token: "Kafka",
-  factory: async () => {
-    const resource = new KafkaResource({
-      clientId: "mycelia-test",
-      brokers: [`localhost:${kafkaPort}`],
-      enforceRequestTimeout: false,
-    });
-    defaultResourceManager.registerResource(resource);
-
-    const admin = resource.kafka.admin();
-    return {
-      resource,
-      admin,
-    };
-  },
-  teardown: async ({ admin }) => {
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await admin.connect();
-
-      const allTopics = await admin.listTopics();
-      const userTopics = allTopics.filter((t: string) => !t.startsWith("__"));
-
-      if (userTopics.length > 0) {
-        await admin.deleteTopics({ topics: userTopics });
-      }
-
-      await admin.disconnect();
-    } catch (error) {
-      console.error("Error during Kafka teardown:", error);
-    }
   },
 });
 

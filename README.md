@@ -87,7 +87,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/your-org/mycelia.git
 cd mycelia
 
-# Start the services (MongoDB, Redis, Kafka)
+# Start the services (MongoDB, Redis)
 docker compose up -d
 
 # Configure environment

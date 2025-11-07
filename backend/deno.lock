@@ -12,6 +12,7 @@
     "jsr:@std/assert@^1.0.14": "1.0.15",
     "jsr:@std/assert@^1.0.15": "1.0.15",
     "jsr:@std/assert@~1.0.6": "1.0.15",
+    "jsr:@std/async@^1.0.15": "1.0.15",
     "jsr:@std/async@^1.0.8": "1.0.15",
     "jsr:@std/bytes@^1.0.6": "1.0.6",
     "jsr:@std/crypto@^1.0.5": "1.0.5",
@@ -73,7 +74,6 @@
     "npm:@remix-run/serve@^2.16.5": "2.17.1_express@4.21.2_typescript@5.9.3",
     "npm:@tailwindcss/postcss@^4.1.5": "4.1.14",
     "npm:@tailwindcss/vite@^4.0.14": "4.1.14_vite@6.3.6__@types+node@24.7.1__tsx@4.20.6__picomatch@4.0.3_@types+node@24.7.1_tsx@4.20.6",
-    "npm:@testcontainers/kafka@^11.4.0": "11.7.1",
     "npm:@testcontainers/mongodb@^11.4.0": "11.7.1",
     "npm:@types/d3@^7.4.3": "7.4.3",
     "npm:@types/jsonwebtoken@^9.0.8": "9.0.10",
@@ -112,7 +112,6 @@
     "npm:isbot@^4.1.0": "4.4.0",
     "npm:jose@^6.0.10": "6.1.0",
     "npm:jsonwebtoken@^9.0.2": "9.0.2",
-    "npm:kafkajs@^2.2.4": "2.2.4",
     "npm:keytar@^7.9.0": "7.9.0",
     "npm:leaflet@^1.9.4": "1.9.4",
     "npm:lodash@^4.17.21": "4.17.21",
@@ -291,6 +290,7 @@
       "integrity": "a917ffdeb5924c9be436dc78bc32e511760e14d3a96e49c607fc5ecca86d0092",
       "dependencies": [
         "jsr:@std/assert@^1.0.15",
+        "jsr:@std/async@^1.0.15",
         "jsr:@std/data-structures",
         "jsr:@std/fs@^1.0.19",
         "jsr:@std/internal@^1.0.12",
@@ -2773,13 +2773,6 @@
         "@tailwindcss/oxide",
         "tailwindcss",
         "vite@6.3.6_@types+node@24.7.1_tsx@4.20.6_picomatch@4.0.3"
-      ]
-    },
-    "@testcontainers/kafka@11.7.1": {
-      "integrity": "sha512-4JtPFxXX6lGKN81geTQN97llmdZsPujw0S1zaM58XXVpUdGauOZhG2O7vPb+GdtmJKwnfzn+uH007LmGkFka8Q==",
-      "dependencies": [
-        "compare-versions",
-        "testcontainers"
       ]
     },
     "@testcontainers/mongodb@11.7.1": {
@@ -6231,9 +6224,6 @@
         "jwa",
         "safe-buffer@5.2.1"
       ]
-    },
-    "kafkajs@2.2.4": {
-      "integrity": "sha512-j/YeapB1vfPT2iOIUn/vxdyKEuhuY2PxMBvf5JWux6iSaukAccrMtXEY/Lb7OvavDhOWME589bpLrEdnVHjfjA=="
     },
     "keycharm@0.4.0": {
       "integrity": "sha512-TyQTtsabOVv3MeOpR92sIKk/br9wxS+zGj4BG7CR8YbK4jM3tyIBaF0zhzeBUMx36/Q/iQLOKKOT+3jOQtemRQ=="
@@ -9700,7 +9690,6 @@
         "npm:@remix-run/serve@^2.16.5",
         "npm:@tailwindcss/postcss@^4.1.5",
         "npm:@tailwindcss/vite@^4.0.14",
-        "npm:@testcontainers/kafka@^11.4.0",
         "npm:@testcontainers/mongodb@^11.4.0",
         "npm:@types/d3@^7.4.3",
         "npm:@types/jsonwebtoken@^9.0.8",
@@ -9735,7 +9724,6 @@
         "npm:isbot@^4.1.0",
         "npm:jose@^6.0.10",
         "npm:jsonwebtoken@^9.0.2",
-        "npm:kafkajs@^2.2.4",
         "npm:keytar@^7.9.0",
         "npm:leaflet@^1.9.4",
         "npm:lodash@^4.17.21",
