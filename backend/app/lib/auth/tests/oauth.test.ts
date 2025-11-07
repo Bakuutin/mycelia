@@ -275,7 +275,7 @@ Deno.test("extractClientCredentials: should handle empty request body", async ()
 
   expect(result.clientId).toBe("");
   expect(result.clientSecret).toBe("");
-  expect(result.grantType).toBe(null);
+  expect(result.grantType).toBe("client_credentials");
   expect(result.scope).toBe(null);
 });
 

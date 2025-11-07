@@ -125,7 +125,7 @@ export class ResourceManager {
       }))
     );
 
-    const unmatchedActions = new Set<FlatResourceAction>();
+    const unmatchedActions = new Set<FlatResourceAction>(flatActions);
 
     const matchedPolicies: Policy[] = [];
 

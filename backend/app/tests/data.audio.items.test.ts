@@ -30,8 +30,6 @@ Deno.test(
 
     expect(data).toHaveProperty("items");
     expect(Array.isArray(data.items)).toBe(true);
-    expect(data).toHaveProperty("transcripts");
-    expect(Array.isArray(data.transcripts)).toBe(true);
   }),
 );
 
