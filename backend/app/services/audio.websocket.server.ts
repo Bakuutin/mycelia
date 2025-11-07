@@ -1,10 +1,14 @@
-import { authenticate, type Auth } from "@/lib/auth/core.server.ts";
+import { type Auth, authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { type WyomingHeader } from "@/lib/audio/wyoming.ts";
 import { Buffer } from "node:buffer";
 import type { IncomingMessage } from "node:http";
-import { createSourceFile, createAudioChunk } from "@/services/streaming.server.ts";
+import {
+  createAudioChunk,
+  createSourceFile,
+} from "@/services/streaming.server.ts";
 import { ObjectId } from "mongodb";
 import Denque from "denque";
+import { defaultResourceManager } from "@/lib/auth/index.ts";
 
 const CHUNK_DURATION_SECONDS = 10;
 
@@ -77,9 +81,9 @@ class PcmWebSocketSession {
     this.bytesFlushed = 0;
     this.chunkIndex = 0;
     this.buffer.clear();
-    
-    const bytesPerSecond =
-      audioFormat.rate * audioFormat.width * audioFormat.channels;
+
+    const bytesPerSecond = audioFormat.rate * audioFormat.width *
+      audioFormat.channels;
     this.bytesPerChunk = bytesPerSecond * CHUNK_DURATION_SECONDS;
 
     const metadata = {
@@ -91,7 +95,9 @@ class PcmWebSocketSession {
       source: "websocket",
     };
 
-    const filename = `audio_${audioFormat.timestamp || Date.now()}_${Date.now()}.pcm`;
+    const filename = `audio_${
+      audioFormat.timestamp || Date.now()
+    }_${Date.now()}.pcm`;
 
     try {
       this.sourceFileId = await createSourceFile(
@@ -101,15 +107,20 @@ class PcmWebSocketSession {
         metadata,
         this.auth.principal,
       );
-      const formatDescription = `${audioFormat.rate}Hz ${audioFormat.width * 8}bit ${audioFormat.channels}ch`;
+      const formatDescription = `${audioFormat.rate}Hz ${
+        audioFormat.width * 8
+      }bit ${audioFormat.channels}ch`;
       console.log(
         `Created SourceFile: ${this.sourceFileId.toString()}, start: ${startTime.toISOString()}, format: ${formatDescription}`,
       );
     } catch (error) {
       console.error("Failed to create SourceFile:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : "Failed to create source file";
-      this.ws.send(JSON.stringify({ type: "error", message: errorMessage }) + "\n");
+      const errorMessage = error instanceof Error
+        ? error.message
+        : "Failed to create source file";
+      this.ws.send(
+        JSON.stringify({ type: "error", message: errorMessage }) + "\n",
+      );
     }
   }
 
@@ -128,9 +139,13 @@ class PcmWebSocketSession {
       return;
     }
 
-    if (this.audioFormat && audioData.byteLength % this.audioFormat.width !== 0) {
+    if (
+      this.audioFormat && audioData.byteLength % this.audioFormat.width !== 0
+    ) {
       console.warn(
-        `Audio data length ${audioData.byteLength} is not divisible by ${this.audioFormat.width} (${this.audioFormat.width * 8}-bit float requires ${this.audioFormat.width} bytes per sample)`
+        `Audio data length ${audioData.byteLength} is not divisible by ${this.audioFormat.width} (${
+          this.audioFormat.width * 8
+        }-bit float requires ${this.audioFormat.width} bytes per sample)`,
       );
     }
 
@@ -144,8 +159,8 @@ class PcmWebSocketSession {
     if (!this.audioFormat) {
       return 0;
     }
-    const bytesPerSecond =
-      this.audioFormat.rate * this.audioFormat.width * this.audioFormat.channels;
+    const bytesPerSecond = this.audioFormat.rate * this.audioFormat.width *
+      this.audioFormat.channels;
     return bytes / bytesPerSecond;
   }
 
@@ -160,7 +175,6 @@ class PcmWebSocketSession {
   private getBufferSize(): number {
     return this.buffer.length;
   }
-
 
   private async checkAndFlushIfNeeded(): Promise<void> {
     if (!this.sourceFileId || !this.audioFormat) {
@@ -178,7 +192,7 @@ class PcmWebSocketSession {
       }
 
       const numberOfChunks = Math.floor(currentBufferSize / this.bytesPerChunk);
-      
+
       for (let i = 0; i < numberOfChunks; i++) {
         const remainingBufferSize = this.getBufferSize();
         if (remainingBufferSize < this.bytesPerChunk) {
@@ -190,27 +204,28 @@ class PcmWebSocketSession {
   }
 
   private async flush(flushAll: boolean = false): Promise<void> {
-    if (!this.sourceFileId || !this.startedAt || !this.audioFormat || !this.buffer.length) {
+    if (
+      !this.sourceFileId || !this.startedAt || !this.audioFormat ||
+      !this.buffer.length
+    ) {
       return;
     }
 
     while (this.buffer.length > 0) {
       const hasWholeChunk = this.buffer.length >= this.bytesPerChunk;
-      
+
       if (!flushAll && !hasWholeChunk) {
         break;
       }
 
-      const bytesToFlush = flushAll 
-        ? this.buffer.length 
-        : this.bytesPerChunk;
-      
+      const bytesToFlush = flushAll ? this.buffer.length : this.bytesPerChunk;
+
       if (bytesToFlush === 0) {
         break;
       }
 
       const audioData = new Uint8Array(bytesToFlush);
-      
+
       for (let i = 0; i < bytesToFlush; i++) {
         const byte = this.buffer.shift();
         if (byte === undefined) {
@@ -229,14 +244,14 @@ class PcmWebSocketSession {
           this.sourceFileId,
           "float32",
         );
-        const logMessage = flushAll 
+        const logMessage = flushAll
           ? `Flushed final audio chunk ${this.chunkIndex}, size: ${audioData.length} bytes, start: ${chunkStartTime.toISOString()}`
           : `Flushed audio chunk ${this.chunkIndex}, size: ${audioData.length} bytes, start: ${chunkStartTime.toISOString()}`;
         console.log(logMessage);
         this.bytesFlushed += audioData.length;
         this.chunkIndex++;
       } catch (error) {
-        const errorMessage = flushAll 
+        const errorMessage = flushAll
           ? "Failed to flush final audio chunk:"
           : "Failed to flush audio chunk:";
         console.error(errorMessage, error);
@@ -273,13 +288,18 @@ class WyomingPayloadHandler {
     this.expectedMessageType = messageType || null;
   }
 
-  addChunk(data: Uint8Array): { payload: Uint8Array; messageType: string | null } | null {
+  addChunk(
+    data: Uint8Array,
+  ): { payload: Uint8Array; messageType: string | null } | null {
     if (this.expectingLength === 0) {
       return null;
     }
 
     this.buffer.push(data);
-    const totalLength = this.buffer.reduce((sum, chunk) => sum + chunk.length, 0);
+    const totalLength = this.buffer.reduce(
+      (sum, chunk) => sum + chunk.length,
+      0,
+    );
 
     if (totalLength < this.expectingLength) {
       return null;
@@ -298,7 +318,7 @@ class WyomingPayloadHandler {
     this.buffer = [];
     this.expectingLength = 0;
     this.expectedMessageType = null;
-    
+
     return { payload: combined, messageType };
   }
 }
@@ -329,10 +349,12 @@ function handlePing(ws: WebSocket | any): void {
   ws.send(JSON.stringify({ type: "pong" }) + "\n");
 }
 
-async function createRequestFromUpgrade(upgrade: IncomingMessage): Promise<Request> {
+async function createRequestFromUpgrade(
+  upgrade: IncomingMessage,
+): Promise<Request> {
   const url = upgrade.url || "/";
   const headers = new Headers();
-  
+
   for (const [key, value] of Object.entries(upgrade.headers)) {
     if (value) {
       if (Array.isArray(value)) {
@@ -345,7 +367,7 @@ async function createRequestFromUpgrade(upgrade: IncomingMessage): Promise<Reque
 
   const urlObj = new URL(url, `http://${upgrade.headers.host || "localhost"}`);
   const tokenParam = urlObj.searchParams.get("token");
-  
+
   if (tokenParam && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${tokenParam}`);
   }
@@ -361,12 +383,11 @@ export async function handlePcmWebSocket(
   upgrade: IncomingMessage,
 ): Promise<void> {
   const request = await createRequestFromUpgrade(upgrade);
-  const auth = await authenticate(request);
-  if (!auth) {
-    ws.close(401, "Unauthorized");
-    return;
-  }
-
+  const auth = await authenticateOr401(request);
+  await defaultResourceManager.ensureAllowed(
+    auth,
+    { path: "live.audio", actions: ["write"] },
+  );
   return new Promise((resolve, reject) => {
     const session = new PcmWebSocketSession(auth, ws);
     const payloadHandler = new WyomingPayloadHandler();
@@ -381,19 +402,22 @@ export async function handlePcmWebSocket(
           const headerBytes = binaryData.slice(0, newlineIndex + 1);
           const headerText = new TextDecoder().decode(headerBytes);
           const header = parseWyomingHeader(headerText.trim());
-          
+
           if (header && header.payload_length !== undefined) {
             const payloadStart = newlineIndex + 1;
             const payloadData = binaryData.slice(payloadStart);
-            
+
             if (payloadData.length === header.payload_length) {
               if (header.type === "audio-chunk") {
                 await session.addAudioData(payloadData);
               }
               return;
             }
-            
-            payloadHandler.setExpectedLength(header.payload_length, header.type);
+
+            payloadHandler.setExpectedLength(
+              header.payload_length,
+              header.type,
+            );
             const payloadResult = payloadHandler.addChunk(payloadData);
             if (payloadResult) {
               const { payload, messageType } = payloadResult;
@@ -459,7 +483,10 @@ export async function handlePcmWebSocket(
       }
     };
 
-    const handleMessage = async (data: any, isBinary: boolean): Promise<void> => {
+    const handleMessage = async (
+      data: any,
+      isBinary: boolean,
+    ): Promise<void> => {
       try {
         if (isBinary) {
           await handleBinaryMessage(data);
@@ -532,7 +559,9 @@ export async function handlePcmWebSocket(
       );
     } else {
       reject(
-        new Error("WebSocket object does not support 'on' or 'addEventListener' methods"),
+        new Error(
+          "WebSocket object does not support 'on' or 'addEventListener' methods",
+        ),
       );
     }
   });

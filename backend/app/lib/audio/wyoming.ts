@@ -12,11 +12,21 @@ export interface WyomingMessage {
   payload: Uint8Array | null;
 }
 
-function isBuffer(obj: any): obj is { isBuffer(): boolean; buffer: ArrayBuffer; byteOffset: number; byteLength: number } {
+function isBuffer(
+  obj: any,
+): obj is {
+  isBuffer(): boolean;
+  buffer: ArrayBuffer;
+  byteOffset: number;
+  byteLength: number;
+} {
   if (obj && typeof obj.isBuffer === "function") {
     return obj.isBuffer();
   }
-  if (obj && typeof Buffer !== "undefined" && Buffer.isBuffer && Buffer.isBuffer(obj)) {
+  if (
+    obj && typeof Buffer !== "undefined" && Buffer.isBuffer &&
+    Buffer.isBuffer(obj)
+  ) {
     return true;
   }
   return false;
@@ -49,7 +59,9 @@ export async function parseWyomingProtocol(
 
       const eventData = event.data;
       if (typeof eventData === "string" || isBuffer(eventData)) {
-        const headerText = typeof eventData === "string" ? eventData : eventData.toString();
+        const headerText = typeof eventData === "string"
+          ? eventData
+          : eventData.toString();
         const jsonLine = headerText.trim();
 
         try {
@@ -69,7 +81,11 @@ export async function parseWyomingProtocol(
               } else if (payloadData instanceof Uint8Array) {
                 resolve({ header, payload: payloadData });
               } else if (isBuffer(payloadData)) {
-                const payload = new Uint8Array(payloadData.buffer, payloadData.byteOffset, payloadData.byteLength);
+                const payload = new Uint8Array(
+                  payloadData.buffer,
+                  payloadData.byteOffset,
+                  payloadData.byteLength,
+                );
                 resolve({ header, payload });
               } else {
                 reject(
@@ -89,7 +105,9 @@ export async function parseWyomingProtocol(
         } catch (error) {
           reject(
             new Error(
-              `Failed to parse Wyoming protocol header: ${error instanceof Error ? error.message : "Unknown error"}`,
+              `Failed to parse Wyoming protocol header: ${
+                error instanceof Error ? error.message : "Unknown error"
+              }`,
             ),
           );
         }
@@ -115,7 +133,9 @@ export async function parseWyomingProtocol(
       ws.removeEventListener("close", handleClose);
       reject(
         new Error(
-          `WebSocket closed. Code: ${event.code}, Reason: ${event.reason || "No reason provided"}`,
+          `WebSocket closed. Code: ${event.code}, Reason: ${
+            event.reason || "No reason provided"
+          }`,
         ),
       );
     };
@@ -125,4 +145,3 @@ export async function parseWyomingProtocol(
     ws.addEventListener("close", handleClose);
   });
 }
-

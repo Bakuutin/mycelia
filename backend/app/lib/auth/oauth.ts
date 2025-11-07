@@ -56,8 +56,10 @@ export async function extractClientCredentials(
   const scope = params.get("scope");
   const clientIdFromHeader = basic?.clientId || "";
   const clientSecretFromHeader = basic?.clientSecret || "";
-  const clientIdFromQuery = params.get("client_id") || params.get("username") || "";
-  const clientSecretFromQuery = params.get("client_secret") || params.get("password") || "";
+  const clientIdFromQuery = params.get("client_id") || params.get("username") ||
+    "";
+  const clientSecretFromQuery = params.get("client_secret") ||
+    params.get("password") || "";
   const clientId = clientIdFromQuery || clientIdFromHeader;
   const clientSecret = clientSecretFromQuery || clientSecretFromHeader;
   return { clientId, clientSecret, grantType, scope };

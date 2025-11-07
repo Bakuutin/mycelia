@@ -84,7 +84,13 @@ const xreadgroupSchema = z.object({
 
 const xgroupSchema = z.object({
   action: z.literal("xgroup"),
-  operation: z.enum(["CREATE", "CREATECONSUMER", "DELCONSUMER", "DESTROY", "SETID"]),
+  operation: z.enum([
+    "CREATE",
+    "CREATECONSUMER",
+    "DELCONSUMER",
+    "DESTROY",
+    "SETID",
+  ]),
   key: z.string(),
   group: z.string(),
   id: z.string().optional(),
@@ -181,7 +187,9 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
         for (const [key, value] of Object.entries(input.fields)) {
           fieldsArray.push(key, value);
         }
-        const args = input.id ? [input.key, input.id, ...fieldsArray] : [input.key, "*", ...fieldsArray];
+        const args = input.id
+          ? [input.key, input.id, ...fieldsArray]
+          : [input.key, "*", ...fieldsArray];
         return redis.xadd(...(args as [string, string, ...string[]]));
       }
       case "xread": {
@@ -220,7 +228,10 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
           if (input.mkstream && input.operation === "CREATE") {
             args.push("MKSTREAM");
           }
-        } else if (input.operation === "CREATECONSUMER" || input.operation === "DELCONSUMER") {
+        } else if (
+          input.operation === "CREATECONSUMER" ||
+          input.operation === "DELCONSUMER"
+        ) {
           if (input.consumer) {
             args.push(input.consumer);
           }
@@ -228,7 +239,11 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
         return (redis.xgroup as any).apply(redis, args);
       }
       case "xack":
-        return redis.xack(input.key, input.group, ...(input.ids as [string, ...string[]]));
+        return redis.xack(
+          input.key,
+          input.group,
+          ...(input.ids as [string, ...string[]]),
+        );
       case "xdel":
         return redis.xdel(input.key, ...(input.ids as [string, ...string[]]));
       case "xrange": {
@@ -266,7 +281,7 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
 
   extractActions(input: RedisRequest) {
     let keys: string[];
-    
+
     if (input.action === "del") {
       keys = input.keys;
     } else if (input.action === "xread" || input.action === "xreadgroup") {

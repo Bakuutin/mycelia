@@ -139,10 +139,10 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     request: mongoRequestSchema,
     response: z.any(),
   };
-  
+
   // Cache for collection existence checks to avoid repeated database calls
   private collectionExistsCache = new Set<string>();
-  
+
   // Method to clear the cache (useful for testing or if collections are dropped externally)
   clearCollectionCache(): void {
     this.collectionExistsCache.clear();
@@ -150,25 +150,29 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
   async getRootDB(): Promise<Db> {
     return getRootDB();
   }
-  
+
   async ensureCollectionExists(db: Db, collectionName: string): Promise<void> {
     // Check cache first - if we've already verified this collection exists, skip the check
     if (this.collectionExistsCache.has(collectionName)) {
       return;
     }
-    
+
     try {
-      const collections = await db.listCollections({ name: collectionName }).toArray();
-      
+      const collections = await db.listCollections({ name: collectionName })
+        .toArray();
+
       if (collections.length === 0) {
         await db.createCollection(collectionName);
         console.log(`Auto-created collection: ${collectionName}`);
       }
-      
+
       // Add to cache after successful verification/creation
       this.collectionExistsCache.add(collectionName);
     } catch (error) {
-      console.error(`Failed to ensure collection ${collectionName} exists:`, error);
+      console.error(
+        `Failed to ensure collection ${collectionName} exists:`,
+        error,
+      );
       // Don't add to cache on error - we'll try again next time
       // Don't throw the error - let the operation continue
       // The operation will fail gracefully if the collection truly doesn't exist
@@ -176,49 +180,62 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
   }
   async use(input: MongoRequest): Promise<MongoResponse> {
     const db = await this.getRootDB();
-    
+
     // Check if collection exists and create if it doesn't
     await this.ensureCollectionExists(db, input.collection);
-    
+
     const collection = db.collection(input.collection);
-    
+
     try {
       switch (input.action) {
-      case "find":
-        return collection.find(input.query, input.options).toArray();
-      case "findOne":
-        return collection.findOne(input.query, input.options);
-      case "insertOne":
-        return collection.insertOne(input.doc);
-      case "insertMany":
-        return collection.insertMany(input.docs);
-      case "updateOne":
-        return collection.updateOne(input.query, input.update);
-      case "updateMany":
-        return collection.updateMany(input.query, input.update, input.options);
-      case "deleteOne":
-        return collection.deleteOne(input.query);
-      case "deleteMany":
-        return collection.deleteMany(input.query);
-      case "count":
-        return collection.countDocuments(input.query);
-      case "aggregate":
-        return collection.aggregate(input.pipeline, input.options).toArray();
-      case "bulkWrite":
-        return collection.bulkWrite(input.operations as any, input.options);
-      case "createIndex":
-        return collection.createIndex(input.index, input.options);
-      case "listIndexes":
-        if (!(await db.listCollections({ name: input.collection }).hasNext())) {
-          return [];
-        }
-        return collection.indexes();
-      default:
-        throw new Error("Unknown action");
+        case "find":
+          return collection.find(input.query, input.options).toArray();
+        case "findOne":
+          return collection.findOne(input.query, input.options);
+        case "insertOne":
+          return collection.insertOne(input.doc);
+        case "insertMany":
+          return collection.insertMany(input.docs);
+        case "updateOne":
+          return collection.updateOne(input.query, input.update);
+        case "updateMany":
+          return collection.updateMany(
+            input.query,
+            input.update,
+            input.options,
+          );
+        case "deleteOne":
+          return collection.deleteOne(input.query);
+        case "deleteMany":
+          return collection.deleteMany(input.query);
+        case "count":
+          return collection.countDocuments(input.query);
+        case "aggregate":
+          return collection.aggregate(input.pipeline, input.options).toArray();
+        case "bulkWrite":
+          return collection.bulkWrite(input.operations as any, input.options);
+        case "createIndex":
+          return collection.createIndex(input.index, input.options);
+        case "listIndexes":
+          if (
+            !(await db.listCollections({ name: input.collection }).hasNext())
+          ) {
+            return [];
+          }
+          return collection.indexes();
+        default:
+          throw new Error("Unknown action");
       }
     } catch (error) {
-      console.error(`MongoDB operation failed on collection ${input.collection}:`, error);
-      throw new Error(`Database operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(
+        `MongoDB operation failed on collection ${input.collection}:`,
+        error,
+      );
+      throw new Error(
+        `Database operation failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
     }
   }
 

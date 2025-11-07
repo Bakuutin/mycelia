@@ -3,16 +3,19 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { ObjectId } from "bson";
-import { tracer, meter } from "@/lib/telemetry.ts";
+import { meter, tracer } from "@/lib/telemetry.ts";
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
   description: "Total number of LLM requests",
 });
 
-const llmRequestDuration = meter.createHistogram("llm_request_duration_seconds", {
-  description: "Duration of LLM requests",
-  unit: "s",
-});
+const llmRequestDuration = meter.createHistogram(
+  "llm_request_duration_seconds",
+  {
+    description: "Duration of LLM requests",
+    unit: "s",
+  },
+);
 
 const llmErrorsCounter = meter.createCounter("llm_errors_total", {
   description: "Total number of LLM errors",
@@ -83,41 +86,50 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
     try {
       llmRequestCounter.add(1, { action: input.action, model: input.model });
-      
+
       switch (input.action) {
         case "completions": {
           const { action, ...body } = input;
-          
+
           const model = await this.getModel(input.model);
           if (!model) {
-            llmErrorsCounter.add(1, { error_type: "model_not_found", model: input.model });
-            span.setStatus({ code: 2, message: `Model ${input.model} not found` });
+            llmErrorsCounter.add(1, {
+              error_type: "model_not_found",
+              model: input.model,
+            });
+            span.setStatus({
+              code: 2,
+              message: `Model ${input.model} not found`,
+            });
             throw new Error(`Model ${input.model} not found`);
           }
-          
+
           span.setAttributes({
             "llm.model_alias": model.alias,
             "llm.model_name": model.name,
             "llm.provider": model.provider,
             "llm.has_api_key": !!model.apiKey,
           });
-          
+
           const requestBody = {
             ...body,
             model: model.name,
           };
-          
-          const proxyResponse = await fetch(model.baseUrl.replace(/\/$/, '') + '/chat/completions', {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${model.apiKey}`,
+
+          const proxyResponse = await fetch(
+            model.baseUrl.replace(/\/$/, "") + "/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${model.apiKey}`,
+              },
+              body: JSON.stringify({
+                ...requestBody,
+                model: model.name,
+              }),
             },
-            body: JSON.stringify({
-              ...requestBody,
-              model: model.name,
-            }),
-          });
+          );
 
           span.setAttributes({
             "llm.response_status": proxyResponse.status,
@@ -126,45 +138,58 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           if (!proxyResponse.ok) {
             const errorBody = await proxyResponse.text();
-            llmErrorsCounter.add(1, { 
-              error_type: "api_error", 
+            llmErrorsCounter.add(1, {
+              error_type: "api_error",
               model: input.model,
-              status_code: proxyResponse.status.toString()
+              status_code: proxyResponse.status.toString(),
             });
-            span.setStatus({ code: 2, message: `API error: ${proxyResponse.status}` });
+            span.setStatus({
+              code: 2,
+              message: `API error: ${proxyResponse.status}`,
+            });
             throw new Error(`Failed to get model ${input.model}: ${errorBody}`);
           }
-          
+
           // Check if streaming is requested
           if (input.stream) {
             span.setStatus({ code: 1 }); // Success
             return new Response(proxyResponse.body, {
               headers: {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
               },
             });
           }
-          
+
           const responseText = await proxyResponse.text();
-          
+
           try {
             const jsonResponse = JSON.parse(responseText);
             span.setStatus({ code: 1 }); // Success
             return jsonResponse;
           } catch (parseError) {
-            llmErrorsCounter.add(1, { 
-              error_type: "json_parse_error", 
-              model: input.model 
+            llmErrorsCounter.add(1, {
+              error_type: "json_parse_error",
+              model: input.model,
             });
-            const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown parse error';
-            span.setStatus({ code: 2, message: `JSON parse error: ${errorMessage}` });
-            throw new Error(`Invalid JSON response from model: ${errorMessage}`);
+            const errorMessage = parseError instanceof Error
+              ? parseError.message
+              : "Unknown parse error";
+            span.setStatus({
+              code: 2,
+              message: `JSON parse error: ${errorMessage}`,
+            });
+            throw new Error(
+              `Invalid JSON response from model: ${errorMessage}`,
+            );
           }
         }
         default:
-          llmErrorsCounter.add(1, { error_type: "unknown_action", action: input.action });
+          llmErrorsCounter.add(1, {
+            error_type: "unknown_action",
+            action: input.action,
+          });
           span.setStatus({ code: 2, message: "Unknown action" });
           throw new Error("Unknown action");
       }
@@ -173,9 +198,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
       throw error;
     } finally {
       const duration = (performance.now() - startTime) / 1000;
-      llmRequestDuration.record(duration, { 
-        action: input.action, 
-        model: input.model 
+      llmRequestDuration.record(duration, {
+        action: input.action,
+        model: input.model,
       });
       span.setAttributes({ "llm.duration_seconds": duration });
       span.end();

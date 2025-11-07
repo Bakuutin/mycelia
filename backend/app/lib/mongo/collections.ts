@@ -68,8 +68,8 @@ async function ensureIndexExists(
 ): Promise<void> {
   const collection = db.collection(collectionName);
   const indexes = await collection.listIndexes().toArray();
-  
-  const indexExists = indexes.some(index => {
+
+  const indexExists = indexes.some((index) => {
     if (indexName) {
       return index.name === indexName;
     }
@@ -79,7 +79,11 @@ async function ensureIndexExists(
 
   if (!indexExists) {
     await collection.createIndex(indexSpec, { name: indexName });
-    console.log(`Created index on ${collectionName}: ${indexName || JSON.stringify(indexSpec)}`);
+    console.log(
+      `Created index on ${collectionName}: ${
+        indexName || JSON.stringify(indexSpec)
+      }`,
+    );
   }
 }
 
@@ -89,10 +93,10 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
     "objects",
     {
       name: "text",
-      aliases: "text", 
-      details: "text"
+      aliases: "text",
+      details: "text",
     },
-    "text_search_index"
+    "text_search_index",
   );
 }
 
@@ -112,7 +116,7 @@ export async function ensureAllCollectionsExist(): Promise<void> {
   }
 
   console.log("Ensuring indexes exist...");
-  
+
   // Ensure indexes for specific collections
   await ensureObjectsIndexes(db);
 

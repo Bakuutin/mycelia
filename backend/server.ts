@@ -1,6 +1,6 @@
 import "@/lib/telemetry.ts";
-import yargs, { type Argv, type ArgumentsCamelCase } from 'yargs';
-import { hideBin } from 'yargs/helpers';
+import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
+import { hideBin } from "yargs/helpers";
 import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
@@ -94,9 +94,13 @@ async function startServer(host: string, port: number, isProduction: boolean) {
     const serverBuildPath = path.resolve("./build/server/index.js");
     const clientAssetsDir = path.resolve("./build/client");
     console.log(`Loading server build from ${serverBuildPath}`);
-    const build: ServerBuild = await import(pathToFileURL(serverBuildPath).href);
-    
-    console.log(`Serving static assets from ${clientAssetsDir} at ${build.publicPath}`);
+    const build: ServerBuild = await import(
+      pathToFileURL(serverBuildPath).href
+    );
+
+    console.log(
+      `Serving static assets from ${clientAssetsDir} at ${build.publicPath}`,
+    );
     app.use(
       build.publicPath,
       express.static(clientAssetsDir, {
@@ -112,14 +116,21 @@ async function startServer(host: string, port: number, isProduction: boolean) {
     );
   } else {
     app.use(express.static("public", { maxAge: "1h" }));
-    
+
     app.use(viteServer!.middlewares);
-    
+
     app.all("*", async (req: Request, res: Response, next: () => void) => {
       try {
-        const serverBuildModule = await viteServer!.ssrLoadModule("virtual:remix/server-build");
-        const build = serverBuildModule.default || serverBuildModule as ServerBuild;
-        return createRequestHandler({ build, mode: "development" })(req, res, next);
+        const serverBuildModule = await viteServer!.ssrLoadModule(
+          "virtual:remix/server-build",
+        );
+        const build = serverBuildModule.default ||
+          serverBuildModule as ServerBuild;
+        return createRequestHandler({ build, mode: "development" })(
+          req,
+          res,
+          next,
+        );
       } catch (error) {
         console.error("Error loading Remix build:", error);
         next();
@@ -133,7 +144,11 @@ async function startServer(host: string, port: number, isProduction: boolean) {
   });
 
   httpServer.listen(port, host, () => {
-    console.log(`Server is running on ${host}:${port} (${isProduction ? "production" : "development"})`);
+    console.log(
+      `Server is running on ${host}:${port} (${
+        isProduction ? "production" : "development"
+      })`,
+    );
     console.log(`Open http://${host}:${port}`);
   });
 
@@ -183,7 +198,9 @@ async function configureCli() {
             describe: "Serve in production mode",
             default: false,
           }),
-      async (args: ArgumentsCamelCase<{ host: string; port: number; prod: boolean }>) => {
+      async (
+        args: ArgumentsCamelCase<{ host: string; port: number; prod: boolean }>,
+      ) => {
         try {
           const host = String(args.host);
           const port = Number(args.port);
@@ -238,7 +255,10 @@ async function configureCli() {
       async (args: ArgumentsCamelCase<{ token?: string }>) => {
         let token = args.token as string | undefined;
         if (!token) {
-          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          const rl = createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
           token = await rl.question("Enter the token: ");
           await rl.close();
         }

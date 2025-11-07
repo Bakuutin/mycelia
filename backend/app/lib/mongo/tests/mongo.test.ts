@@ -101,26 +101,26 @@ Deno.test(
     "Mongo",
   ], async (auth: Auth) => {
     const mongo = await getMongoResource(auth);
-    
+
     // Use a unique collection name that definitely doesn't exist
     const uniqueCollectionName = `test_collection_${Date.now()}`;
-    
+
     // Try to insert into a non-existent collection - should auto-create it
     const result = await mongo({
       action: "insertOne",
       collection: uniqueCollectionName,
       doc: { name: "Test Document", createdAt: new Date() },
     });
-    
+
     expect(result.insertedId).toBeInstanceOf(ObjectId);
-    
+
     // Verify the document was actually inserted
     const foundDoc = await mongo({
       action: "findOne",
       collection: uniqueCollectionName,
       query: { _id: result.insertedId },
     });
-    
+
     expect(foundDoc).toHaveProperty("name", "Test Document");
     expect(foundDoc).toHaveProperty("createdAt");
   }),
@@ -133,35 +133,35 @@ Deno.test(
     "Mongo",
   ], async (auth: Auth) => {
     const mongo = await getMongoResource(auth);
-    
+
     // Use a unique collection name
     const uniqueCollectionName = `cache_test_${Date.now()}`;
-    
+
     // First operation should create the collection and cache it
     const result1 = await mongo({
       action: "insertOne",
       collection: uniqueCollectionName,
       doc: { name: "First Document" },
     });
-    
+
     expect(result1.insertedId).toBeInstanceOf(ObjectId);
-    
+
     // Second operation should use the cache (no "Auto-created collection" log)
     const result2 = await mongo({
       action: "insertOne",
       collection: uniqueCollectionName,
       doc: { name: "Second Document" },
     });
-    
+
     expect(result2.insertedId).toBeInstanceOf(ObjectId);
-    
+
     // Verify both documents exist
     const count = await mongo({
       action: "count",
       collection: uniqueCollectionName,
       query: {},
     });
-    
+
     expect(count).toBe(2);
   }),
 );

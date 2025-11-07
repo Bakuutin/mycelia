@@ -225,9 +225,9 @@ export async function invalidateTimelineForData(
 async function ffmpeg(
   inputData: Uint8Array,
   { inputOptions = [], outputOptions }: {
-    inputOptions?: string[],
-    outputOptions: string[],
-  }
+    inputOptions?: string[];
+    outputOptions: string[];
+  },
 ): Promise<Uint8Array> {
   const tempInputPath = await Deno.makeTempFile({ suffix: ".bin" });
   const tempOutputPath = await Deno.makeTempFile({ suffix: ".opus" });
@@ -287,7 +287,10 @@ async function pcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
 async function float32ToOpus(audioData: Uint8Array): Promise<Uint8Array> {
   return await ffmpeg(
     audioData,
-    { inputOptions: ["-f", "f32le", "-ar", "16000", "-ac", "1"], outputOptions: ["-c:a", "libopus", "-b:a", "64k"] },
+    {
+      inputOptions: ["-f", "f32le", "-ar", "16000", "-ac", "1"],
+      outputOptions: ["-c:a", "libopus", "-b:a", "64k"],
+    },
   );
 }
 
@@ -298,7 +301,6 @@ export async function createAudioChunk(
   originalId: ObjectId,
   format: "opus" | "pcm" | "float32" = "opus",
 ): Promise<ObjectId> {
-
   await Deno.writeFile(
     `debug.${format}`,
     audioData,
@@ -309,7 +311,6 @@ export async function createAudioChunk(
   } else if (format == "float32") {
     audioData = await float32ToOpus(audioData);
   }
-
 
   const auth = await getServerAuth();
   const mongoResource = await auth.getResource("tech.mycelia.mongo");
