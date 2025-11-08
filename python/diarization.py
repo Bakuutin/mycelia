@@ -1,23 +1,17 @@
-from chunking import (
-    audio_chunks_collection, read_codec,
+from chunking import ( read_codec,
     sample_rate
 )
 from datetime import datetime, UTC
-from pymongo.collection import Collection
 
-from utils import mongo
 import logging
 
-
+from lib.resources import call_resource
 import time
 from tqdm import tqdm
 import torch
-from pymongo import UpdateOne
 
 logger = logging.getLogger('diarization')
 
-
-diarization_coll: Collection =  mongo['diarizations']
 
 
 model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
@@ -53,35 +47,35 @@ def get_voice_prob(audio):
             max_prob = speech_prob
     return max_prob
 
+def apply_updates(updates):
+    call_resource('tech.mycelia.mongo', {
+        "action": "bulkWrite",
+        "collection": "audio_chunks",
+        "operations": [
+            {
+                "updateOne": {
+                    "filter": {"_id": id},
+                    "update": update,
+                }
+            } for id, update in updates
+        ],
+    })
+
 
 def run_voice_activity_detection(limit=1000, verbose_logs=False):
 
-    total_chunks = audio_chunks_collection.estimated_document_count()
+    chunks_to_process = limit
+    processed_chunks = 0
 
-    if verbose_logs:
-        # very slow on large collections
-        pending_chunks = audio_chunks_collection.count_documents({"vad": None})
-
-        processed_chunks = total_chunks - pending_chunks
-
-        if pending_chunks == 0:
-            logger.info(f"✓ VAD complete: {processed_chunks}/{total_chunks} chunks processed")
-            return
-
-        chunks_to_process = min(limit, pending_chunks) if limit else pending_chunks
-        logger.info(f"Starting VAD: {chunks_to_process} chunks to process, {processed_chunks} already processed (Total: {total_chunks} chunks)")
-    else:
-        chunks_to_process = limit
-        processed_chunks = total_chunks - limit
-
-    cursor = audio_chunks_collection.find(
-        {
+    cursor = call_resource('tech.mycelia.mongo', {
+        "action": "find",
+        "collection": "audio_chunks",
+        "query": {
             "vad": None,
         },
-        sort=[("start", -1)],
-        batch_size=300,
-        limit=limit,
-    )
+        "sort": [("start", -1)],
+        "limit": limit,
+    })
     updates = []
     has_speech = 0
     start_time = time.time()
@@ -89,8 +83,8 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False):
     for i, chunk in enumerate(pbar):
         audio = read_codec(chunk["data"], codec="opus", sample_rate=sample_rate)
         prob = get_voice_prob(audio)
-        updates.append(UpdateOne(
-            {"_id": chunk["_id"]},
+        updates.append((
+            chunk["_id"],
             {
                 "$set": {
                     "vad.ran_at": datetime.now(UTC),
@@ -102,30 +96,13 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False):
         has_speech += prob > vad_threshold
         current_overall = processed_chunks + (i + 1)
 
-        elapsed_time = time.time() - start_time
-        chunks_processed_now = i + 1
-        speed = chunks_processed_now / elapsed_time if elapsed_time > 0 else 0
-
-        remaining_overall = total_chunks - current_overall
-        eta_seconds = remaining_overall / speed if speed > 0 else 0
-
-        if eta_seconds < 60:
-            eta_str = f"{int(eta_seconds)}s"
-        elif eta_seconds < 3600:
-            eta_str = f"{int(eta_seconds / 60)}m {int(eta_seconds % 60)}s"
-        else:
-            hours = int(eta_seconds / 3600)
-            minutes = int((eta_seconds % 3600) / 60)
-            eta_str = f"{hours}h {minutes}m"
-
+        
         pbar.set_postfix({
-            'overall': f"{current_overall}/{total_chunks}",
-            'eta_all': eta_str,
             'has_speech': f"{(has_speech / (i+1)) * 100:.1f}%",
             'ts': chunk['start'].replace(microsecond=0).isoformat(),
         })
         if len(updates) >= 30:
-            audio_chunks_collection.bulk_write(updates)
+            apply_updates(updates)
             updates = []
 
         if limit and i >= limit:
@@ -133,7 +110,7 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False):
 
     # Process any remaining updates
     if updates:
-        audio_chunks_collection.bulk_write(updates)
+        apply_updates(updates)
 
     if verbose_logs:
         new_processed_chunks = processed_chunks + (i + 1)

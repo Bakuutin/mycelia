@@ -11,7 +11,6 @@ import os
 from diarization import run_voice_activity_detection
 import time
 
-from chunking import audio_chunks_collection
 import io
 from pydub import AudioSegment
 from datetime import timedelta

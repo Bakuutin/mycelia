@@ -1,4 +1,3 @@
-from pymongo.collection import Collection
 from datetime import datetime, timedelta
 import io
 
@@ -13,13 +12,16 @@ import numpy as np
 import os
 import logging
 
-from utils import mongo, sample_rate, lazy, sha, TMP_DIR
+import base64
+
+from lib.resources import call_resource
+
+from utils import sample_rate, sha, TMP_DIR
 
 logger = logging.getLogger('chunking')
 
 CHUNK_MAX_LEN = timedelta(seconds=10)
 
-audio_chunks_collection: Collection = lazy(lambda: mongo['audio_chunks'])
 
 def get_tmp_dir(original):
     return os.path.join(TMP_DIR, sha(original))
@@ -138,6 +140,42 @@ def read_codec(source: bytes, codec: str, sample_rate: int = sample_rate) -> np.
     return wav_to_array(io.BytesIO(output_data))
 
 
+def server_side_cursor_find(
+        collection: str,
+        filter: dict,
+        sort: list[tuple[str, int]],
+        batch_size: int = 100,
+):
+    resp = call_resource('tech.mycelia.mongo', {
+        "action": "createCursor",
+        "collection": collection,
+        "filter": filter,
+        "sort": sort,
+        "batchSize": batch_size,
+    })
+    cursor_id = resp["cursor_id"]
+
+    try:
+        while True:
+            batch = call_resource('tech.mycelia.mongo', {
+                "action": "getMore",
+                "collection": collection,
+                "cursor_id": cursor_id,
+                "batchSize": batch_size,
+            })
+            docs = batch["documents"]
+            if not docs:
+                break
+            for doc in docs:
+                yield doc
+    finally:
+        call_resource('tech.mycelia.mongo', {
+            "action": "killCursor",
+            "collection": collection,
+            "cursor_id": cursor_id,
+        })
+
+
 
 class AudioChunkReader:
     cursor: datetime
@@ -145,7 +183,6 @@ class AudioChunkReader:
     def __init__(
             self,
             *,
-            db_collection: Collection,
             filter_chunks: dict,
             start_at,
             fetch_batch_size: int,
@@ -221,11 +258,9 @@ def fetch_audio(
         filter_chunks: dict | None = None,
         prefetch_chunks: int = 10,
         sample_rate: int = sample_rate,
-        db_collection: Collection = audio_chunks_collection,
     ) -> io.BytesIO:
 
     reader = AudioChunkReader(
-        db_collection=db_collection,
         filter_chunks=filter_chunks or {},
         start_at=start,
         fetch_batch_size=prefetch_chunks,
@@ -246,13 +281,21 @@ def ingest_source(original: dict):
 
         for i, [offset, file] in enumerate(chunk_files):
             with open(file, "rb") as f:
-                audio_chunks_collection.insert_one({
-                    "format": "opus",
-                    "original_id": original["_id"],
-                    "index": i,
-                    "ingested_at": datetime.now(UTC),
-                    "start": start + offset,
-                    "data": f.read(),
+                call_resource('tech.mycelia.mongo', {
+                    "action": "insertOne",
+                    "collection": "audio_chunks",
+                    "doc": {
+                        "format": "opus",
+                        "original_id": original["_id"],
+                        "index": i,
+                        "ingested_at": {
+                            "$date": datetime.now(tz=UTC).isoformat()
+                        },
+                        "start": start + offset,
+                        "data": {
+                            "$binary": { "base64": base64.b64encode(f.read()).decode(), "subType": "00"}
+                        },
+                    }
                 })
     finally:
         shutil.rmtree(tmp_dir)

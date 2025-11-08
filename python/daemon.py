@@ -2,19 +2,18 @@
 from lib.config import get_url
 from discovery import Importer
 
-from discovery import source_files
-from pymongo import DESCENDING
 import logging
 from datetime import datetime, UTC
-from diarization import run_voice_activity_detection
+# from diarization import run_voice_activity_detection
 import time
 
 import platform
 
-from chunking import audio_chunks_collection
 import io
 from pydub import AudioSegment
 from datetime import timedelta
+
+from lib.resources import call_resource
 
 
 import settings
@@ -67,13 +66,25 @@ def ingests_missing_sources(limit=None, retry_errors=False):
     if not retry_errors:
         base_query["ingestion.error"] = {"$exists": False}
 
-    total_pending = source_files.count_documents(base_query)
+    total_pending = call_resource('tech.mycelia.mongo', {
+        "action": "count",
+        "collection": "source_files",
+        "query": base_query
+    })
 
-    already_ingested = source_files.count_documents({"ingested": True})
+    already_ingested = call_resource('tech.mycelia.mongo', {
+        "action": "count",
+        "collection": "source_files",
+        "query": {"ingested": True}
+    })
 
-    errored_count = source_files.count_documents({
-        "ingested": False,
-        "ingestion.error": {"$exists": True}
+    errored_count = call_resource('tech.mycelia.mongo', {
+        "action": "count",
+        "collection": "source_files",
+        "query": {
+            "ingested": False,
+            "ingestion.error": {"$exists": True}
+        }
     })
 
     total_files = already_ingested + total_pending + errored_count
@@ -87,9 +98,13 @@ def ingests_missing_sources(limit=None, retry_errors=False):
 
     logger.info(f"Starting ingestion: {total_pending} pending, {already_ingested} already ingested, {errored_count} errored (Total: {total_files} files)")
 
-    query = source_files.find(base_query).sort([('start', DESCENDING)])
-    if limit:
-        query = query.limit(limit)
+    query = call_resource('tech.mycelia.mongo', {
+        "action": "find",
+        "collection": "source_files",
+        "query": base_query,
+        "sort": [('start', -1)],
+        "limit": limit,
+    })
 
     processed = 0
     errors = 0
@@ -106,20 +121,33 @@ def ingests_missing_sources(limit=None, retry_errors=False):
                 unknown_importer
             )
             importer.upload(source)
-            source_files.update_one({"_id": source["_id"]}, {"$set": {
+            call_resource('tech.mycelia.mongo', {
+                "action": "updateOne",
+                "collection": "source_files",
+                "query": {"_id": source["_id"]},
+                "update": {"$set": {
                 "ingested": True,
                 "ingested_at": datetime.now(tz=UTC),
-            }})
+            }}
+            })
             processed += 1
             logger.info(f"✓ Successfully ingested: {file_name}")
         except Exception as e:
             errors += 1
             error_msg = str(e)
             logger.error(f"✗ Error ingesting {file_name}: {error_msg[:100]}")
-            source_files.update_one({"_id": source["_id"]}, {"$set": {"ingestion": {
-                "error": error_msg,
-                "last_attempt": datetime.now(tz=UTC),
-            }}})
+
+            call_resource('tech.mycelia.mongo', {
+                "action": "updateOne",
+                "collection": "source_files",
+                "query": {"_id": source["_id"]},
+                "update": {"$set": {
+                    "ingestion": {
+                        "error": error_msg,
+                        "last_attempt": datetime.now(tz=UTC),
+                    }
+                }}
+            })
 
     remaining = total_pending - processed - errors
     new_ingested_total = already_ingested + processed
@@ -132,10 +160,15 @@ def ingests_missing_sources(limit=None, retry_errors=False):
 
 
 def list_errored_files():
-    errored_files = source_files.find({
-        "ingested": False,
-        "ingestion.error": {"$exists": True}
-    }).sort([('ingestion.last_attempt', DESCENDING)])
+    errored_files = call_resource('tech.mycelia.mongo', {
+        "action": "find",
+        "collection": "source_files",
+        "query": {
+            "ingested": False,
+            "ingestion.error": {"$exists": True}
+        },
+        "sort": [('ingestion.last_attempt', -1)]
+    })
 
     count = 0
     for source in errored_files:
@@ -159,10 +192,12 @@ def list_errored_files():
 
 
 def clear_error(file_id):
-    result = source_files.update_one(
-        {"_id": file_id},
-        {"$unset": {"ingestion": ""}}
-    )
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "updateOne",
+        "collection": "source_files",
+        "query": {"_id": file_id},
+        "update": {"$unset": {"ingestion": ""}}
+    })
     if result.modified_count > 0:
         logger.info(f"Cleared error for file {file_id}")
         return True
@@ -172,10 +207,12 @@ def clear_error(file_id):
 
 
 def clear_all_errors():
-    result = source_files.update_many(
-        {"ingestion.error": {"$exists": True}},
-        {"$unset": {"ingestion": ""}}
-    )
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "updateMany",
+        "collection": "source_files",
+        "query": {"ingestion.error": {"$exists": True}},
+        "update": {"$unset": {"ingestion": ""}}
+    })
     logger.info(f"Cleared errors for {result.modified_count} files")
     return result.modified_count
 
@@ -185,39 +222,54 @@ def add_missing_durations():
         "duration": {"$exists": False}
     }
 
-    cursor = source_files.find(query)
+    cursor = call_resource('tech.mycelia.mongo', {
+        "action": "find",
+        "collection": "source_files",
+        "query": query
+    })
     for original in cursor:
         # Find the latest chunk for this original
-        latest_chunk = audio_chunks_collection.find_one(
-            {"meta.original_id": original["_id"]},
-            sort=[("start", -1)]  # Sort by start time descending, get the latest
-        )
+        latest_chunk = call_resource('tech.mycelia.mongo', {
+            "action": "findOne",
+            "collection": "audio_chunks",
+            "query": {"meta.original_id": original["_id"]},
+            "sort": [("start", -1)],
+            "limit": 1
+        })
         if latest_chunk:
             end = latest_chunk["start"] + timedelta(seconds=AudioSegment.from_file(io.BytesIO(latest_chunk['data']), format="ogg").duration_seconds)
             duration = end - original["start"]
-            source_files.update_one(
-                {"_id": original["_id"]},
-                {
+            call_resource('tech.mycelia.mongo', {
+                "action": "updateOne",
+                "collection": "source_files",
+                "query": {"_id": original["_id"]},
+                "update": {
                     "$set": {
                         "duration": duration.total_seconds()
                     }
                 }
-            )
+            })
 
 
 def add_missing_ends():
-    for original in source_files.find({
-        "duration": {"$exists": True},
-        "end": {"$exists": False}
+    for original in call_resource('tech.mycelia.mongo', {
+        "action": "find",
+        "collection": "source_files",
+        "query": {
+            "duration": {"$exists": True},
+            "end": {"$exists": False}
+        }
     }):
-        source_files.update_one(
-            {"_id": original["_id"]},
-            {
+        call_resource('tech.mycelia.mongo', {
+            "action": "updateOne",
+            "collection": "source_files",
+            "query": {"_id": original["_id"]},
+            "update": {
                 "$set": {
                     "end": original["start"] + timedelta(seconds=original["duration"])
                 }
             }
-        )
+        })
 
 #%%
 
@@ -236,8 +288,8 @@ def main():
     logger.info("\n[2/3] Ingesting audio files...")
     ingests_missing_sources(limit=20)
 
-    logger.info("\n[3/3] Running voice activity detection...")
-    run_voice_activity_detection(limit=1000)
+    # logger.info("\n[3/3] Running voice activity detection...")
+    # run_voice_activity_detection(limit=1000)
 
     logger.info("=" * 60)
     logger.info("Daemon cycle complete")

@@ -10,6 +10,7 @@ def call_resource(resource_name: str, body: dict) -> Any:
         get_url("api", "resource", resource_name),
         data=json.dumps(encoded),
         headers={"Content-Type": "application/json"},
+        timeout=600,
     )
     response.raise_for_status()
     data = response.json()
