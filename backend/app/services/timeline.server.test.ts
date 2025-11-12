@@ -1,14 +1,11 @@
 import { expect, fn } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { Policy } from "@/lib/auth/resources.ts";
-import { getMongoResource, MongoResource } from "@/lib/mongo/core.server.ts";
-import { ObjectId } from "mongodb";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import {
   fetchTimelineData,
-  getDaysAgo,
-  type Resolution,
   updateHistogram,
 } from "./timeline.server.ts";
+import { Resolution } from "@/types/resolution.ts";
 import { type Timestamp } from "@/types/timeline.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 
@@ -75,7 +72,6 @@ Deno.test(
     expect(item.totals.seconds).toBeDefined();
   }),
 );
-
 
 Deno.test(
   "updateHistogram should process audio_chunks data correctly",

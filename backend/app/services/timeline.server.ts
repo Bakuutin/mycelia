@@ -14,6 +14,8 @@ import {
   RESOLUTION_TO_MS,
 } from "@/types/resolution.ts";
 
+export type { Resolution };
+
 type AggregationOperation = {
   $sum?: any;
   $avg?: any;

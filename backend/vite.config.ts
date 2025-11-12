@@ -25,7 +25,7 @@ export default defineConfig({
     }),
     tsconfigPaths(),
     tailwindcss(),
-    devtoolsJson(),
+    (devtoolsJson as any)(),
   ],
   resolve: {
     alias: {

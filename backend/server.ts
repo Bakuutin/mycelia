@@ -30,14 +30,18 @@ let logFile: Deno.FsFile | null = null;
 
 function setupLogging() {
   try {
-    logFile = Deno.openSync("server.log", { create: true, write: true, append: true });
+    logFile = Deno.openSync("server.log", {
+      create: true,
+      write: true,
+      append: true,
+    });
     const originalLog = console.log;
     const originalError = console.error;
 
     const writeToLog = (args: any[], isError = false) => {
       const timestamp = new Date().toISOString();
-      const message = args.map(arg => {
-        if (typeof arg === 'object') {
+      const message = args.map((arg) => {
+        if (typeof arg === "object") {
           try {
             return JSON.stringify(arg);
           } catch {
@@ -45,9 +49,11 @@ function setupLogging() {
           }
         }
         return String(arg);
-      }).join(' ');
+      }).join(" ");
 
-      const logLine = `[${timestamp}] ${isError ? 'ERROR' : 'INFO'}: ${message}\n`;
+      const logLine = `[${timestamp}] ${
+        isError ? "ERROR" : "INFO"
+      }: ${message}\n`;
 
       try {
         originalLog(...args);

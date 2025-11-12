@@ -4,7 +4,7 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
 
-const zObjectIdString = z.string().transform((val) => new ObjectId(val));
+const zObjectId = z.instanceof(ObjectId).or(z.string().transform((val) => new ObjectId(val)));
 
 const zIcon = z.union([
   z.object({ text: z.string() }),
@@ -22,8 +22,8 @@ const zObjectInput = z.object({
   isRelationship: z.boolean().optional(),
   isPromise: z.boolean().optional(),
   relationship: z.object({
-    object: zObjectIdString,
-    subject: zObjectIdString,
+    object: zObjectId,
+    subject: zObjectId,
     symmetrical: z.boolean(),
   }).optional(),
   location: z.object({
@@ -81,7 +81,7 @@ const getRelationshipsSchema = z.object({
 const getHistorySchema = z.object({
   action: z.literal("getHistory"),
   id: z.string(),
-  limit: z.number().max(500).default(50),
+  limit: z.number().max(500).optional(),
   skip: z.number().optional(),
 });
 
@@ -95,11 +95,11 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   getHistorySchema,
 ]);
 
-type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
-type ObjectsResponse = any;
+export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
+export type ObjectsResponse = any;
 
 function getNestedValue(obj: any, path: string): any {
-  const parts = path.split('.');
+  const parts = path.split(".");
   let current = obj;
   for (const part of parts) {
     if (current === null || current === undefined) {
@@ -110,13 +110,13 @@ function getNestedValue(obj: any, path: string): any {
   return current;
 }
 
-
-
-export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse> {
+export class ObjectsResource
+  implements Resource<ObjectsRequest, ObjectsResponse> {
   code = "tech.mycelia.objects";
-  description = "Object management operations with optimistic locking and field-level updates";
+  description =
+    "Object management operations with optimistic locking and field-level updates";
   schemas = {
-    request: objectsRequestSchema,
+    request: objectsRequestSchema as z.ZodType<ObjectsRequest>,
     response: z.any(),
   };
 
@@ -126,16 +126,16 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
 
   private async recordHistory(
     objectId: ObjectId,
-    action: 'create' | 'update' | 'delete',
+    action: "create" | "update" | "delete",
     userId: string,
     version: number,
     field: string | null,
     oldValue: any,
-    newValue: any
+    newValue: any,
   ): Promise<void> {
     try {
       const db = await this.getRootDB();
-      await db.collection('object_history').insertOne({
+      await db.collection("object_history").insertOne({
         objectId,
         action,
         timestamp: new Date(),
@@ -146,7 +146,7 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
         newValue,
       });
     } catch (error) {
-      console.error('Failed to record object history:', error);
+      console.error("Failed to record object history:", error);
     }
   }
 
@@ -170,12 +170,12 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
 
         await this.recordHistory(
           result.insertedId,
-          'create',
+          "create",
           auth.principal,
           1,
           null,
           undefined,
-          doc
+          doc,
         );
 
         return { insertedId: result.insertedId };
@@ -189,7 +189,7 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
           query: { _id: objectId },
         });
         if (!object) {
-          throw new Error('Object not found');
+          throw new Error("Object not found");
         }
         if (object.version === undefined) {
           object.version = 0;
@@ -206,13 +206,13 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
           query: { _id: objectId },
         });
         if (!current) {
-          throw new Error('Object not found');
+          throw new Error("Object not found");
         }
 
         const currentVersion = current.version ?? 0;
 
         if (currentVersion !== input.version) {
-          const error: any = new Error('Object was modified by another user');
+          const error: any = new Error("Object was modified by another user");
           error.code = 409;
           error.current = currentVersion;
           error.expected = input.version;
@@ -227,7 +227,7 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
 
         if (input.value === null || input.value === undefined) {
           // Remove the field using $unset, but still update timestamp and version
-          updateDoc.$unset = { [input.field]: '' };
+          updateDoc.$unset = { [input.field]: "" };
           updateDoc.$set = {
             updatedAt: new Date(),
             version: currentVersion + 1,
@@ -255,19 +255,19 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
         });
 
         if (!result) {
-          const error: any = new Error('Update failed');
+          const error: any = new Error("Update failed");
           error.code = 500;
           throw error;
         }
 
         await this.recordHistory(
           objectId,
-          'update',
+          "update",
           auth.principal,
           result.version,
           input.field,
           oldValue,
-          input.value
+          input.value,
         );
 
         return result;
@@ -282,7 +282,7 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
           query: { _id: objectId },
         });
         if (!current) {
-          throw new Error('Object not found');
+          throw new Error("Object not found");
         }
 
         const result = await mongo({
@@ -293,12 +293,12 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
 
         await this.recordHistory(
           objectId,
-          'delete',
+          "delete",
           auth.principal,
           current.version ?? 0,
           null,
           current,
-          undefined
+          undefined,
         );
 
         return { deletedCount: result.deletedCount };
@@ -310,18 +310,21 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
         if (input.options?.hasTimeRanges) {
           query = {
             ...query,
-            timeRanges: { $exists: true, $ne: [] }
+            timeRanges: { $exists: true, $ne: [] },
           };
         }
 
         if (input.options?.searchTerm && input.options.searchTerm.trim()) {
-          const searchRegex = { $regex: input.options.searchTerm, $options: 'i' };
+          const searchRegex = {
+            $regex: input.options.searchTerm,
+            $options: "i",
+          };
           query = {
             ...query,
             $or: [
               { name: searchRegex },
-              { aliases: searchRegex }
-            ]
+              { aliases: searchRegex },
+            ],
           };
         }
 
@@ -329,8 +332,14 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
           const pipeline: any[] = [
             {
               $addFields: {
-                hasTimeRanges: { $cond: { if: { $isArray: "$timeRanges" }, then: true, else: false } }
-              }
+                hasTimeRanges: {
+                  $cond: {
+                    if: { $isArray: "$timeRanges" },
+                    then: true,
+                    else: false,
+                  },
+                },
+              },
             },
             { $match: query },
             {
@@ -338,19 +347,29 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
                 from: "objects",
                 localField: "relationship.subject",
                 foreignField: "_id",
-                as: "subjectObject"
-              }
+                as: "subjectObject",
+              },
             },
             {
               $lookup: {
                 from: "objects",
                 localField: "relationship.object",
                 foreignField: "_id",
-                as: "objectObject"
-              }
+                as: "objectObject",
+              },
             },
-            { $unwind: { path: "$subjectObject", preserveNullAndEmptyArrays: true } },
-            { $unwind: { path: "$objectObject", preserveNullAndEmptyArrays: true } },
+            {
+              $unwind: {
+                path: "$subjectObject",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $unwind: {
+                path: "$objectObject",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
             {
               $addFields: {
                 earliestStart: {
@@ -358,26 +377,26 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
                     $map: {
                       input: "$timeRanges",
                       as: "r",
-                      in: "$$r.start"
-                    }
-                  }
+                      in: "$$r.start",
+                    },
+                  },
                 },
                 latestEnd: {
                   $max: {
                     $map: {
                       input: "$timeRanges",
                       as: "r",
-                      in: { $ifNull: ["$$r.end", "$$r.start"] }
-                    }
-                  }
-                }
-              }
+                      in: { $ifNull: ["$$r.end", "$$r.start"] },
+                    },
+                  },
+                },
+              },
             },
             {
               $addFields: {
-                duration: { $subtract: ["$latestEnd", "$earliestStart"] }
-              }
-            }
+                duration: { $subtract: ["$latestEnd", "$earliestStart"] },
+              },
+            },
           ];
 
           if (input.options?.sort) {
@@ -427,27 +446,29 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
             $match: {
               $or: [
                 { "relationship.subject": objectId },
-                { "relationship.object": objectId }
-              ]
-            }
+                { "relationship.object": objectId },
+              ],
+            },
           },
           {
             $lookup: {
               from: "objects",
               localField: "relationship.subject",
               foreignField: "_id",
-              as: "subjectObj"
-            }
+              as: "subjectObj",
+            },
           },
           {
             $lookup: {
               from: "objects",
               localField: "relationship.object",
               foreignField: "_id",
-              as: "objectObj"
-            }
+              as: "objectObj",
+            },
           },
-          { $unwind: { path: "$subjectObj", preserveNullAndEmptyArrays: true } },
+          {
+            $unwind: { path: "$subjectObj", preserveNullAndEmptyArrays: true },
+          },
           { $unwind: { path: "$objectObj", preserveNullAndEmptyArrays: true } },
           {
             $project: {
@@ -456,10 +477,10 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
                 $cond: [
                   { $eq: ["$relationship.subject", objectId] },
                   "$objectObj",
-                  "$subjectObj"
-                ]
-              }
-            }
+                  "$subjectObj",
+                ],
+              },
+            },
           },
           {
             $set: {
@@ -468,32 +489,32 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
                   $map: {
                     input: "$relationship.timeRanges",
                     as: "r",
-                    in: "$$r.start"
-                  }
-                }
+                    in: "$$r.start",
+                  },
+                },
               },
               latestEnd: {
                 $max: {
                   $map: {
                     input: "$relationship.timeRanges",
                     as: "r",
-                    in: "$$r.end"
-                  }
-                }
-              }
-            }
+                    in: "$$r.end",
+                  },
+                },
+              },
+            },
           },
           {
             $set: {
-              endOrNow: { $ifNull: ["$latestEnd", new Date()] }
-            }
+              endOrNow: { $ifNull: ["$latestEnd", new Date()] },
+            },
           },
           {
             $set: {
-              duration: { $subtract: ["$endOrNow", "$earliestStart"] }
-            }
+              duration: { $subtract: ["$endOrNow", "$earliestStart"] },
+            },
           },
-          { $sort: { endOrNow: -1, earliestStart: -1 } }
+          { $sort: { endOrNow: -1, earliestStart: -1 } },
         ];
 
         return await mongo({
@@ -512,7 +533,7 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
         if (input.skip) {
           findOptions.skip = input.skip;
         }
-        findOptions.limit = input.limit as number;
+        findOptions.limit = (input.limit as number) ?? 50;
 
         return await mongo({
           action: "find",
@@ -550,5 +571,5 @@ export class ObjectsResource implements Resource<ObjectsRequest, ObjectsResponse
 export function getObjectsResource(
   auth: Auth,
 ): Promise<(input: ObjectsRequest) => Promise<ObjectsResponse>> {
-  return auth.getResource("tech.mycelia.objects");
+  return auth.getResource<ObjectsRequest, ObjectsResponse>("tech.mycelia.objects");
 }

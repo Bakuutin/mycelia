@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { ObjectsResource } from "@/lib/objects/resource.server.ts";
+import { ObjectsResource, type ObjectsRequest, type ObjectsResponse, getObjectsResource as getObjectsResourceFn } from "@/lib/objects/resource.server.ts";
 import { ObjectId } from "mongodb";
 
 async function getObjectsResource(auth: Auth) {
-  return auth.getResource("tech.mycelia.objects");
+  return getObjectsResourceFn(auth);
 }
 
 Deno.test(
@@ -131,8 +131,8 @@ Deno.test(
       object: {
         name: "Test",
         relationship: {
-          subject: subjectId.toString(),
-          object: objectId.toString(),
+          subject: subjectId,
+          object: objectId,
           symmetrical: false,
         },
       },
@@ -397,8 +397,8 @@ Deno.test(
         name: "Friends",
         isRelationship: true,
         relationship: {
-          subject: person1.insertedId.toString(),
-          object: person2.insertedId.toString(),
+          subject: person1.insertedId,
+          object: person2.insertedId,
           symmetrical: true,
         },
         timeRanges: [{ start: new Date() }],
@@ -462,7 +462,7 @@ Deno.test(
     expect(createEntry.version).toBe(1);
 
     const nameUpdate = history.find(
-      (h: any) => h.action === "update" && h.field === "name"
+      (h: any) => h.action === "update" && h.field === "name",
     );
     expect(nameUpdate).toBeDefined();
     expect(nameUpdate.oldValue).toBe("Original");
@@ -470,7 +470,7 @@ Deno.test(
     expect(nameUpdate.version).toBe(2);
 
     const detailsUpdate = history.find(
-      (h: any) => h.action === "update" && h.field === "details"
+      (h: any) => h.action === "update" && h.field === "details",
     );
     expect(detailsUpdate).toBeDefined();
     expect(detailsUpdate.oldValue).toBe("First version");
@@ -520,7 +520,7 @@ Deno.test(
     expect(firstPage).toHaveLength(5);
     expect(secondPage).toHaveLength(5);
     expect(firstPage[0].timestamp.getTime()).toBeGreaterThan(
-      secondPage[0].timestamp.getTime()
+      secondPage[0].timestamp.getTime(),
     );
   }),
 );
@@ -546,8 +546,8 @@ Deno.test(
         name: "Relationship",
         isRelationship: true,
         relationship: {
-          subject: subject.insertedId.toString(),
-          object: object.insertedId.toString(),
+          subject: subject.insertedId,
+          object: object.insertedId,
           symmetrical: false,
         },
         timeRanges: [{ start: new Date() }],

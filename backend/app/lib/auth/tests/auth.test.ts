@@ -130,7 +130,11 @@ Deno.test("getResource: should apply middleware when modify policy is present", 
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.number(), modified: z.boolean(), flag: z.string().optional() }),
+      response: z.object({
+        id: z.number(),
+        modified: z.boolean(),
+        flag: z.string().optional(),
+      }),
     },
     modifiers: {
       addFlag: {

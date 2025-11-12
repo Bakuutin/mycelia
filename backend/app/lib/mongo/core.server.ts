@@ -290,6 +290,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
       try {
         await cursor.close();
       } catch {
+        // ignore
       }
       throw error;
     }
@@ -410,7 +411,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     ) {
       actions.push("update");
     }
-    
+
     return [
       {
         path: ["db", input.collection],

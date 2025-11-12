@@ -61,7 +61,7 @@ export class Auth {
 
   getResource<Input, Output>(
     code: string,
-  ): Promise<(input: Input) => Promise<Output>> {
+  ): Promise<(input: Input) => Promise<Output | Response>> {
     return defaultResourceManager.getResource(code, this);
   }
 }
