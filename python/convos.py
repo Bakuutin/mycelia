@@ -202,7 +202,10 @@ def setup_llm_tools(model: str = "small"):
     }
 
     llm = get_llm(model)
-    tool_llm = llm.bind_tools([extract_conversations_tool], tool_choice="extract_conversations")
+    tool_llm = llm.bind_tools([extract_conversations_tool], tool_choice={
+        "type": "function",
+        "function": {"name": "extract_conversations"}
+    })
 
     prompts_path = Path(__file__).parent / "prompts.yml"
     with open(prompts_path, "r") as f:

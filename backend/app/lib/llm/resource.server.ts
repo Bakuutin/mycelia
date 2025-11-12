@@ -19,10 +19,32 @@ const llmErrorsCounter = meter.createCounter("llm_errors_total", {
 });
 
 const messageSchema = z.object({
-  role: z.enum(["system", "user", "assistant", "function"]),
-  content: z.string(),
+  role: z.enum(["system", "user", "assistant", "function", "tool"]),
+  content: z.string().nullable(),
   name: z.string().optional(),
+  tool_calls: z.array(z.any()).optional(),
+  tool_call_id: z.string().optional(),
 });
+
+const toolSchema = z.object({
+  type: z.literal("function"),
+  function: z.object({
+    name: z.string(),
+    description: z.string().optional(),
+    parameters: z.record(z.any()).optional(),
+  }),
+});
+
+const toolChoiceSchema = z.union([
+  z.literal("none"),
+  z.literal("auto"),
+  z.object({
+    type: z.literal("function"),
+    function: z.object({
+      name: z.string(),
+    }),
+  }),
+]);
 
 const chatCompletionRequestSchema = z.object({
   action: z.literal("completions"),
@@ -37,6 +59,9 @@ const chatCompletionRequestSchema = z.object({
   presence_penalty: z.number().min(-2).max(2).optional(),
   frequency_penalty: z.number().min(-2).max(2).optional(),
   logit_bias: z.record(z.string(), z.number()).optional(),
+  tools: z.array(toolSchema).optional(),
+  tool_choice: toolChoiceSchema.optional(),
+  parallel_tool_calls: z.boolean().optional(),
 });
 
 const llmRequestSchema = z.discriminatedUnion("action", [
