@@ -139,20 +139,22 @@ const TimelinePage = () => {
                     <div className="mt-1 flex-shrink-0">
                       <IconDisplay icon={object.icon} fallback="📦" />
                     </div>
-                    <Link
-                      to={`/objects/${object._id.toString()}`}
-                      className="flex-1 min-w-0"
-                    >
-                      <div className="flex items-baseline gap-2">
-                        <h3 className="font-medium hover:text-primary transition-colors">
-                          {object.name || 'Unnamed object'}
-                        </h3>
-                      </div>
-                      {object.details && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {object.details}
-                        </p>
-                      )}
+                    <div className="flex-1 min-w-0">
+                      <Link
+                        to={`/objects/${object._id.toString()}`}
+                        className="block"
+                      >
+                        <div className="flex items-baseline gap-2">
+                          <h3 className="font-medium hover:text-primary transition-colors">
+                            {object.name || 'Unnamed object'}
+                          </h3>
+                        </div>
+                        {object.details && (
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {object.details}
+                          </p>
+                        )}
+                      </Link>
                       {object.timeRanges && object.timeRanges.length > 0 && (
                         <div className="space-y-1 mt-2">
                           {object.timeRanges.map((range, idx) => (
@@ -166,7 +168,7 @@ const TimelinePage = () => {
                                   )}
                                 </span>
                                 {range.end && isTimeRangeShorterThanTranscriptThreshold(range.start, range.end) && (
-                                  <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}>
+                                  <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`} onClick={(e) => e.stopPropagation()}>
                                     <Button variant="outline" size="sm" className="h-6 px-2 text-xs">
                                       Transcript
                                     </Button>
@@ -177,7 +179,7 @@ const TimelinePage = () => {
                           ))}
                         </div>
                       )}
-                    </Link>
+                    </div>
                   </div>
                 );
               })}

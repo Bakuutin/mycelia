@@ -20,6 +20,7 @@ export const zObject = z.object({
   name: z.string().optional(),
   details: z.string().optional(),
   icon: zIcon,
+  color: z.string().optional(),
   aliases: z.array(z.string()).optional(),
   isEvent: z.boolean().optional(),
   isPerson: z.boolean().optional(),
@@ -39,6 +40,7 @@ export const zObject = z.object({
     end: z.date().optional(),
     name: z.string().optional(),
   })).optional(),
+  version: z.number().default(0),
   createdAt: z.date(),
   updatedAt: z.date(),
 }).passthrough().refine(
@@ -62,6 +64,7 @@ export type ObjectFormData = {
   name?: string;
   details?: string;
   icon?: { text: string } | { base64: string };
+  color?: string;
   aliases?: string[];
   isEvent?: boolean;
   isPerson?: boolean;
@@ -81,6 +84,7 @@ export type ObjectFormData = {
     end?: Date;
     name?: string;
   }>;
+  version?: number;
   createdAt?: Date;
   updatedAt?: Date;
 };

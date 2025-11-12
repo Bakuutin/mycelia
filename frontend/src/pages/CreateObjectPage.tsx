@@ -25,6 +25,7 @@ const CreateObjectPage = () => {
 
   const handleUpdate = async (updates: Partial<ObjectFormData>) => {
     setObject(prev => ({ ...prev, ...updates }));
+    return Promise.resolve();
   };
 
   const handleSubmit = async () => {
@@ -38,14 +39,11 @@ const CreateObjectPage = () => {
     setError(null);
 
     try {
-      const result = await callResource("tech.mycelia.mongo", {
-        action: "insertOne",
-        collection: "objects",
-        doc: {
+      const result = await callResource("tech.mycelia.objects", {
+        action: "create",
+        object: {
           ...object,
           name: object.name.trim(),
-          createdAt: new Date(),
-          updatedAt: new Date(),
         }
       });
 

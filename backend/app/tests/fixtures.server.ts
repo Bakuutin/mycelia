@@ -149,13 +149,17 @@ defineFixture({
     const fs = new FsResource();
     const timeline = new TimelineResource();
     const processor = new ProcessorResource();
+    const { ObjectsResource } = await import("@/lib/objects/resource.server.ts");
+    const objects = new ObjectsResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
     processor.getRootDB = async () => isolatedDB;
+    objects.getRootDB = async () => isolatedDB;
     defaultResourceManager.registerResource(resource);
     defaultResourceManager.registerResource(fs);
     defaultResourceManager.registerResource(timeline);
     defaultResourceManager.registerResource(processor);
+    defaultResourceManager.registerResource(objects);
 
     return {
       db: isolatedDB,

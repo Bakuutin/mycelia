@@ -15,10 +15,15 @@ const ObjectDetailPage = () => {
   const updateObjectMutation = useUpdateObject();
   const deleteObjectMutation = useDeleteObject();
 
-  const autoSave = async (updates: Partial<ObjectFormData>) => {
+  const handleFieldUpdate = (field: string, value: any) => {
     if (!object || !id) return;
-    
-    updateObjectMutation.mutate({ id, updates });
+
+    updateObjectMutation.mutate({
+      id: object._id.toString(),
+      version: object.version,
+      field,
+      value,
+    });
   };
 
   // Convert Object to ObjectFormData for the form
@@ -104,9 +109,14 @@ const ObjectDetailPage = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="border rounded-lg p-6">
-          <ObjectForm 
-            object={formObject} 
-            onUpdate={autoSave} 
+          <ObjectForm
+            object={formObject}
+            onUpdate={async (updates) => {
+              if (!object) return;
+              for (const [field, value] of Object.entries(updates)) {
+                handleFieldUpdate(field, value);
+              }
+            }}
           />
         </div>
 

@@ -20,7 +20,8 @@ import { isTimeRangeShorterThanTranscriptThreshold } from '@/lib/transcriptUtils
 
 interface ObjectFormProps {
   object: ObjectFormData;
-  onUpdate: (updates: Partial<ObjectFormData>) => Promise<void>;
+  onUpdate?: (updates: Partial<ObjectFormData>) => Promise<void>;
+  onFieldUpdate?: (field: string, value: any) => void;
 }
 
 const renderIcon = (icon: any) => {
@@ -97,17 +98,34 @@ function useDebouncedUpdate(
   return [localValue, setLocalValue] as const;
 }
 
-export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
+export function ObjectForm({ object, onUpdate, onFieldUpdate }: ObjectFormProps) {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
   const [newFieldType, setNewFieldType] = useState<'string' | 'number' | 'boolean'>('string');
   const [showAddField, setShowAddField] = useState(false);
 
+  const updateField = (field: string, value: any) => {
+    if (onFieldUpdate) {
+      onFieldUpdate(field, value);
+    } else if (onUpdate) {
+      onUpdate({ [field]: value } as Partial<ObjectFormData>);
+    }
+  };
+
+  const updateFieldsAsync = async (updates: Partial<ObjectFormData>) => {
+    if (onUpdate) {
+      await onUpdate(updates);
+    } else if (onFieldUpdate && Object.keys(updates).length === 1) {
+      const [field, value] = Object.entries(updates)[0];
+      onFieldUpdate(field, value);
+    }
+  };
+
   // Use debounced auto-save for name field
   const [nameValue, setNameValue] = useDebouncedUpdate(
     object.name || '',
     500, // 500ms delay
-    onUpdate,
+    updateFieldsAsync,
     'name'
   );
 
@@ -115,7 +133,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
   const [detailsValue, setDetailsValue] = useDebouncedUpdate(
     object.details || '',
     500, // 500ms delay
-    onUpdate,
+    updateFieldsAsync,
     'details'
   );
 
@@ -136,8 +154,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
       value = newFieldValue;
     }
 
-    const updates: any = { [newFieldName]: value };
-    onUpdate(updates);
+    updateField(newFieldName, value);
 
     setNewFieldName('');
     setNewFieldValue('');
@@ -146,8 +163,8 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
   };
 
   const handleDeleteCustomField = (fieldName: string) => {
-    const updates: any = { $unset: { [fieldName]: '' } };
-    onUpdate(updates);
+    // Use the actual field name with value null to remove it
+    updateField(fieldName, null);
   };
 
   return (
@@ -158,7 +175,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <div className="mt-1">
             <EmojiPickerButton
               value={object.icon}
-              onChange={(icon) => onUpdate({ icon })}
+              onChange={(icon) => updateField('icon', icon)}
             />
           </div>
         </div>
@@ -191,7 +208,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Checkbox
             id="isEvent"
             checked={object.isEvent || false}
-            onCheckedChange={(checked) => onUpdate({ isEvent: checked as boolean })}
+            onCheckedChange={(checked) => updateField('isEvent', checked as boolean)}
           />
           <Label htmlFor="isEvent" className="text-sm font-medium cursor-pointer">
             Is Event
@@ -202,7 +219,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Checkbox
             id="isPerson"
             checked={object.isPerson || false}
-            onCheckedChange={(checked) => onUpdate({ isPerson: checked as boolean })}
+            onCheckedChange={(checked) => updateField('isPerson', checked as boolean)}
           />
           <Label htmlFor="isPerson" className="text-sm font-medium cursor-pointer">
             Is Person

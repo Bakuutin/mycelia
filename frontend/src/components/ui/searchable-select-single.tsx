@@ -336,8 +336,11 @@ export const SearchableSelectSingle = React.forwardRef<
 
 		const getOptionByValue = React.useCallback(
 			(value: string): SelectOption | undefined => {
-				const option = getAllOptions().find((option) => option.value === value);
-				if (!option && import.meta.env.DEV) {
+				const allOptions = getAllOptions();
+				const option = allOptions.find((option) => option.value === value);
+				// Only warn if options have been loaded (not empty) and value is still not found
+				// This prevents spamming warnings during initial load when options haven't loaded yet
+				if (!option && value && allOptions.length > 0 && import.meta.env.DEV) {
 					console.warn(
 						`SearchableSelectSingle: Option with value "${value}" not found in options list`
 					);

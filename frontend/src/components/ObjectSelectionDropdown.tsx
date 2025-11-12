@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ObjectId } from 'bson';
 import { SearchableSelectSingle, type SelectOption } from '@/components/ui/searchable-select-single';
 import { Button } from '@/components/ui/button';
-import { useObjectSearch, useCreateObject } from '@/hooks/useObjectQueries';
+import { useObjectSelection, useObjectSearch, useCreateObject, useObject } from '@/hooks/useObjectQueries';
 import type { Object } from '@/types/objects';
 
 interface ObjectSelectionDropdownProps {
@@ -31,11 +31,30 @@ export function ObjectSelectionDropdown({
   const createObjectMutation = useCreateObject();
   const [searchValue, setSearchValue] = useState('');
 
-  // Use search hook - always fetch all objects for dropdown
-  const { data: searchResults = [] } = useObjectSearch('', 50);
+  // Fetch all objects for dropdown (1000 limit)
+  const { data: allObjects = [] } = useObjectSelection();
+  
+  // Use search when user types, otherwise use all objects
+  const { data: searchResults = [] } = useObjectSearch(searchValue.trim(), 1000);
+  
+  // Use search results if searching, otherwise use all objects
+  const baseResults = searchValue.trim() ? searchResults : allObjects;
+  
+  // Fetch the selected object if it's not in the results
+  const hasValueInResults = useMemo(() => {
+    if (!value) return true;
+    return baseResults.some((obj: Object) => {
+      const objectIdString = obj._id instanceof ObjectId
+        ? obj._id.toHexString()
+        : String(obj._id);
+      return objectIdString === value;
+    });
+  }, [baseResults, value]);
+  
+  const { data: selectedObject } = useObject(value && !hasValueInResults ? value : undefined);
 
   const options: SelectOption[] = useMemo(() => {
-    const objectOptions = searchResults.map((obj: Object) => {
+    const objectOptions = baseResults.map((obj: Object) => {
       // Ensure consistent string representation of ObjectId
       const objectIdString = obj._id instanceof ObjectId
         ? obj._id.toHexString()
@@ -49,6 +68,23 @@ export function ObjectSelectionDropdown({
         value: objectIdString,
       };
     });
+
+    // Add the selected object if it's not in the results
+    if (selectedObject && value) {
+      const objectIdString = selectedObject._id instanceof ObjectId
+        ? selectedObject._id.toHexString()
+        : String(selectedObject._id);
+      
+      // Only add if it's not already in the options
+      if (!objectOptions.some(opt => opt.value === objectIdString)) {
+        const icon = renderIcon(selectedObject.icon);
+        const name = selectedObject.name || 'Unnamed';
+        objectOptions.unshift({
+          label: icon ? `${icon} ${name}` : name,
+          value: objectIdString,
+        });
+      }
+    }
 
     // Add create option if there's a search value and no exact match
     if (searchValue.trim()) {
@@ -65,7 +101,7 @@ export function ObjectSelectionDropdown({
     }
 
     return objectOptions;
-  }, [searchResults, searchValue]);
+  }, [baseResults, selectedObject, value, searchValue]);
 
   const handleCreateObject = async (objectName: string) => {
     if (!objectName.trim()) return;

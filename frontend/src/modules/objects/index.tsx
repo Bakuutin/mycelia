@@ -78,21 +78,21 @@ function RangeBox({ range }: { range: PlacedObjectRange }) {
         y={topMargin + lane * laneHeight}
         className="p-2"
       >
-        <div className="h-full flex flex-col justify-center text-white">
+        <div className="h-full flex flex-col justify-center items-start text-white">
           {isRelationship && hasRelationshipData ? (
             // Relationship display
-            <div className="space-y-0.5">
+            <div className="space-y-0.5 w-full">
               {/* Relationship name and icon */}
-              <div className="flex items-center gap-1 text-xs font-medium">
+              <div className="flex items-center gap-1 text-xs font-medium justify-start">
                 <span className="text-sm">{renderIcon(object.icon)}</span>
                 <span className="truncate">{object.name}</span>
               </div>
               
               {/* Subject and Object with arrow - keep them close together */}
-              <div className="flex items-center gap-1 text-xs justify-start">
-                <div className="flex items-center gap-0.5">
-                  <span className="text-sm">{renderIcon(object.subjectObject?.icon)}</span>
-                  <span className="font-medium max-w-[80px]">{object.subjectObject?.name}</span>
+              <div className="flex items-center gap-1 text-xs justify-start min-w-0 w-full">
+                <div className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden justify-start">
+                  <span className="text-sm flex-shrink-0">{renderIcon(object.subjectObject?.icon)}</span>
+                  <span className="font-medium truncate min-w-0">{object.subjectObject?.name}</span>
                 </div>
                 
                 <div className="flex-shrink-0">
@@ -103,17 +103,17 @@ function RangeBox({ range }: { range: PlacedObjectRange }) {
                   )}
                 </div>
                 
-                <div className="flex items-center gap-0.5">
-                  <span className="text-sm">{renderIcon(object.objectObject?.icon)}</span>
-                  <span className="font-medium max-w-[80px]">{object.objectObject?.name}</span>
+                <div className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden justify-start">
+                  <span className="text-sm flex-shrink-0">{renderIcon(object.objectObject?.icon)}</span>
+                  <span className="font-medium truncate min-w-0">{object.objectObject?.name}</span>
                 </div>
               </div>
               
             </div>
           ) : (
             // Regular object display
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-1 text-xs font-medium">
+            <div className="space-y-0.5 w-full">
+              <div className="flex items-center gap-1 text-xs font-medium justify-start">
                 <span className="text-sm">{renderIcon(object.icon)}</span>
                 <span className="truncate">{object.name}</span>
               </div>
