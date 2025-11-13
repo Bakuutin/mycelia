@@ -1,5 +1,12 @@
 import React from "react";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetClose } from "@/components/ui/sheet.tsx";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet.tsx";
 import { Button } from "@/components/ui/button.tsx";
 
 export interface EntityEditSheetProps<T> {

@@ -1,21 +1,24 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { callResource } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { ArrowLeft, Save } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { callResource } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ArrowLeft, Save } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const createModelSchema = z.object({
-  alias: z.string().min(1, 'Alias is required').max(50, 'Alias must be less than 50 characters'),
+  alias: z.string().min(1, "Alias is required").max(
+    50,
+    "Alias must be less than 50 characters",
+  ),
   name: z.string(),
   provider: z.string().optional(),
-  baseUrl: z.string().url('Must be a valid URL'),
+  baseUrl: z.string().url("Must be a valid URL"),
   apiKey: z.string().optional(),
 });
 
@@ -30,29 +33,29 @@ const CreateLLMPage = () => {
   const form = useForm<CreateModelData>({
     resolver: zodResolver(createModelSchema),
     defaultValues: {
-      alias: '',
-      name: '',
-      provider: '',
-      baseUrl: '',
-      apiKey: '',
+      alias: "",
+      name: "",
+      provider: "",
+      baseUrl: "",
+      apiKey: "",
     },
   });
 
   // Handle pre-filling form from URL parameters (for duplication)
   useEffect(() => {
-    const alias = searchParams.get('alias');
-    const name = searchParams.get('name');
-    const provider = searchParams.get('provider');
-    const baseUrl = searchParams.get('baseUrl');
-    const apiKey = searchParams.get('apiKey');
+    const alias = searchParams.get("alias");
+    const name = searchParams.get("name");
+    const provider = searchParams.get("provider");
+    const baseUrl = searchParams.get("baseUrl");
+    const apiKey = searchParams.get("apiKey");
 
     if (alias || name || provider || baseUrl || apiKey) {
       form.reset({
-        alias: alias || '',
-        name: name || '',
-        provider: provider || '',
-        baseUrl: baseUrl || '',
-        apiKey: apiKey || '',
+        alias: alias || "",
+        name: name || "",
+        provider: provider || "",
+        baseUrl: baseUrl || "",
+        apiKey: apiKey || "",
       });
     }
   }, [searchParams, form]);
@@ -71,16 +74,16 @@ const CreateLLMPage = () => {
           provider: data.provider,
           baseUrl: data.baseUrl,
           apiKey: data.apiKey,
-        }
+        },
       });
 
       if (result.insertedId) {
-        navigate('/settings/llms');
+        navigate("/settings/llms");
       } else {
-        setError('Failed to create model');
+        setError("Failed to create model");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create model');
+      setError(err instanceof Error ? err.message : "Failed to create model");
     } finally {
       setSaving(false);
     }
@@ -111,15 +114,18 @@ const CreateLLMPage = () => {
               <Label htmlFor="alias">Alias *</Label>
               <Input
                 id="alias"
-                {...form.register('alias')}
+                {...form.register("alias")}
                 placeholder="e.g., small, medium, large, or custom name"
-                className={form.formState.errors.alias ? 'border-red-500' : ''}
+                className={form.formState.errors.alias ? "border-red-500" : ""}
               />
               <p className="text-sm text-muted-foreground">
-                Use predefined aliases (small, medium, large) or create a custom one
+                Use predefined aliases (small, medium, large) or create a custom
+                one
               </p>
               {form.formState.errors.alias && (
-                <p className="text-sm text-red-500">{form.formState.errors.alias.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.alias.message}
+                </p>
               )}
             </div>
 
@@ -127,12 +133,14 @@ const CreateLLMPage = () => {
               <Label htmlFor="name">Model Name *</Label>
               <Input
                 id="name"
-                {...form.register('name')}
+                {...form.register("name")}
                 placeholder="e.g., gpt-4-turbo-preview"
-                className={form.formState.errors.name ? 'border-red-500' : ''}
+                className={form.formState.errors.name ? "border-red-500" : ""}
               />
               {form.formState.errors.name && (
-                <p className="text-sm text-red-500">{form.formState.errors.name.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.name.message}
+                </p>
               )}
             </div>
 
@@ -140,12 +148,16 @@ const CreateLLMPage = () => {
               <Label htmlFor="provider">Provider *</Label>
               <Input
                 id="provider"
-                {...form.register('provider')}
+                {...form.register("provider")}
                 placeholder="e.g., OpenAI, Anthropic, etc."
-                className={form.formState.errors.provider ? 'border-red-500' : ''}
+                className={form.formState.errors.provider
+                  ? "border-red-500"
+                  : ""}
               />
               {form.formState.errors.provider && (
-                <p className="text-sm text-red-500">{form.formState.errors.provider.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.provider.message}
+                </p>
               )}
             </div>
 
@@ -153,12 +165,16 @@ const CreateLLMPage = () => {
               <Label htmlFor="baseUrl">Base URL *</Label>
               <Input
                 id="baseUrl"
-                {...form.register('baseUrl')}
+                {...form.register("baseUrl")}
                 placeholder="https://api.openai.com/v1"
-                className={form.formState.errors.baseUrl ? 'border-red-500' : ''}
+                className={form.formState.errors.baseUrl
+                  ? "border-red-500"
+                  : ""}
               />
               {form.formState.errors.baseUrl && (
-                <p className="text-sm text-red-500">{form.formState.errors.baseUrl.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.baseUrl.message}
+                </p>
               )}
             </div>
           </div>
@@ -168,12 +184,14 @@ const CreateLLMPage = () => {
             <Input
               id="apiKey"
               type="password"
-              {...form.register('apiKey')}
+              {...form.register("apiKey")}
               placeholder="Enter your API key"
-              className={form.formState.errors.apiKey ? 'border-red-500' : ''}
+              className={form.formState.errors.apiKey ? "border-red-500" : ""}
             />
             {form.formState.errors.apiKey && (
-              <p className="text-sm text-red-500">{form.formState.errors.apiKey.message}</p>
+              <p className="text-sm text-red-500">
+                {form.formState.errors.apiKey.message}
+              </p>
             )}
           </div>
 
@@ -184,14 +202,16 @@ const CreateLLMPage = () => {
               </Button>
             </Link>
             <Button type="submit" disabled={saving}>
-              {saving ? (
-                'Creating...'
-              ) : (
-                <>
-                  <Save className="w-4 h-4 mr-2" />
-                  Create Model
-                </>
-              )}
+              {saving
+                ? (
+                  "Creating..."
+                )
+                : (
+                  <>
+                    <Save className="w-4 h-4 mr-2" />
+                    Create Model
+                  </>
+                )}
             </Button>
           </div>
         </form>

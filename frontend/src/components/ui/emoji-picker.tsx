@@ -1,10 +1,10 @@
 "use client";
 
 import {
+  EmojiPicker as EmojiPickerPrimitive,
   type EmojiPickerListCategoryHeaderProps,
   type EmojiPickerListEmojiProps,
   type EmojiPickerListRowProps,
-  EmojiPicker as EmojiPickerPrimitive,
 } from "frimousse";
 import { LoaderIcon, SearchIcon, X } from "lucide-react";
 import type * as React from "react";
@@ -22,7 +22,7 @@ function EmojiPicker({
     <EmojiPickerPrimitive.Root
       className={cn(
         "bg-popover text-popover-foreground isolate flex h-full w-fit flex-col overflow-hidden rounded-md",
-        className
+        className,
       )}
       data-slot="emoji-picker"
       {...props}
@@ -67,7 +67,7 @@ function EmojiPickerEmoji({
       {...props}
       className={cn(
         "data-[active]:bg-accent flex size-7 items-center justify-center rounded-sm text-base",
-        className
+        className,
       )}
       data-slot="emoji-picker-emoji"
     >
@@ -134,28 +134,29 @@ function EmojiPickerFooter({
     <div
       className={cn(
         "max-w-(--frimousse-viewport-width) flex w-full min-w-0 items-center gap-1 border-t p-2",
-        className
+        className,
       )}
       data-slot="emoji-picker-footer"
       {...props}
     >
       <EmojiPickerPrimitive.ActiveEmoji>
         {({ emoji }) =>
-          emoji ? (
-            <>
-              <div className="flex size-7 flex-none items-center justify-center text-lg">
-                {emoji.emoji}
-              </div>
-              <span className="text-secondary-foreground truncate text-xs">
-                {emoji.label}
+          emoji
+            ? (
+              <>
+                <div className="flex size-7 flex-none items-center justify-center text-lg">
+                  {emoji.emoji}
+                </div>
+                <span className="text-secondary-foreground truncate text-xs">
+                  {emoji.label}
+                </span>
+              </>
+            )
+            : (
+              <span className="text-muted-foreground ml-1.5 flex h-7 items-center truncate text-xs">
+                Select an emoji…
               </span>
-            </>
-          ) : (
-            <span className="text-muted-foreground ml-1.5 flex h-7 items-center truncate text-xs">
-              Select an emoji…
-            </span>
-          )
-        }
+            )}
       </EmojiPickerPrimitive.ActiveEmoji>
     </div>
   );
@@ -179,9 +180,17 @@ function EmojiPickerButton({ value, onChange }: EmojiPickerButtonProps) {
     setIsOpen(false);
   };
 
-  const displayIcon = value && 'text' in value ? value.text : value && 'base64' in value ? (
-    <img src={`data:image/png;base64,${value.base64}`} alt="icon" className="w-6 h-6" />
-  ) : null;
+  const displayIcon = value && "text" in value
+    ? value.text
+    : value && "base64" in value
+    ? (
+      <img
+        src={`data:image/png;base64,${value.base64}`}
+        alt="icon"
+        className="w-6 h-6"
+      />
+    )
+    : null;
 
   return (
     <div className="relative">
@@ -191,7 +200,7 @@ function EmojiPickerButton({ value, onChange }: EmojiPickerButtonProps) {
         onClick={() => setIsOpen(!isOpen)}
         className="w-[2.5rem] p-0"
       >
-        {displayIcon || '🫥' }
+        {displayIcon || "🫥"}
       </Button>
 
       {isOpen && (
@@ -236,8 +245,8 @@ function EmojiPickerButton({ value, onChange }: EmojiPickerButtonProps) {
 
 export {
   EmojiPicker,
-  EmojiPickerSearch,
+  EmojiPickerButton,
   EmojiPickerContent,
   EmojiPickerFooter,
-  EmojiPickerButton,
+  EmojiPickerSearch,
 };

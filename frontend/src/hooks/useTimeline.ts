@@ -67,7 +67,7 @@ export function useTimeline() {
       .wheelDelta((event) => -event.deltaY * 0.002)
       .touchable(() => true)
       .filter((event) => {
-        if (event.type === 'dblclick') return false;
+        if (event.type === "dblclick") return false;
         if (event.button && event.button !== 0) return false;
         return true;
       }), [
@@ -84,9 +84,9 @@ export function useTimeline() {
       const node = svg.node();
 
       if (node) {
-        node.style.touchAction = 'none';
-        node.style.webkitUserSelect = 'none';
-        node.style.userSelect = 'none';
+        node.style.touchAction = "none";
+        node.style.webkitUserSelect = "none";
+        node.style.userSelect = "none";
       }
 
       svg.call(zoomBehavior as any);

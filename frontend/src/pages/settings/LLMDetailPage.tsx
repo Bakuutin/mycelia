@@ -1,24 +1,39 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { callResource } from '@/lib/api';
-import { getLLM } from '@/lib/llm';
-import type { Model } from '@/types/llm';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { ArrowLeft, Save, Trash2, Play, CheckCircle, XCircle, Loader2, Copy } from 'lucide-react';
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { callResource } from "@/lib/api";
+import { getLLM } from "@/lib/llm";
+import type { Model } from "@/types/llm";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  ArrowLeft,
+  CheckCircle,
+  Copy,
+  Loader2,
+  Play,
+  Save,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 
 const updateModelSchema = z.object({
-  alias: z.enum(['small', 'medium', 'large']),
-  name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
-  provider: z.string().min(1, 'Provider is required').max(50, 'Provider must be less than 50 characters'),
-  baseUrl: z.string().url('Must be a valid URL'),
-  apiKey: z.string().min(1, 'API key is required'),
+  alias: z.enum(["small", "medium", "large"]),
+  name: z.string().min(1, "Name is required").max(
+    100,
+    "Name must be less than 100 characters",
+  ),
+  provider: z.string().min(1, "Provider is required").max(
+    50,
+    "Provider must be less than 50 characters",
+  ),
+  baseUrl: z.string().url("Must be a valid URL"),
+  apiKey: z.string().min(1, "API key is required"),
 });
 
 type UpdateModelData = z.infer<typeof updateModelSchema>;
@@ -31,14 +46,18 @@ const LLMDetailPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    success: boolean;
-    response?: any;
-    error?: string;
-  } | null>(null);
-  const [streamingResponse, setStreamingResponse] = useState<string>('');
+  const [testResult, setTestResult] = useState<
+    {
+      success: boolean;
+      response?: any;
+      error?: string;
+    } | null
+  >(null);
+  const [streamingResponse, setStreamingResponse] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [testMessage, setTestMessage] = useState('Hello, can you respond with a simple greeting?');
+  const [testMessage, setTestMessage] = useState(
+    "Hello, can you respond with a simple greeting?",
+  );
 
   const form = useForm<UpdateModelData>({
     resolver: zodResolver(updateModelSchema),
@@ -53,7 +72,7 @@ const LLMDetailPage = () => {
         const result = await callResource("tech.mycelia.mongo", {
           action: "findOne",
           collection: "llm_models",
-          query: { _id: { $oid: id } }
+          query: { _id: { $oid: id } },
         });
 
         if (result) {
@@ -66,10 +85,10 @@ const LLMDetailPage = () => {
             apiKey: result.apiKey,
           });
         } else {
-          setError('Model not found');
+          setError("Model not found");
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch model');
+        setError(err instanceof Error ? err.message : "Failed to fetch model");
       } finally {
         setLoading(false);
       }
@@ -93,20 +112,20 @@ const LLMDetailPage = () => {
           $set: {
             ...data,
             updatedAt: new Date(),
-          }
-        }
+          },
+        },
       });
 
-      navigate('/settings/llms');
+      navigate("/settings/llms");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update model');
+      setError(err instanceof Error ? err.message : "Failed to update model");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!id || !confirm('Are you sure you want to delete this model?')) {
+    if (!id || !confirm("Are you sure you want to delete this model?")) {
       return;
     }
 
@@ -114,17 +133,17 @@ const LLMDetailPage = () => {
       await callResource("tech.mycelia.mongo", {
         action: "deleteOne",
         collection: "llm_models",
-        query: { _id: { $oid: id } }
+        query: { _id: { $oid: id } },
       });
-      navigate('/settings/llms');
+      navigate("/settings/llms");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete model');
+      setError(err instanceof Error ? err.message : "Failed to delete model");
     }
   };
 
   const handleDuplicate = () => {
     if (!model) return;
-    
+
     const searchParams = new URLSearchParams({
       alias: model.alias,
       name: model.name,
@@ -132,7 +151,7 @@ const LLMDetailPage = () => {
       baseUrl: model.baseUrl,
       apiKey: model.apiKey,
     });
-    
+
     navigate(`/settings/llms/new?${searchParams.toString()}`);
   };
 
@@ -143,14 +162,14 @@ const LLMDetailPage = () => {
       setTesting(true);
       setTestResult(null);
       setError(null);
-      setStreamingResponse('');
+      setStreamingResponse("");
       setIsStreaming(true);
 
       const llm = getLLM(model.alias);
-      const stream = await llm.stream([{ role: 'user', content: testMessage }]);
-      
-      let fullResponse = '';
-      
+      const stream = await llm.stream([{ role: "user", content: testMessage }]);
+
+      let fullResponse = "";
+
       for await (const chunk of stream) {
         const content = chunk.content;
         if (content) {
@@ -158,7 +177,7 @@ const LLMDetailPage = () => {
           setStreamingResponse(fullResponse);
         }
       }
-      
+
       setTestResult({
         success: true,
         response: { content: fullResponse },
@@ -166,7 +185,7 @@ const LLMDetailPage = () => {
     } catch (err) {
       setTestResult({
         success: false,
-        error: err instanceof Error ? err.message : 'Test request failed'
+        error: err instanceof Error ? err.message : "Test request failed",
       });
     } finally {
       setTesting(false);
@@ -198,7 +217,7 @@ const LLMDetailPage = () => {
           <h2 className="text-2xl font-semibold">Error</h2>
         </div>
         <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">{error || 'Model not found'}</p>
+          <p className="text-red-500">{error || "Model not found"}</p>
         </div>
       </div>
     );
@@ -247,11 +266,13 @@ const LLMDetailPage = () => {
               <Label htmlFor="alias">Alias *</Label>
               <Input
                 id="alias"
-                {...form.register('alias')}
-                className={form.formState.errors.alias ? 'border-red-500' : ''}
+                {...form.register("alias")}
+                className={form.formState.errors.alias ? "border-red-500" : ""}
               />
               {form.formState.errors.alias && (
-                <p className="text-sm text-red-500">{form.formState.errors.alias.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.alias.message}
+                </p>
               )}
             </div>
 
@@ -259,11 +280,13 @@ const LLMDetailPage = () => {
               <Label htmlFor="name">Model Name *</Label>
               <Input
                 id="name"
-                {...form.register('name')}
-                className={form.formState.errors.name ? 'border-red-500' : ''}
+                {...form.register("name")}
+                className={form.formState.errors.name ? "border-red-500" : ""}
               />
               {form.formState.errors.name && (
-                <p className="text-sm text-red-500">{form.formState.errors.name.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.name.message}
+                </p>
               )}
             </div>
 
@@ -271,11 +294,15 @@ const LLMDetailPage = () => {
               <Label htmlFor="provider">Provider *</Label>
               <Input
                 id="provider"
-                {...form.register('provider')}
-                className={form.formState.errors.provider ? 'border-red-500' : ''}
+                {...form.register("provider")}
+                className={form.formState.errors.provider
+                  ? "border-red-500"
+                  : ""}
               />
               {form.formState.errors.provider && (
-                <p className="text-sm text-red-500">{form.formState.errors.provider.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.provider.message}
+                </p>
               )}
             </div>
 
@@ -283,11 +310,15 @@ const LLMDetailPage = () => {
               <Label htmlFor="baseUrl">Base URL *</Label>
               <Input
                 id="baseUrl"
-                {...form.register('baseUrl')}
-                className={form.formState.errors.baseUrl ? 'border-red-500' : ''}
+                {...form.register("baseUrl")}
+                className={form.formState.errors.baseUrl
+                  ? "border-red-500"
+                  : ""}
               />
               {form.formState.errors.baseUrl && (
-                <p className="text-sm text-red-500">{form.formState.errors.baseUrl.message}</p>
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.baseUrl.message}
+                </p>
               )}
             </div>
           </div>
@@ -297,11 +328,13 @@ const LLMDetailPage = () => {
             <Input
               id="apiKey"
               type="password"
-              {...form.register('apiKey')}
-              className={form.formState.errors.apiKey ? 'border-red-500' : ''}
+              {...form.register("apiKey")}
+              className={form.formState.errors.apiKey ? "border-red-500" : ""}
             />
             {form.formState.errors.apiKey && (
-              <p className="text-sm text-red-500">{form.formState.errors.apiKey.message}</p>
+              <p className="text-sm text-red-500">
+                {form.formState.errors.apiKey.message}
+              </p>
             )}
           </div>
 
@@ -312,14 +345,16 @@ const LLMDetailPage = () => {
               </Button>
             </Link>
             <Button type="submit" disabled={saving}>
-              {saving ? (
-                'Saving...'
-              ) : (
-                <>
-                  <Save className="w-4 h-4 mr-2" />
-                  Save Changes
-                </>
-              )}
+              {saving
+                ? (
+                  "Saving..."
+                )
+                : (
+                  <>
+                    <Save className="w-4 h-4 mr-2" />
+                    Save Changes
+                  </>
+                )}
             </Button>
           </div>
         </form>
@@ -335,17 +370,19 @@ const LLMDetailPage = () => {
               disabled={testing || !model}
               variant="outline"
             >
-              {testing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Testing...
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 mr-2" />
-                  Test Request
-                </>
-              )}
+              {testing
+                ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Testing...
+                  </>
+                )
+                : (
+                  <>
+                    <Play className="w-4 h-4 mr-2" />
+                    Test Request
+                  </>
+                )}
             </Button>
           </div>
 
@@ -376,15 +413,15 @@ const LLMDetailPage = () => {
           {testResult && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                {testResult.success ? (
-                  <CheckCircle className="w-5 h-5 text-green-500" />
-                ) : (
-                  <XCircle className="w-5 h-5 text-red-500" />
-                )}
-                <span className={`font-medium ${
-                  testResult.success ? 'text-green-700' : 'text-red-700'
-                }`}>
-                  {testResult.success ? 'Test Successful' : 'Test Failed'}
+                {testResult.success
+                  ? <CheckCircle className="w-5 h-5 text-green-500" />
+                  : <XCircle className="w-5 h-5 text-red-500" />}
+                <span
+                  className={`font-medium ${
+                    testResult.success ? "text-green-700" : "text-red-700"
+                  }`}
+                >
+                  {testResult.success ? "Test Successful" : "Test Failed"}
                 </span>
               </div>
 
@@ -393,7 +430,8 @@ const LLMDetailPage = () => {
                   <Label>Final Response:</Label>
                   <div className="p-3 bg-green-50 border border-green-200 rounded-md">
                     <div className="text-sm text-green-800 whitespace-pre-wrap">
-                      {testResult.response.content || JSON.stringify(testResult.response, null, 2)}
+                      {testResult.response.content ||
+                        JSON.stringify(testResult.response, null, 2)}
                     </div>
                   </div>
                 </div>

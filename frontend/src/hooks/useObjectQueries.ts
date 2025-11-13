@@ -1,17 +1,23 @@
-import { useQuery, useMutation, useQueryClient, UseQueryResult } from '@tanstack/react-query';
-import { callResource } from '@/lib/api';
-import type { Object } from '@/types/objects';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  UseQueryResult,
+} from "@tanstack/react-query";
+import { callResource } from "@/lib/api";
+import type { Object } from "@/types/objects";
 import { ObjectId } from "bson";
 
 // Query keys
 export const objectKeys = {
-  all: ['objects'] as const,
-  lists: () => [...objectKeys.all, 'list'] as const,
-  list: (filters: Record<string, any>) => [...objectKeys.lists(), { filters }] as const,
-  details: () => [...objectKeys.all, 'detail'] as const,
+  all: ["objects"] as const,
+  lists: () => [...objectKeys.all, "list"] as const,
+  list: (filters: Record<string, any>) =>
+    [...objectKeys.lists(), { filters }] as const,
+  details: () => [...objectKeys.all, "detail"] as const,
   detail: (id: string) => [...objectKeys.details(), id] as const,
-  related: (id: string) => [...objectKeys.all, 'related', id] as const,
-  selection: () => [...objectKeys.all, 'selection'] as const,
+  related: (id: string) => [...objectKeys.all, "related", id] as const,
+  selection: () => [...objectKeys.all, "selection"] as const,
 };
 
 // Fetch a single object by ID
@@ -19,7 +25,7 @@ export function useObject(id: string | ObjectId | undefined) {
   return useQuery({
     queryKey: objectKeys.detail(id?.toString()!),
     queryFn: async () => {
-      if (!id) throw new Error('Object ID is required');
+      if (!id) throw new Error("Object ID is required");
       return await callResource("tech.mycelia.objects", {
         action: "get",
         id: id.toString(),
@@ -43,14 +49,14 @@ export function useObjectSelection() {
         },
       });
     },
-    staleTime: 30 * 1000 // 30 sec
+    staleTime: 30 * 1000, // 30 sec
   });
 }
 
 // Fetch objects with search functionality for dropdowns
-export function useObjectSearch(searchTerm: string = '', limit: number = 50) {
+export function useObjectSearch(searchTerm: string = "", limit: number = 50) {
   return useQuery({
-    queryKey: [...objectKeys.selection(), 'search', searchTerm, limit],
+    queryKey: [...objectKeys.selection(), "search", searchTerm, limit],
     queryFn: async () => {
       return await callResource("tech.mycelia.objects", {
         action: "list",
@@ -62,22 +68,25 @@ export function useObjectSearch(searchTerm: string = '', limit: number = 50) {
         },
       });
     },
-    staleTime: 10 * 1000 // 10 sec for search results
+    staleTime: 10 * 1000, // 10 sec for search results
   });
 }
 
-
-export function getRelationships(objectId: string | ObjectId | undefined): UseQueryResult<{
+export function getRelationships(
+  objectId: string | ObjectId | undefined,
+): UseQueryResult<{
   relationship: Object;
   other: Object;
 }[], Error> {
   const queryClient = useQueryClient();
-  const idString = objectId ? (objectId instanceof ObjectId ? objectId.toString() : objectId) : undefined;
+  const idString = objectId
+    ? (objectId instanceof ObjectId ? objectId.toString() : objectId)
+    : undefined;
 
   return useQuery({
     queryKey: objectKeys.related(idString!),
     queryFn: async () => {
-      if (!idString) throw new Error('Object ID is required');
+      if (!idString) throw new Error("Object ID is required");
 
       const relationships = await callResource("tech.mycelia.objects", {
         action: "getRelationships",
@@ -86,13 +95,16 @@ export function getRelationships(objectId: string | ObjectId | undefined): UseQu
 
       // populate useQuery cache with the "other" objects
       relationships.forEach((relationship: any) => {
-        queryClient.setQueryData(objectKeys.detail(relationship.other._id.toString()), relationship.other);
+        queryClient.setQueryData(
+          objectKeys.detail(relationship.other._id.toString()),
+          relationship.other,
+        );
       });
 
       return relationships;
     },
     enabled: !!idString,
-    staleTime: 30 * 1000 // 30 sec
+    staleTime: 30 * 1000, // 30 sec
   });
 }
 
@@ -105,12 +117,12 @@ export function useUpdateObject() {
       id,
       version,
       field,
-      value
+      value,
     }: {
       id: string;
       version: number;
       field: string;
-      value: any
+      value: any;
     }) => {
       return await callResource("tech.mycelia.objects", {
         action: "update",

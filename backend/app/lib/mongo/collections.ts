@@ -5,14 +5,12 @@ import { RESOLUTION_ORDER } from "@/types/resolution.ts";
 
 export const REGULAR_COLLECTIONS = [
   "api_keys",
-  "events",
   "audio_chunks",
   "transcriptions",
   "diarizations",
   "source_files",
-  "people",
-  "conversations",
   "objects",
+  "objects_history",
 ] as const;
 
 export const GRIDFS_BUCKETS = [
@@ -66,6 +64,8 @@ async function ensureIndexExists(
   indexSpec: Record<string, any>,
   indexName?: string,
 ): Promise<void> {
+  await ensureCollectionExists(db, collectionName);
+
   const collection = db.collection(collectionName);
   const indexes = await collection.listIndexes().toArray();
 
@@ -97,6 +97,15 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
       details: "text",
     },
     "text_search_index",
+  );
+  await ensureIndexExists(
+    db,
+    "object_history",
+    {
+      "objectId": 1,
+      "timestamp": -1,
+    },
+    "object_id",
   );
 }
 

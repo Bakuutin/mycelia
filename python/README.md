@@ -125,15 +125,31 @@ Optional flags:
 
 - `--limit <N>`: process at most N conversation chunks
 - `--not-later-than <UNIX_TS>`: only process transcripts earlier than the given UNIX timestamp (seconds)
+- `--model {small|medium|large}`: choose LLM size (default: small)
+- `--force`: force recreation of existing conversations (deletes and recreates)
 
-Examples:
+#### Resume-Safe Processing
+
+By default, `convos.py` **skips** chunks that already have conversations, making it safe to resume interrupted processing:
 
 ```bash
-# Process everything available
-uv run convos.py
+# Process new conversations only (skips existing)
+uv run convos.py --limit 10
 
-# Process only 5 chunks
-uv run convos.py --limit 5
+# Continue processing - will skip the 10 already done
+uv run convos.py --limit 10
+```
+
+#### Force Recreate
+
+Use `--force` to delete and recreate existing conversations:
+
+```bash
+# Recreate conversations (useful after prompt improvements)
+uv run convos.py --limit 10 --force
+
+# Recreate with larger model
+uv run convos.py --limit 10 --force --model medium
 
 # Process items not later than a specific time
 uv run convos.py --not-later-than 1730500000

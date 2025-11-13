@@ -1,10 +1,15 @@
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import type { Object, ObjectFormData } from '@/types/objects';
-import { Button } from '@/components/ui/button';
-import { ArrowLeft, Trash2 } from 'lucide-react';
-import { useObject, useUpdateObject, useDeleteObject } from '@/hooks/useObjectQueries';
-import { ObjectForm } from '@/components/ObjectForm';
-import { RelationshipsPanel } from '@/components/RelationshipsPanel';
+import { Link, useNavigate, useParams } from "react-router-dom";
+import type { Object, ObjectFormData } from "@/types/objects";
+import { Button } from "@/components/ui/button";
+import { ArrowLeft, Trash2 } from "lucide-react";
+import {
+  useDeleteObject,
+  useObject,
+  useUpdateObject,
+} from "@/hooks/useObjectQueries";
+import { ObjectForm } from "@/components/ObjectForm";
+import { RelationshipsPanel } from "@/components/RelationshipsPanel";
+import { MetadataDisplay } from "@/components/MetadataDisplay";
 import { ObjectId } from "bson";
 
 const ObjectDetailPage = () => {
@@ -27,23 +32,29 @@ const ObjectDetailPage = () => {
   };
 
   // Convert Object to ObjectFormData for the form
-  const formObject: ObjectFormData = object ? {
-    ...object,
-    relationship: object.relationship ? {
-      object: object.relationship.object,
-      subject: object.relationship.subject,
-      symmetrical: object.relationship.symmetrical
-    } : undefined
-  } : {} as ObjectFormData;
+  const formObject: ObjectFormData = object
+    ? {
+      ...object,
+      relationship: object.relationship
+        ? {
+          object: object.relationship.object,
+          subject: object.relationship.subject,
+          symmetrical: object.relationship.symmetrical,
+        }
+        : undefined,
+    }
+    : {} as ObjectFormData;
 
   const handleDelete = async () => {
     if (!object || !id) return;
-    const confirmed = globalThis.confirm ? globalThis.confirm("Delete this object?") : true;
+    const confirmed = globalThis.confirm
+      ? globalThis.confirm("Delete this object?")
+      : true;
     if (!confirmed) return;
 
     deleteObjectMutation.mutate(id, {
       onSuccess: () => {
-        navigate('/objects');
+        navigate("/objects");
       },
     });
   };
@@ -78,7 +89,9 @@ const ObjectDetailPage = () => {
           </Link>
         </div>
         <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error?.message || 'Object not found'}</p>
+          <p className="text-red-500">
+            Error: {error?.message || "Object not found"}
+          </p>
         </div>
       </div>
     );
@@ -94,15 +107,17 @@ const ObjectDetailPage = () => {
           </Button>
         </Link>
         <div className="flex items-center gap-2">
-          {updateObjectMutation.isPending && <span className="text-xs text-muted-foreground">Saving...</span>}
-          <Button 
-            variant="destructive" 
-            size="sm" 
+          {updateObjectMutation.isPending && (
+            <span className="text-xs text-muted-foreground">Saving...</span>
+          )}
+          <Button
+            variant="destructive"
+            size="sm"
             onClick={handleDelete}
             disabled={deleteObjectMutation.isPending}
           >
             <Trash2 className="w-4 h-4 mr-2" />
-            {deleteObjectMutation.isPending ? 'Deleting...' : 'Delete'}
+            {deleteObjectMutation.isPending ? "Deleting..." : "Delete"}
           </Button>
         </div>
       </div>
@@ -120,8 +135,11 @@ const ObjectDetailPage = () => {
           />
         </div>
 
-        <div className="border rounded-lg p-6">
-          <RelationshipsPanel object={object} />
+        <div className="space-y-6">
+          <div className="border rounded-lg p-6">
+            <RelationshipsPanel object={object} />
+          </div>
+          <MetadataDisplay object={object} />
         </div>
       </div>
     </div>
@@ -129,4 +147,3 @@ const ObjectDetailPage = () => {
 };
 
 export default ObjectDetailPage;
-

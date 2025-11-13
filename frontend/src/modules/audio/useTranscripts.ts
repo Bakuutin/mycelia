@@ -1,15 +1,17 @@
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { callResource } from "@/lib/api";
 
 interface Transcript {
   _id: string;
-  segments: {text: string; start: number; end: number}[];
+  segments: { text: string; start: number; end: number }[];
   start: Date;
   end: Date;
 }
 
 export const useTranscripts = (cursorDate: Date | null) => {
-  const [transcripts, setTranscripts] = useState<Transcript[]>(cachedTranscripts);
+  const [transcripts, setTranscripts] = useState<Transcript[]>(
+    cachedTranscripts,
+  );
 
   const bucketMs = 5000;
   const bucketKey = useMemo(() => {

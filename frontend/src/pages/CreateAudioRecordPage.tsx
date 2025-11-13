@@ -1,14 +1,20 @@
-import { Radio, RefreshCw } from 'lucide-react';
-import { useAudioRecording } from '@/hooks/useAudioRecording';
-import { RecordingControls } from '@/components/audio/RecordingControls';
-import { RecordingStatus } from '@/components/audio/RecordingStatus';
-import { AudioVisualizer } from '@/components/audio/AudioVisualizer';
-import { Card } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
-import { useSettingsStore } from '@/stores/settingsStore';
+import { Radio, RefreshCw } from "lucide-react";
+import { useAudioRecording } from "@/hooks/useAudioRecording";
+import { RecordingControls } from "@/components/audio/RecordingControls";
+import { RecordingStatus } from "@/components/audio/RecordingStatus";
+import { AudioVisualizer } from "@/components/audio/AudioVisualizer";
+import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 export default function CreateAudioRecordPage() {
   const recording = useAudioRecording();
@@ -18,7 +24,7 @@ export default function CreateAudioRecordPage() {
     autoGainControl,
     setEchoCancellation,
     setNoiseSuppression,
-    setAutoGainControl
+    setAutoGainControl,
   } = useSettingsStore();
 
   return (
@@ -51,25 +57,28 @@ export default function CreateAudioRecordPage() {
               <SelectValue placeholder="Select input device..." />
             </SelectTrigger>
             <SelectContent>
-              {recording.availableDevices.length === 0 ? (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                  No devices available
-                </div>
-              ) : (
-                recording.availableDevices.map((device) => (
-                  <SelectItem key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </SelectItem>
-                ))
-              )}
+              {recording.availableDevices.length === 0
+                ? (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    No devices available
+                  </div>
+                )
+                : (
+                  recording.availableDevices.map((device) => (
+                    <SelectItem key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </SelectItem>
+                  ))
+                )}
             </SelectContent>
           </Select>
-          
+
           <div>
             <Label htmlFor="sample-rate-select">Sample Rate</Label>
             <Select
               value={recording.sampleRate.toString()}
-              onValueChange={(value) => recording.setSampleRate(Number.parseInt(value, 10))}
+              onValueChange={(value) =>
+                recording.setSampleRate(Number.parseInt(value, 10))}
               disabled={recording.isRecording}
             >
               <SelectTrigger id="sample-rate-select">
@@ -84,7 +93,7 @@ export default function CreateAudioRecordPage() {
               </SelectContent>
             </Select>
           </div>
-          
+
           <div className="space-y-3">
             <Label>Audio Processing</Label>
             <div className="space-y-2">
@@ -92,7 +101,8 @@ export default function CreateAudioRecordPage() {
                 <Checkbox
                   id="echo-cancellation"
                   checked={echoCancellation}
-                  onCheckedChange={(checked) => setEchoCancellation(checked === true)}
+                  onCheckedChange={(checked) =>
+                    setEchoCancellation(checked === true)}
                   disabled={recording.isRecording}
                 />
                 <Label
@@ -106,7 +116,8 @@ export default function CreateAudioRecordPage() {
                 <Checkbox
                   id="noise-suppression"
                   checked={noiseSuppression}
-                  onCheckedChange={(checked) => setNoiseSuppression(checked === true)}
+                  onCheckedChange={(checked) =>
+                    setNoiseSuppression(checked === true)}
                   disabled={recording.isRecording}
                 />
                 <Label
@@ -120,7 +131,8 @@ export default function CreateAudioRecordPage() {
                 <Checkbox
                   id="auto-gain-control"
                   checked={autoGainControl}
-                  onCheckedChange={(checked) => setAutoGainControl(checked === true)}
+                  onCheckedChange={(checked) =>
+                    setAutoGainControl(checked === true)}
                   disabled={recording.isRecording}
                 />
                 <Label
@@ -132,7 +144,7 @@ export default function CreateAudioRecordPage() {
               </div>
             </div>
           </div>
-          
+
           {!recording.canAccessMicrophone && (
             <p className="text-sm text-muted-foreground">
               Microphone access requires HTTPS or localhost
@@ -144,8 +156,6 @@ export default function CreateAudioRecordPage() {
       <RecordingControls recording={recording} />
 
       <RecordingStatus recording={recording} />
-
     </div>
   );
 }
-

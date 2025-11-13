@@ -1,17 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { callResource } from '@/lib/api';
-import { useSettingsStore } from '@/stores/settingsStore';
-import { formatTime, formatTimeRangeDuration } from '@/lib/formatTime';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { DateTimePicker } from '@/components/ui/datetime-picker';
-
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { callResource } from "@/lib/api";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 
 interface TranscriptSegment {
   start: number; // seconds from transcript start
-  end: number;   // seconds from transcript start
+  end: number; // seconds from transcript start
   text: string;
 }
 
@@ -33,7 +32,7 @@ function parseDateParam(value: string | null): Date | null {
   if (!value) return null;
   // Support ISO strings and millis since epoch
   const asNumber = Number(value);
-  if (!Number.isNaN(asNumber) && value.trim() !== '') {
+  if (!Number.isNaN(asNumber) && value.trim() !== "") {
     const d = new Date(asNumber);
     return Number.isNaN(d.getTime()) ? null : d;
   }
@@ -47,8 +46,8 @@ const TranscriptPage = () => {
   const location = useLocation();
   const { timeFormat } = useSettingsStore();
 
-  const startParam = searchParams.get('start');
-  const endParam = searchParams.get('end');
+  const startParam = searchParams.get("start");
+  const endParam = searchParams.get("end");
 
   const startDate = useMemo(() => {
     const parsed = parseDateParam(startParam);
@@ -56,7 +55,7 @@ const TranscriptPage = () => {
     // Default to 24 hours ago if no start parameter
     return new Date(Date.now() - 24 * 60 * 60 * 1000);
   }, [startParam]);
-  
+
   const endDate = useMemo(() => {
     const parsed = parseDateParam(endParam);
     if (parsed) return parsed;
@@ -73,26 +72,28 @@ const TranscriptPage = () => {
   const [displayEnd, setDisplayEnd] = useState<Date | null>(null);
   const suppressRefetch = useRef(false);
 
-  const initialQ = searchParams.get('q') || '';
+  const initialQ = searchParams.get("q") || "";
   const [q, setQ] = useState<string>(initialQ);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchSegments, setSearchSegments] = useState<RenderSegment[]>([]);
   const [lastSearchedQ, setLastSearchedQ] = useState<string>(initialQ);
 
-  const [formStartDate, setFormStartDate] = useState<Date | undefined>(undefined);
+  const [formStartDate, setFormStartDate] = useState<Date | undefined>(
+    undefined,
+  );
   const [formEndDate, setFormEndDate] = useState<Date | undefined>(undefined);
 
   function updateRange(newStart: Date, newEnd: Date) {
     const currentSearch = new URLSearchParams(window.location.search);
-    currentSearch.set('start', newStart.getTime().toString());
-    currentSearch.set('end', newEnd.getTime().toString());
+    currentSearch.set("start", newStart.getTime().toString());
+    currentSearch.set("end", newEnd.getTime().toString());
     const newSearch = currentSearch.toString();
-    window.history.pushState(null, '', `?${newSearch}`);
+    window.history.pushState(null, "", `?${newSearch}`);
   }
 
   function escapeRegex(source: string) {
-    return source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   function renderHighlightedText(text: string, query: string) {
@@ -101,26 +102,29 @@ const TranscriptPage = () => {
       .map((w) => w.trim())
       .filter(Boolean);
     if (words.length === 0) return text;
-    const pattern = `(${words.map(escapeRegex).join('|')})`;
-    const splitRe = new RegExp(pattern, 'gi');
-    const checkRe = new RegExp(pattern, 'i');
+    const pattern = `(${words.map(escapeRegex).join("|")})`;
+    const splitRe = new RegExp(pattern, "gi");
+    const checkRe = new RegExp(pattern, "i");
     const parts = text.split(splitRe);
     return (
       <>
         {parts.map((part, idx) =>
-          checkRe.test(part) ? (
-            <mark key={idx} className="bg-yellow-200">
-              {part}
-            </mark>
-          ) : (
-            <span key={idx}>{part}</span>
-          )
+          checkRe.test(part)
+            ? (
+              <mark key={idx} className="bg-yellow-200">
+                {part}
+              </mark>
+            )
+            : <span key={idx}>{part}</span>
         )}
       </>
     );
   }
 
-  async function fetchSegmentsRange(rangeStart: Date, rangeEnd: Date): Promise<RenderSegment[]> {
+  async function fetchSegmentsRange(
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Promise<RenderSegment[]> {
     const docs: TranscriptionDoc[] = await callResource("tech.mycelia.mongo", {
       action: "find",
       collection: "transcriptions",
@@ -140,7 +144,7 @@ const TranscriptPage = () => {
           rendered.push({
             time: absStart,
             endTime: absEnd,
-            text: (s.text || '').replace(/\n/g, ' '),
+            text: (s.text || "").replace(/\n/g, " "),
             transcriptStart: doc.start,
           });
         }
@@ -152,8 +156,12 @@ const TranscriptPage = () => {
 
   async function handleApplyRange() {
     if (!formStartDate || !formEndDate) return;
-    const startNorm = formStartDate.getTime() > formEndDate.getTime() ? formEndDate : formStartDate;
-    const endNorm = formStartDate.getTime() > formEndDate.getTime() ? formStartDate : formEndDate;
+    const startNorm = formStartDate.getTime() > formEndDate.getTime()
+      ? formEndDate
+      : formStartDate;
+    const endNorm = formStartDate.getTime() > formEndDate.getTime()
+      ? formStartDate
+      : formEndDate;
     setLoading(true);
     setError(null);
     setSearchError(null);
@@ -172,26 +180,32 @@ const TranscriptPage = () => {
         setSearchSegments(results);
         setLastSearchedQ(query);
         const currentSearch = new URLSearchParams(window.location.search);
-        currentSearch.set('q', query);
+        currentSearch.set("q", query);
         const newSearch = currentSearch.toString();
-        window.history.pushState(null, '', `?${newSearch}`);
+        window.history.pushState(null, "", `?${newSearch}`);
       } else {
         setSearchSegments([]);
-        setLastSearchedQ('');
+        setLastSearchedQ("");
         const currentSearch = new URLSearchParams(window.location.search);
-        currentSearch.delete('q');
+        currentSearch.delete("q");
         const newSearch = currentSearch.toString();
-        window.history.pushState(null, '', `?${newSearch}`);
+        window.history.pushState(null, "", `?${newSearch}`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch transcripts');
+      setError(
+        err instanceof Error ? err.message : "Failed to fetch transcripts",
+      );
     } finally {
       setLoading(false);
       setSearching(false);
     }
   }
 
-  async function fetchSearch(rangeStart: Date, rangeEnd: Date, query: string): Promise<RenderSegment[]> {
+  async function fetchSearch(
+    rangeStart: Date,
+    rangeEnd: Date,
+    query: string,
+  ): Promise<RenderSegment[]> {
     if (!query.trim()) return [];
     const pipeline = [
       {
@@ -201,8 +215,15 @@ const TranscriptPage = () => {
           $text: { $search: query },
         },
       },
-      { $sort: { score: { $meta: 'textScore' } } },
-      { $project: { start: 1, end: 1, segments: 1, score: { $meta: 'textScore' } } },
+      { $sort: { score: { $meta: "textScore" } } },
+      {
+        $project: {
+          start: 1,
+          end: 1,
+          segments: 1,
+          score: { $meta: "textScore" },
+        },
+      },
       { $limit: 200 },
     ];
 
@@ -223,7 +244,7 @@ const TranscriptPage = () => {
         const absStart = new Date(doc.start.getTime() + s.start * 1000);
         const absEnd = new Date(doc.start.getTime() + s.end * 1000);
         if (absEnd > rangeStart && absStart < rangeEnd) {
-          const t = (s.text || '').replace(/\n/g, ' ');
+          const t = (s.text || "").replace(/\n/g, " ");
           const lt = t.toLowerCase();
           if (loweredWords.some((w) => lt.includes(w))) {
             rendered.push({
@@ -318,7 +339,9 @@ const TranscriptPage = () => {
         setFormStartDate(s);
         setFormEndDate(e);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch transcripts');
+        setError(
+          err instanceof Error ? err.message : "Failed to fetch transcripts",
+        );
       } finally {
         setLoading(false);
       }
@@ -332,7 +355,6 @@ const TranscriptPage = () => {
 
     initialFetch();
   }, [startDate, endDate, startParam, endParam]);
-
 
   if (loading) {
     return (
@@ -393,64 +415,104 @@ const TranscriptPage = () => {
             placeholder="Search"
             className="flex-1"
           />
-          <Button type="button" variant="outline" onClick={handleGoToLatest15Min} disabled={loading || searching}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleGoToLatest15Min}
+            disabled={loading || searching}
+          >
             Latest 15min
           </Button>
-          <Button type="submit" disabled={loading || !formStartDate || !formEndDate || searching}>
-            {searching ? 'Applying…' : 'Apply'}
+          <Button
+            type="submit"
+            disabled={loading || !formStartDate || !formEndDate || searching}
+          >
+            {searching ? "Applying…" : "Apply"}
           </Button>
         </div>
       </form>
 
-      {lastSearchedQ && searchError ? (
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {searchError}</p>
-        </div>
-      ) : null}
+      {lastSearchedQ && searchError
+        ? (
+          <div className="border rounded-lg p-8 text-center">
+            <p className="text-red-500">Error: {searchError}</p>
+          </div>
+        )
+        : null}
 
       {!lastSearchedQ && (
         <div className="flex items-center justify-start">
-          <Button type="button" variant="secondary" onClick={handleLoadEarlier} disabled={loading || loadingTop}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleLoadEarlier}
+            disabled={loading || loadingTop}
+          >
             −100
           </Button>
         </div>
       )}
 
       <div className="border rounded-lg">
-        {(lastSearchedQ && searchSegments.length === 0) || (!lastSearchedQ && segments.length === 0) ? (
-          <div className="p-8 text-center">
-            <p className="text-muted-foreground">No transcript segments{lastSearchedQ ? ' matching your search' : ''} in this interval</p>
-          </div>
-        ) : (
-          <div className="divide-y">
-            {(lastSearchedQ ? searchSegments : segments).map((seg, idx, arr) => {
-              const prev = idx > 0 ? arr[idx - 1] : null;
-              const showGap = prev && seg.time.getTime() - prev.endTime.getTime() > 3 * 1000;
-              const gapBadge = showGap ? (
-                <div className="absolute left-1/2 -top-0">
-                  <Badge variant="secondary" className="text-xs" style={{ transform: 'translate(-50%, -14px)' }}>
-                    {formatTimeRangeDuration(prev!.endTime, seg.time)}
-                  </Badge>
-                </div>
-              ) : null;
+        {(lastSearchedQ && searchSegments.length === 0) ||
+            (!lastSearchedQ && segments.length === 0)
+          ? (
+            <div className="p-8 text-center">
+              <p className="text-muted-foreground">
+                No transcript segments{lastSearchedQ
+                  ? " matching your search"
+                  : ""} in this interval
+              </p>
+            </div>
+          )
+          : (
+            <div className="divide-y">
+              {(lastSearchedQ ? searchSegments : segments).map(
+                (seg, idx, arr) => {
+                  const prev = idx > 0 ? arr[idx - 1] : null;
+                  const showGap = prev &&
+                    seg.time.getTime() - prev.endTime.getTime() > 3 * 1000;
+                  const gapBadge = showGap
+                    ? (
+                      <div className="absolute left-1/2 -top-0">
+                        <Badge
+                          variant="secondary"
+                          className="text-xs"
+                          style={{ transform: "translate(-50%, -14px)" }}
+                        >
+                          {formatTimeRangeDuration(prev!.endTime, seg.time)}
+                        </Badge>
+                      </div>
+                    )
+                    : null;
 
-              return (
-                <div key={idx} className="relative p-4">
-                  {gapBadge}
-                  <div className="text-xs text-muted-foreground mb-1">
-                    {formatTime(seg.time, timeFormat)}
-                  </div>
-                  <div className="whitespace-pre-wrap leading-relaxed">{lastSearchedQ ? renderHighlightedText(seg.text, lastSearchedQ) : seg.text}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  return (
+                    <div key={idx} className="relative p-4">
+                      {gapBadge}
+                      <div className="text-xs text-muted-foreground mb-1">
+                        {formatTime(seg.time, timeFormat)}
+                      </div>
+                      <div className="whitespace-pre-wrap leading-relaxed">
+                        {lastSearchedQ
+                          ? renderHighlightedText(seg.text, lastSearchedQ)
+                          : seg.text}
+                      </div>
+                    </div>
+                  );
+                },
+              )}
+            </div>
+          )}
       </div>
 
       {!lastSearchedQ && (
         <div className="flex items-center justify-end">
-          <Button type="button" variant="secondary" onClick={handleLoadLater} disabled={loading || loadingBottom}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleLoadLater}
+            disabled={loading || loadingBottom}
+          >
             +100
           </Button>
         </div>
@@ -460,5 +522,3 @@ const TranscriptPage = () => {
 };
 
 export default TranscriptPage;
-
-

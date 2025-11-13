@@ -10,9 +10,7 @@ import { PlayPauseButton } from "./PlayPauseButton.tsx";
 import GainSlider from "./GainSlider.tsx";
 import { useTranscripts } from "./useTranscripts.ts";
 
-
 const day = 1000 * 60 * 60 * 24;
-
 
 export const AudioPlayerTool: Tool = {
   component: () => {
@@ -35,7 +33,9 @@ export const DateTimePickerTool: Tool = {
   component: () => {
     const { currentDate, resetDate } = useDateStore();
 
-    const handleDateTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleDateTimeChange = (
+      event: React.ChangeEvent<HTMLInputElement>,
+    ) => {
       const newDate = new Date(event.target.value);
       resetDate(newDate);
     };
@@ -43,11 +43,11 @@ export const DateTimePickerTool: Tool = {
     const formatDateTimeLocal = (date: Date | null) => {
       if (!date) return "";
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      const hours = String(date.getHours()).padStart(2, '0');
-      const minutes = String(date.getMinutes()).padStart(2, '0');
-      const seconds = String(date.getSeconds()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      const hours = String(date.getHours()).padStart(2, "0");
+      const minutes = String(date.getMinutes()).padStart(2, "0");
+      const seconds = String(date.getSeconds()).padStart(2, "0");
       return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
     };
 
@@ -132,8 +132,6 @@ export const AudioLayer: () => Layer = () => {
   } as Layer;
 };
 
-
-
 export const TranscriptLayer: () => Layer = () => {
   return {
     component: () => {
@@ -157,37 +155,56 @@ export const TranscriptLayer: () => Layer = () => {
             ref={containerRef}
             className="mt-2 space-y-1 h-32 overflow-y-auto overscroll-none"
           >
-            {transcripts.length === 0 ? (
-              <div className="h-full flex items-center text-gray-400 italic">
-                <p className="text-sm">... transcripts will be shown here...</p>
-              </div>
-            ) : (
-              transcripts.map((transcript) => {
-                const isActive = !!currentDate && transcript.start <= currentDate;
-                const base = "text-sm italic p-1 rounded whitespace-pre-wrap";
-                const cls = isActive ? `${base} text-yellow-600` : `${base}`;
-                const formatTime = (d: Date) => d.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-                return (
-                  <div key={transcript._id} className="flex items-start gap-2">
-                    <div className="w-20 shrink-0 text-xs text-gray-400 text-right font-mono leading-6">
-                      {formatTime(transcript.start)}
-                    </div>
-                    <p
-                      ref={(el) => {
-                        itemRefs.current[String(transcript._id)] = el;
-                      }}
-                      className={cls}
+            {transcripts.length === 0
+              ? (
+                <div className="h-full flex items-center text-gray-400 italic">
+                  <p className="text-sm">
+                    ... transcripts will be shown here...
+                  </p>
+                </div>
+              )
+              : (
+                transcripts.map((transcript) => {
+                  const isActive = !!currentDate &&
+                    transcript.start <= currentDate;
+                  const base = "text-sm italic p-1 rounded whitespace-pre-wrap";
+                  const cls = isActive ? `${base} text-yellow-600` : `${base}`;
+                  const formatTime = (d: Date) =>
+                    d.toLocaleTimeString([], {
+                      hour12: false,
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    });
+                  return (
+                    <div
+                      key={transcript._id}
+                      className="flex items-start gap-2"
                     >
-                      {transcript.segments.map((segment, idx) => (
-                        <span onClick={() => {
-                          resetDate(new Date(segment.start));
-                        }} key={idx}>{segment.text}</span>
-                      ))}
-                    </p>
-                  </div>
-                );
-              })
-            )}
+                      <div className="w-20 shrink-0 text-xs text-gray-400 text-right font-mono leading-6">
+                        {formatTime(transcript.start)}
+                      </div>
+                      <p
+                        ref={(el) => {
+                          itemRefs.current[String(transcript._id)] = el;
+                        }}
+                        className={cls}
+                      >
+                        {transcript.segments.map((segment, idx) => (
+                          <span
+                            onClick={() => {
+                              resetDate(new Date(segment.start));
+                            }}
+                            key={idx}
+                          >
+                            {segment.text}
+                          </span>
+                        ))}
+                      </p>
+                    </div>
+                  );
+                })
+              )}
           </div>
         </div>
       );
@@ -195,14 +212,14 @@ export const TranscriptLayer: () => Layer = () => {
   } as Layer;
 };
 
-
-
 export const TopicsLayer: () => Layer = () => {
   return {
     component: ({ width }: LayerComponentProps) => {
       let { start, end } = useTimelineRange();
       const { currentDate } = useDateStore();
-      const centerMs = currentDate ? currentDate.getTime() : (start.getTime() + end.getTime()) / 2;
+      const centerMs = currentDate
+        ? currentDate.getTime()
+        : (start.getTime() + end.getTime()) / 2;
       start = new Date(centerMs - 1000 * 60 * 30);
       end = new Date(centerMs + 1000 * 60 * 30);
 
@@ -214,7 +231,6 @@ export const TopicsLayer: () => Layer = () => {
         return (s.ts - centerMs) / 100 / (s.siblingCount) + width / 2;
       };
 
-
       const layout = useMemo(() => {
         return items
           .filter((i) => (i.topics?.length ?? 0) > 0)
@@ -224,39 +240,48 @@ export const TopicsLayer: () => Layer = () => {
             const segmentMs = startMs + 2.5 * 60 * 100;
             return topics.map((topic, idx) => {
               const segStartMs = startMs + idx * segmentMs;
-              const seg = { id: `${i.id}-${idx}`,ts: segStartMs, topic, siblingCount: topics.length, idx };
-              return { ...seg, x: sToShift(seg)};
+              const seg = {
+                id: `${i.id}-${idx}`,
+                ts: segStartMs,
+                topic,
+                siblingCount: topics.length,
+                idx,
+              };
+              return { ...seg, x: sToShift(seg) };
             });
-          })
-      }, [items, currentDate, centerMs ]);
+          });
+      }, [items, currentDate, centerMs]);
 
       const baselineY = 14;
 
       return (
-
         <div className="relative h-[28px]">
-            {layout.map((p) => {
-              return (
-                <span
-                  key={`topics-${p.id}`}
-                  style={{
-                    transform: `translate(${p.x}px, ${baselineY}px)`,
-                    position: 'absolute',
-                    left: 0,
-                    top: 0,
-                    width: '100%',
-                    height: '30px',
+          {layout.map((p) => {
+            return (
+              <span
+                key={`topics-${p.id}`}
+                style={{
+                  transform: `translate(${p.x}px, ${baselineY}px)`,
+                  position: "absolute",
+                  left: 0,
+                  top: 0,
+                  width: "100%",
+                  height: "30px",
                 }}
-                  className="text-[10px] fill-white opacity-90"
-                >
-                  {p.idx === 0 && (
-                    <span className="text-yellow-600">{
-                      new Date(p.ts).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" })
-                    }</span>
-                  )} {JSON.stringify(p.topic) }
-                </span>
-              );
-            })}
+                className="text-[10px] fill-white opacity-90"
+              >
+                {p.idx === 0 && (
+                  <span className="text-yellow-600">
+                    {new Date(p.ts).toLocaleTimeString([], {
+                      hour12: false,
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                )} {JSON.stringify(p.topic)}
+              </span>
+            );
+          })}
         </div>
       );
     },

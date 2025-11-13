@@ -20,7 +20,8 @@ export const zTimelineItem = z.object({
         name: z.string(),
         description: z.string(),
       }),
-    ])).optional(),
+    ]),
+  ).optional(),
 });
 
 export const zQueryParams = z.object({

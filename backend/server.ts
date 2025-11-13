@@ -18,7 +18,6 @@ import { type ServerBuild } from "@remix-run/node";
 import { createRequestHandler } from "@remix-run/express";
 
 import { requestCounter } from "@/lib/telemetry.ts";
-import { spawnAudioProcessingWorker } from "@/services/audio.server.ts";
 import { handlePcmWebSocket } from "@/services/audio.websocket.server.ts";
 import path from "node:path";
 import { setupResources } from "@/lib/resources/registry.ts";
@@ -342,8 +341,10 @@ async function configureCli() {
 
 async function main() {
   setupLogging();
+  setupLogging();
   await setup();
   await configureCli();
+  cleanupLogging();
   cleanupLogging();
   exit(0);
 }

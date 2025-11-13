@@ -9,7 +9,9 @@ interface TimelineChartProps {
   className?: string;
 }
 
-export const TimelineChart: React.FC<TimelineChartProps> = ({ layers, className }) => {
+export const TimelineChart: React.FC<TimelineChartProps> = (
+  { layers, className },
+) => {
   const { containerRef, width, timeScale, transform } = useTimeline();
 
   const resolvedLayers = useMemo<Layer[]>(() => {
@@ -37,5 +39,3 @@ export const TimelineChart: React.FC<TimelineChartProps> = ({ layers, className 
 };
 
 export default TimelineChart;
-
-

@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { callResource } from '@/lib/api';
-import type { Person } from '@/types/people';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { ArrowLeft, Trash2 } from 'lucide-react';
-import { EmojiPickerButton } from '@/components/ui/emoji-picker';
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { callResource } from "@/lib/api";
+import type { Person } from "@/types/people";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ArrowLeft, Trash2 } from "lucide-react";
+import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 
 const PersonDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -30,7 +30,7 @@ const PersonDetailPage = () => {
           setError("Person not found");
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch person');
+        setError(err instanceof Error ? err.message : "Failed to fetch person");
       } finally {
         setLoading(false);
       }
@@ -40,7 +40,6 @@ const PersonDetailPage = () => {
       fetchPerson();
     }
   }, [id]);
-
 
   const autoSave = async (updates: Partial<Person>) => {
     if (!person) return;
@@ -61,7 +60,7 @@ const PersonDetailPage = () => {
 
       setPerson({ ...person, ...updates });
     } catch (err) {
-      console.error('Auto-save failed:', err);
+      console.error("Auto-save failed:", err);
     } finally {
       setSaving(false);
     }
@@ -69,7 +68,9 @@ const PersonDetailPage = () => {
 
   const handleDelete = async () => {
     if (!person) return;
-    const confirmed = globalThis.confirm ? globalThis.confirm("Delete this person?") : true;
+    const confirmed = globalThis.confirm
+      ? globalThis.confirm("Delete this person?")
+      : true;
     if (!confirmed) return;
 
     try {
@@ -78,9 +79,9 @@ const PersonDetailPage = () => {
         collection: "people",
         query: { _id: person._id },
       });
-      navigate('/people');
+      navigate("/people");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete person');
+      setError(err instanceof Error ? err.message : "Failed to delete person");
     }
   };
 
@@ -114,7 +115,7 @@ const PersonDetailPage = () => {
           </Link>
         </div>
         <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error || 'Person not found'}</p>
+          <p className="text-red-500">Error: {error || "Person not found"}</p>
         </div>
       </div>
     );
@@ -130,7 +131,9 @@ const PersonDetailPage = () => {
           </Button>
         </Link>
         <div className="flex items-center gap-2">
-          {saving && <span className="text-xs text-muted-foreground">Saving...</span>}
+          {saving && (
+            <span className="text-xs text-muted-foreground">Saving...</span>
+          )}
           <Button variant="destructive" size="sm" onClick={handleDelete}>
             <Trash2 className="w-4 h-4 mr-2" />
             Delete
@@ -173,7 +176,6 @@ const PersonDetailPage = () => {
           />
         </div>
       </div>
-
     </div>
   );
 };

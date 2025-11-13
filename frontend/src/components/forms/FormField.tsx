@@ -14,7 +14,7 @@ export const FormField: React.FC<FormFieldProps> = ({
   htmlFor,
   error,
   children,
-  required = false
+  required = false,
 }) => {
   return (
     <div className="grid grid-cols-4 items-center gap-4">

@@ -84,12 +84,16 @@ export const useDateStore = create<DateStore>((set) => ({
     });
   },
   setAudioContext: (ctx: AudioContext | null) => set({ audioContext: ctx }),
-  setSourceNode: (node: AudioBufferSourceNode | null) => set({ sourceNode: node }),
+  setSourceNode: (node: AudioBufferSourceNode | null) =>
+    set({ sourceNode: node }),
   setGainNode: (node: GainNode | null) => set({ gainNode: node }),
-  setIsCreatingSource: (isCreating: boolean) => set({ isCreatingSource: isCreating }),
+  setIsCreatingSource: (isCreating: boolean) =>
+    set({ isCreatingSource: isCreating }),
   setRafId: (id: number | null) => set({ rafId: id }),
-  setBaselines: (date: Date, ctxTime: number) => set({ baselineStartDate: date, baselineStartCtxTime: ctxTime }),
-  clearBaselines: () => set({ baselineStartDate: null, baselineStartCtxTime: null }),
+  setBaselines: (date: Date, ctxTime: number) =>
+    set({ baselineStartDate: date, baselineStartCtxTime: ctxTime }),
+  clearBaselines: () =>
+    set({ baselineStartDate: null, baselineStartCtxTime: null }),
   update(
     data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>),
   ) {
@@ -267,7 +271,8 @@ export const AudioPlayer: React.FC = () => {
     }
 
     const tick = () => {
-      const { baselineStartDate, baselineStartCtxTime } = useDateStore.getState();
+      const { baselineStartDate, baselineStartCtxTime } = useDateStore
+        .getState();
       if (baselineStartDate && baselineStartCtxTime !== null) {
         const elapsed = audioContext.currentTime - baselineStartCtxTime;
         const newDate = new Date(baselineStartDate.getTime() + elapsed * 1000);

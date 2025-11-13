@@ -61,11 +61,11 @@ const formatTime = (
 export const formatLabel = (
   date: Date,
   options?: {
-    allJanFirst?: boolean,
-    hasTime?: boolean,
-    hasWeekdays?: boolean,
-    hasSeconds?: boolean,
-    hasMilliseconds?: boolean,
+    allJanFirst?: boolean;
+    hasTime?: boolean;
+    hasWeekdays?: boolean;
+    hasSeconds?: boolean;
+    hasMilliseconds?: boolean;
   },
 ): React.ReactNode[] => {
   const year = date.getFullYear().toString();
@@ -75,9 +75,12 @@ export const formatLabel = (
     hasWeekdays: true,
     hasSeconds: true,
     hasMilliseconds: false,
-  }
+  };
 
-  const { allJanFirst, hasTime, hasWeekdays, hasSeconds, hasMilliseconds } = { ...defaults, ...options };
+  const { allJanFirst, hasTime, hasWeekdays, hasSeconds, hasMilliseconds } = {
+    ...defaults,
+    ...options,
+  };
 
   if (allJanFirst) {
     return [year];

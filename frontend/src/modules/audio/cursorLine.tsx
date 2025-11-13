@@ -1,4 +1,3 @@
-
 export const CursorLine = ({
   position,
   height,

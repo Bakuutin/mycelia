@@ -1,4 +1,4 @@
-import { useSettingsStore } from '@/stores/settingsStore';
+import { useSettingsStore } from "@/stores/settingsStore";
 
 export interface TokenExchangeResponse {
   jwt: string | null;
@@ -8,16 +8,16 @@ export interface TokenExchangeResponse {
 export async function exchangeApiKeyForJWT(
   apiEndpoint: string,
   clientId: string,
-  clientSecret: string
+  clientSecret: string,
 ): Promise<TokenExchangeResponse> {
   try {
     const response = await fetch(`${apiEndpoint}/oauth/token`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        grant_type: 'client_credentials',
+        grant_type: "client_credentials",
         client_id: clientId,
         client_secret: clientSecret,
       }),
@@ -25,7 +25,7 @@ export async function exchangeApiKeyForJWT(
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      return { jwt: null, error: data.error || 'Failed to exchange token' };
+      return { jwt: null, error: data.error || "Failed to exchange token" };
     }
 
     const data = await response.json();
@@ -42,6 +42,10 @@ export async function getCurrentJWT(): Promise<string | null> {
     return null;
   }
 
-  const result = await exchangeApiKeyForJWT(apiEndpoint, clientId, clientSecret);
+  const result = await exchangeApiKeyForJWT(
+    apiEndpoint,
+    clientId,
+    clientSecret,
+  );
   return result.jwt;
 }

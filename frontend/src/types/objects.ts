@@ -2,13 +2,11 @@ import { z } from "zod";
 import { ObjectId } from "bson";
 import { zIcon } from "./icon";
 
-
 const zCustomFieldPrimitive = z.union([
   z.string(),
   z.number(),
   z.boolean(),
 ]);
-
 
 const zCustomFieldValue = z.union([
   zCustomFieldPrimitive,
@@ -40,21 +38,28 @@ export const zObject = z.object({
     end: z.date().optional(),
     name: z.string().optional(),
   })).optional(),
-  version: z.number().default(0),
+  metadata: z.object({
+    extractedWith: z.object({
+      model: z.string(),
+      timestamp: z.date(),
+    }).optional(),
+  }).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
+  version: z.number().optional(),
 }).passthrough().refine(
   (data) => {
     if (data.isPromise) {
       return data.isRelationship === true &&
-             data.relationship !== undefined;
+        data.relationship !== undefined;
     }
     return true;
   },
   {
-    message: "If isPromise is true, the object must be a relationship and have at least one time interval",
-    path: ["isPromise"]
-  }
+    message:
+      "If isPromise is true, the object must be a relationship and have at least one time interval",
+    path: ["isPromise"],
+  },
 );
 
 export type Object = z.infer<typeof zObject>;
@@ -89,29 +94,39 @@ export type ObjectFormData = {
   updatedAt?: Date;
 };
 
-export function validateObjectForSave(obj: ObjectFormData): { valid: boolean; error?: string } {
+export function validateObjectForSave(
+  obj: ObjectFormData,
+): { valid: boolean; error?: string } {
   if (!obj.name?.trim()) {
-    return { valid: false, error: 'Name is required' };
+    return { valid: false, error: "Name is required" };
   }
 
   if (obj.isRelationship && obj.relationship) {
     if (!obj.relationship.object || !obj.relationship.subject) {
-      return { valid: false, error: 'Relationship must have both subject and object configured' };
+      return {
+        valid: false,
+        error: "Relationship must have both subject and object configured",
+      };
     }
   }
 
   if (obj.isPromise) {
     if (!obj.isRelationship) {
-      return { valid: false, error: 'Promise objects must be relationships' };
+      return { valid: false, error: "Promise objects must be relationships" };
     }
     if (!obj.relationship?.object || !obj.relationship?.subject) {
-      return { valid: false, error: 'Promise objects must have a relationship configured' };
+      return {
+        valid: false,
+        error: "Promise objects must have a relationship configured",
+      };
     }
     if (!obj.timeRanges || obj.timeRanges.length === 0) {
-      return { valid: false, error: 'Promise objects must have at least one time interval' };
+      return {
+        valid: false,
+        error: "Promise objects must have at least one time interval",
+      };
     }
   }
 
   return { valid: true };
 }
-

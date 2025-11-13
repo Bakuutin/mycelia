@@ -1,4 +1,4 @@
-import type { Icon } from '@/types/icon';
+import type { Icon } from "@/types/icon";
 
 interface IconDisplayProps {
   icon?: Icon;
@@ -6,16 +6,18 @@ interface IconDisplayProps {
   className?: string;
 }
 
-export const IconDisplay = ({ icon, fallback = '📄', className = 'text-2xl' }: IconDisplayProps) => {
+export const IconDisplay = (
+  { icon, fallback = "📄", className = "text-2xl" }: IconDisplayProps,
+) => {
   if (!icon) {
     return <span className={className}>{fallback}</span>;
   }
 
-  if ('text' in icon) {
+  if ("text" in icon) {
     return <span className={className}>{icon.text}</span>;
   }
 
-  if ('base64' in icon) {
+  if ("base64" in icon) {
     return (
       <img
         src={`data:image/png;base64,${icon.base64}`}

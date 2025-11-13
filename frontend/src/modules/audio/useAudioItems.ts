@@ -180,13 +180,17 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
     }));
 
     if (get().schedulerActive[resolution]) return;
-    set((state) => ({ schedulerActive: { ...state.schedulerActive, [resolution]: true } }));
+    set((state) => ({
+      schedulerActive: { ...state.schedulerActive, [resolution]: true },
+    }));
 
     const DEBOUNCE_MS = 250;
     setTimeout(() => {
       const pendingNow = get().pendingByResolution[resolution] ?? [];
       if (pendingNow.length === 0) {
-        set((state) => ({ schedulerActive: { ...state.schedulerActive, [resolution]: false } }));
+        set((state) => ({
+          schedulerActive: { ...state.schedulerActive, [resolution]: false },
+        }));
         return;
       }
 
@@ -198,7 +202,11 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
         schedulerActive: { ...state.schedulerActive, [resolution]: false },
       }));
 
-      const missingRanges = get().getMissingRanges(resolution, minStart, maxEnd);
+      const missingRanges = get().getMissingRanges(
+        resolution,
+        minStart,
+        maxEnd,
+      );
       if (missingRanges.length === 0) return;
 
       const existing = get().inFlightRequests[resolution];
@@ -221,7 +229,9 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
         const range = queue.shift();
         if (!range) return;
         try {
-          const res = await fetch(`/data/audio/items?start=${range.start}&end=${range.end}&resolution=${resolution}`);
+          const res = await fetch(
+            `/data/audio/items?start=${range.start}&end=${range.end}&resolution=${resolution}`,
+          );
           const data = await res.json();
           const store = get();
           store.addData(
@@ -241,7 +251,9 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
             (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
           set((state) => {
-            const next = { ...state.inFlightRequests } as typeof state.inFlightRequests;
+            const next = {
+              ...state.inFlightRequests,
+            } as typeof state.inFlightRequests;
             if (updatedRanges.length > 0) {
               next[resolution] = {
                 ranges: updatedRanges,
@@ -260,7 +272,9 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
             (r) => !(r.start === range.start && r.end === range.end),
           ) ?? [];
           set((state) => {
-            const next = { ...state.inFlightRequests } as typeof state.inFlightRequests;
+            const next = {
+              ...state.inFlightRequests,
+            } as typeof state.inFlightRequests;
             if (updatedRanges.length > 0) {
               next[resolution] = {
                 ranges: updatedRanges,
@@ -275,7 +289,9 @@ export const useAudioCache = create<AudioCacheStore>((set, get) => ({
         await runOne();
       };
       void (async () => {
-        const workers = new Array(Math.min(MAX, queue.length)).fill(0).map(() => runOne());
+        const workers = new Array(Math.min(MAX, queue.length)).fill(0).map(() =>
+          runOne()
+        );
         await Promise.all(workers);
       })();
     }, DEBOUNCE_MS);
@@ -338,10 +354,14 @@ export function useAudioItems(start: Date, end: Date, resolution: Resolution) {
     const rows = idx.tsDim.top(Infinity) as TimelineItem[];
     idx.tsDim.filterAll();
     return rows;
-  }, [indexByResolution[resolution]?.cf, data[resolution]?.items, start.getTime(), end.getTime()]);
+  }, [
+    indexByResolution[resolution]?.cf,
+    data[resolution]?.items,
+    start.getTime(),
+    end.getTime(),
+  ]);
 
   return {
     items: filteredItems,
   };
 }
-

@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react';
-import { ObjectId } from 'bson';
-import { SearchableSelectSingle, type SelectOption } from '@/components/ui/searchable-select-single';
-import { Button } from '@/components/ui/button';
-import { useObjectSelection, useObjectSearch, useCreateObject, useObject } from '@/hooks/useObjectQueries';
-import type { Object } from '@/types/objects';
+import { useMemo, useState } from "react";
+import { ObjectId } from "bson";
+import {
+  SearchableSelectSingle,
+  type SelectOption,
+} from "@/components/ui/searchable-select-single";
+import { Button } from "@/components/ui/button";
+import {
+  useCreateObject,
+  useObject,
+  useObjectSearch,
+  useObjectSelection,
+} from "@/hooks/useObjectQueries";
+import type { Object } from "@/types/objects";
 
 interface ObjectSelectionDropdownProps {
   value: string;
@@ -14,11 +22,11 @@ interface ObjectSelectionDropdownProps {
 }
 
 const renderIcon = (icon: any) => {
-  if (!icon) return '';
-  if (typeof icon === 'string') return icon;
+  if (!icon) return "";
+  if (typeof icon === "string") return icon;
   if (icon.text) return icon.text;
-  if (icon.base64) return '📷';
-  return '';
+  if (icon.base64) return "📷";
+  return "";
 };
 
 export function ObjectSelectionDropdown({
@@ -26,20 +34,23 @@ export function ObjectSelectionDropdown({
   onChange,
   placeholder = "Select an object...",
   label,
-  className
+  className,
 }: ObjectSelectionDropdownProps) {
   const createObjectMutation = useCreateObject();
-  const [searchValue, setSearchValue] = useState('');
+  const [searchValue, setSearchValue] = useState("");
 
   // Fetch all objects for dropdown (1000 limit)
   const { data: allObjects = [] } = useObjectSelection();
-  
+
   // Use search when user types, otherwise use all objects
-  const { data: searchResults = [] } = useObjectSearch(searchValue.trim(), 1000);
-  
+  const { data: searchResults = [] } = useObjectSearch(
+    searchValue.trim(),
+    1000,
+  );
+
   // Use search results if searching, otherwise use all objects
   const baseResults = searchValue.trim() ? searchResults : allObjects;
-  
+
   // Fetch the selected object if it's not in the results
   const hasValueInResults = useMemo(() => {
     if (!value) return true;
@@ -50,8 +61,10 @@ export function ObjectSelectionDropdown({
       return objectIdString === value;
     });
   }, [baseResults, value]);
-  
-  const { data: selectedObject } = useObject(value && !hasValueInResults ? value : undefined);
+
+  const { data: selectedObject } = useObject(
+    value && !hasValueInResults ? value : undefined,
+  );
 
   const options: SelectOption[] = useMemo(() => {
     const objectOptions = baseResults.map((obj: Object) => {
@@ -61,7 +74,7 @@ export function ObjectSelectionDropdown({
         : String(obj._id);
 
       const icon = renderIcon(obj.icon);
-      const name = obj.name || 'Unnamed';
+      const name = obj.name || "Unnamed";
 
       return {
         label: icon ? `${icon} ${name}` : name,
@@ -74,11 +87,11 @@ export function ObjectSelectionDropdown({
       const objectIdString = selectedObject._id instanceof ObjectId
         ? selectedObject._id.toHexString()
         : String(selectedObject._id);
-      
+
       // Only add if it's not already in the options
-      if (!objectOptions.some(opt => opt.value === objectIdString)) {
+      if (!objectOptions.some((opt) => opt.value === objectIdString)) {
         const icon = renderIcon(selectedObject.icon);
-        const name = selectedObject.name || 'Unnamed';
+        const name = selectedObject.name || "Unnamed";
         objectOptions.unshift({
           label: icon ? `${icon} ${name}` : name,
           value: objectIdString,
@@ -88,10 +101,10 @@ export function ObjectSelectionDropdown({
 
     // Add create option if there's a search value and no exact match
     if (searchValue.trim()) {
-      const hasExactMatch = objectOptions.some((option: SelectOption) => 
+      const hasExactMatch = objectOptions.some((option: SelectOption) =>
         option.label.toLowerCase() === searchValue.toLowerCase()
       );
-      
+
       if (!hasExactMatch) {
         objectOptions.push({
           label: `➕ Create "${searchValue}"`,
@@ -109,7 +122,7 @@ export function ObjectSelectionDropdown({
     try {
       const result = await createObjectMutation.mutateAsync({
         name: objectName.trim(),
-        icon: { text: '📦' }, // Default icon for new objects
+        icon: { text: "📦" }, // Default icon for new objects
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -117,13 +130,13 @@ export function ObjectSelectionDropdown({
       // Update the form with the new object ID
       onChange(result.insertedId.toString());
     } catch (error) {
-      console.error('Failed to create object:', error);
+      console.error("Failed to create object:", error);
     }
   };
 
   const handleChange = (selectedValue: string) => {
-    if (selectedValue.startsWith('__create__')) {
-      const objectName = selectedValue.replace('__create__', '');
+    if (selectedValue.startsWith("__create__")) {
+      const objectName = selectedValue.replace("__create__", "");
       handleCreateObject(objectName);
     } else {
       onChange(selectedValue);
@@ -138,7 +151,7 @@ export function ObjectSelectionDropdown({
     if (!searchValue.trim()) {
       return "No objects found";
     }
-    
+
     return (
       <div className="flex items-center justify-between p-2">
         <span className="text-sm text-muted-foreground">
@@ -167,7 +180,7 @@ export function ObjectSelectionDropdown({
         key={value}
         options={options}
         defaultValue={value}
-        onValueChange={(value) => handleChange(value || '')}
+        onValueChange={(value) => handleChange(value || "")}
         onSearchChange={handleSearchChange}
         placeholder={placeholder}
         searchable

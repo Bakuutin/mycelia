@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { callResource } from '@/lib/api';
-import type { Model } from '@/types/llm';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Bot, Plus, Settings, Trash2 } from 'lucide-react';
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { callResource } from "@/lib/api";
+import type { Model } from "@/types/llm";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Bot, Plus, Settings, Trash2 } from "lucide-react";
 
-const PREDEFINED_ALIASES = ['small', 'medium', 'large'] as const;
+const PREDEFINED_ALIASES = ["small", "medium", "large"] as const;
 
 const ModelSkeleton = ({ alias }: { alias: string }) => (
   <Card className="p-4 border-dashed border-2 border-muted-foreground/20">
@@ -42,11 +42,13 @@ const LLMSettingsPage = () => {
           action: "find",
           collection: "llm_models",
           query: {},
-          options: { sort: { alias: 1 } }
+          options: { sort: { alias: 1 } },
         });
         setModels(result);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch LLM models');
+        setError(
+          err instanceof Error ? err.message : "Failed to fetch LLM models",
+        );
       } finally {
         setLoading(false);
       }
@@ -56,7 +58,7 @@ const LLMSettingsPage = () => {
   }, []);
 
   const handleDelete = async (modelId: string) => {
-    if (!confirm('Are you sure you want to delete this model?')) {
+    if (!confirm("Are you sure you want to delete this model?")) {
       return;
     }
 
@@ -64,14 +66,13 @@ const LLMSettingsPage = () => {
       await callResource("tech.mycelia.mongo", {
         action: "deleteOne",
         collection: "llm_models",
-        query: { _id: { $oid: modelId } }
+        query: { _id: { $oid: modelId } },
       });
-      setModels(models.filter(m => m._id.toString() !== modelId));
+      setModels(models.filter((m) => m._id.toString() !== modelId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete model');
+      setError(err instanceof Error ? err.message : "Failed to delete model");
     }
   };
-
 
   if (loading) {
     return (
@@ -128,51 +129,9 @@ const LLMSettingsPage = () => {
           <h3 className="text-lg font-semibold">Predefined Models</h3>
           <div className="grid gap-4">
             {PREDEFINED_ALIASES.map((alias) => {
-              const model = models.find(m => m.alias === alias);
-              return model ? (
-                <Card key={model._id.toString()} className="p-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold">{model.alias}</h3>
-                        <Badge variant="secondary">{model.provider}</Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground">
-                        {model.name} • {model.baseUrl}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Link to={`/settings/llms/${model._id.toString()}`}>
-                        <Button variant="outline" size="sm">
-                          <Settings className="w-4 h-4" />
-                        </Button>
-                      </Link>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDelete(model._id.toString())}
-                        className="text-red-500 hover:text-red-700"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </Card>
-              ) : (
-                <ModelSkeleton key={alias} alias={alias} />
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Custom Models */}
-        {models.filter(m => !PREDEFINED_ALIASES.includes(m.alias as any)).length > 0 && (
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold">Custom Models</h3>
-            <div className="grid gap-4">
-              {models
-                .filter(m => !PREDEFINED_ALIASES.includes(m.alias as any))
-                .map((model) => (
+              const model = models.find((m) => m.alias === alias);
+              return model
+                ? (
                   <Card key={model._id.toString()} className="p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1 space-y-2">
@@ -194,6 +153,50 @@ const LLMSettingsPage = () => {
                           variant="outline"
                           size="sm"
                           onClick={() => handleDelete(model._id.toString())}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                )
+                : <ModelSkeleton key={alias} alias={alias} />;
+            })}
+          </div>
+        </div>
+
+        {/* Custom Models */}
+        {models.filter((m) => !PREDEFINED_ALIASES.includes(m.alias as any))
+              .length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold">Custom Models</h3>
+            <div className="grid gap-4">
+              {models
+                .filter((m) => !PREDEFINED_ALIASES.includes(m.alias as any))
+                .map((model) => (
+                  <Card key={model._id.toString()} className="p-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold">{model.alias}</h3>
+                          <Badge variant="secondary">{model.provider}</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {model.name} • {model.baseUrl}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Link to={`/settings/llms/${model._id.toString()}`}>
+                          <Button variant="outline" size="sm">
+                            <Settings className="w-4 h-4" />
+                          </Button>
+                        </Link>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            handleDelete(model._id.toString())}
                           className="text-red-500 hover:text-red-700"
                         >
                           <Trash2 className="w-4 h-4" />

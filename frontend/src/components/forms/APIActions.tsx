@@ -1,11 +1,18 @@
-import { Button } from '@/components/ui/button';
-import { CheckCircle2, XCircle, Loader2, Save, Trash2, Key } from 'lucide-react';
+import { Button } from "@/components/ui/button";
+import {
+  CheckCircle2,
+  Key,
+  Loader2,
+  Save,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 
 interface APIActionsProps {
   hasChanges: boolean;
   isSaved: boolean;
   isExchanging: boolean;
-  exchangeResult: 'success' | 'error' | null;
+  exchangeResult: "success" | "error" | null;
   canTest: boolean;
   onSave: () => void;
   onTestToken: () => void;
@@ -28,17 +35,19 @@ export function APIActions({
         onClick={onSave}
         disabled={!hasChanges || isSaved}
       >
-        {isSaved ? (
-          <>
-            <CheckCircle2 className="w-4 h-4 mr-2" />
-            Saved
-          </>
-        ) : (
-          <>
-            <Save className="w-4 h-4 mr-2" />
-            Save Settings
-          </>
-        )}
+        {isSaved
+          ? (
+            <>
+              <CheckCircle2 className="w-4 h-4 mr-2" />
+              Saved
+            </>
+          )
+          : (
+            <>
+              <Save className="w-4 h-4 mr-2" />
+              Save Settings
+            </>
+          )}
       </Button>
 
       <Button
@@ -46,33 +55,37 @@ export function APIActions({
         onClick={onTestToken}
         disabled={isExchanging || !canTest}
       >
-        {isExchanging ? (
-          <>
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            Exchanging...
-          </>
-        ) : (
-          <>
-            <Key className="w-4 h-4 mr-2" />
-            Test Token
-          </>
-        )}
+        {isExchanging
+          ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Exchanging...
+            </>
+          )
+          : (
+            <>
+              <Key className="w-4 h-4 mr-2" />
+              Test Token
+            </>
+          )}
       </Button>
 
       <div className="flex flex-col gap-2 ml-auto">
         {exchangeResult && (
           <div className="flex items-center gap-2">
-            {exchangeResult === 'success' ? (
-              <>
-                <CheckCircle2 className="w-5 h-5 text-green-600" />
-                <span className="text-sm text-green-600">Token valid</span>
-              </>
-            ) : (
-              <>
-                <XCircle className="w-5 h-5 text-red-600" />
-                <span className="text-sm text-red-600">Token invalid</span>
-              </>
-            )}
+            {exchangeResult === "success"
+              ? (
+                <>
+                  <CheckCircle2 className="w-5 h-5 text-green-600" />
+                  <span className="text-sm text-green-600">Token valid</span>
+                </>
+              )
+              : (
+                <>
+                  <XCircle className="w-5 h-5 text-red-600" />
+                  <span className="text-sm text-red-600">Token invalid</span>
+                </>
+              )}
           </div>
         )}
       </div>

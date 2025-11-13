@@ -1,30 +1,30 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Settings, Bot, Palette, Key, Monitor, Database } from 'lucide-react';
+import { Link, Outlet, useLocation } from "react-router-dom";
+import { Bot, Database, Key, Monitor, Palette, Settings } from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
 
   const clientSettings = [
-    { 
-      name: 'General', 
-      path: '/settings', 
+    {
+      name: "General",
+      path: "/settings",
       icon: Palette,
-      description: 'Appearance and time format'
+      description: "Appearance and time format",
     },
-    { 
-      name: 'API', 
-      path: '/settings/api', 
+    {
+      name: "API",
+      path: "/settings/api",
       icon: Key,
-      description: 'API configuration and authentication'
+      description: "API configuration and authentication",
     },
   ];
 
   const serverSettings = [
-    { 
-      name: 'LLMs', 
-      path: '/settings/llms', 
+    {
+      name: "LLMs",
+      path: "/settings/llms",
       icon: Bot,
-      description: 'Manage LLM models and providers'
+      description: "Manage LLM models and providers",
     },
   ];
 
@@ -46,23 +46,26 @@ const SettingsLayout = () => {
             <div className="space-y-1">
               {clientSettings.map((tab) => {
                 const Icon = tab.icon;
-                const isActive = location.pathname === tab.path || 
-                  (tab.path === '/settings' && location.pathname === '/settings');
-                
+                const isActive = location.pathname === tab.path ||
+                  (tab.path === "/settings" &&
+                    location.pathname === "/settings");
+
                 return (
                   <Link
                     key={tab.path}
                     to={tab.path}
                     className={`flex items-start gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${
                       isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                     }`}
                   >
                     <Icon className="w-4 h-4 mt-0.5 flex-shrink-0" />
                     <div>
                       <div className="font-medium">{tab.name}</div>
-                      <div className="text-xs opacity-70 mt-0.5">{tab.description}</div>
+                      <div className="text-xs opacity-70 mt-0.5">
+                        {tab.description}
+                      </div>
                     </div>
                   </Link>
                 );
@@ -80,21 +83,23 @@ const SettingsLayout = () => {
               {serverSettings.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = location.pathname === tab.path;
-                
+
                 return (
                   <Link
                     key={tab.path}
                     to={tab.path}
                     className={`flex items-start gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${
                       isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                     }`}
                   >
                     <Icon className="w-4 h-4 mt-0.5 flex-shrink-0" />
                     <div>
                       <div className="font-medium">{tab.name}</div>
-                      <div className="text-xs opacity-70 mt-0.5">{tab.description}</div>
+                      <div className="text-xs opacity-70 mt-0.5">
+                        {tab.description}
+                      </div>
                     </div>
                   </Link>
                 );

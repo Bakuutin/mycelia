@@ -21,11 +21,13 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
       const objects = await fetchObjects();
       set({ objects });
     } catch (err) {
-      const error = err instanceof Error ? err.message : 'Failed to fetch objects';
-      console.error('Failed to fetch objects:', err);
+      const error = err instanceof Error
+        ? err.message
+        : "Failed to fetch objects";
+      console.error("Failed to fetch objects:", err);
       set({ error });
     } finally {
-      set({loading: false});
+      set({ loading: false });
     }
   },
   fetchInitial: async () => {
@@ -36,13 +38,15 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
       const objects = await fetchObjects();
       set({ objects });
     } catch (err) {
-      const error = err instanceof Error ? err.message : 'Failed to fetch objects';
-      console.error('Failed to fetch objects:', err);
+      const error = err instanceof Error
+        ? err.message
+        : "Failed to fetch objects";
+      console.error("Failed to fetch objects:", err);
       set({ error });
     } finally {
-      set({loading: false});
+      set({ loading: false });
     }
-  }
+  },
 }));
 
 async function fetchObjects(): Promise<Object[]> {

@@ -38,7 +38,7 @@ export const CodeBlock = ({
     <div
       className={cn(
         "relative w-full overflow-hidden rounded-md border bg-background text-foreground",
-        className
+        className,
       )}
       {...props}
     >

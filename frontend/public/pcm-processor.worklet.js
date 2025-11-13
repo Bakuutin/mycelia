@@ -10,4 +10,4 @@ class MicProcessor extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor('mic-processor', MicProcessor);
+registerProcessor("mic-processor", MicProcessor);

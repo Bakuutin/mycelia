@@ -1,11 +1,13 @@
-import { Link } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 
 const HomePage = () => {
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <div className="text-center space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">Welcome to Mycelia</h1>
+        <h1 className="text-4xl font-bold tracking-tight">
+          Welcome to Mycelia
+        </h1>
         <p className="text-xl text-muted-foreground">
           Your personal memory assistant
         </p>
@@ -21,7 +23,8 @@ const HomePage = () => {
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            View your audio recordings, transcriptions, and events on an interactive timeline
+            View your audio recordings, transcriptions, and events on an
+            interactive timeline
           </p>
         </Link>
 
@@ -37,7 +40,6 @@ const HomePage = () => {
             View and search through your audio transcriptions
           </p>
         </Link>
-
 
         <Link
           to="/people"

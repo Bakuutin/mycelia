@@ -90,7 +90,7 @@ cd mycelia
 # Start the services (MongoDB, Redis)
 docker compose up -d
 
-# Configure environment
+# Configure backend environment
 cd backend
 cp .env.example .env
 # Edit .env with your preferred settings
@@ -274,6 +274,41 @@ This will:
 - Connect to the STT server specified in your `.env`
 - Process audio chunks from the database
 - Store transcriptions back to MongoDB
+
+
+### Conversation Extraction (python/convos.py)
+
+`python/convos.py` scans recent transcripts, groups them into time-bounded conversation chunks, uses an LLM to extract structured conversations, then writes conversation objects and "mentioned in" relationships to MongoDB.
+
+When to run:
+- After your audio has been imported and transcribed. In sequence: Import/daemon → STT → Conversation extraction → (optionally) timeline histogram recalculation.
+
+What it does:
+- Groups adjacent transcript segments into conversations based on silence gaps and total content length
+- Prompts an LLM to extract: title, summary, entities, start/end, emoji
+- Creates conversation objects in `objects` collection and links mentioned entities via relationships
+
+How to run:
+```bash
+cd python
+uv run convos.py \
+  --limit 5 \
+  --model small
+```
+
+Flags:
+- `--limit <n>`: Maximum number of conversation chunks to process in this run
+- `--not-later-than <unix_ts>`: Only consider transcripts earlier than this UTC UNIX timestamp
+- `--model <small|medium|large>`: LLM size used for extraction (default: `small`)
+
+Model selection guidance:
+- `small`: Fastest and cheapest. Good for routine runs and iterative backfills
+- `medium`: Balanced quality vs. speed for mixed content
+- `large`: Highest quality summaries/titles/entity extraction; slower and more costly
+
+Notes:
+- Logs are written to `~/Library/mycelia/logs/convos.log` and INFO is printed to console
+- The script marks daily buckets as processed to avoid re-processing the same time windows
 
 
 ### Remote Operations (cli.ts)

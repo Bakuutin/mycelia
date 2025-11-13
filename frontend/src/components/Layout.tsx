@@ -1,16 +1,16 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, Clock, Settings, Package } from 'lucide-react';
-import { useTheme } from '../hooks/useTheme';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { Link, Outlet, useLocation } from "react-router-dom";
+import { Clock, Home, Package, Settings } from "lucide-react";
+import { useTheme } from "../hooks/useTheme";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const Layout = () => {
   useTheme();
   const location = useLocation();
 
   const navigation = [
-    { name: 'Timeline', path: '/timeline', icon: Clock },
-    { name: 'Objects', path: '/objects', icon: Package },
-    { name: 'Settings', path: '/settings', icon: Settings },
+    { name: "Timeline", path: "/timeline", icon: Clock },
+    { name: "Objects", path: "/objects", icon: Package },
+    { name: "Settings", path: "/settings", icon: Settings },
   ];
 
   return (
@@ -33,8 +33,8 @@ const Layout = () => {
                         to={item.path}
                         className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                           isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                         }`}
                       >
                         <Icon className="w-4 h-4" />

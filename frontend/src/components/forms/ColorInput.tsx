@@ -1,7 +1,8 @@
 import React from "react";
 import { Input } from "@/components/ui/input.tsx";
 
-interface ColorInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
+interface ColorInputProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
   value?: string;
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }

@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import { devtools } from 'zustand/middleware';
-import { callResource } from '@/lib/api';
+import { create } from "zustand";
+import { devtools } from "zustand/middleware";
+import { callResource } from "@/lib/api";
 
 export interface HistogramItem {
   _id: { $oid: string } | string;
@@ -26,15 +26,15 @@ const seenIds = new Set<string>();
 let lastLoadMs = 0;
 
 function getIdKey(item: HistogramItem): string {
-  return typeof item._id === 'string' ? item._id : JSON.stringify(item._id);
+  return typeof item._id === "string" ? item._id : JSON.stringify(item._id);
 }
 
 async function fetchPage(beforeStart: Date | null): Promise<HistogramItem[]> {
   const query: any = { topics: { $exists: true, $ne: [] } };
   if (beforeStart) query.start = { $lt: beforeStart };
-  const result = await callResource('tech.mycelia.mongo', {
-    action: 'find',
-    collection: 'histogram_5min',
+  const result = await callResource("tech.mycelia.mongo", {
+    action: "find",
+    collection: "histogram_5min",
     query,
     options: { sort: { start: -1 }, limit: PAGE_SIZE },
   });
@@ -63,7 +63,9 @@ export const useTopicsStore = create<TopicsState>()(
         }
         set({ items: deduped });
       } catch (err) {
-        set({ error: err instanceof Error ? err.message : 'Failed to fetch topics' });
+        set({
+          error: err instanceof Error ? err.message : "Failed to fetch topics",
+        });
       } finally {
         set({ loading: false });
       }
@@ -97,13 +99,13 @@ export const useTopicsStore = create<TopicsState>()(
             merged.push(it);
           }
         }
-        const trimmed = merged.length > MAX_KEEP ? merged.slice(0, MAX_KEEP) : merged;
+        const trimmed = merged.length > MAX_KEEP
+          ? merged.slice(0, MAX_KEEP)
+          : merged;
         set({ items: trimmed });
       } finally {
         set({ loadingMore: false });
       }
     },
-  }), { name: 'topics-store' })
+  }), { name: "topics-store" }),
 );
-
-
