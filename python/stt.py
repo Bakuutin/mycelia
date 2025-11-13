@@ -1,6 +1,5 @@
 import io
 import time
-import wave
 import os
 import argparse
 import requests
@@ -9,10 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 from logging.handlers import RotatingFileHandler
 from tqdm import tqdm
-from lib.config import get_url
+from lib.resources import call_resource
 
 from lib.transcription import known_errors, remove_if_lonely
-from utils import lazy, mongo
 
 STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087').rstrip('/')
 
@@ -46,9 +44,6 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 
-chunks = lazy(lambda: mongo['audio_chunks'])
-transcriptions = lazy(lambda: mongo['transcriptions'])
-
 NO_SPEECH_DETECTED = object()
 
 class SpeechSequence(BaseModel):
@@ -77,6 +72,29 @@ class SpeechSequence(BaseModel):
         return f'{self.original_id}: {repr(indices)}'
 
 
+def mongo_cursor(collection, query, options, batch_size=200):
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "getFirstBatch",
+        "collection": collection,
+        "query": query,
+        "options": options,
+        "batchSize": batch_size,
+    })
+    cursor_id = result.get("cursorId")
+
+    while result.get("data", []) and result.get("hasMore", False):
+        for c in result['data']:
+            yield c
+
+        result = call_resource('tech.mycelia.mongo', {
+            "action": "getMore",
+            "collection": collection,
+            "cursorId": cursor_id,
+            "batchSize": batch_size,
+        })
+
+
+
 
 def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_id=None) -> Iterator[SpeechSequence]:
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
@@ -90,10 +108,10 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_
 
     if filters:
         base_filters.update(filters)
-
-    cursor = chunks.find(base_filters).sort('start', -1)
-
-    for i, chunk in enumerate(cursor):
+    
+    for chunk in mongo_cursor('audio_chunks', base_filters, {
+        "sort": {"start": -1},
+    }):
         if limit is not None and yielded >= limit:
             break
 
@@ -152,24 +170,38 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_
 
 
 def claim_sequence(seq: SpeechSequence, worker_id: str) -> bool:
-    result = chunks.update_many(
-        {
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "updateMany",
+        "collection": "audio_chunks",
+        "query": {
             '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
             'processing_by': None
         },
-        {'$set': {'processing_by': worker_id, 'claimed_at': datetime.now(tz=UTC)}}
-    )
-    return result.modified_count == len(seq.chunks)
+        "update": {
+            '$set': {'processing_by': worker_id, 'claimed_at': datetime.now(tz=UTC)},
+        }
+    })
+
+    success = result['modifiedCount'] == len(seq.chunks)
+
+    if not success:
+        release_sequence(seq, worker_id)
+
+    return success
 
 
-def release_sequence(seq: SpeechSequence):
-    chunks.update_many(
-        {
-            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]}
+def release_sequence(seq: SpeechSequence, worker_id: str):
+    call_resource('tech.mycelia.mongo', {
+        "action": "updateMany",
+        "collection": "audio_chunks",
+        "query": {
+            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
+            'processing_by': worker_id
         },
-        {'$set': {'processing_by': None, 'claimed_at': None}}
-    )
-
+        "update": {
+            '$set': {'processing_by': None, 'claimed_at': None},
+        }
+    })
 
 def process_sequence(sequence: SpeechSequence, worker_id: str):
     start_time = time.time()
@@ -193,14 +225,14 @@ def process_sequence(sequence: SpeechSequence, worker_id: str):
 
     except requests.exceptions.ReadTimeout as e:
         end_time = time.time()
-        release_sequence(sequence)
+        release_sequence(sequence, worker_id)
         tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout')
         tqdm.write(f'  → Increase timeout or check STT server at {STT_SERVER_URL}')
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
     except Exception as e:
         end_time = time.time()
-        release_sequence(sequence)
+        release_sequence(sequence, worker_id)
         tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)}')
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
@@ -350,15 +382,17 @@ def transcribe_sequence(sequence: SpeechSequence):
     if segments:
         duration = segments[-1]['end']
 
-        transcription_data = {
-            'original': sequence.original_id,
-            'start': sequence.start,
-            'duration': duration,
-            'end': sequence.start + timedelta(seconds=duration),
-            **transcript
-        }
-
-        transcriptions.insert_one(transcription_data)
+        call_resource('tech.mycelia.mongo', {
+            "action": "insertOne",
+            "collection": "transcriptions",
+            "doc": {
+                'original': sequence.original_id,
+                'start': sequence.start,
+                'duration': duration,
+                'end': sequence.start + timedelta(seconds=duration),
+                **transcript
+            }
+        })
 
     transcribed_text = ''.join(segment['text'] for segment in segments)
     return transcribed_text
@@ -368,12 +402,16 @@ def transcribe_sequence(sequence: SpeechSequence):
 def mark_as_transcribed(seq: SpeechSequence):
     chunks_to_mark = seq.chunks[:-1] if seq.is_partial else seq.chunks
     if chunks_to_mark:
-        chunks.update_many(
-            {
-                '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]}
+        call_resource('tech.mycelia.mongo', {
+            "action": "updateMany",
+            "collection": "audio_chunks",
+            "query": {
+                '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]},
             },
-            {'$set': {'transcribed_at': datetime.now(tz=UTC)}}
-        )
+            "update": {
+                '$set': {'transcribed_at': datetime.now(tz=UTC)},
+            }
+        })
 
 
 if __name__ == '__main__':

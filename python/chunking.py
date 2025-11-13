@@ -18,6 +18,9 @@ from lib.resources import call_resource
 
 from utils import sample_rate, sha, TMP_DIR
 
+from tqdm import tqdm
+import subprocess
+
 logger = logging.getLogger('chunking')
 
 CHUNK_MAX_LEN = timedelta(seconds=10)
@@ -26,33 +29,32 @@ CHUNK_MAX_LEN = timedelta(seconds=10)
 def get_tmp_dir(original):
     return os.path.join(TMP_DIR, sha(original))
 
-def split_to_opus_chunks(original, *, quiet=True):
+def split_to_opus_chunks(original, *, quiet=False):
     dest_dir = get_tmp_dir(original)
+
+    if os.path.exists(dest_dir):
+        os.rmdir(dest_dir)
     os.makedirs(dest_dir, exist_ok=True)
 
-    stream = (
-        ffmpeg
-        .input(original)
-        .output(
-            os.path.join(dest_dir, "%010d.opus"),
-            f='segment',
-            segment_time=int(CHUNK_MAX_LEN.total_seconds()),
-            acodec='libopus',
-            audio_bitrate='64k',
-            map_metadata = -1,
-        )
-        .overwrite_output()  # Allow overwriting existing files
-    )
+    command = [
+        'ffmpeg',
+        '-i', original,
+        '-f', 'segment',
+        '-segment_time', str(int(CHUNK_MAX_LEN.total_seconds())),
+        '-acodec', 'libopus',
+        '-map_metadata', '-1',
+        os.path.join(dest_dir, "%010d.opus"),
+        '-y',
+        '-v', 'error',
+        '-stats',
+    ]
 
-    if os.listdir(dest_dir):
-        pass
-    else:
-        try:
-            stream.run(quiet=quiet, capture_stdout=True, capture_stderr=True)
-        except ffmpeg.Error as e:
-            error_msg = e.stderr.decode() if e.stderr else str(e)
-            logger.error(f"FFmpeg error processing '{original}':\n{error_msg}")
-            raise Exception(f"ffmpeg error processing {os.path.basename(original)}: {error_msg[:200]}")
+    # Run the command using subprocess.run
+    subprocess.run(
+        command,
+        check=True,  # This will raise an exception if the command fails
+        stderr=subprocess.STDOUT  # Capture error messages as part of stdout
+    )
 
     return [
         (i * CHUNK_MAX_LEN, os.path.join(dest_dir, f))
@@ -273,7 +275,7 @@ def ingest_source(original: dict):
         start: datetime = original["start"]
         logger.info("ingesting %s chunks of '%s'",len(chunk_files), path)
 
-        for i, [offset, file] in enumerate(chunk_files):
+        for i, [offset, file] in tqdm(enumerate(chunk_files)):
             with open(file, "rb") as f:
                 call_resource('tech.mycelia.mongo', {
                     "action": "insertOne",

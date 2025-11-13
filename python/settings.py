@@ -60,9 +60,10 @@ def find_local_audio() -> str | None:
     return default if os.path.isdir(default) else None
 
 
-try:
+
+if os.path.exists('./local.py'):
     from local import importers
-except ImportError:
+else:
     print("No local.py found, using default importers")
     importers: list[FilesystemImporter] = []
 
