@@ -155,25 +155,19 @@ def server_side_cursor_find(
     })
     cursor_id = resp["cursor_id"]
 
-    try:
-        while True:
-            batch = call_resource('tech.mycelia.mongo', {
-                "action": "getMore",
-                "collection": collection,
-                "cursor_id": cursor_id,
-                "batchSize": batch_size,
-            })
-            docs = batch["documents"]
-            if not docs:
-                break
-            for doc in docs:
-                yield doc
-    finally:
-        call_resource('tech.mycelia.mongo', {
-            "action": "killCursor",
+    while True:
+        batch = call_resource('tech.mycelia.mongo', {
+            "action": "getMore",
             "collection": collection,
             "cursor_id": cursor_id,
+            "batchSize": batch_size,
         })
+        docs = batch["documents"]
+        if not docs:
+            break
+        for doc in docs:
+            yield doc
+    
 
 
 

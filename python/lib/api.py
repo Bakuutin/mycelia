@@ -35,21 +35,3 @@ def encode_typed(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [encode_typed(v) for v in obj]
     return obj
-
-
-def _parse_iso8601_z(iso: str) -> datetime:
-    if iso.endswith("Z"):
-        iso = iso[:-1] + "+00:00"
-    return datetime.fromisoformat(iso).astimezone(timezone.utc)
-
-
-def decode_typed(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        if set(obj.keys()) == {"$date"}:
-            return _parse_iso8601_z(obj["$date"])  
-        if set(obj.keys()) == {"$oid"}:
-            return ObjectId(obj["$oid"])  
-        return {k: decode_typed(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [decode_typed(v) for v in obj]
-    return obj
