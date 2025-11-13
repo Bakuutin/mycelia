@@ -287,7 +287,7 @@ async function configureCli() {
         const key = await generateApiKey(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
-        console.log(`MYCELIA_TOKEN: ${key}`);
+        console.log(`MYCELIA_TOKEN=${key}`);
       },
     )
     .command(

@@ -4,55 +4,16 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/bitnamilegacy/redis/data
+      - .docker/redis:/bitnamilegacy/redis/data
     environment:
       - REDIS_PASSWORD
-    networks:
-      - a5t
   mongo:
     image: mongo:8.0
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - .docker/mongo:/data/db
     restart: unless-stopped
-    # command: ["mongod", "--keyFile", "/data/db/mongo-keyfile", "--bind_ip_all"]
-    networks:
-      - a5t
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-    networks:
-      - a5t
-  # app:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     MONGO_URL: ${MONGO_URL}
-  #     SECRET_KEY: ${SECRET_KEY}
-  #     DATABASE_NAME: ${DATABASE_NAME}
-  #     REDIS_HOST: redis
-  #     REDIS_PORT: 6379
-  #     REDIS_PASSWORD: ${REDIS_PASSWORD}
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.routers.mycelia.rule=Host(`mycelia.tigor.net`)"
-  #     - "traefik.http.routers.mycelia.service=mycelia"
-  #     - "traefik.http.services.mycelia.loadbalancer.server.port=3000"
-  #   networks:
-  #     - a5t
-  #     # - traefik_default
-
-networks:
-  a5t:
-  # traefik_default:
-  #   external: true
-
-
-volumes:
-  mongo_data:
-  redis_data:
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME
+      - MONGO_INITDB_ROOT_PASSWORD

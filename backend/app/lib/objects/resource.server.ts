@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
 
-const zObjectId = z.instanceof(ObjectId).or(z.string().transform((val) => new ObjectId(val)));
+const zObjectId = z.instanceof(ObjectId);
 
 const zIcon = z.union([
   z.object({ text: z.string() }),
@@ -13,7 +13,7 @@ const zIcon = z.union([
 
 const zObjectInput = z.object({
   name: z.string().min(1),
-  details: z.string().optional(),
+  details: z.string().nullable().optional(),
   icon: zIcon.optional(),
   color: z.string().optional(),
   aliases: z.array(z.string()).optional(),

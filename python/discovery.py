@@ -214,7 +214,7 @@ class SshFilesystemImporter(FilesystemImporter):
     def clients(self) -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
         with paramiko.SSHClient() as ssh:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(self.host, port=self.port, username=self.username, allow_agent=True, look_for_keys=True)
+            ssh.connect(self.host, port=self.port, username=self.username, allow_agent=True, look_for_keys=True, timeout=10)
             with ssh.open_sftp() as sftp:
                 yield ssh, sftp
 

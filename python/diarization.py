@@ -62,57 +62,83 @@ def apply_updates(updates):
     })
 
 
-def run_voice_activity_detection(limit=1000, verbose_logs=False):
+def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100):
 
-    chunks_to_process = limit
-    processed_chunks = 0
-
-    cursor = call_resource('tech.mycelia.mongo', {
-        "action": "find",
+    # Use resumable cursors: getFirstBatch to start
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "getFirstBatch",
         "collection": "audio_chunks",
         "query": {
             "vad": None,
         },
-        "sort": [("start", -1)],
-        "limit": limit,
+        "options": {
+            "sort": {"start": -1},
+        },
+        "batchSize": min(batch_size, limit) if limit else batch_size,
     })
+    
+    cursor_id = result.get("cursorId", "")
+    has_more = result.get("hasMore", False)
+    chunks = result.get("data", [])
+    
     updates = []
     has_speech = 0
     start_time = time.time()
-    pbar = tqdm(cursor, total=chunks_to_process, unit="chunks")
-    for i, chunk in enumerate(pbar):
-        audio = read_codec(chunk["data"], codec="opus", sample_rate=sample_rate)
-        prob = get_voice_prob(audio)
-        updates.append((
-            chunk["_id"],
-            {
-                "$set": {
-                    "vad.ran_at": datetime.now(UTC),
-                    "vad.prob": prob,
-                    "vad.has_speech": prob > vad_threshold,
-                },
-            }
-        ))
-        has_speech += prob > vad_threshold
-        current_overall = processed_chunks + (i + 1)
+    total_processed = 0
+    pbar = tqdm(total=limit if limit else None, unit="chunks")
+    
+    while chunks:
+        for chunk in chunks:
+            if limit and total_processed >= limit:
+                break
+                
+            audio = read_codec(chunk["data"], codec="opus", sample_rate=sample_rate)
+            prob = get_voice_prob(audio)
+            updates.append((
+                chunk["_id"],
+                {
+                    "$set": {
+                        "vad.ran_at": datetime.now(UTC),
+                        "vad.prob": prob,
+                        "vad.has_speech": prob > vad_threshold,
+                    },
+                }
+            ))
+            has_speech += prob > vad_threshold
+            total_processed += 1
 
-        
-        pbar.set_postfix({
-            'has_speech': f"{(has_speech / (i+1)) * 100:.1f}%",
-            'ts': chunk['start'].replace(microsecond=0).isoformat(),
-        })
-        if len(updates) >= 30:
-            apply_updates(updates)
-            updates = []
+            pbar.set_postfix({
+                'has_speech': f"{(has_speech / total_processed) * 100:.1f}%" if total_processed > 0 else "0%",
+                'ts': chunk['start'].replace(microsecond=0).isoformat() if 'start' in chunk else '',
+            })
+            pbar.update(1)
+            
+            if len(updates) >= 30:
+                apply_updates(updates)
+                updates = []
 
-        if limit and i >= limit:
+        if limit and total_processed >= limit:
             break
+
+        # Get more batches if available
+        if has_more and cursor_id:
+            result = call_resource('tech.mycelia.mongo', {
+                "action": "getMore",
+                "collection": "audio_chunks",
+                "cursorId": cursor_id,
+                "batchSize": min(batch_size, limit - total_processed) if limit else batch_size,
+            })
+            has_more = result.get("hasMore", False)
+            chunks = result.get("data", [])
+            # cursor_id remains the same for getMore
+        else:
+            chunks = []
 
     # Process any remaining updates
     if updates:
         apply_updates(updates)
 
+    pbar.close()
+
     if verbose_logs:
-        new_processed_chunks = processed_chunks + (i + 1)
-        logger.info(f"VAD batch complete: {i + 1} chunks processed, {has_speech} with speech ({(has_speech / (i+1)) * 100:.1f}%)")
-        logger.info(f"Overall VAD status: {new_processed_chunks}/{total_chunks} chunks processed")
+        logger.info(f"VAD batch complete: {total_processed} chunks processed, {has_speech} with speech ({(has_speech / total_processed) * 100:.1f}%)" if total_processed > 0 else "VAD batch complete: 0 chunks processed")

@@ -138,10 +138,9 @@ export function DateTimePicker({
     if (field === 'year') {
       const numValue = Number(value);
       // Check if the value looks like a Unix timestamp (not in reasonable year range)
-      if (numValue > 1000000 || numValue < -1000000) {
+      if (Math.abs(numValue) > 100000) {
         // Treat as timestamp - convert to milliseconds and set directly
-        const timestampMs = numValue > 1000000000 ? numValue * 1000 : numValue;
-        setDate(timestampMs);
+        setDate(numValue * 1000);
         return;
       }
     }

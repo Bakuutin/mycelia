@@ -1,10 +1,9 @@
 #%%
-from lib.config import get_url
 from discovery import Importer
 
 import logging
 from datetime import datetime, UTC
-# from diarization import run_voice_activity_detection
+from diarization import run_voice_activity_detection
 import time
 
 import platform
@@ -44,7 +43,10 @@ logger.info(f"Logging to {log_file}")
 
 def import_new_files():
     for importer in settings.importers:
-        importer.run()
+        try:
+            importer.run()
+        except Exception as e:
+            logger.exception('Error importing files via %s', importer.code)
 
 
 importer_map = {importer.code: importer for importer in settings.importers}
@@ -288,8 +290,8 @@ def main():
     logger.info("\n[2/3] Ingesting audio files...")
     ingests_missing_sources(limit=20)
 
-    # logger.info("\n[3/3] Running voice activity detection...")
-    # run_voice_activity_detection(limit=1000)
+    logger.info("\n[3/3] Running voice activity detection...")
+    run_voice_activity_detection(limit=1000)
 
     logger.info("=" * 60)
     logger.info("Daemon cycle complete")
