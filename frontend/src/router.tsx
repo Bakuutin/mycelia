@@ -4,8 +4,6 @@ import HomePage from "./pages/HomePage";
 import TimelinePage from "./pages/TimelinePage";
 import CreateEventPage from "./pages/CreateEventPage";
 import EventDetailPage from "./pages/EventDetailPage";
-import PersonDetailPage from "./pages/PersonDetailPage";
-import PeoplePage from "./pages/PeoplePage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
@@ -16,8 +14,10 @@ import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
 import ObjectsPage from "./pages/ObjectsPage";
 import ObjectDetailPage from "./pages/ObjectDetailPage";
+import ObjectHistoryPage from "./pages/ObjectHistoryPage";
 import CreateObjectPage from "./pages/CreateObjectPage";
 import CreateAudioRecordPage from "./pages/CreateAudioRecordPage";
+import AudioPlayerPage from "./pages/AudioPlayerPage";
 
 export const router = createBrowserRouter([
   {
@@ -37,6 +37,10 @@ export const router = createBrowserRouter([
         element: <TranscriptPage />,
       },
       {
+        path: "audio",
+        element: <AudioPlayerPage />,
+      },
+      {
         path: "audio/record",
         element: <CreateAudioRecordPage />,
       },
@@ -49,14 +53,6 @@ export const router = createBrowserRouter([
         element: <EventDetailPage />,
       },
       {
-        path: "people",
-        element: <PeoplePage />,
-      },
-      {
-        path: "people/:id",
-        element: <PersonDetailPage />,
-      },
-      {
         path: "objects",
         element: <ObjectsPage />,
       },
@@ -67,6 +63,10 @@ export const router = createBrowserRouter([
       {
         path: "objects/:id",
         element: <ObjectDetailPage />,
+      },
+      {
+        path: "objects/:id/history",
+        element: <ObjectHistoryPage />,
       },
       {
         path: "settings",

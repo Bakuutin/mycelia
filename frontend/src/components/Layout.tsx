@@ -1,11 +1,15 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { Clock, Home, Package, Settings } from "lucide-react";
-import { useTheme } from "../hooks/useTheme";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { useTheme } from "@/hooks/useTheme";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player.tsx";
+import { AudioWaveform } from "@/components/AudioWaveform";
+import { Button } from "@/components/ui/button.tsx";
 
 const Layout = () => {
   useTheme();
   const location = useLocation();
+  const { isPlaying, setIsPlaying } = useAudioPlayer();
 
   const navigation = [
     { name: "Timeline", path: "/timeline", icon: Clock },
@@ -31,11 +35,10 @@ const Layout = () => {
                       <Link
                         key={item.path}
                         to={item.path}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                          isActive
+                        className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive
                             ? "bg-primary text-primary-foreground"
                             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        }`}
+                          }`}
                       >
                         <Icon className="w-4 h-4" />
                         {item.name}
@@ -44,6 +47,16 @@ const Layout = () => {
                   })}
                 </div>
               </div>
+              {isPlaying && (
+                <Link to="/audio">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                  >
+                    <AudioWaveform size={20} />
+                  </Button>
+                </Link>
+              )}
             </div>
           </div>
         </nav>
@@ -51,6 +64,7 @@ const Layout = () => {
           <Outlet />
         </main>
       </div>
+      <AudioPlayer />
     </TooltipProvider>
   );
 };

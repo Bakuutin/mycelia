@@ -8,7 +8,6 @@ import { callResource } from "@/lib/api";
 import type { Object } from "@/types/objects";
 import { ObjectId } from "bson";
 
-// Query keys
 export const objectKeys = {
   all: ["objects"] as const,
   lists: () => [...objectKeys.all, "list"] as const,
@@ -18,6 +17,7 @@ export const objectKeys = {
   detail: (id: string) => [...objectKeys.details(), id] as const,
   related: (id: string) => [...objectKeys.all, "related", id] as const,
   selection: () => [...objectKeys.all, "selection"] as const,
+  history: (id: string) => [...objectKeys.all, "history", id] as const,
 };
 
 // Fetch a single object by ID
@@ -180,5 +180,32 @@ export function useDeleteObject() {
       // Invalidate all object queries
       queryClient.invalidateQueries({ queryKey: objectKeys.all });
     },
+  });
+}
+
+// Fetch object history
+export function useObjectHistory(
+  id: string | ObjectId | undefined,
+  options?: { limit?: number; skip?: number },
+) {
+  const idString = id?.toString();
+  return useQuery({
+    queryKey: [...objectKeys.history(idString!), options],
+    queryFn: async () => {
+      if (!idString) throw new Error("Object ID is required");
+      const body: any = {
+        action: "getHistory",
+        id: idString,
+      };
+      if (options?.limit != null) {
+        body.limit = options.limit;
+      }
+      if (options?.skip != null) {
+        body.skip = options.skip;
+      }
+      return await callResource("tech.mycelia.objects", body);
+    },
+    enabled: !!idString,
+    staleTime: 30 * 1000, // 30 sec
   });
 }

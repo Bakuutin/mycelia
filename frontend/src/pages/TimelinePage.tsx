@@ -1,44 +1,54 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { callResource } from "@/lib/api";
-import type { Object } from "@/types/objects";
-import { formatTime } from "@/lib/formatTime";
-import { useSettingsStore } from "@/stores/settingsStore";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { TimelineChart } from "@/components/timeline/TimelineChart";
-import { IconDisplay } from "@/components/IconDisplay";
 import { config } from "@/config";
 import { useObjects } from "@/modules/objects/useObjects";
-import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
+import { useTimelineRange } from "@/stores/timelineRange";
 
 const TimelinePage = () => {
-  const { objects, loading, error } = useObjects();
-  const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(
-    new Set(),
-  );
-  const { timeFormat } = useSettingsStore();
+  const { loading, error, objects } = useObjects();
+  const { setRange } = useTimelineRange();
+  const hasRescaledRef = useRef(false);
 
-  const toggleObjectSelection = (objectId: string) => {
-    setSelectedObjectIds((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(objectId)) {
-        newSet.delete(objectId);
-      } else {
-        newSet.add(objectId);
+  // Rescale timeline to fit all objects when they finish loading
+  useEffect(() => {
+    if (loading || hasRescaledRef.current || !objects || objects.length === 0) {
+      return;
+    }
+
+    // Extract all time ranges from objects
+    const allTimes: Date[] = [];
+    for (const object of objects) {
+      if (object.timeRanges && object.timeRanges.length > 0) {
+        for (const range of object.timeRanges) {
+          allTimes.push(range.start);
+          if (range.end) {
+            allTimes.push(range.end);
+          } else {
+            // If no end time, use start time as end (for point events)
+            allTimes.push(range.start);
+          }
+        }
       }
-      return newSet;
-    });
-  };
+    }
 
-  const selectAll = () => {
-    setSelectedObjectIds(new Set(objects.map((o) => o._id.toString())));
-  };
+    if (allTimes.length === 0) {
+      return;
+    }
 
-  const clearSelection = () => {
-    setSelectedObjectIds(new Set());
-  };
+    // Find earliest and latest times
+    const earliest = new Date(Math.min(...allTimes.map(t => t.getTime())));
+    const latest = new Date(Math.max(...allTimes.map(t => t.getTime())));
+
+    // Add padding (5% on each side)
+    const duration = latest.getTime() - earliest.getTime();
+    const padding = duration * 0.05;
+    const paddedStart = new Date(earliest.getTime() - padding);
+    const paddedEnd = new Date(latest.getTime() + padding);
+
+    // Set the range
+    setRange(paddedStart, paddedEnd);
+    hasRescaledRef.current = true;
+  }, [loading, objects, setRange]);
 
   if (loading) {
     return (

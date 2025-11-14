@@ -42,15 +42,27 @@ const HomePage = () => {
         </Link>
 
         <Link
-          to="/people"
+          to="/audio"
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">People</h2>
+            <h2 className="text-2xl font-semibold">Audio Player</h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            View and manage people from your objects and events
+            Listen to your past
+          </p>
+        </Link>
+        <Link
+          to="/audio/record"
+          className="p-6 border rounded-lg hover:border-primary transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-semibold">Record</h2>
+            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+          </div>
+          <p className="text-muted-foreground">
+            Stream audio from this device directly to mycelia
           </p>
         </Link>
       </div>

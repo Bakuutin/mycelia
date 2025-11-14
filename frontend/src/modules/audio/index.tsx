@@ -1,23 +1,19 @@
 import { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
 import React, { useMemo, useRef } from "react";
 
-import { AudioPlayer, useDateStore } from "./player.tsx";
+import { AudioPlayer, useAudioPlayer } from "./player.tsx";
 import { TimelineItems } from "./TimelineItems.tsx";
 import { CursorLine } from "./cursorLine.tsx";
-import { useAudioItems } from "./useAudioItems.ts";
 import { useTimelineRange } from "@/stores/timelineRange.ts";
 import { PlayPauseButton } from "./PlayPauseButton.tsx";
 import GainSlider from "./GainSlider.tsx";
 import { useTranscripts } from "./useTranscripts.ts";
-
-const day = 1000 * 60 * 60 * 24;
 
 export const AudioPlayerTool: Tool = {
   component: () => {
     return (
       <>
         <PlayPauseButton />
-        <AudioPlayer />
       </>
     );
   },
@@ -31,7 +27,7 @@ export const GainTool: Tool = {
 
 export const DateTimePickerTool: Tool = {
   component: () => {
-    const { currentDate, resetDate } = useDateStore();
+    const { currentDate, resetDate } = useAudioPlayer();
 
     const handleDateTimeChange = (
       event: React.ChangeEvent<HTMLInputElement>,
@@ -66,24 +62,10 @@ export const DateTimePickerTool: Tool = {
 export const AudioLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { currentDate, resetDate, setIsPlaying } = useDateStore();
+      const { currentDate, resetDate, setIsPlaying } = useAudioPlayer();
 
       const { start, end, setRange } = useTimelineRange();
 
-      const resolution = useMemo(() => {
-        const duration = end.getTime() - start.getTime();
-        if (duration > 300 * day) {
-          return "1week";
-        } else if (duration > 50 * day) {
-          return "1day";
-        } else if (duration > day) {
-          return "1hour";
-        } else {
-          return "5min";
-        }
-      }, [start, end]);
-
-      const { items } = useAudioItems(start, end, resolution);
       React.useEffect(() => {
         if (!currentDate) return;
         const duration = end.getTime() - start.getTime();
@@ -114,11 +96,6 @@ export const AudioLayer: () => Layer = () => {
           }}
         >
           <g>
-            <TimelineItems
-              items={items as any}
-              scale={scale}
-              transform={transform}
-            />
             {currentDate !== null && (
               <CursorLine
                 position={transform.applyX(scale(currentDate))}
@@ -135,7 +112,7 @@ export const AudioLayer: () => Layer = () => {
 export const TranscriptLayer: () => Layer = () => {
   return {
     component: () => {
-      const { currentDate, resetDate } = useDateStore();
+      const { currentDate, resetDate } = useAudioPlayer();
       const { transcripts } = useTranscripts(currentDate);
       const containerRef = useRef<HTMLDivElement | null>(null);
       const itemRefs = useRef<Record<string, HTMLParagraphElement | null>>({});
@@ -216,7 +193,7 @@ export const TopicsLayer: () => Layer = () => {
   return {
     component: ({ width }: LayerComponentProps) => {
       let { start, end } = useTimelineRange();
-      const { currentDate } = useDateStore();
+      const { currentDate } = useAudioPlayer();
       const centerMs = currentDate
         ? currentDate.getTime()
         : (start.getTime() + end.getTime()) / 2;

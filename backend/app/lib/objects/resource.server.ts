@@ -81,8 +81,8 @@ const getRelationshipsSchema = z.object({
 const getHistorySchema = z.object({
   action: z.literal("getHistory"),
   id: z.string(),
-  limit: z.number().max(500).optional(),
-  skip: z.number().optional(),
+  limit: z.number().max(500).nullish(),
+  skip: z.number().nullish(),
 });
 
 const objectsRequestSchema = z.discriminatedUnion("action", [
@@ -530,17 +530,24 @@ export class ObjectsResource
         const findOptions: any = {
           sort: { timestamp: -1 },
         };
-        if (input.skip) {
+        if (input.skip != null) {
           findOptions.skip = input.skip;
         }
-        findOptions.limit = (input.limit as number) ?? 50;
+        findOptions.limit = input.limit ?? 50;
 
-        return await mongo({
-          action: "find",
-          collection: "object_history",
-          query: { objectId },
-          options: findOptions,
-        });
+        try {
+          return await mongo({
+            action: "find",
+            collection: "object_history",
+            query: { objectId: objectId },
+            options: findOptions,
+          });
+        } catch (error) {
+          console.error("Error fetching object history:", error);
+          throw new Error(
+            `Failed to fetch object history: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
 
       default:

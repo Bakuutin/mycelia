@@ -208,22 +208,6 @@ const LLMSettingsPage = () => {
             </div>
           </div>
         )}
-
-        {/* Empty State */}
-        {models.length === 0 && (
-          <Card className="p-8 text-center">
-            <Bot className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-            <p className="text-muted-foreground mb-4">
-              No LLM models configured. Add your first model to get started.
-            </p>
-            <Link to="/settings/llms/new">
-              <Button>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Model
-              </Button>
-            </Link>
-          </Card>
-        )}
       </div>
     </div>
   );

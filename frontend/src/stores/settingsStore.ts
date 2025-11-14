@@ -26,6 +26,8 @@ interface SettingsState {
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
+  playbackRate: number;
+  volume: number;
   setApiEndpoint: (endpoint: string) => void;
   setClientId: (id: string) => void;
   setClientSecret: (secret: string) => void;
@@ -36,6 +38,8 @@ interface SettingsState {
   setEchoCancellation: (enabled: boolean) => void;
   setNoiseSuppression: (enabled: boolean) => void;
   setAutoGainControl: (enabled: boolean) => void;
+  setPlaybackRate: (rate: number) => void;
+  setVolume: (volume: number) => void;
   clearSettings: () => void;
 }
 
@@ -52,6 +56,8 @@ function getDefaultApiEndpoint(): string {
 const DEFAULT_API_ENDPOINT = getDefaultApiEndpoint();
 const DEFAULT_TIME_FORMAT: TimeFormat = "gregorian-local-iso";
 const DEFAULT_TRANSCRIPT_THRESHOLD_HOURS = 12;
+const DEFAULT_PLAYBACK_RATE = 1;
+const DEFAULT_VOLUME = 1;
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -66,6 +72,8 @@ export const useSettingsStore = create<SettingsState>()(
       echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: false,
+      playbackRate: DEFAULT_PLAYBACK_RATE,
+      volume: DEFAULT_VOLUME,
       setApiEndpoint: (endpoint) => set({ apiEndpoint: endpoint }),
       setClientId: (id) => set({ clientId: id }),
       setClientSecret: (secret) => set({ clientSecret: secret }),
@@ -78,6 +86,8 @@ export const useSettingsStore = create<SettingsState>()(
       setEchoCancellation: (enabled) => set({ echoCancellation: enabled }),
       setNoiseSuppression: (enabled) => set({ noiseSuppression: enabled }),
       setAutoGainControl: (enabled) => set({ autoGainControl: enabled }),
+      setPlaybackRate: (rate) => set({ playbackRate: rate }),
+      setVolume: (volume) => set({ volume }),
       clearSettings: () =>
         set({
           apiEndpoint: DEFAULT_API_ENDPOINT,
@@ -90,6 +100,8 @@ export const useSettingsStore = create<SettingsState>()(
           echoCancellation: true,
           noiseSuppression: false,
           autoGainControl: false,
+          playbackRate: DEFAULT_PLAYBACK_RATE,
+          volume: DEFAULT_VOLUME,
         }),
     }),
     {

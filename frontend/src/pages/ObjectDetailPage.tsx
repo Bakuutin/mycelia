@@ -1,7 +1,7 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, History, Trash2 } from "lucide-react";
 import {
   useDeleteObject,
   useObject,
@@ -110,6 +110,12 @@ const ObjectDetailPage = () => {
           {updateObjectMutation.isPending && (
             <span className="text-xs text-muted-foreground">Saving...</span>
           )}
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/objects/${id}/history`}>
+              <History className="w-4 h-4 mr-2" />
+              History
+            </Link>
+          </Button>
           <Button
             variant="destructive"
             size="sm"

@@ -8,8 +8,8 @@ export const zTimestamp = z.coerce.number().transform((val) =>
 );
 
 export const zTimelineItem = z.object({
-  start: z.date(),
-  end: z.date(),
+  start: z.coerce.date(),
+  end: z.coerce.date(),
   totals: z.any(),
   id: z.string(),
   stale: z.boolean().optional(),
@@ -30,8 +30,8 @@ export const zQueryParams = z.object({
 });
 
 export const zLoaderData = z.object({
-  start: z.date(),
-  end: z.date(),
+  start: z.coerce.date(),
+  end: z.coerce.date(),
   items: z.array(zTimelineItem),
 });
 

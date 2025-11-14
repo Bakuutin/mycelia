@@ -12,7 +12,7 @@ from lib.resources import call_resource
 
 from lib.transcription import known_errors, remove_if_lonely
 
-STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087').rstrip('/')
+STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8081').rstrip('/')
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)

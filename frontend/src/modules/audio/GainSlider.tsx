@@ -1,8 +1,8 @@
 import React from "react";
-import { useDateStore } from "./player.tsx";
+import { useSettingsStore } from "@/stores/settingsStore.ts";
 
 const GainSlider: React.FC = () => {
-  const { volume, setVolume } = useDateStore();
+  const { volume, setVolume } = useSettingsStore();
 
   const handleGainChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setVolume(parseFloat(event.target.value));
