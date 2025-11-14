@@ -43,5 +43,5 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
   const ext: string = file?.metadata?.extension ||
     (file?.filename?.split(".").pop() ?? "");
   const contentType = contentTypeForExtension(ext || "");
-  return new Response(data, { headers: { "Content-Type": contentType } });
+  return new Response(data as unknown as BodyInit, { headers: { "Content-Type": contentType } });
 }

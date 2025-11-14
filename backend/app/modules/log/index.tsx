@@ -451,7 +451,7 @@ export const CurvedTimeLayer: (options?: { height?: number }) => Layer = (
                     <circle cy={6} r={2} fill="#999" />
                     <text
                       textAnchor="middle"
-                      dominantBaseline="baseline"
+                      dominantBaseline="alphabetic"
                       fontSize="10px"
                       fill="white"
                     >

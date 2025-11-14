@@ -1,0 +1,65 @@
+# Default values for webui
+replicaCount: 1
+
+image:
+  repository: webui
+  pullPolicy: Always
+  tag: "latest"
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: LoadBalancer
+  port: 80
+  nodePort: 31011  
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # cert-manager.io/cluster-issuer: "selfsigned-issuer"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header X-Content-Type-Options "nosniff" always;
+  # Define common paths to avoid duplication
+  commonPaths: &commonPaths
+    - path: /
+      pathType: Prefix
+  
+  hosts:
+    - host: webui.example.com  # Overridden by Skaffold setValueTemplates
+      paths: *commonPaths
+    - host: external.example.com  # Overridden by Skaffold setValueTemplates
+      paths: *commonPaths
+  # tls:
+  #   - secretName: friend-lite-tls
+  #     hosts:
+  #       - webui.example.com
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Environment variables
+env:
+  # Backend connection (will be set by Skaffold)
+  REACT_APP_BACKEND_URL: ""
+  
+  # Vite allowed hosts configured at build time via Docker buildArgs
+  
+  # Other environment variables
+  NODE_ENV: "production"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

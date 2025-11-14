@@ -1,9 +1,9 @@
-import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ObjectId } from 'bson';
-import { IconDisplay } from '@/components/IconDisplay';
-import { callResource } from '@/lib/api';
-import type { Icon } from '@/types/icon';
+import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { ObjectId } from "bson";
+import { IconDisplay } from "@/components/IconDisplay";
+import { callResource } from "@/lib/api";
+import type { Icon } from "@/types/icon";
 
 interface PersonChipProps {
   personId: string;
@@ -26,7 +26,7 @@ export function PersonChip({ personId, name }: PersonChipProps) {
   const { data: icon } = useQuery({
     queryKey: ["person", personId, "icon"],
     queryFn: () => fetchPersonIcon(personId),
-    staleTime: 30 * 1000 // 30 sec
+    staleTime: 30 * 1000, // 30 sec
   });
 
   const handleClick = (e: React.MouseEvent) => {
@@ -46,5 +46,3 @@ export function PersonChip({ personId, name }: PersonChipProps) {
     </button>
   );
 }
-
-

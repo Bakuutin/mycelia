@@ -196,12 +196,12 @@ export const ContextContentFooter = ({
   const { modelId, usage } = useContextValue();
   const costUSD = modelId
     ? estimateCost({
-        modelId,
-        usage: {
-          input: usage?.inputTokens ?? 0,
-          output: usage?.outputTokens ?? 0,
-        },
-      }).totalUSD
+      modelId,
+      usage: {
+        input: usage?.inputTokens ?? 0,
+        output: usage?.outputTokens ?? 0,
+      },
+    }).totalUSD
     : undefined;
   const totalCost = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -212,7 +212,7 @@ export const ContextContentFooter = ({
     <div
       className={cn(
         "flex w-full items-center justify-between gap-3 bg-secondary p-3 text-xs",
-        className
+        className,
       )}
       {...props}
     >
@@ -246,9 +246,9 @@ export const ContextInputUsage = ({
 
   const inputCost = modelId
     ? estimateCost({
-        modelId,
-        usage: { input: inputTokens, output: 0 },
-      }).totalUSD
+      modelId,
+      usage: { input: inputTokens, output: 0 },
+    }).totalUSD
     : undefined;
   const inputCostText = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -286,9 +286,9 @@ export const ContextOutputUsage = ({
 
   const outputCost = modelId
     ? estimateCost({
-        modelId,
-        usage: { input: 0, output: outputTokens },
-      }).totalUSD
+      modelId,
+      usage: { input: 0, output: outputTokens },
+    }).totalUSD
     : undefined;
   const outputCostText = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -326,9 +326,9 @@ export const ContextReasoningUsage = ({
 
   const reasoningCost = modelId
     ? estimateCost({
-        modelId,
-        usage: { reasoningTokens },
-      }).totalUSD
+      modelId,
+      usage: { reasoningTokens },
+    }).totalUSD
     : undefined;
   const reasoningCostText = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -366,9 +366,9 @@ export const ContextCacheUsage = ({
 
   const cacheCost = modelId
     ? estimateCost({
-        modelId,
-        usage: { cacheReads: cacheTokens, input: 0, output: 0 },
-      }).totalUSD
+      modelId,
+      usage: { cacheReads: cacheTokens, input: 0, output: 0 },
+    }).totalUSD
     : undefined;
   const cacheCostText = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -394,13 +394,11 @@ const TokensWithCost = ({
   costText?: string;
 }) => (
   <span>
-    {tokens === undefined
-      ? "—"
-      : new Intl.NumberFormat("en-US", {
-          notation: "compact",
-        }).format(tokens)}
-    {costText ? (
-      <span className="ml-2 text-muted-foreground">• {costText}</span>
-    ) : null}
+    {tokens === undefined ? "—" : new Intl.NumberFormat("en-US", {
+      notation: "compact",
+    }).format(tokens)}
+    {costText
+      ? <span className="ml-2 text-muted-foreground">• {costText}</span>
+      : null}
   </span>
 );

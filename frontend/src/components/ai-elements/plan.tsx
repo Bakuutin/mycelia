@@ -62,12 +62,14 @@ export const PlanHeader = ({ className, ...props }: PlanHeaderProps) => (
   />
 );
 
-export type PlanTitleProps = Omit<
-  ComponentProps<typeof CardTitle>,
-  "children"
-> & {
-  children: string;
-};
+export type PlanTitleProps =
+  & Omit<
+    ComponentProps<typeof CardTitle>,
+    "children"
+  >
+  & {
+    children: string;
+  };
 
 export const PlanTitle = ({ children, ...props }: PlanTitleProps) => {
   const { isStreaming } = usePlan();
@@ -79,12 +81,14 @@ export const PlanTitle = ({ children, ...props }: PlanTitleProps) => {
   );
 };
 
-export type PlanDescriptionProps = Omit<
-  ComponentProps<typeof CardDescription>,
-  "children"
-> & {
-  children: string;
-};
+export type PlanDescriptionProps =
+  & Omit<
+    ComponentProps<typeof CardDescription>,
+    "children"
+  >
+  & {
+    children: string;
+  };
 
 export const PlanDescription = ({
   className,

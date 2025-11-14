@@ -6,7 +6,6 @@ export interface AudioChunk {
   _id?: ObjectId;
   format: string;
   original_id?: ObjectId;
-  source_file_id?: ObjectId;
   index: number;
   ingested_at: Date;
   start: Date;
@@ -16,7 +15,7 @@ export interface AudioChunk {
 export interface SourceFile {
   _id: ObjectId;
   start: Date;
-  size: number;
+  size?: number;
   extension: string;
   ingested: boolean;
   importer: string;
@@ -32,7 +31,7 @@ export interface SourceFile {
 
 export async function createSourceFile(
   startTime: Date,
-  fileSize: number,
+  fileSize: number | undefined,
   filename: string,
   metadata: Record<string, any>,
   createdBy: string,
@@ -223,20 +222,102 @@ export async function invalidateTimelineForData(
   }
 }
 
+async function ffmpeg(
+  inputData: Uint8Array,
+  { inputOptions = [], outputOptions }: {
+    inputOptions?: string[];
+    outputOptions: string[];
+  },
+): Promise<Uint8Array> {
+  const tempInputPath = await Deno.makeTempFile({ suffix: ".bin" });
+  const tempOutputPath = await Deno.makeTempFile({ suffix: ".opus" });
+  const finalArgs = [
+    ...inputOptions,
+    "-i",
+    tempInputPath,
+    ...outputOptions,
+    "-map_metadata",
+    "-1",
+    "-y",
+    tempOutputPath,
+  ];
+  try {
+    await Deno.writeFile(tempInputPath, inputData);
+    console.log(`Running FFmpeg: ffmpeg ${finalArgs.join(" ")}`);
+    const process = new Deno.Command("ffmpeg", {
+      args: finalArgs,
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const child = process.spawn();
+    const status = await child.status;
+    if (!status.success) {
+      const stderrReader = child.stderr.getReader();
+      const stderr = await stderrReader.read();
+      const errorOutput = new TextDecoder().decode(
+        stderr.value || new Uint8Array(),
+      );
+      stderrReader.releaseLock();
+      await child.stderr.cancel();
+      await child.stdout.cancel();
+      throw new Error(`FFmpeg conversion failed: ${errorOutput}`);
+    }
+    await child.stderr.cancel();
+    await child.stdout.cancel();
+    return Deno.readFile(tempOutputPath);
+  } finally {
+    try {
+      await Promise.all([
+        Deno.remove(tempInputPath),
+        Deno.remove(tempOutputPath),
+      ]);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+async function pcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
+  return await ffmpeg(
+    audioData,
+    { outputOptions: ["-c:a", "libopus", "-b:a", "64k"] },
+  );
+}
+
+async function float32ToOpus(audioData: Uint8Array): Promise<Uint8Array> {
+  return await ffmpeg(
+    audioData,
+    {
+      inputOptions: ["-f", "f32le", "-ar", "16000", "-ac", "1"],
+      outputOptions: ["-c:a", "libopus", "-b:a", "64k"],
+    },
+  );
+}
+
 export async function createAudioChunk(
   audioData: Uint8Array,
   startTime: Date,
   index: number,
-  sourceFileId?: ObjectId,
-  originalId?: ObjectId,
+  originalId: ObjectId,
+  format: "opus" | "pcm" | "float32" = "opus",
 ): Promise<ObjectId> {
+  await Deno.writeFile(
+    `debug.${format}`,
+    audioData,
+  );
+
+  if (format == "pcm") {
+    audioData = await pcmToOpus(audioData);
+  } else if (format == "float32") {
+    audioData = await float32ToOpus(audioData);
+  }
+
   const auth = await getServerAuth();
   const mongoResource = await auth.getResource("tech.mycelia.mongo");
 
   const chunk: AudioChunk = {
     format: "opus",
     original_id: originalId,
-    source_file_id: sourceFileId,
     index,
     ingested_at: new Date(),
     start: startTime,
@@ -251,7 +332,7 @@ export async function createAudioChunk(
 
   console.log(
     `Audio chunk created: ${result.insertedId}, index: ${index}, start: ${startTime.toISOString()}, size: ${audioData.length} bytes${
-      sourceFileId ? `, source_file_id: ${sourceFileId}` : ""
+      originalId ? `, original_id: ${originalId}` : ""
     }`,
   );
 

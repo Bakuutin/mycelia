@@ -1,0 +1,64 @@
+FROM python:3.10-bookworm
+
+## Install system dependencies including PortAudio for pyaudio
+RUN apt-get update && apt-get install -y \
+build-essential \
+git \
+ffmpeg \
+curl \
+&& rm -rf /var/lib/apt/lists/*
+# portaudio19-dev \
+# libasound2-dev \
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Copy dependency files first
+COPY pyproject.toml ./
+COPY uv.lock ./
+
+# Copy source code
+COPY src/ src/
+
+# Install dependencies and package  
+# Use build arg to control CPU vs GPU mode
+ARG COMPUTE_MODE=gpu
+RUN if [ "$COMPUTE_MODE" = "gpu" ]; then \
+        uv sync --no-default-groups --group gpu; \
+    else \
+        uv sync --no-default-groups --group cpu; \
+    fi
+
+# Copy the PyTorch installation script
+COPY scripts/install-pytorch.py /app/scripts/
+
+# Install PyTorch with CUDA support using cache mount
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv run --env COMPUTE_MODE=gpu scripts/install-pytorch.py || true
+
+
+
+
+# Create directories
+RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
+
+# Set environment variables
+ENV HF_HOME=/models
+ENV PYTHONPATH=/app
+ENV CUDA_VISIBLE_DEVICES=0
+ENV TORCH_CUDA_ARCH_LIST="6.1"
+
+# Copy the download script
+COPY scripts/download-pyannote.py /app/scripts/
+
+# Pre-download models using cache mount (only downloads if not already cached)
+RUN --mount=type=cache,target=/models \
+    uv run --env HF_HOME=/models scripts/download-pyannote.py || true
+
+# Expose port
+EXPOSE 8085
+
+# Run the service
+CMD ["uv", "run", "--no-dev", "--no-sync", "simple-speaker-service"] 

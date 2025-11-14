@@ -1,7 +1,8 @@
-import React, { useEffect } from "react";
-import { useFetcher } from "@remix-run/react";
+import React, { useEffect, useRef } from "react";
 import { create } from "zustand";
 import _ from "lodash";
+import { apiClient } from "@/lib/api.ts";
+import { useSettingsStore } from "@/stores/settingsStore.ts";
 
 export interface Chunk {
   start: Date;
@@ -15,7 +16,6 @@ export interface DateStore {
   startDate: Date | null;
   chunks: Chunk[];
   currentChunk: Chunk | null;
-  volume: number;
   audioContext: AudioContext | null;
   sourceNode: AudioBufferSourceNode | null;
   gainNode: GainNode | null;
@@ -29,7 +29,6 @@ export interface DateStore {
   resetDate: (date: Date | null) => void;
   appendChunks: (chunks: Chunk[]) => void;
   popChunk: () => Promise<Chunk | null>;
-  setVolume: (volume: number) => void;
   setAudioContext: (ctx: AudioContext | null) => void;
   setSourceNode: (node: AudioBufferSourceNode | null) => void;
   setGainNode: (node: GainNode | null) => void;
@@ -42,13 +41,12 @@ export interface DateStore {
   ) => void;
 }
 
-export const useDateStore = create<DateStore>((set) => ({
+export const useAudioPlayer = create<DateStore>((set) => ({
   currentDate: null,
   startDate: null,
   chunks: [],
   currentChunk: null,
   isPlaying: false,
-  volume: 1,
   audioContext: null,
   sourceNode: null,
   gainNode: null,
@@ -63,7 +61,6 @@ export const useDateStore = create<DateStore>((set) => ({
     set({ currentDate: date, chunks: [], startDate: date, currentChunk: null });
   },
   appendChunks(chunks: Chunk[]) {
-    console.log("Appending chunks", chunks.map((chunk) => chunk.start));
     set((state) => {
       const combined = [...state.chunks, ...chunks];
       combined.sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -84,18 +81,21 @@ export const useDateStore = create<DateStore>((set) => ({
     });
   },
   setAudioContext: (ctx: AudioContext | null) => set({ audioContext: ctx }),
-  setSourceNode: (node: AudioBufferSourceNode | null) => set({ sourceNode: node }),
+  setSourceNode: (node: AudioBufferSourceNode | null) =>
+    set({ sourceNode: node }),
   setGainNode: (node: GainNode | null) => set({ gainNode: node }),
-  setIsCreatingSource: (isCreating: boolean) => set({ isCreatingSource: isCreating }),
+  setIsCreatingSource: (isCreating: boolean) =>
+    set({ isCreatingSource: isCreating }),
   setRafId: (id: number | null) => set({ rafId: id }),
-  setBaselines: (date: Date, ctxTime: number) => set({ baselineStartDate: date, baselineStartCtxTime: ctxTime }),
-  clearBaselines: () => set({ baselineStartDate: null, baselineStartCtxTime: null }),
+  setBaselines: (date: Date, ctxTime: number) =>
+    set({ baselineStartDate: date, baselineStartCtxTime: ctxTime }),
+  clearBaselines: () =>
+    set({ baselineStartDate: null, baselineStartCtxTime: null }),
   update(
     data: Partial<DateStore> | ((state: DateStore) => Partial<DateStore>),
   ) {
     set(data);
   },
-  setVolume: (volume: number) => set({ volume }),
 }));
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
@@ -112,75 +112,76 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 
 export const AudioPlayer: React.FC = () => {
   const {
+    appendChunks,
     audioContext,
-    setAudioContext,
-    sourceNode,
-    setSourceNode,
+    chunks,
+    currentDate,
     gainNode,
-    setGainNode,
     isCreatingSource,
+    isPlaying,
+    popChunk,
+    setAudioContext,
+    setBaselines,
+    setGainNode,
     setIsCreatingSource,
-  } = useDateStore();
-  const fetcher = useFetcher();
+    setSourceNode,
+    sourceNode,
+    startDate,
+    updateDate,
+  } = useAudioPlayer();
+  
+  // Get volume and playbackRate from settings store
+  const { volume, playbackRate } = useSettingsStore();
   const preloadLimit = 20; // Number of segments to preload
 
-  const ensureAudioContext = () => {
-    if (!audioContext) {
+  useEffect(() => {
+    if (isPlaying && !audioContext) {
       const newAudioContext =
         new (globalThis.AudioContext || (window as any).webkitAudioContext)();
       setAudioContext(newAudioContext);
     }
-  };
+  }, [isPlaying, audioContext]);
 
-  const {
-    isPlaying,
-    volume,
-    currentDate,
-    updateDate,
-    appendChunks,
-    chunks,
-    popChunk,
-    startDate,
-  } = useDateStore();
-
-  if (isPlaying) {
-    ensureAudioContext();
-  }
+  const loadingRef = useRef(false)
 
   const fetchAndDecodeBuffers = async () => {
-    if (fetcher.state !== "idle") return;
+    if (loadingRef.current) return;
+    
     const prev = chunks[chunks.length - 1];
     const start = prev ? prev.start : currentDate;
     if (!start) return;
+    
+    try {
+      loadingRef.current = true
+      const lastId = prev ? prev._id : null;
+      const resp = await apiClient.get(
+        `/data/audio?start=${start.toISOString()}&limit=${preloadLimit}${
+          lastId ? `&lastId=${lastId}` : ""
+        }`,
+      );
 
-    const lastId = prev ? prev._id : null;
-    fetcher.load(
-      `/data/audio?start=${start.toISOString()}&limit=${preloadLimit}${
-        lastId ? `&lastId=${lastId}` : ""
-      }`,
-    );
-  };
-
-  useEffect(() => {
-    if (
-      fetcher.data &&
-      Array.isArray((fetcher.data as { segments: any[] }).segments)
-    ) {
-      const segments: any[] = (fetcher.data as { segments: any[] }).segments;
-
-      for (const segment of segments) {
-        audioContext!.decodeAudioData(base64ToArrayBuffer(segment.data)).then(
-          (audioBuffer) => {
-            appendChunks([{
-              buffer: audioBuffer,
-              start: new Date(segment.start),
-              _id: segment._id,
-            }]);
-          },
-        );
+      if (
+        resp &&
+        Array.isArray((resp as { segments: any[] }).segments)
+      ) {
+        const segments: any[] = (resp as { segments: any[] }).segments;
+  
+        for (const segment of segments) {
+          audioContext!.decodeAudioData(base64ToArrayBuffer(segment.data)).then(
+            (audioBuffer) => {
+              appendChunks([{
+                buffer: audioBuffer,
+                start: new Date(segment.start),
+                _id: segment._id,
+              }]);
+            },
+          );
+        }
       }
+    } finally {
+      loadingRef.current = false
     }
-  }, [fetcher.data]);
+  };
 
   useEffect(() => {
     if (audioContext && !gainNode) {
@@ -197,6 +198,16 @@ export const AudioPlayer: React.FC = () => {
     }
   }, [volume, gainNode]);
 
+  useEffect(() => {
+    if (sourceNode && audioContext && sourceNode.playbackRate.value !== playbackRate) {
+      sourceNode.playbackRate.value = playbackRate;
+      
+      // if (isPlaying && currentDate && audioContext) {
+      //   setBaselines(currentDate, audioContext.currentTime);
+      // }
+    }
+  }, [playbackRate, sourceNode, isPlaying, currentDate, audioContext]);
+
   const createBufferSource = async () => {
     if (
       !audioContext || chunks.length === 0 || isCreatingSource
@@ -212,14 +223,13 @@ export const AudioPlayer: React.FC = () => {
       setIsCreatingSource(false);
       return;
     }
-    console.log("Playing", chunk.start.toISOString());
     bufferSource.buffer = chunk.buffer;
     bufferSource.connect(gainNode!);
 
     const when = audioContext.currentTime;
     bufferSource.start(when);
 
-    useDateStore.getState().setBaselines(chunk.start, when);
+    useAudioPlayer.getState().setBaselines(chunk.start, when);
     updateDate(chunk.start);
 
     bufferSource.onended = () => {
@@ -267,10 +277,11 @@ export const AudioPlayer: React.FC = () => {
     }
 
     const tick = () => {
-      const { baselineStartDate, baselineStartCtxTime } = useDateStore.getState();
+      const { baselineStartDate, baselineStartCtxTime } = useAudioPlayer.getState();
+      const currentPlaybackRate = useSettingsStore.getState().playbackRate;
       if (baselineStartDate && baselineStartCtxTime !== null) {
         const elapsed = audioContext.currentTime - baselineStartCtxTime;
-        const newDate = new Date(baselineStartDate.getTime() + elapsed * 1000);
+        const newDate = new Date(baselineStartDate.getTime() + elapsed * currentPlaybackRate * 1000);
         updateDate(newDate);
       }
       frameId = requestAnimationFrame(tick);

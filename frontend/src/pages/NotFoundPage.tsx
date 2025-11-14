@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
-import { Home } from 'lucide-react';
+import { Link } from "react-router-dom";
+import { Home } from "lucide-react";
 
 const NotFoundPage = () => {
   return (

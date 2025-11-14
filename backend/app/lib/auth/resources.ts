@@ -32,6 +32,16 @@ export type ModifyPolicy<Arg> = {
 
 export type Policy = SimplePolicy | ModifyPolicy<any>;
 
+export interface ResourceAction {
+  path: ResourcePath;
+  actions: string[];
+}
+
+export interface FlatResourceAction {
+  path: ResourcePath;
+  action: string;
+}
+
 export type MiddlewareFunction<Input, Output, Arg> = (
   opts: { arg: Arg; auth: Auth; input: Input },
   next: (input: Input, auth: Auth) => Promise<Output>,
@@ -39,7 +49,7 @@ export type MiddlewareFunction<Input, Output, Arg> = (
 
 export type ResourceAccessModifier<Input, Output, Arg> = {
   schema?: z.ZodSchema<Arg>;
-  use: MiddlewareFunction<Input, Output, Arg>;
+  use: MiddlewareFunction<Input, Output | Response, Arg>;
 };
 
 export interface Resource<Input, Output> {
@@ -93,10 +103,63 @@ export class ResourceManager {
       minimatch(action, policy.action);
   }
 
+  async ensureAllowed(auth: Auth, ...actions: ResourceAction[]): Promise<void> {
+    const matchedPolicies = await this.matchPolicies(auth, ...actions);
+    for (const policy of matchedPolicies) {
+      if (policy.effect != "allow") {
+        permissionDenied({
+          policy,
+        });
+      }
+    }
+  }
+
+  async matchPolicies(
+    auth: Auth,
+    ...actions: ResourceAction[]
+  ): Promise<Policy[]> {
+    const flatActions: FlatResourceAction[] = actions.flatMap((action) =>
+      action.actions.map((subAction) => ({
+        path: action.path,
+        action: subAction,
+      }))
+    );
+
+    const unmatchedActions = new Set<FlatResourceAction>(flatActions);
+
+    const matchedPolicies: Policy[] = [];
+
+    for (const action of flatActions) {
+      for (const policy of auth.policies) {
+        if (!this.matchPolicy(policy, action.path, action.action)) {
+          continue;
+        }
+
+        matchedPolicies.push(policy);
+        unmatchedActions.delete(action);
+
+        if (policy.effect === "deny") {
+          permissionDenied({
+            policy,
+            actions: [action],
+          });
+        }
+      }
+    }
+
+    if (unmatchedActions.size > 0) {
+      permissionDenied({
+        actions: [...unmatchedActions],
+      });
+    }
+
+    return matchedPolicies;
+  }
+
   async getResource<Input, Output>(
     code: Code,
     auth: Auth,
-  ): Promise<(input: Input) => Promise<Output>> {
+  ): Promise<(input: Input) => Promise<Output | Response>> {
     const resource: Resource<Input, Output> | undefined = this.resources.get(
       code,
     );
@@ -108,50 +171,17 @@ export class ResourceManager {
       });
     }
 
-    return async (input: Input): Promise<Output> => {
+    return async (input: Input): Promise<Output | Response> => {
       input = resource.schemas.request.parse(input);
 
-      const actions = resource.extractActions(input);
+      const actions: ResourceAction[] = resource.extractActions(input);
 
-      const flatActions = actions.flatMap((action) =>
-        action.actions.map((subAction) => ({
-          path: action.path,
-          action: subAction,
-        }))
-      );
-
-      const unmatchedActions = new Set(flatActions);
-
-      const matchedPolicies: Policy[] = [];
-
-      for (const action of flatActions) {
-        for (const policy of auth.policies) {
-          if (!this.matchPolicy(policy, action.path, action.action)) {
-            continue;
-          }
-
-          matchedPolicies.push(policy);
-          unmatchedActions.delete(action);
-
-          if (policy.effect === "deny") {
-            permissionDenied({
-              policy,
-              actions: [action],
-            });
-          }
-        }
-      }
-
-      if (unmatchedActions.size > 0) {
-        permissionDenied({
-          actions: [...unmatchedActions],
-        });
-      }
+      const policies = await this.matchPolicies(auth, ...actions);
 
       let finalUse = resource.use.bind(resource);
 
-      for (let i = matchedPolicies.length - 1; i >= 0; i--) {
-        const policy = matchedPolicies[i];
+      for (let i = policies.length - 1; i >= 0; i--) {
+        const policy = policies[i];
 
         if (policy.effect === "modify") {
           const modifier:
@@ -185,12 +215,12 @@ export class ResourceManager {
       accessLogger.log(auth, resource, actions);
 
       const result = await finalUse(input, auth);
-      
+
       // If result is a Response object, return it directly without schema validation
       if (result instanceof Response) {
         return result;
       }
-      
+
       // Otherwise, validate and return the typed response
       return resource.schemas.response.parse(result);
     };

@@ -1,20 +1,27 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { callResource } from '@/lib/api';
-import type { EventItem } from '@/types/events';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { ArrowLeft, Trash2, X } from 'lucide-react';
-import { ColorInput } from '@/components/forms/ColorInput';
-import { CategoryInput } from '@/components/forms/CategoryInput';
-import { ToggleGroup } from '@/components/ui/toggle-group';
-import { Separator } from '@/components/ui/separator';
-import { DateTimePicker } from '@/components/ui/datetime-picker';
-import { EmojiPickerButton } from '@/components/ui/emoji-picker';
-import { Combobox } from '@/components/ui/combobox';
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { callResource } from "@/lib/api";
+import type { EventItem } from "@/types/events";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ArrowLeft, Trash2, X } from "lucide-react";
+import { ColorInput } from "@/components/forms/ColorInput";
+import { CategoryInput } from "@/components/forms/CategoryInput";
+import { ToggleGroup } from "@/components/ui/toggle-group";
+import { Separator } from "@/components/ui/separator";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { EmojiPickerButton } from "@/components/ui/emoji-picker";
+import { Combobox } from "@/components/ui/combobox";
 
-const EVENT_CATEGORIES = ["geography", "life", "education", "relationship", "work", "misc"];
+const EVENT_CATEGORIES = [
+  "geography",
+  "life",
+  "education",
+  "relationship",
+  "work",
+  "misc",
+];
 
 const EventDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -49,7 +56,7 @@ const EventDetailPage = () => {
           setError("Event not found");
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch event');
+        setError(err instanceof Error ? err.message : "Failed to fetch event");
       } finally {
         setLoading(false);
       }
@@ -81,7 +88,7 @@ const EventDetailPage = () => {
 
       setEvent({ ...event, ...updates });
     } catch (err) {
-      console.error('Auto-save failed:', err);
+      console.error("Auto-save failed:", err);
     } finally {
       setSaving(false);
     }
@@ -89,7 +96,9 @@ const EventDetailPage = () => {
 
   const handleDelete = async () => {
     if (!event) return;
-    const confirmed = globalThis.confirm ? globalThis.confirm("Delete this event?") : true;
+    const confirmed = globalThis.confirm
+      ? globalThis.confirm("Delete this event?")
+      : true;
     if (!confirmed) return;
 
     try {
@@ -98,9 +107,9 @@ const EventDetailPage = () => {
         collection: "events",
         query: { _id: event._id },
       });
-      navigate('/timeline');
+      navigate("/timeline");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete event');
+      setError(err instanceof Error ? err.message : "Failed to delete event");
     }
   };
 
@@ -134,7 +143,7 @@ const EventDetailPage = () => {
           </Link>
         </div>
         <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error || 'Event not found'}</p>
+          <p className="text-red-500">Error: {error || "Event not found"}</p>
         </div>
       </div>
     );
@@ -150,7 +159,9 @@ const EventDetailPage = () => {
           </Button>
         </Link>
         <div className="flex items-center gap-2">
-          {saving && <span className="text-xs text-muted-foreground">Saving...</span>}
+          {saving && (
+            <span className="text-xs text-muted-foreground">Saving...</span>
+          )}
           <Button variant="destructive" size="sm" onClick={handleDelete}>
             <Trash2 className="w-4 h-4 mr-2" />
             Delete
@@ -172,7 +183,9 @@ const EventDetailPage = () => {
             </div>
 
             <div className="flex-1">
-              <Label htmlFor="title" className="text-sm font-medium">Title</Label>
+              <Label htmlFor="title" className="text-sm font-medium">
+                Title
+              </Label>
               <Input
                 id="title"
                 value={event.title}
@@ -188,7 +201,8 @@ const EventDetailPage = () => {
             <Input
               id="shortTitle"
               value={event.shortTitle || ""}
-              onChange={(e) => autoSave({ shortTitle: e.target.value || undefined })}
+              onChange={(e) =>
+                autoSave({ shortTitle: e.target.value || undefined })}
               placeholder="Optional compact label"
             />
           </div>
@@ -198,7 +212,8 @@ const EventDetailPage = () => {
             <Input
               id="description"
               value={event.description || ""}
-              onChange={(e) => autoSave({ description: e.target.value || undefined })}
+              onChange={(e) =>
+                autoSave({ description: e.target.value || undefined })}
               placeholder="Optional details"
             />
           </div>
@@ -245,8 +260,8 @@ const EventDetailPage = () => {
             <Label htmlFor="parentId">Parent Event</Label>
             <Combobox
               options={allEvents
-                .filter(e => e._id.toString() !== event._id.toString())
-                .map(e => ({
+                .filter((e) => e._id.toString() !== event._id.toString())
+                .map((e) => ({
                   value: e._id.toString(),
                   label: e.title,
                 }))}
@@ -257,7 +272,8 @@ const EventDetailPage = () => {
               emptyText="No events found."
             />
             <p className="text-xs text-muted-foreground">
-              When zoomed out, this event will be hidden and its parent will be shown instead
+              When zoomed out, this event will be hidden and its parent will be
+              shown instead
             </p>
           </div>
         </div>

@@ -48,14 +48,16 @@ export const Branch = ({
   };
 
   const goToPrevious = () => {
-    const newBranch =
-      currentBranch > 0 ? currentBranch - 1 : branches.length - 1;
+    const newBranch = currentBranch > 0
+      ? currentBranch - 1
+      : branches.length - 1;
     handleBranchChange(newBranch);
   };
 
   const goToNext = () => {
-    const newBranch =
-      currentBranch < branches.length - 1 ? currentBranch + 1 : 0;
+    const newBranch = currentBranch < branches.length - 1
+      ? currentBranch + 1
+      : 0;
     handleBranchChange(newBranch);
   };
 
@@ -95,7 +97,7 @@ export const BranchMessages = ({ children, ...props }: BranchMessagesProps) => {
     <div
       className={cn(
         "grid gap-2 overflow-hidden [&>div]:pb-0",
-        index === currentBranch ? "block" : "hidden"
+        index === currentBranch ? "block" : "hidden",
       )}
       key={branch.key}
       {...props}
@@ -126,7 +128,7 @@ export const BranchSelector = ({
       className={cn(
         "flex items-center gap-2 self-end px-10",
         from === "assistant" ? "justify-start" : "justify-end",
-        className
+        className,
       )}
       {...props}
     />
@@ -149,7 +151,7 @@ export const BranchPrevious = ({
         "size-7 shrink-0 rounded-full text-muted-foreground transition-colors",
         "hover:bg-accent hover:text-foreground",
         "disabled:pointer-events-none disabled:opacity-50",
-        className
+        className,
       )}
       disabled={totalBranches <= 1}
       onClick={goToPrevious}
@@ -179,7 +181,7 @@ export const BranchNext = ({
         "size-7 shrink-0 rounded-full text-muted-foreground transition-colors",
         "hover:bg-accent hover:text-foreground",
         "disabled:pointer-events-none disabled:opacity-50",
-        className
+        className,
       )}
       disabled={totalBranches <= 1}
       onClick={goToNext}
@@ -202,7 +204,7 @@ export const BranchPage = ({ className, ...props }: BranchPageProps) => {
     <span
       className={cn(
         "font-medium text-muted-foreground text-xs tabular-nums",
-        className
+        className,
       )}
       {...props}
     >

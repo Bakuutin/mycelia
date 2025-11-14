@@ -1,6 +1,0 @@
-{
-  "imports": {
-    "cytoscape": "npm:cytoscape@^3.33.1",
-    "react-cytoscapejs": "npm:react-cytoscapejs@^2.0.0"
-  }
-}

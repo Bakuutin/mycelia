@@ -1,17 +1,35 @@
 import io
 import time
-import wave
 import os
 import argparse
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
-from lib.config import get_url
+import logging
+from logging.handlers import RotatingFileHandler
+from tqdm import tqdm
+from lib.resources import call_resource
 
 from lib.transcription import known_errors, remove_if_lonely
-from utils import lazy, mongo
 
-STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8087').rstrip('/')
+STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8081').rstrip('/')
+
+LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    handlers=[
+        RotatingFileHandler(
+            os.path.join(LOG_DIR, 'stt.log'),
+            maxBytes=10*1024*1024,
+            backupCount=5
+        ),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 from datetime import datetime
@@ -25,9 +43,6 @@ import signal
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
-
-chunks = lazy(lambda: mongo['audio_chunks'])
-transcriptions = lazy(lambda: mongo['transcriptions'])
 
 NO_SPEECH_DETECTED = object()
 
@@ -57,23 +72,46 @@ class SpeechSequence(BaseModel):
         return f'{self.original_id}: {repr(indices)}'
 
 
+def mongo_cursor(collection, query, options, batch_size=200):
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "getFirstBatch",
+        "collection": collection,
+        "query": query,
+        "options": options,
+        "batchSize": batch_size,
+    })
+    cursor_id = result.get("cursorId")
 
-def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iterator[SpeechSequence]:
-    print('getting speech sequences')
+    while result.get("data", []) and result.get("hasMore", False):
+        for c in result['data']:
+            yield c
+
+        result = call_resource('tech.mycelia.mongo', {
+            "action": "getMore",
+            "collection": collection,
+            "cursorId": cursor_id,
+            "batchSize": batch_size,
+        })
+
+
+
+
+def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_id=None) -> Iterator[SpeechSequence]:
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
     yielded = 0
 
     base_filters = {
         'transcribed_at': {'$eq': None},
+        'processing_by': {'$eq': None},
         'vad.has_speech': True
     }
 
     if filters:
         base_filters.update(filters)
-
-    cursor = chunks.find(base_filters).sort('start', -1)
-
-    for i, chunk in enumerate(cursor):
+    
+    for chunk in mongo_cursor('audio_chunks', base_filters, {
+        "sort": {"start": -1},
+    }):
         if limit is not None and yielded >= limit:
             break
 
@@ -108,7 +146,7 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
                 chunks=[]
             )
             except Exception as e:
-                print(f"Error creating speech sequence for {original_id}: {e}")
+                tqdm.write(f"ERROR: Creating speech sequence for {original_id}: {e}")
                 continue
 
         seq.chunks.append(chunk)
@@ -129,45 +167,170 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30) -> Iter
     if limit is None or yielded < limit:
         for seq in sequences_by_id.values():
             yield seq
-    else:
-        print(f'{len(sequences_by_id)} sequences left to yield')
-        for seq in sequences_by_id.values():
-            print(seq.start.strftime("%Y-%m-%d %H:%M:%S"), len(seq.chunks))
 
 
-def process_sequence(sequence: SpeechSequence):
+def claim_sequence(seq: SpeechSequence, worker_id: str) -> bool:
+    result = call_resource('tech.mycelia.mongo', {
+        "action": "updateMany",
+        "collection": "audio_chunks",
+        "query": {
+            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
+            'processing_by': None
+        },
+        "update": {
+            '$set': {'processing_by': worker_id, 'claimed_at': datetime.now(tz=UTC)},
+        }
+    })
+
+    success = result['modifiedCount'] == len(seq.chunks)
+
+    if not success:
+        release_sequence(seq, worker_id)
+
+    return success
+
+
+def release_sequence(seq: SpeechSequence, worker_id: str):
+    call_resource('tech.mycelia.mongo', {
+        "action": "updateMany",
+        "collection": "audio_chunks",
+        "query": {
+            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
+            'processing_by': worker_id
+        },
+        "update": {
+            '$set': {'processing_by': None, 'claimed_at': None},
+        }
+    })
+
+def process_sequence(sequence: SpeechSequence, worker_id: str):
+    start_time = time.time()
+    timestamp = sequence.start.strftime("%Y-%m-%d %H:%M:%S")
+    chunks_count = len(sequence.chunks)
+    original_id = str(sequence.original_id)
+
     try:
-        print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\tOriginalId {str(sequence.original_id)}\t started')
-        start = time.time()
+        if not claim_sequence(sequence, worker_id):
+            tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  skipped (claimed)')
+            return {"status": "skipped", "chunks": 0, "duration": 0}
+
         result = transcribe_sequence(sequence)
         mark_as_transcribed(sequence)
-        end = time.time()
-        print(f'{sequence.start.strftime("%Y-%m-%d %H:%M:%S")}\tlen {len(sequence.chunks)} chunks\ttook {end - start}s {"empty" if result is NO_SPEECH_DETECTED else "transcribed"}')
+
+        end_time = time.time()
+        duration = end_time - start_time
+        status = "empty" if result is NO_SPEECH_DETECTED else "transcribed"
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  {duration:5.2f}s  {status}')
+        return {"status": status, "chunks": chunks_count, "duration": duration}
+
+    except requests.exceptions.ReadTimeout as e:
+        end_time = time.time()
+        release_sequence(sequence, worker_id)
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout')
+        tqdm.write(f'  → Increase timeout or check STT server at {STT_SERVER_URL}')
+        return {"status": "error", "chunks": 0, "duration": end_time - start_time}
+
     except Exception as e:
-        print(f"Error processing sequence starting at {sequence.start}: {e}")
+        end_time = time.time()
+        release_sequence(sequence, worker_id)
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)}')
+        return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
 
 
-def process_speech_sequences(limit=None, max_workers=1):
+def process_speech_sequences(limit=None, max_workers=1, worker_id=None):
+    import socket
+    if worker_id is None:
+        worker_id = f"{socket.gethostname()}_{os.getpid()}"
+
+    tqdm.write(f'Worker ID: {worker_id}')
+    tqdm.write(f'Using {max_workers} parallel worker(s)')
+
     processed_count = 0
-    batch_size = min(limit, 1000) if limit is not None else 1000
+    stats = {'transcribed': 0, 'empty': 0, 'error': 0, 'skipped': 0}
+    total_chunks = 0
+    batch_size = min(limit if limit else 1000, 1000)
 
-    while True:
-        for sequence in get_speech_sequences(limit=batch_size):
-            process_sequence(sequence)
-            processed_count += 1
-            if limit and processed_count >= limit:
-                return
-    # while limit is None or processed_count < limit:
-    #     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-    #         futures = []
-    #         for sequence in get_speech_sequences(limit=batch_size):
-    #             futures.append(executor.submit(process_sequence, sequence))
-    #             print(f'{len(futures)} futures scheduled')
-    #             while len(futures) >= max_workers:
-    #                 done, not_done = concurrent.futures.wait(futures, timeout=0.1)
-    #                 futures = list(not_done)
-    #                 processed_count += len(done)
+    total = limit if limit else None
+    bar_format = '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}, {postfix}]' if total else '{n_fmt} [{elapsed}, {rate_fmt}, {postfix}]'
+
+    with tqdm(total=total, desc="Processing", unit="seq", bar_format=bar_format) as pbar:
+
+        if max_workers == 1:
+            while True:
+                batch_processed = 0
+                for sequence in get_speech_sequences(limit=batch_size, worker_id=worker_id):
+                    result = process_sequence(sequence, worker_id)
+                    status = result["status"]
+
+                    if status in stats:
+                        stats[status] += 1
+
+                    total_chunks += result["chunks"]
+
+                    if status != "skipped":
+                        processed_count += 1
+                        batch_processed += 1
+
+                    pbar.update(1)
+                    pbar.set_postfix(
+                        transcribed=stats['transcribed'],
+                        empty=stats['empty'],
+                        errors=stats['error'],
+                        skipped=stats['skipped'],
+                        chunks=total_chunks
+                    )
+
+                    if limit and processed_count >= limit:
+                        break
+
+                if limit and processed_count >= limit:
+                    break
+
+                if batch_processed == 0:
+                    tqdm.write("\nNo more sequences to process")
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                while True:
+                    sequences = list(get_speech_sequences(limit=batch_size, worker_id=worker_id))
+                    if not sequences:
+                        tqdm.write("\nNo more sequences to process")
+                        break
+
+                    futures = {executor.submit(process_sequence, seq, worker_id): seq for seq in sequences}
+
+                    for future in concurrent.futures.as_completed(futures):
+                        result = future.result()
+                        status = result["status"]
+
+                        if status in stats:
+                            stats[status] += 1
+
+                        total_chunks += result["chunks"]
+
+                        if status != "skipped":
+                            processed_count += 1
+
+                        pbar.update(1)
+                        pbar.set_postfix(
+                            transcribed=stats['transcribed'],
+                            empty=stats['empty'],
+                            errors=stats['error'],
+                            skipped=stats['skipped'],
+                            chunks=total_chunks
+                        )
+
+                        if limit and processed_count >= limit:
+                            break
+
+                    if limit and processed_count >= limit:
+                        break
+
+    tqdm.write("\n" + "=" * 80)
+    tqdm.write(f"Completed: {processed_count} sequences, {total_chunks} chunks")
+    tqdm.write(f"Stats: transcribed={stats['transcribed']}, empty={stats['empty']}, errors={stats['error']}, skipped={stats['skipped']}")
+    tqdm.write("=" * 80)
 
 
 def transcribe_sequence(sequence: SpeechSequence):
@@ -219,15 +382,17 @@ def transcribe_sequence(sequence: SpeechSequence):
     if segments:
         duration = segments[-1]['end']
 
-        transcription_data = {
-            'original': sequence.original_id,
-            'start': sequence.start,
-            'duration': duration,
-            'end': sequence.start + timedelta(seconds=duration),
-            **transcript
-        }
-
-        transcriptions.insert_one(transcription_data)
+        call_resource('tech.mycelia.mongo', {
+            "action": "insertOne",
+            "collection": "transcriptions",
+            "doc": {
+                'original': sequence.original_id,
+                'start': sequence.start,
+                'duration': duration,
+                'end': sequence.start + timedelta(seconds=duration),
+                **transcript
+            }
+        })
 
     transcribed_text = ''.join(segment['text'] for segment in segments)
     return transcribed_text
@@ -237,16 +402,20 @@ def transcribe_sequence(sequence: SpeechSequence):
 def mark_as_transcribed(seq: SpeechSequence):
     chunks_to_mark = seq.chunks[:-1] if seq.is_partial else seq.chunks
     if chunks_to_mark:
-        chunks.update_many(
-            {
-                '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]}
+        call_resource('tech.mycelia.mongo', {
+            "action": "updateMany",
+            "collection": "audio_chunks",
+            "query": {
+                '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]},
             },
-            {'$set': {'transcribed_at': datetime.now(tz=UTC)}}
-        )
+            "update": {
+                '$set': {'transcribed_at': datetime.now(tz=UTC)},
+            }
+        })
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=None)
     args = parser.parse_args()
-    process_speech_sequences(limit=args.limit, max_workers=5)
+    process_speech_sequences(limit=args.limit, max_workers=1)

@@ -1,16 +1,25 @@
-"use client"
+"use client";
 
-import React, { useState, useMemo, useCallback, useEffect } from "react"
-import { X, Calendar as CalendarIcon, Copy } from "lucide-react"
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Calendar as CalendarIcon, Copy, X } from "lucide-react";
 
-import { useSettingsStore } from "@/stores/settingsStore"
-import { formatTime } from "@/lib/formatTime"
-import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { useSettingsStore } from "@/stores/settingsStore";
+import { formatTime } from "@/lib/formatTime";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface NumberInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   id: string;
@@ -24,7 +33,9 @@ function NumberInput({ className, ...props }: NumberInputProps) {
   return (
     <Input
       {...props}
-      className={`[&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${className || ''}`}
+      className={`[&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+        className || ""
+      }`}
     />
   );
 }
@@ -37,23 +48,24 @@ interface DateTimePickerProps {
   nullable?: boolean;
 }
 
-
-export function DateTimePicker({ 
-  value, 
-  onChange, 
-  placeholder = "Pick a date and time", 
+export function DateTimePicker({
+  value,
+  onChange,
+  placeholder = "Pick a date and time",
   disabled,
-  nullable = false
+  nullable = false,
 }: DateTimePickerProps) {
   const { timeFormat } = useSettingsStore();
-  const [isoTS, setIsoTS] = useState<number | null>(value ? Math.floor(value.getTime() / 1000) : null)
+  const [isoTS, setIsoTS] = useState<number | null>(
+    value ? Math.floor(value.getTime() / 1000) : null,
+  );
 
   // Sync internal state with value prop changes
   useEffect(() => {
     setIsoTS(value ? Math.floor(value.getTime() / 1000) : null);
   }, [value]);
 
-  const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(false);
 
   const setDate = useCallback((ms: number | null | Date) => {
     if (ms instanceof Date) {
@@ -76,29 +88,36 @@ export function DateTimePicker({
     return {
       hours: selectedDate.getUTCHours(),
       minutes: selectedDate.getUTCMinutes(),
-      seconds: selectedDate.getUTCSeconds()
+      seconds: selectedDate.getUTCSeconds(),
     };
   }, [selectedDate, isoTS]);
 
   const selectedDateFields = useMemo(() => {
     if (isoTS === null) return { year: 0, month: 0, day: 0 };
-    if (selectedDate === null) return { year: new Date().getFullYear(), month: new Date().getMonth() + 1, day: new Date().getDate() };
+    if (selectedDate === null) {
+      return {
+        year: new Date().getFullYear(),
+        month: new Date().getMonth() + 1,
+        day: new Date().getDate(),
+      };
+    }
     return {
       year: selectedDate.getFullYear(),
       month: selectedDate.getMonth() + 1,
-      day: selectedDate.getDate()
+      day: selectedDate.getDate(),
     };
   }, [selectedDate, isoTS]);
 
-
-  const replaceTime = (date: Date | null | undefined, time: { hours: number, minutes: number, seconds: number }) => {
+  const replaceTime = (
+    date: Date | null | undefined,
+    time: { hours: number; minutes: number; seconds: number },
+  ) => {
     if (!date) return null;
     date.setUTCHours(time.hours);
     date.setUTCMinutes(time.minutes);
     date.setUTCSeconds(time.seconds);
     return date;
   };
-
 
   const handleDaySelect = (localDate: Date | undefined) => {
     if (localDate === undefined) {
@@ -108,60 +127,71 @@ export function DateTimePicker({
     const month = localDate.getMonth();
     const day = localDate.getDate();
 
-    const ts = Date.UTC(year, month, day, selectedTime.hours, selectedTime.minutes, selectedTime.seconds);
+    const ts = Date.UTC(
+      year,
+      month,
+      day,
+      selectedTime.hours,
+      selectedTime.minutes,
+      selectedTime.seconds,
+    );
 
     if (isNaN(ts)) {
       return;
     }
 
-      setDate(ts);
-    };
+    setDate(ts);
+  };
 
-  const handleTimeChange = (field: 'hours' | 'minutes' | 'seconds', value: number | string) => {
+  const handleTimeChange = (
+    field: "hours" | "minutes" | "seconds",
+    value: number | string,
+  ) => {
     // If value is empty string, don't update
-    if (value === '') return;
-    
+    if (value === "") return;
+
     const baseDate = selectedDate || new Date();
     setDate(
-      replaceTime(baseDate, { 
-        ...selectedTime, 
-        [field]: value as number
-      })
+      replaceTime(baseDate, {
+        ...selectedTime,
+        [field]: value as number,
+      }),
     );
   };
 
-  const handleDateChange = (field: 'year' | 'month' | 'day', value: number | string) => {
+  const handleDateChange = (
+    field: "year" | "month" | "day",
+    value: number | string,
+  ) => {
     // If value is empty string, don't update
-    if (value === '') return;
-    
+    if (value === "") return;
+
     // Special handling for year field - check if it looks like a timestamp
-    if (field === 'year') {
+    if (field === "year") {
       const numValue = Number(value);
       // Check if the value looks like a Unix timestamp (not in reasonable year range)
-      if (numValue > 1000000 || numValue < -1000000) {
+      if (Math.abs(numValue) > 100000) {
         // Treat as timestamp - convert to milliseconds and set directly
-        const timestampMs = numValue > 1000000000 ? numValue * 1000 : numValue;
-        setDate(timestampMs);
+        setDate(numValue * 1000);
         return;
       }
     }
-    
+
     const baseDate = selectedDate || new Date();
     const newDate = new Date(baseDate);
-    
-    if (field === 'year') {
+
+    if (field === "year") {
       newDate.setFullYear(value as number);
-    } else if (field === 'month') {
+    } else if (field === "month") {
       newDate.setMonth((value as number) - 1); // month is 0-indexed
-    } else if (field === 'day') {
+    } else if (field === "day") {
       newDate.setDate(value as number);
     }
-    
+
     setDate(
-      replaceTime(newDate, selectedTime)
+      replaceTime(newDate, selectedTime),
     );
   };
-
 
   const displayText = useMemo(() => {
     if (selectedDate === null) return null;
@@ -171,94 +201,140 @@ export function DateTimePicker({
 
   const handleCopyTimestamp = useCallback(async () => {
     if (isoTS === null) return;
-    
+
     try {
       await navigator.clipboard.writeText(isoTS.toString());
     } catch (error) {
-      console.error('Failed to copy timestamp:', error);
+      console.error("Failed to copy timestamp:", error);
     }
   }, [isoTS]);
 
   return (
     <div className="space-y-2 min-w-[250px]">
       <div className="flex gap-1">
-                    <div>
-                      <Label htmlFor="year" className="text-xs text-muted-foreground">Year</Label>
-                      <NumberInput
-                        id="year"
-                        type="number"
-                        value={selectedDateFields.year === 0 ? '' : selectedDateFields.year}
-                        onChange={(e) => handleDateChange('year', e.target.value === '' ? '' : parseInt(e.target.value) || new Date().getFullYear())}
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-[80px]"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="month" className="text-xs text-muted-foreground">Month</Label>
-                      <NumberInput
-                        id="month"
-                        type="number"
-                        min="1"
-                        max="12"
-                        value={selectedDateFields.month === 0 ? '' : selectedDateFields.month}
-                        onChange={(e) => handleDateChange('month', e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-[50px]"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="day" className="text-xs text-muted-foreground">Day</Label>
-                      <NumberInput
-                        id="day"
-                        type="number"
-                        min="1"
-                        max="31"
-                        value={selectedDateFields.day === 0 ? '' : selectedDateFields.day}
-                        onChange={(e) => handleDateChange('day', e.target.value === '' ? '' : parseInt(e.target.value) || 1)}
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-[50px]"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="hours" className="text-xs text-muted-foreground">Hour</Label>
-                      <NumberInput
-                        id="hours"
-                        type="number"
-                        min="0"
-                        max="23"
-                        value={selectedTime.hours === 0 && isoTS === null ? '' : selectedTime.hours}
-                        onChange={(e) => handleTimeChange('hours', e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-[50px]"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="minutes" className="text-xs text-muted-foreground">Min</Label>
-                      <NumberInput
-                        id="minutes"
-                        type="number"
-                        min="0"
-                        max="59"
-                        value={selectedTime.minutes === 0 && isoTS === null ? '' : selectedTime.minutes}
-                        onChange={(e) => handleTimeChange('minutes', e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-[50px]"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="seconds" className="text-xs text-muted-foreground">Sec</Label>
-                      <NumberInput
-                        id="seconds"
-                        type="number"
-                        min="0"
-                        max="59"
-                        value={selectedTime.seconds === 0 && isoTS === null ? '' : selectedTime.seconds}
-                        onChange={(e) => handleTimeChange('seconds', e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-[50px]"
-                      />
-                    </div>
-         
+        <div>
+          <Label htmlFor="year" className="text-xs text-muted-foreground">
+            Year
+          </Label>
+          <NumberInput
+            id="year"
+            type="number"
+            value={selectedDateFields.year === 0 ? "" : selectedDateFields.year}
+            onChange={(e) =>
+              handleDateChange(
+                "year",
+                e.target.value === ""
+                  ? ""
+                  : parseInt(e.target.value) || new Date().getFullYear(),
+              )}
+            onFocus={(e) => e.target.select()}
+            className="h-8 w-[80px]"
+          />
+        </div>
+        <div>
+          <Label htmlFor="month" className="text-xs text-muted-foreground">
+            Month
+          </Label>
+          <NumberInput
+            id="month"
+            type="number"
+            min="1"
+            max="12"
+            value={selectedDateFields.month === 0
+              ? ""
+              : selectedDateFields.month}
+            onChange={(e) =>
+              handleDateChange(
+                "month",
+                e.target.value === "" ? "" : parseInt(e.target.value) || 1,
+              )}
+            onFocus={(e) => e.target.select()}
+            className="h-8 w-[50px]"
+          />
+        </div>
+        <div>
+          <Label htmlFor="day" className="text-xs text-muted-foreground">
+            Day
+          </Label>
+          <NumberInput
+            id="day"
+            type="number"
+            min="1"
+            max="31"
+            value={selectedDateFields.day === 0 ? "" : selectedDateFields.day}
+            onChange={(e) =>
+              handleDateChange(
+                "day",
+                e.target.value === "" ? "" : parseInt(e.target.value) || 1,
+              )}
+            onFocus={(e) => e.target.select()}
+            className="h-8 w-[50px]"
+          />
+        </div>
+        <div>
+          <Label htmlFor="hours" className="text-xs text-muted-foreground">
+            Hour
+          </Label>
+          <NumberInput
+            id="hours"
+            type="number"
+            min="0"
+            max="23"
+            value={selectedTime.hours === 0 && isoTS === null
+              ? ""
+              : selectedTime.hours}
+            onChange={(e) =>
+              handleTimeChange(
+                "hours",
+                e.target.value === "" ? "" : parseInt(e.target.value) || 0,
+              )}
+            onFocus={(e) => e.target.select()}
+            className="h-8 w-[50px]"
+          />
+        </div>
+        <div>
+          <Label htmlFor="minutes" className="text-xs text-muted-foreground">
+            Min
+          </Label>
+          <NumberInput
+            id="minutes"
+            type="number"
+            min="0"
+            max="59"
+            value={selectedTime.minutes === 0 && isoTS === null
+              ? ""
+              : selectedTime.minutes}
+            onChange={(e) =>
+              handleTimeChange(
+                "minutes",
+                e.target.value === "" ? "" : parseInt(e.target.value) || 0,
+              )}
+            onFocus={(e) => e.target.select()}
+            className="h-8 w-[50px]"
+          />
+        </div>
+        <div>
+          <Label htmlFor="seconds" className="text-xs text-muted-foreground">
+            Sec
+          </Label>
+          <NumberInput
+            id="seconds"
+            type="number"
+            min="0"
+            max="59"
+            value={selectedTime.seconds === 0 && isoTS === null
+              ? ""
+              : selectedTime.seconds}
+            onChange={(e) =>
+              handleTimeChange(
+                "seconds",
+                e.target.value === "" ? "" : parseInt(e.target.value) || 0,
+              )}
+            onFocus={(e) => e.target.select()}
+            className="h-8 w-[50px]"
+          />
+        </div>
+
         <div className="flex flex-col justify-end">
           <Popover open={isOpen} onOpenChange={setIsOpen}>
             <PopoverTrigger asChild>
@@ -270,19 +346,19 @@ export function DateTimePicker({
                 <CalendarIcon className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            {isOpen && (
-              <div className="p-3">
-                <Calendar
-                  mode="single"
-                  captionLayout="dropdown"
-                  selected={selectedDate || undefined}
-                  onSelect={handleDaySelect}
-                  defaultMonth={selectedDate || new Date()}
-                />
-              </div>
-            )}
-          </PopoverContent>
+            <PopoverContent className="w-auto p-0" align="start">
+              {isOpen && (
+                <div className="p-3">
+                  <Calendar
+                    mode="single"
+                    captionLayout="dropdown"
+                    selected={selectedDate || undefined}
+                    onSelect={handleDaySelect}
+                    defaultMonth={selectedDate || new Date()}
+                  />
+                </div>
+              )}
+            </PopoverContent>
           </Popover>
         </div>
         {isoTS !== null && (
@@ -319,7 +395,6 @@ export function DateTimePicker({
             </Button>
           </div>
         )}
-       
       </div>
       {isoTS !== null && (
         <div className="text-sm text-muted-foreground">
@@ -327,5 +402,5 @@ export function DateTimePicker({
         </div>
       )}
     </div>
-  )
+  );
 }

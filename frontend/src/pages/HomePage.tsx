@@ -1,11 +1,13 @@
-import { Link } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 
 const HomePage = () => {
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <div className="text-center space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">Welcome to Mycelia</h1>
+        <h1 className="text-4xl font-bold tracking-tight">
+          Welcome to Mycelia
+        </h1>
         <p className="text-xl text-muted-foreground">
           Your personal memory assistant
         </p>
@@ -21,7 +23,8 @@ const HomePage = () => {
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            View your audio recordings, transcriptions, and events on an interactive timeline
+            View your audio recordings, transcriptions, and events on an
+            interactive timeline
           </p>
         </Link>
 
@@ -38,17 +41,28 @@ const HomePage = () => {
           </p>
         </Link>
 
-
         <Link
-          to="/people"
+          to="/audio"
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">People</h2>
+            <h2 className="text-2xl font-semibold">Audio Player</h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            View and manage people from your objects and events
+            Listen to your past
+          </p>
+        </Link>
+        <Link
+          to="/audio/record"
+          className="p-6 border rounded-lg hover:border-primary transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-semibold">Record</h2>
+            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+          </div>
+          <p className="text-muted-foreground">
+            Stream audio from this device directly to mycelia
           </p>
         </Link>
       </div>

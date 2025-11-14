@@ -1,0 +1,110 @@
+[project]
+name = "advanced-omi-backend"
+version = "0.1.0"
+description = "AI-powered wearable ecosystem for audio capture, transcription, and memory extraction"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "easy-audio-interfaces>=0.7.1", # we need to add local-audio for scripts/local-audio.py | If we don't need that, we can remove this, and then remove portaudio19-dev from Dockerfile
+    "fastapi>=0.115.12",
+    "mem0ai", # Using main branch with PR #3250 AsyncMemory fix
+    "langchain_neo4j",
+    "motor>=3.7.1",
+    "ollama>=0.4.8",
+    "friend-lite-sdk",
+    "python-dotenv>=1.1.0",
+    "uvicorn>=0.34.2",
+    "wyoming>=1.6.1",
+    "aiohttp>=3.8.0",
+    "fastapi-users[beanie]>=14.0.1",
+    "PyYAML>=6.0.1",
+    "langfuse>=3.3.0",
+    "spacy>=3.8.2",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "redis>=5.0.0",
+    "rq>=1.16.0",
+    "soundfile>=0.12.1",
+]
+
+[project.optional-dependencies]
+deepgram = [
+    "deepgram-sdk>=4.0.0",
+]
+
+local-audio = [
+    "easy-audio-interfaces[local-audio]>=0.7.1",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line-length = 100
+
+[tool.uv.sources]
+mem0ai = { git = "https://github.com/AnkushMalaker/mem0.git", rev = "async-client-unbound-var-fix" }
+
+[tool.poetry.dependencies]
+robotframework = "^6.1.1"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*", "*Tests"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--spec",
+    "-v",
+    "--tb=long",
+    "--color=yes",
+    "--durations=10",
+    "--showlocals",
+    "--capture=no",
+]
+markers = [
+    "integration: marks tests as integration tests (may be slow)",
+    "unit: marks tests as unit tests (fast, isolated)",
+    "smoke: marks tests as smoke tests (quick validation)",
+    "slow: marks tests as slow running tests",
+    "api: marks tests that test API endpoints",
+    "memory: marks tests that test memory functionality",
+    "transcription: marks tests that test transcription functionality",
+    "auth: marks tests that test authentication",
+    "database: marks tests that require database access",
+]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "pre-commit>=4.2.0",
+    "pre-commit-uv>=4.1.4",
+]
+test = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-spec>=3.2.0",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.6.0",
+    "pytest-mock>=3.14.0",
+    "requests-mock>=1.12.1",
+    "pytest-json-report>=1.5.0",
+    "pytest-html>=4.0.0",
+]

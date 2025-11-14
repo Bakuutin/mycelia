@@ -1,28 +1,35 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { callResource } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { ArrowLeft } from 'lucide-react';
-import { ColorInput } from '@/components/forms/ColorInput';
-import { CategoryInput } from '@/components/forms/CategoryInput';
-import { ToggleGroup } from '@/components/ui/toggle-group';
-import { Separator } from '@/components/ui/separator';
-import { DateTimePicker } from '@/components/ui/datetime-picker';
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { callResource } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ArrowLeft } from "lucide-react";
+import { ColorInput } from "@/components/forms/ColorInput";
+import { CategoryInput } from "@/components/forms/CategoryInput";
+import { ToggleGroup } from "@/components/ui/toggle-group";
+import { Separator } from "@/components/ui/separator";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 
-const EVENT_CATEGORIES = ["geography", "life", "education", "relationship", "work", "misc"];
+const EVENT_CATEGORIES = [
+  "geography",
+  "life",
+  "education",
+  "relationship",
+  "work",
+  "misc",
+];
 
 const CreateEventPage = () => {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
-    title: '',
-    shortTitle: '',
-    description: '',
-    kind: 'point' as 'point' | 'range',
-    category: 'misc',
-    color: '#64748b',
+    title: "",
+    shortTitle: "",
+    description: "",
+    kind: "point" as "point" | "range",
+    category: "misc",
+    color: "#64748b",
     start: new Date(),
     end: null as Date | null,
   });
@@ -44,16 +51,18 @@ const CreateEventPage = () => {
           color: formData.color,
           category: formData.category,
           start: formData.start,
-          ...(formData.kind === "range" && formData.end ? { end: formData.end } : {}),
+          ...(formData.kind === "range" && formData.end
+            ? { end: formData.end }
+            : {}),
           createdAt: now,
           updatedAt: now,
         },
       } as const;
 
       await callResource("tech.mycelia.mongo", doc);
-      navigate('/timeline');
+      navigate("/timeline");
     } catch (err) {
-      console.error('Failed to create event:', err);
+      console.error("Failed to create event:", err);
     } finally {
       setSaving(false);
     }
@@ -79,7 +88,8 @@ const CreateEventPage = () => {
             <Input
               id="title"
               value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, title: e.target.value })}
               placeholder="Event title"
               required
             />
@@ -90,7 +100,8 @@ const CreateEventPage = () => {
             <Input
               id="shortTitle"
               value={formData.shortTitle}
-              onChange={(e) => setFormData({ ...formData, shortTitle: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, shortTitle: e.target.value })}
               placeholder="Optional compact label"
             />
           </div>
@@ -100,7 +111,8 @@ const CreateEventPage = () => {
             <Input
               id="description"
               value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, description: e.target.value })}
               placeholder="Optional details"
             />
           </div>
@@ -113,7 +125,12 @@ const CreateEventPage = () => {
                 { value: "point", label: "Point" },
                 { value: "range", label: "Range" },
               ]}
-              onChange={(value) => setFormData({ ...formData, kind: value, end: value === 'point' ? null : formData.end })}
+              onChange={(value) =>
+                setFormData({
+                  ...formData,
+                  kind: value,
+                  end: value === "point" ? null : formData.end,
+                })}
             />
           </div>
 
@@ -122,7 +139,8 @@ const CreateEventPage = () => {
             <CategoryInput
               id="category"
               value={formData.category}
-              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, category: e.target.value })}
               categories={EVENT_CATEGORIES}
               placeholder="Event category"
               required
@@ -134,7 +152,8 @@ const CreateEventPage = () => {
             <ColorInput
               id="color"
               value={formData.color}
-              onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, color: e.target.value })}
             />
           </div>
         </div>
@@ -146,7 +165,8 @@ const CreateEventPage = () => {
             <Label htmlFor="start">Start *</Label>
             <DateTimePicker
               value={formData.start}
-              onChange={(date) => date && setFormData({ ...formData, start: date })}
+              onChange={(date) =>
+                date && setFormData({ ...formData, start: date })}
             />
           </div>
 

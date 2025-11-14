@@ -21,10 +21,15 @@ export function useBucketedTimeline(
     cfRef.current.add(items);
   }, [items]);
 
-  const tsDim = useMemo(() => cfRef.current.dimension((d: any) => d.timestamp), []);
+  const tsDim = useMemo(
+    () => cfRef.current.dimension((d: any) => d.timestamp),
+    [],
+  );
 
   const bucketDim = useMemo(() => {
-    return cfRef.current.dimension((d: any) => toBucketStart(d.timestamp, bucketMs));
+    return cfRef.current.dimension((d: any) =>
+      toBucketStart(d.timestamp, bucketMs)
+    );
   }, [bucketMs]);
 
   const group = useMemo(() => {
@@ -65,5 +70,3 @@ export function useSummaryBuckets(
 
   return group.all();
 }
-
-

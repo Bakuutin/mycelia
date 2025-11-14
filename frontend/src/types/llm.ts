@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { ObjectId } from "bson";
 
-export type ModelSize = 'small' | 'medium' | 'large';
+export type ModelSize = "small" | "medium" | "large";
 
 export const zModel = z.object({
   _id: z.instanceof(ObjectId),
-  alias: z.enum(['small', 'medium', 'large']),
+  alias: z.enum(["small", "medium", "large"]),
   name: z.string(),
   provider: z.string(),
   baseUrl: z.string().url(),

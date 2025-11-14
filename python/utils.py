@@ -2,7 +2,6 @@ import hashlib
 import numpy as np
 import os
 import tempfile
-import pymongo
 import random
 
 from lazy_object_proxy import Proxy as _lazy
@@ -17,13 +16,6 @@ T = TypeVar('T')
 
 def lazy(factory: Callable[[], T]) -> T:
     return _lazy(factory)
-
-def get_mongo():
-    mongo_connection = pymongo.MongoClient(os.environ['MONGO_URL'], tz_aware=True)
-    mongo = mongo_connection[os.environ['DATABASE_NAME']]
-    return mongo
-
-mongo = lazy(get_mongo)
 
 sample_rate = 16000
 

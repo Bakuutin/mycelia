@@ -21,11 +21,13 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
       const objects = await fetchObjects();
       set({ objects });
     } catch (err) {
-      const error = err instanceof Error ? err.message : 'Failed to fetch objects';
-      console.error('Failed to fetch objects:', err);
+      const error = err instanceof Error
+        ? err.message
+        : "Failed to fetch objects";
+      console.error("Failed to fetch objects:", err);
       set({ error });
     } finally {
-      set({loading: false});
+      set({ loading: false });
     }
   },
   fetchInitial: async () => {
@@ -36,78 +38,27 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
       const objects = await fetchObjects();
       set({ objects });
     } catch (err) {
-      const error = err instanceof Error ? err.message : 'Failed to fetch objects';
-      console.error('Failed to fetch objects:', err);
+      const error = err instanceof Error
+        ? err.message
+        : "Failed to fetch objects";
+      console.error("Failed to fetch objects:", err);
       set({ error });
     } finally {
-      set({loading: false});
+      set({ loading: false });
     }
-  }
+  },
 }));
 
 async function fetchObjects(): Promise<Object[]> {
-  return callResource("tech.mycelia.mongo", {
-        action: "aggregate",
-        collection: "objects",
-        pipeline: [
-          {
-            $addFields: {
-              hasTimeRanges: { $cond: { if: { $isArray: "$timeRanges" }, then: true, else: false } }
-            }
-          },
-          { $match: { hasTimeRanges: true } },
-          // Lookup subject object for relationships
-          {
-            $lookup: {
-              from: "objects",
-              localField: "relationship.subject",
-              foreignField: "_id",
-              as: "subjectObject"
-            }
-          },
-          // Lookup object object for relationships
-          {
-            $lookup: {
-              from: "objects",
-              localField: "relationship.object",
-              foreignField: "_id",
-              as: "objectObject"
-            }
-          },
-          // Unwind the arrays to get single objects
-          { $unwind: { path: "$subjectObject", preserveNullAndEmptyArrays: true } },
-          { $unwind: { path: "$objectObject", preserveNullAndEmptyArrays: true } },
-          {
-            $addFields: {
-              earliestStart: {
-                $min: {
-                  $map: {
-                    input: "$timeRanges",
-                    as: "r",
-                    in: "$$r.start"
-                  }
-                }
-              },
-              latestEnd: {
-                $max: {
-                  $map: {
-                    input: "$timeRanges",
-                    as: "r",
-                    in: { $ifNull: ["$$r.end", "$$r.start"] }
-                  }
-                }
-              }
-            }
-          },
-          {
-            $addFields: {
-              duration: { $subtract: ["$latestEnd", "$earliestStart"] }
-            }
-          },
-          { $sort: { earliestStart: -1, duration: -1 } }
-        ],
-      });
-};
+  return callResource("tech.mycelia.objects", {
+    action: "list",
+    options: {
+      hasTimeRanges: true,
+      includeRelationships: true,
+      sort: { earliestStart: -1, duration: -1 },
+    },
+  });
+}
 
 export function useObjects() {
   const { objects, loading, error } = useObjectsStore();

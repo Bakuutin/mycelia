@@ -11,7 +11,13 @@
   "lint": {
     "rules": {
       "tags": ["recommended"],
-      "exclude": ["no-explicit-any", "no-unused-vars", "require-await", "no-sloppy-imports", "no-window"]
+      "exclude": [
+        "no-explicit-any",
+        "no-unused-vars",
+        "require-await",
+        "no-sloppy-imports",
+        "no-window"
+      ]
     }
   },
   "unstable": [
@@ -70,5 +76,3 @@
     "strict": true
   }
 }
-
-

@@ -1,37 +1,47 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowLeft, ArrowLeftRight, Plus, X, MoveHorizontal, RefreshCcw, Trash2 } from 'lucide-react';
-import type { Object } from '@/types/objects';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { EmojiPickerButton } from '@/components/ui/emoji-picker';
-import { ObjectSelectionDropdown } from '@/components/ObjectSelectionDropdown';
-import { getRelationships, useCreateObject, useDeleteObject } from "@/hooks/useObjectQueries.ts";
-import { ObjectId } from 'bson';
-import { formatTime, formatTimeRangeDuration } from '@/lib/formatTime';
-import { useSettingsStore } from '@/stores/settingsStore';
-import { useNow } from '@/hooks/useNow';
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowRight,
+  MoveHorizontal,
+  Plus,
+  RefreshCcw,
+  Trash2,
+  X,
+} from "lucide-react";
+import type { Object } from "@/types/objects";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { EmojiPickerButton } from "@/components/ui/emoji-picker";
+import { ObjectSelectionDropdown } from "@/components/ObjectSelectionDropdown";
+import {
+  getRelationships,
+  useCreateObject,
+  useDeleteObject,
+} from "@/hooks/useObjectQueries.ts";
+import { ObjectId } from "bson";
+import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { useNow } from "@/hooks/useNow";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@/components/ui/tooltip';
+} from "@/components/ui/tooltip";
 
 interface RelationshipsPanelProps {
   object: Object;
 }
 
-
-
 const renderIcon = (icon: any) => {
-  if (!icon) return '';
-  if (typeof icon === 'string') return icon;
+  if (!icon) return "";
+  if (typeof icon === "string") return icon;
   if (icon.text) return icon.text;
-  if (icon.base64) return '📷'; // Placeholder for base64 images
-  return '';
+  if (icon.base64) return "📷"; // Placeholder for base64 images
+  return "";
 };
-
 
 export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
@@ -49,23 +59,23 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
     objectId: string;
     symmetrical: boolean;
   }>({
-    name: '',
-    icon: { text: '🔗' },
-    details: '',
+    name: "",
+    icon: { text: "" },
+    details: "",
     subjectId: object._id.toString(),
-    objectId: '',
+    objectId: "",
     symmetrical: false,
   });
   const [createError, setCreateError] = useState<string | null>(null);
 
   const handleCreateRelationship = async () => {
     if (!newRelationship.name.trim()) {
-      setCreateError('Relationship name is required');
+      setCreateError("Relationship name is required");
       return;
     }
 
     if (!newRelationship.objectId) {
-      setCreateError('Please select the object');
+      setCreateError("Please select the object");
       return;
     }
 
@@ -87,26 +97,30 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
       await createObjectMutation.mutateAsync(relationshipDoc);
       setShowCreateForm(false);
       setNewRelationship({
-        name: '',
-        icon: { text: '🔗' },
-        details: '',
+        name: "",
+        icon: { text: "" },
+        details: "",
         subjectId: object._id.toString(),
-        objectId: '',
+        objectId: "",
         symmetrical: false,
       });
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Failed to create relationship');
+      setCreateError(
+        err instanceof Error ? err.message : "Failed to create relationship",
+      );
     }
   };
 
   const handleDeleteRelationship = async (relationshipId: string) => {
-    const confirmed = globalThis.confirm ? globalThis.confirm("Delete this relationship?") : true;
+    const confirmed = globalThis.confirm
+      ? globalThis.confirm("Delete this relationship?")
+      : true;
     if (!confirmed) return;
 
     try {
       await deleteObjectMutation.mutateAsync(relationshipId);
     } catch (err) {
-      console.error('Failed to delete relationship:', err);
+      console.error("Failed to delete relationship:", err);
     }
   };
 
@@ -150,18 +164,24 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                   value={newRelationship.icon}
                   onChange={(icon) => {
                     if (icon) {
-                      setNewRelationship(prev => ({ ...prev, icon }));
+                      setNewRelationship((prev) => ({ ...prev, icon }));
                     }
                   }}
                 />
               </div>
             </div>
             <div className="flex-1">
-              <Label htmlFor="rel-name" className="text-xs">Relationship Name</Label>
+              <Label htmlFor="rel-name" className="text-xs">
+                Relationship Name
+              </Label>
               <Input
                 id="rel-name"
                 value={newRelationship.name}
-                onChange={(e) => setNewRelationship(prev => ({ ...prev, name: e.target.value }))}
+                onChange={(e) =>
+                  setNewRelationship((prev) => ({
+                    ...prev,
+                    name: e.target.value,
+                  }))}
                 placeholder="e.g., knows, works with, manages"
                 className="mt-1"
               />
@@ -179,7 +199,7 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                         type="button"
                         className="flex items-center gap-1"
                         onClick={() => {
-                          setNewRelationship(prev => ({
+                          setNewRelationship((prev) => ({
                             ...prev,
                             subjectId: prev.objectId || object._id.toString(),
                             objectId: prev.subjectId,
@@ -199,9 +219,9 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                 value={newRelationship.subjectId}
                 onChange={(value) => {
                   if (value) {
-                    setNewRelationship(prev => ({
+                    setNewRelationship((prev) => ({
                       ...prev,
-                      subjectId: value
+                      subjectId: value,
                     }));
                   }
                 }}
@@ -216,22 +236,24 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                     variant="ghost"
                     size="icon"
                     onClick={() => {
-                      setNewRelationship(prev => ({
+                      setNewRelationship((prev) => ({
                         ...prev,
-                        symmetrical: !prev.symmetrical
+                        symmetrical: !prev.symmetrical,
                       }));
                     }}
                     className="h-[40px] w-[40px] p-0"
                   >
-                    {newRelationship.symmetrical ? (
-                      <MoveHorizontal className="w-4 h-4" />
-                    ) : (
-                      <ArrowRight className="w-4 h-4" />
-                    )}
+                    {newRelationship.symmetrical
+                      ? <MoveHorizontal className="w-4 h-4" />
+                      : <ArrowRight className="w-4 h-4" />}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>{newRelationship.symmetrical ? 'Make Directional' : 'Make Symmetrical'}</p>
+                  <p>
+                    {newRelationship.symmetrical
+                      ? "Make Directional"
+                      : "Make Symmetrical"}
+                  </p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -242,9 +264,9 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                 value={newRelationship.objectId}
                 onChange={(value) => {
                   if (value) {
-                    setNewRelationship(prev => ({
+                    setNewRelationship((prev) => ({
                       ...prev,
-                      objectId: value
+                      objectId: value,
                     }));
                   }
                 }}
@@ -254,11 +276,17 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
           </div>
 
           <div>
-            <Label htmlFor="rel-details" className="text-xs">Details (optional)</Label>
+            <Label htmlFor="rel-details" className="text-xs">
+              Details (optional)
+            </Label>
             <textarea
               id="rel-details"
               value={newRelationship.details}
-              onChange={(e) => setNewRelationship(prev => ({ ...prev, details: e.target.value }))}
+              onChange={(e) =>
+                setNewRelationship((prev) => ({
+                  ...prev,
+                  details: e.target.value,
+                }))}
               placeholder="Additional details about this relationship"
               className="mt-1 flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
@@ -276,7 +304,7 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
               onClick={handleCreateRelationship}
               disabled={createObjectMutation.isPending}
             >
-              {createObjectMutation.isPending ? 'Creating...' : 'Create'}
+              {createObjectMutation.isPending ? "Creating..." : "Create"}
             </Button>
             <Button
               variant="ghost"
@@ -293,94 +321,115 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
         </div>
       )}
       {relationships.length > 0 && (
-          <div className="flex flex-col gap-2">
-            {relationships.map(({ other, relationship }) => {
-              // Determine if current object is subject or object in the relationship
-              const isCurrentObjectSubject = relationship.relationship?.subject.toString() === object._id.toString();
-              const isSymmetrical = relationship.relationship?.symmetrical;
+        <div className="flex flex-col gap-2">
+          {relationships.map(({ other, relationship }) => {
+            // Determine if current object is subject or object in the relationship
+            const isCurrentObjectSubject =
+              relationship.relationship?.subject.toString() ===
+                object._id.toString();
+            const isSymmetrical = relationship.relationship?.symmetrical;
 
-              // Use double-sided arrow for symmetrical relationships, directional arrows for asymmetrical
-              const ArrowComponent = isSymmetrical ? ArrowLeftRight : (isCurrentObjectSubject ? ArrowRight : ArrowLeft);
+            // Use double-sided arrow for symmetrical relationships, directional arrows for asymmetrical
+            const ArrowComponent = isSymmetrical
+              ? ArrowLeftRight
+              : (isCurrentObjectSubject ? ArrowRight : ArrowLeft);
 
-              return (
-                <div key={relationship._id.toString()} className="p-1 space-y-2">
-                  {/* Horizontal relationship flow */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <Link to={`/objects/${relationship._id.toString()}`} className="flex items-center gap-2 flex-shrink-0">
+            return (
+              <div key={relationship._id.toString()} className="p-1 space-y-2">
+                {/* Horizontal relationship flow */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <Link
+                      to={`/objects/${relationship._id.toString()}`}
+                      className="flex items-center gap-2 flex-shrink-0"
+                    >
+                      <span className="text-md">
+                        {renderIcon(relationship.icon)}
+                      </span>
+                      <span className="font-medium whitespace-nowrap">
+                        {relationship.name}
+                      </span>
 
-                          <span className="text-md">{renderIcon(relationship.icon)}</span>
-                          <span className="font-medium whitespace-nowrap">{relationship.name}</span>
-
-                        <ArrowComponent className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                      </Link>
-                      <Link to={`/objects/${other._id.toString()}`} className="flex items-center gap-2 min-w-0">
-                        <span className="text-md">{renderIcon(other.icon)}</span>
-                        <span className="font-medium truncate">{other.name}</span>
-                      </Link>
-                    </div>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeleteRelationship(relationship._id.toString())}
-                          disabled={deleteObjectMutation.isPending}
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Delete relationship</p>
-                      </TooltipContent>
-                    </Tooltip>
+                      <ArrowComponent className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                    </Link>
+                    <Link
+                      to={`/objects/${other._id.toString()}`}
+                      className="flex items-center gap-2 min-w-0"
+                    >
+                      <span className="text-md">{renderIcon(other.icon)}</span>
+                      <span className="font-medium truncate">{other.name}</span>
+                    </Link>
                   </div>
-
-                  {/* Relationship description and time ranges below */}
-                  {(relationship.details || (relationship.timeRanges && relationship.timeRanges.length > 0)) && (
-                    <div className="text-sm text-muted-foreground pl-2 space-y-1">
-                      {relationship.details && (
-                        <div>{relationship.details}</div>
-                      )}
-                      {relationship.timeRanges && relationship.timeRanges.length > 0 && (
-                        <div className="space-y-1">
-                          {relationship.timeRanges.map((range, rangeIndex) => (
-                            <div key={rangeIndex} className="text-xs">
-                              {range.name && (
-                                <span className="font-medium">{range.name}: </span>
-                              )}
-                              <span>
-                                {formatTime(range.start, timeFormat)}
-                                {range.end ? (
-                                  <> → {formatTime(range.end, timeFormat)}</>
-                                ) : (
-                                  <span className="ml-2 text-muted-foreground/70">
-                                    (ongoing - {formatTimeRangeDuration(range.start, now)})
-                                  </span>
-                                )}
-                                {range.end && (
-                                  <span className="ml-2 text-muted-foreground/70">
-                                    ({formatTimeRangeDuration(range.start, range.end)})
-                                  </span>
-                                )}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          handleDeleteRelationship(relationship._id.toString())}
+                        disabled={deleteObjectMutation.isPending}
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Delete relationship</p>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
-              );
-            })}
-          </div>
+
+                {/* Relationship description and time ranges below */}
+                {(relationship.details ||
+                  (relationship.timeRanges &&
+                    relationship.timeRanges.length > 0)) && (
+                  <div className="text-sm text-muted-foreground pl-2 space-y-1">
+                    {relationship.details && <div>{relationship.details}</div>}
+                    {relationship.timeRanges &&
+                      relationship.timeRanges.length > 0 && (
+                      <div className="space-y-1">
+                        {relationship.timeRanges.map((range, rangeIndex) => (
+                          <div key={rangeIndex} className="text-xs">
+                            {range.name && (
+                              <span className="font-medium">{range.name}:</span>
+                            )}
+                            <span>
+                              {formatTime(range.start, timeFormat)}
+                              {range.end
+                                ? <>→ {formatTime(range.end, timeFormat)}</>
+                                : (
+                                  <span className="ml-2 text-muted-foreground/70">
+                                    (ongoing -{" "}
+                                    {formatTimeRangeDuration(range.start, now)})
+                                  </span>
+                                )}
+                              {range.end && (
+                                <span className="ml-2 text-muted-foreground/70">
+                                  ({formatTimeRangeDuration(
+                                    range.start,
+                                    range.end,
+                                  )})
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {relationships.length === 0 && (
         <div className="text-center py-8 text-muted-foreground">
           <p>No related objects found.</p>
-          <p className="text-sm mt-1">Create relationship objects to link this object to others.</p>
+          <p className="text-sm mt-1">
+            Create relationship objects to link this object to others.
+          </p>
         </div>
       )}
     </div>

@@ -1,0 +1,233 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: friend-lite
+build:
+  tagPolicy:
+    dateTime:
+      format: "2006-01-02_15-04-05"
+      timezone: "UTC"
+profiles:
+  - name: moonshine-asr
+    build:
+      artifacts:
+        - image: moonshine-asr
+          context: extras/asr-services
+          docker:
+            dockerfile: Dockerfile_Moonshine
+    deploy:
+      helm:
+        releases:
+          - name: moonshine-asr
+            chartPath: extras/asr-services/charts/moonshine
+            namespace: speech
+            createNamespace: true
+            setValueTemplates:
+              image.repository: "{{.IMAGE_REPO_moonshine_asr}}"
+              image.tag: "{{.IMAGE_TAG_moonshine_asr}}"
+
+  - name: parakeet-asr
+    build:
+      artifacts:
+        - image: parakeet-asr
+          context: extras/asr-services
+          docker:
+            dockerfile: Dockerfile_Parakeet
+    deploy:
+      helm:
+        releases:
+          - name: parakeet-asr
+            chartPath: extras/asr-services/charts/parakeet
+            namespace: speech
+            createNamespace: true
+            setValueTemplates:
+              image.repository: "{{.IMAGE_REPO_parakeet_asr}}"
+              image.tag: "{{.IMAGE_TAG_parakeet_asr}}"
+
+  - name: speaker-recognition
+    build:
+      local:
+        push: true
+        useDockerCLI: true
+      artifacts:
+        - image: speaker-recognition
+          context: extras/speaker-recognition
+          docker:
+            dockerfile: Dockerfile-k8s
+            buildArgs:
+              COMPUTE_MODE: "{{.COMPUTE_MODE}}"
+        - image: speaker-recognition-ui
+          context: extras/speaker-recognition/webui
+          docker:
+            dockerfile: Dockerfile
+            buildArgs:
+              VITE_ALLOWED_HOSTS: "{{.VITE_ALLOWED_HOSTS}}"
+    deploy:
+      helm:
+        releases:
+          - name: speaker-recognition
+            chartPath: extras/speaker-recognition/charts
+            namespace: speech
+            setValueTemplates:
+              speaker.image.repository: "{{.IMAGE_REPO_speaker_recognition}}"
+              speaker.image.tag: "{{.IMAGE_TAG_speaker_recognition}}"
+              webui.image.repository: "{{.IMAGE_REPO_speaker_recognition_ui}}"
+              webui.image.tag: "{{.IMAGE_TAG_speaker_recognition_ui}}"
+              # Node selector configuration
+              nodeSelector.hostname: "{{.SPEAKER_NODE}}"
+              # Shared models configuration
+              global.sharedModels.enabled: "true"
+              global.sharedModels.useHostPath: "true"
+              global.sharedModels.size: "20Gi"
+              global.sharedModels.hostPath: "/shared/models"
+              global.sharedModels.nodes[0]: "anubis"
+              global.sharedModels.nodes[1]: "babel"
+
+  # Infrastructure profile - deploy once, rarely updated
+  - name: infrastructure
+    deploy:
+      helm:
+        releases:
+          # Infrastructure components using Bitnami charts
+          - name: mongodb
+            remoteChart: oci://registry-1.docker.io/bitnamicharts/mongodb
+            version: "16.5.1"
+            namespace: "{{.INFRASTRUCTURE_NAMESPACE}}"
+            createNamespace: true
+            setValueTemplates:
+              auth.enabled: "false"
+              persistence.size: "10Gi"
+              persistence.storageClass: "openebs-hostpath"
+              service.nameOverride: "mongodb"
+              
+          - name: qdrant
+            chartPath: backends/charts/qdrant
+            namespace: "{{.INFRASTRUCTURE_NAMESPACE}}"
+            setValueTemplates:
+              persistence.size: "10Gi"
+              persistence.storageClass: "openebs-hostpath"
+
+          - name: redis
+            remoteChart: oci://registry-1.docker.io/bitnamicharts/redis
+            version: "22.0.7"
+            namespace: "{{.INFRASTRUCTURE_NAMESPACE}}"
+            setValueTemplates:
+              auth.enabled: "false"  # Disable authentication for simplicity
+              master.persistence.enabled: "true"
+              master.persistence.size: "2Gi"
+              master.persistence.storageClass: "openebs-hostpath"
+              master.service.nameOverride: "redis"
+              replica.replicaCount: "0"  # Single instance for development
+
+  # Application profile - frequently updated
+  - name: advanced-backend
+    build:
+      local:
+        push: true
+        useDockerCLI: true
+      artifacts:
+        - image: advanced-backend
+          context: backends/advanced
+          docker:
+            dockerfile: Dockerfile.k8s
+        - image: webui
+          context: backends/advanced/webui
+          docker:
+            dockerfile: Dockerfile
+
+    deploy:
+      helm:
+        releases:
+          # Application components using custom charts
+          - name: advanced-backend
+            chartPath: backends/charts/advanced-backend
+            namespace: "{{.APPLICATION_NAMESPACE}}"
+            createNamespace: true
+            valuesFiles:
+              - backends/charts/advanced-backend/ingress-values.yaml
+            setValueTemplates:
+              image.repository: "{{.IMAGE_REPO_advanced_backend}}"
+              image.tag: "{{.IMAGE_TAG_advanced_backend}}"
+              # Override specific Kubernetes-specific values (not in env file)
+              env.MONGODB_URI: "mongodb://mongodb.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:27017/friend-lite"
+              env.QDRANT_BASE_URL: "qdrant.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local"
+              env.REDIS_URL: "redis://redis-master.{{.INFRASTRUCTURE_NAMESPACE}}.svc.cluster.local:6379/0"
+              persistence.storageClass: "openebs-hostpath"
+              persistence.size: "10Gi"
+              service.nodePort: "{{.BACKEND_NODEPORT}}"
+              # Ingress configuration
+              ingress.hosts[0].host: "{{.BACKEND_HOST}}"
+              ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
+              # Node selector
+              nodeSelector.kubernetes\.io/hostname: anubis
+
+          - name: webui
+            chartPath: backends/charts/webui
+            namespace: "{{.APPLICATION_NAMESPACE}}"
+            setValueTemplates:
+              image.repository: "{{.IMAGE_REPO_webui}}"
+              image.tag: "{{.IMAGE_TAG_webui}}"
+              service.nodePort: "{{.WEBUI_NODEPORT}}"
+              # Ingress configuration
+              ingress.hosts[0].host: "{{.WEBUI_HOST}}"
+              ingress.hosts[1].host: "{{.EXTERNAL_DOMAIN}}"
+              # Node selector
+              nodeSelector.kubernetes\.io/hostname: anubis
+
+  - name: test-env
+    portForward:
+      - resourceType: container
+        resourceName: redis-test
+        namespace: advanced
+        localPort: 6379
+        port: 6380
+    build:
+
+      artifacts:
+        - image: friend-backend-test
+          context: backends/advanced
+          docker:
+            dockerfile: Dockerfile          
+        - image: webui-test
+          context: backends/advanced/webui
+          docker:
+            dockerfile: Dockerfile
+
+    deploy:
+      docker:
+        images: [friend-backend-test, webui-test, mongo-test, qdrant-test, redis-test]
+          
+   
+
+  - name: speaker-recognition-gtx1070
+    build:
+      local:
+        push: true
+        useDockerCLI: true
+      artifacts:
+        - image: speaker-recognition
+          context: extras/speaker-recognition
+          docker:
+            dockerfile: Dockerfile-gtx1070
+        - image: speaker-recognition-ui
+          context: extras/speaker-recognition/webui
+          docker:
+            dockerfile: Dockerfile
+    deploy:
+      helm:
+        releases:
+          - name: speaker-recognition
+            chartPath: extras/speaker-recognition/charts
+            namespace: speech
+            setValueTemplates:
+              speaker.image.repository: "{{.IMAGE_REPO_speaker_recognition}}"
+              speaker.image.tag: "{{.IMAGE_TAG_speaker_recognition}}"
+              webui.image.repository: "{{.IMAGE_REPO_speaker_recognition_ui}}"
+              webui.image.tag: "{{.IMAGE_TAG_speaker_recognition_ui}}"
+              # Shared models configuration
+              global.sharedModels.enabled: "true"
+              global.sharedModels.useHostPath: "true"
+              global.sharedModels.size: "20Gi"
+              global.sharedModels.hostPath: "/shared/models"
+
+

@@ -1,11 +1,9 @@
-import _, { chunk } from "lodash";
+import _ from "lodash";
 import { type LoaderData, type Timestamp } from "../types/timeline.ts";
 
-import ms from "ms";
 
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { defaultResourceManager } from "../lib/auth/resources.ts";
 
 import type { Resolution } from "@/types/resolution.ts";
 import {
@@ -13,6 +11,8 @@ import {
   RESOLUTION_ORDER,
   RESOLUTION_TO_MS,
 } from "@/types/resolution.ts";
+
+export type { Resolution };
 
 type AggregationOperation = {
   $sum?: any;
@@ -332,20 +332,6 @@ export async function fetchTimelineData(
   const binSize = RESOLUTION_TO_MS[resolution];
   const queryStart = new Date(startDate.getTime() - duration - binSize);
   const queryEnd = new Date(endDate.getTime() + duration + binSize);
-
-  // return {
-  //   items: Array.from({ length: 100 }).map((_, i) => ({
-  //     id: `${resolution}-${i}`,
-  //     start: new Date(binSize * i),
-  //     end: new Date(binSize * (i + 1)),
-  //     totals: {
-  //       audio_chunks: { count: binSize / 1000 / 60 * i, has_speech: binSize / 1000 / 60 * i },
-  //       seconds: binSize,
-  //     },
-  //   })),
-  //   start: originalStart,
-  //   end: originalEnd,
-  // };
 
   const mongo = await auth.getResource("tech.mycelia.mongo");
 

@@ -1,61 +1,70 @@
-import { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import type { Object, ObjectFormData } from '@/types/objects';
-import { zObject } from '@/types/objects';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
-import { DateTimePicker } from '@/components/ui/datetime-picker';
-import { Plus, X, Trash2, RefreshCcw, ArrowRight, MoveHorizontal, ExternalLink } from 'lucide-react';
-import { EmojiPickerButton } from '@/components/ui/emoji-picker';
-import { ObjectId } from 'bson';
-import { ObjectSelectionDropdown } from '@/components/ObjectSelectionDropdown';
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import type { Object, ObjectFormData } from "@/types/objects";
+import { zObject } from "@/types/objects";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
+import {
+  ArrowRight,
+  ExternalLink,
+  MoveHorizontal,
+  Plus,
+  RefreshCcw,
+  Trash2,
+  X,
+} from "lucide-react";
+import { EmojiPickerButton } from "@/components/ui/emoji-picker";
+import { ObjectId } from "bson";
+import { ObjectSelectionDropdown } from "@/components/ObjectSelectionDropdown";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { isTimeRangeShorterThanTranscriptThreshold } from '@/lib/transcriptUtils';
+} from "@/components/ui/tooltip";
+import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
 
 interface ObjectFormProps {
   object: ObjectFormData;
-  onUpdate: (updates: Partial<ObjectFormData>) => Promise<void>;
+  onUpdate?: (updates: Partial<ObjectFormData>) => Promise<void>;
+  onFieldUpdate?: (field: string, value: any) => void;
 }
 
 const renderIcon = (icon: any) => {
-  if (!icon) return '';
-  if (typeof icon === 'string') return icon;
+  if (!icon) return "";
+  if (typeof icon === "string") return icon;
   if (icon.text) return icon.text;
-  if (icon.base64) return '📷'; // Placeholder for base64 images
-  return '';
+  if (icon.base64) return "📷"; // Placeholder for base64 images
+  return "";
 };
 
 // Extract known fields from the Zod schema
 const KNOWN_FIELDS = new Set(
-  Object.keys((zObject as any)._def.schema.shape)
+  Object.keys((zObject as any)._def.schema.shape),
 );
 
 const getTypeString = (value: any): string => {
-  if (value === null || value === undefined) return 'unknown';
-  if (typeof value === 'string') return 'string';
-  if (typeof value === 'number') return 'number';
-  if (typeof value === 'boolean') return 'boolean';
+  if (value === null || value === undefined) return "unknown";
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
   if (Array.isArray(value)) {
-    if (value.length === 0) return 'array';
+    if (value.length === 0) return "array";
     const firstType = getTypeString(value[0]);
     return `${firstType}[]`;
   }
-  return 'unknown';
+  return "unknown";
 };
 
 const formatValue = (value: any): string => {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return value.toString();
-  if (typeof value === 'boolean') return value.toString();
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return value.toString();
+  if (typeof value === "boolean") return value.toString();
   if (Array.isArray(value)) {
-    return value.map(v => String(v)).join(', ');
+    return value.map((v) => String(v)).join(", ");
   }
   return String(value);
 };
@@ -65,7 +74,7 @@ function useDebouncedUpdate(
   value: string,
   delay: number,
   onUpdate: (updates: Partial<ObjectFormData>) => Promise<void>,
-  fieldName: keyof ObjectFormData
+  fieldName: keyof ObjectFormData,
 ) {
   const [localValue, setLocalValue] = useState(value);
   const timeoutRef = useRef<number>();
@@ -97,57 +106,76 @@ function useDebouncedUpdate(
   return [localValue, setLocalValue] as const;
 }
 
-export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
-  const [newFieldName, setNewFieldName] = useState('');
-  const [newFieldValue, setNewFieldValue] = useState('');
-  const [newFieldType, setNewFieldType] = useState<'string' | 'number' | 'boolean'>('string');
+export function ObjectForm(
+  { object, onUpdate, onFieldUpdate }: ObjectFormProps,
+) {
+  const [newFieldName, setNewFieldName] = useState("");
+  const [newFieldValue, setNewFieldValue] = useState("");
+  const [newFieldType, setNewFieldType] = useState<
+    "string" | "number" | "boolean"
+  >("string");
   const [showAddField, setShowAddField] = useState(false);
+
+  const updateField = (field: string, value: any) => {
+    if (onFieldUpdate) {
+      onFieldUpdate(field, value);
+    } else if (onUpdate) {
+      onUpdate({ [field]: value } as Partial<ObjectFormData>);
+    }
+  };
+
+  const updateFieldsAsync = async (updates: Partial<ObjectFormData>) => {
+    if (onUpdate) {
+      await onUpdate(updates);
+    } else if (onFieldUpdate && Object.keys(updates).length === 1) {
+      const [field, value] = Object.entries(updates)[0];
+      onFieldUpdate(field, value);
+    }
+  };
 
   // Use debounced auto-save for name field
   const [nameValue, setNameValue] = useDebouncedUpdate(
-    object.name || '',
+    object.name || "",
     500, // 500ms delay
-    onUpdate,
-    'name'
+    updateFieldsAsync,
+    "name",
   );
 
   // Use debounced auto-save for details field
   const [detailsValue, setDetailsValue] = useDebouncedUpdate(
-    object.details || '',
+    object.details || "",
     500, // 500ms delay
-    onUpdate,
-    'details'
+    updateFieldsAsync,
+    "details",
   );
 
-
   const extraFields = Object.entries(object).filter(
-    ([key]) => !KNOWN_FIELDS.has(key)
+    ([key]) => !KNOWN_FIELDS.has(key),
   );
 
   const handleAddCustomField = () => {
     if (!newFieldName.trim()) return;
 
     let value: string | number | boolean;
-    if (newFieldType === 'number') {
+    if (newFieldType === "number") {
       value = parseFloat(newFieldValue) || 0;
-    } else if (newFieldType === 'boolean') {
-      value = newFieldValue.toLowerCase() === 'true';
+    } else if (newFieldType === "boolean") {
+      value = newFieldValue.toLowerCase() === "true";
     } else {
       value = newFieldValue;
     }
 
-    const updates: any = { [newFieldName]: value };
-    onUpdate(updates);
+    updateField(newFieldName, value);
 
-    setNewFieldName('');
-    setNewFieldValue('');
-    setNewFieldType('string');
+    setNewFieldName("");
+    setNewFieldValue("");
+    setNewFieldType("string");
     setShowAddField(false);
   };
 
   const handleDeleteCustomField = (fieldName: string) => {
-    const updates: any = { $unset: { [fieldName]: '' } };
-    onUpdate(updates);
+    // Use the actual field name with value null to remove it
+    updateField(fieldName, null);
   };
 
   return (
@@ -158,7 +186,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <div className="mt-1">
             <EmojiPickerButton
               value={object.icon}
-              onChange={(icon) => onUpdate({ icon })}
+              onChange={(icon) => updateField("icon", icon)}
             />
           </div>
         </div>
@@ -191,9 +219,13 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Checkbox
             id="isEvent"
             checked={object.isEvent || false}
-            onCheckedChange={(checked) => onUpdate({ isEvent: checked as boolean })}
+            onCheckedChange={(checked) =>
+              updateField("isEvent", checked as boolean)}
           />
-          <Label htmlFor="isEvent" className="text-sm font-medium cursor-pointer">
+          <Label
+            htmlFor="isEvent"
+            className="text-sm font-medium cursor-pointer"
+          >
             Is Event
           </Label>
         </div>
@@ -202,9 +234,13 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Checkbox
             id="isPerson"
             checked={object.isPerson || false}
-            onCheckedChange={(checked) => onUpdate({ isPerson: checked as boolean })}
+            onCheckedChange={(checked) =>
+              updateField("isPerson", checked as boolean)}
           />
-          <Label htmlFor="isPerson" className="text-sm font-medium cursor-pointer">
+          <Label
+            htmlFor="isPerson"
+            className="text-sm font-medium cursor-pointer"
+          >
             Is Person
           </Label>
         </div>
@@ -218,19 +254,22 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 onUpdate({
                   isRelationship: true,
                   relationship: {
-                    symmetrical: false
-                  }
+                    symmetrical: false,
+                  },
                 });
               } else {
                 onUpdate({
                   isRelationship: false,
                   relationship: undefined,
-                  isPromise: false // Clear isPromise if relationship is removed
+                  isPromise: false, // Clear isPromise if relationship is removed
                 });
               }
             }}
           />
-          <Label htmlFor="isRelationship" className="text-sm font-medium cursor-pointer">
+          <Label
+            htmlFor="isRelationship"
+            className="text-sm font-medium cursor-pointer"
+          >
             Is Relationship
           </Label>
         </div>
@@ -248,7 +287,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 if (!object.isRelationship) {
                   updates.isRelationship = true;
                   updates.relationship = {
-                    symmetrical: false
+                    symmetrical: false,
                   };
                 }
 
@@ -258,10 +297,12 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               }
             }}
           />
-          <Label htmlFor="isPromise" className="text-sm font-medium cursor-pointer">
+          <Label
+            htmlFor="isPromise"
+            className="text-sm font-medium cursor-pointer"
+          >
             Is Promise
           </Label>
-
         </div>
       </div>
 
@@ -276,7 +317,11 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Link
-                        to={`/objects/${object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}`}
+                        to={`/objects/${
+                          object.relationship.subject instanceof ObjectId
+                            ? object.relationship.subject.toHexString()
+                            : String(object.relationship.subject)
+                        }`}
                         target="_blank"
                         rel="noopener noreferrer"
                       >
@@ -304,7 +349,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                             const newRelationship = {
                               ...object.relationship,
                               subject: object.relationship.object,
-                              object: object.relationship.subject
+                              object: object.relationship.subject,
                             };
                             onUpdate({ relationship: newRelationship });
                           }
@@ -321,12 +366,14 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </div>
               <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
-                  value={object.relationship.subject instanceof ObjectId ? object.relationship.subject.toHexString() : String(object.relationship.subject)}
+                  value={object.relationship.subject instanceof ObjectId
+                    ? object.relationship.subject.toHexString()
+                    : String(object.relationship.subject)}
                   onChange={(value) => {
                     if (object.relationship && value) {
                       const newRelationship = {
                         ...object.relationship,
-                        subject: new ObjectId(value)
+                        subject: new ObjectId(value),
                       };
                       onUpdate({ relationship: newRelationship });
                     }
@@ -348,22 +395,24 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                       if (object.relationship) {
                         const newRelationship = {
                           ...object.relationship,
-                          symmetrical: !object.relationship.symmetrical
+                          symmetrical: !object.relationship.symmetrical,
                         };
                         onUpdate({ relationship: newRelationship });
                       }
                     }}
                     className="h-8 w-8 p-0"
                   >
-                    {object.relationship.symmetrical ? (
-                      <MoveHorizontal className="w-4 h-4" />
-                    ) : (
-                      <ArrowRight className="w-4 h-4" />
-                    )}
+                    {object.relationship.symmetrical
+                      ? <MoveHorizontal className="w-4 h-4" />
+                      : <ArrowRight className="w-4 h-4" />}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>{object.relationship.symmetrical ? 'Make Directional' : 'Make Symmetrical'}</p>
+                  <p>
+                    {object.relationship.symmetrical
+                      ? "Make Directional"
+                      : "Make Symmetrical"}
+                  </p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -376,7 +425,11 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Link
-                        to={`/objects/${object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}`}
+                        to={`/objects/${
+                          object.relationship.object instanceof ObjectId
+                            ? object.relationship.object.toHexString()
+                            : String(object.relationship.object)
+                        }`}
                         target="_blank"
                         rel="noopener noreferrer"
                       >
@@ -396,12 +449,14 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </div>
               <div className="flex gap-2 min-w-0">
                 <ObjectSelectionDropdown
-                  value={object.relationship.object instanceof ObjectId ? object.relationship.object.toHexString() : String(object.relationship.object)}
+                  value={object.relationship.object instanceof ObjectId
+                    ? object.relationship.object.toHexString()
+                    : String(object.relationship.object)}
                   onChange={(value) => {
                     if (object.relationship && value) {
                       const newRelationship = {
                         ...object.relationship,
-                        object: new ObjectId(value)
+                        object: new ObjectId(value),
                       };
                       onUpdate({ relationship: newRelationship });
                     }
@@ -435,8 +490,12 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  const newAliases = (object.aliases || []).filter((_, i) => i !== index);
-                  onUpdate({ aliases: newAliases.length > 0 ? newAliases : undefined });
+                  const newAliases = (object.aliases || []).filter((_, i) =>
+                    i !== index
+                  );
+                  onUpdate({
+                    aliases: newAliases.length > 0 ? newAliases : undefined,
+                  });
                 }}
               >
                 <X className="w-4 h-4" />
@@ -454,7 +513,12 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="latitude" className="text-xs text-muted-foreground">Latitude</Label>
+                <Label
+                  htmlFor="latitude"
+                  className="text-xs text-muted-foreground"
+                >
+                  Latitude
+                </Label>
                 <Input
                   id="latitude"
                   type="number"
@@ -462,7 +526,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   value={object.location.latitude}
                   onChange={(e) => {
                     const value = e.target.value;
-                    if (value === '') {
+                    if (value === "") {
                       onUpdate({ location: undefined });
                     } else {
                       onUpdate({
@@ -477,7 +541,12 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="longitude" className="text-xs text-muted-foreground">Longitude</Label>
+                <Label
+                  htmlFor="longitude"
+                  className="text-xs text-muted-foreground"
+                >
+                  Longitude
+                </Label>
                 <Input
                   id="longitude"
                   type="number"
@@ -485,7 +554,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                   value={object.location.longitude}
                   onChange={(e) => {
                     const value = e.target.value;
-                    if (value === '') {
+                    if (value === "") {
                       onUpdate({ location: undefined });
                     } else {
                       onUpdate({
@@ -519,13 +588,19 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           {(object.timeRanges || []).map((range, index) => (
             <div key={index} className="border rounded-md p-4 space-y-3">
               <div className="flex justify-between items-start">
-                <Label className="text-xs text-muted-foreground">Range {index + 1}</Label>
+                <Label className="text-xs text-muted-foreground">
+                  Range {index + 1}
+                </Label>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    const newRanges = (object.timeRanges || []).filter((_, i) => i !== index);
-                    onUpdate({ timeRanges: newRanges.length > 0 ? newRanges : undefined });
+                    const newRanges = (object.timeRanges || []).filter((_, i) =>
+                      i !== index
+                    );
+                    onUpdate({
+                      timeRanges: newRanges.length > 0 ? newRanges : undefined,
+                    });
                   }}
                 >
                   <X className="w-4 h-4" />
@@ -533,20 +608,27 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </div>
 
               <div>
-                <Label htmlFor={`range-name-${index}`} className="text-xs">Name (optional)</Label>
+                <Label htmlFor={`range-name-${index}`} className="text-xs">
+                  Name (optional)
+                </Label>
                 <Input
                   id={`range-name-${index}`}
-                  value={range.name || ''}
+                  value={range.name || ""}
                   onChange={(e) => {
                     const newRanges = [...(object.timeRanges || [])];
-                    newRanges[index] = { ...range, name: e.target.value || undefined };
+                    newRanges[index] = {
+                      ...range,
+                      name: e.target.value || undefined,
+                    };
                     onUpdate({ timeRanges: newRanges });
                   }}
                   placeholder="Range name"
                 />
               </div>
               <div>
-                <Label htmlFor={`range-start-${index}`} className="text-xs">Start</Label>
+                <Label htmlFor={`range-start-${index}`} className="text-xs">
+                  Start
+                </Label>
                 <DateTimePicker
                   value={range.start}
                   onChange={(date) => {
@@ -560,7 +642,9 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 />
               </div>
               <div>
-                <Label htmlFor={`range-end-${index}`} className="text-xs">End (optional)</Label>
+                <Label htmlFor={`range-end-${index}`} className="text-xs">
+                  End (optional)
+                </Label>
                 <DateTimePicker
                   nullable
                   value={range.end}
@@ -574,9 +658,15 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
               </div>
 
               {/* Transcript button for ranges shorter than user-configured threshold */}
-              {range.end && isTimeRangeShorterThanTranscriptThreshold(range.start, range.end) && (
+              {range.end &&
+                isTimeRangeShorterThanTranscriptThreshold(
+                  range.start,
+                  range.end,
+                ) && (
                 <div className="pt-2 flex items-center gap-2">
-                  <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}>
+                  <Link
+                    to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}
+                  >
                     <Button variant="outline" size="sm">
                       Go to transcript
                     </Button>
@@ -596,7 +686,9 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <div className="border rounded-lg p-4 space-y-3 bg-muted/50">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label htmlFor="new-field-name" className="text-xs">Field Name</Label>
+                <Label htmlFor="new-field-name" className="text-xs">
+                  Field Name
+                </Label>
                 <Input
                   id="new-field-name"
                   value={newFieldName}
@@ -610,7 +702,10 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 <select
                   id="new-field-type"
                   value={newFieldType}
-                  onChange={(e) => setNewFieldType(e.target.value as 'string' | 'number' | 'boolean')}
+                  onChange={(e) =>
+                    setNewFieldType(
+                      e.target.value as "string" | "number" | "boolean",
+                    )}
                   className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <option value="string">string</option>
@@ -621,26 +716,28 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
             </div>
             <div>
               <Label htmlFor="new-field-value" className="text-xs">Value</Label>
-              {newFieldType === 'boolean' ? (
-                <select
-                  id="new-field-value"
-                  value={newFieldValue}
-                  onChange={(e) => setNewFieldValue(e.target.value)}
-                  className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="true">true</option>
-                  <option value="false">false</option>
-                </select>
-              ) : (
-                <Input
-                  id="new-field-value"
-                  type={newFieldType === 'number' ? 'number' : 'text'}
-                  value={newFieldValue}
-                  onChange={(e) => setNewFieldValue(e.target.value)}
-                  placeholder={newFieldType === 'number' ? '0' : 'value'}
-                  className="mt-1"
-                />
-              )}
+              {newFieldType === "boolean"
+                ? (
+                  <select
+                    id="new-field-value"
+                    value={newFieldValue}
+                    onChange={(e) => setNewFieldValue(e.target.value)}
+                    className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                )
+                : (
+                  <Input
+                    id="new-field-value"
+                    type={newFieldType === "number" ? "number" : "text"}
+                    value={newFieldValue}
+                    onChange={(e) => setNewFieldValue(e.target.value)}
+                    placeholder={newFieldType === "number" ? "0" : "value"}
+                    className="mt-1"
+                  />
+                )}
             </div>
             <div className="flex gap-2">
               <Button
@@ -655,9 +752,9 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
                 size="sm"
                 onClick={() => {
                   setShowAddField(false);
-                  setNewFieldName('');
-                  setNewFieldValue('');
-                  setNewFieldType('string');
+                  setNewFieldName("");
+                  setNewFieldValue("");
+                  setNewFieldType("string");
                 }}
               >
                 Cancel
@@ -669,9 +766,14 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
         {extraFields.length > 0 && (
           <div className="border rounded-lg divide-y">
             {extraFields.map(([key, value]) => (
-              <div key={key} className="p-3 grid grid-cols-[auto_1fr_auto_auto] gap-3 items-center">
+              <div
+                key={key}
+                className="p-3 grid grid-cols-[auto_1fr_auto_auto] gap-3 items-center"
+              >
                 <div className="font-mono text-sm font-medium">{key}</div>
-                <div className="text-sm text-muted-foreground truncate">{formatValue(value)}</div>
+                <div className="text-sm text-muted-foreground truncate">
+                  {formatValue(value)}
+                </div>
                 <div className="text-xs text-muted-foreground font-mono bg-muted px-2 py-1 rounded">
                   {getTypeString(value)}
                 </div>
@@ -695,7 +797,7 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           variant="outline"
           size="sm"
           onClick={() => {
-            const newAliases = [...(object.aliases || []), ''];
+            const newAliases = [...(object.aliases || []), ""];
             onUpdate({ aliases: newAliases });
           }}
         >
@@ -707,12 +809,13 @@ export function ObjectForm({ object, onUpdate }: ObjectFormProps) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => onUpdate({
-              location: {
-                latitude: 0,
-                longitude: 0
-              }
-            })}
+            onClick={() =>
+              onUpdate({
+                location: {
+                  latitude: 0,
+                  longitude: 0,
+                },
+              })}
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Location

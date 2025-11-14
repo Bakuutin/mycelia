@@ -83,14 +83,16 @@ export function Combobox({
                   key={option.value}
                   value={option.label}
                   onSelect={() => {
-                    onValueChange(option.value === value ? undefined : option.value);
+                    onValueChange(
+                      option.value === value ? undefined : option.value,
+                    );
                     setOpen(false);
                   }}
                 >
                   <Check
                     className={cn(
                       "mr-2 h-4 w-4",
-                      value === option.value ? "opacity-100" : "opacity-0"
+                      value === option.value ? "opacity-100" : "opacity-0",
                     )}
                   />
                   {option.label}

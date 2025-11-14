@@ -5,14 +5,12 @@ import { RESOLUTION_ORDER } from "@/types/resolution.ts";
 
 export const REGULAR_COLLECTIONS = [
   "api_keys",
-  "events",
   "audio_chunks",
   "transcriptions",
   "diarizations",
   "source_files",
-  "people",
-  "conversations",
   "objects",
+  "objects_history",
 ] as const;
 
 export const GRIDFS_BUCKETS = [
@@ -66,10 +64,12 @@ async function ensureIndexExists(
   indexSpec: Record<string, any>,
   indexName?: string,
 ): Promise<void> {
+  await ensureCollectionExists(db, collectionName);
+
   const collection = db.collection(collectionName);
   const indexes = await collection.listIndexes().toArray();
-  
-  const indexExists = indexes.some(index => {
+
+  const indexExists = indexes.some((index) => {
     if (indexName) {
       return index.name === indexName;
     }
@@ -79,7 +79,11 @@ async function ensureIndexExists(
 
   if (!indexExists) {
     await collection.createIndex(indexSpec, { name: indexName });
-    console.log(`Created index on ${collectionName}: ${indexName || JSON.stringify(indexSpec)}`);
+    console.log(
+      `Created index on ${collectionName}: ${
+        indexName || JSON.stringify(indexSpec)
+      }`,
+    );
   }
 }
 
@@ -89,10 +93,19 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
     "objects",
     {
       name: "text",
-      aliases: "text", 
-      details: "text"
+      aliases: "text",
+      details: "text",
     },
-    "text_search_index"
+    "text_search_index",
+  );
+  await ensureIndexExists(
+    db,
+    "object_history",
+    {
+      "objectId": 1,
+      "timestamp": -1,
+    },
+    "object_id",
   );
 }
 
@@ -112,7 +125,7 @@ export async function ensureAllCollectionsExist(): Promise<void> {
   }
 
   console.log("Ensuring indexes exist...");
-  
+
   // Ensure indexes for specific collections
   await ensureObjectsIndexes(db);
 

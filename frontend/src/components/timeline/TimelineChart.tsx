@@ -3,18 +3,22 @@ import type { Layer } from "@/core/core";
 import { useTimeline } from "@/hooks/useTimeline";
 import { TimeLayer } from "@/modules/time";
 import { ObjectsLayer } from "@/modules/objects";
+import { AudioLayer } from "@/modules/audio/index.tsx";
+import { HistogramLayer } from "@/modules/timeline/HistogramLayer.tsx";
 
 interface TimelineChartProps {
   layers?: Layer[];
   className?: string;
 }
 
-export const TimelineChart: React.FC<TimelineChartProps> = ({ layers, className }) => {
+export const TimelineChart: React.FC<TimelineChartProps> = (
+  { layers, className },
+) => {
   const { containerRef, width, timeScale, transform } = useTimeline();
 
   const resolvedLayers = useMemo<Layer[]>(() => {
     if (layers && layers.length > 0) return layers;
-    return [TimeLayer(), ObjectsLayer()];
+    return [TimeLayer(), HistogramLayer(), ObjectsLayer(), AudioLayer()];
   }, [layers]);
 
   return (
@@ -37,5 +41,3 @@ export const TimelineChart: React.FC<TimelineChartProps> = ({ layers, className 
 };
 
 export default TimelineChart;
-
-

@@ -1,12 +1,14 @@
 import subprocess
 import platform
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from faster_whisper import WhisperModel
 import asyncio
 import numpy as np
 import io
 import ffmpeg
 import wave
+import time
+
 
 sample_rate = 16000
 
@@ -42,7 +44,7 @@ model_size = "large-v3"
 print(f"Initializing Whisper model: {model_size}")
 print(f"Device: {device}, Compute type: {compute_type}")
 
-model = WhisperModel(model_size, device=device, compute_type=compute_type, num_workers=5, cpu_threads=10)
+model = WhisperModel(model_size, device=device, compute_type=compute_type, num_workers=1, cpu_threads=10)
 
 def wav_to_array(source: io.BytesIO) -> np.ndarray:
     wav_file = wave.open(source, 'rb')
@@ -105,6 +107,8 @@ app = FastAPI(
 @app.post("/transcribe")
 async def transcribe(files: list[UploadFile] = File(...)):
     try:
+
+        start_time = time.time()
         tasks = [file_to_array(file) for file in files]
 
         if not tasks:
@@ -113,6 +117,9 @@ async def transcribe(files: list[UploadFile] = File(...)):
         sound = np.concatenate(await asyncio.gather(*tasks))
 
         segments, info = model.transcribe(sound, multilingual=True)
+
+        duration = time.time() - start_time
+        print('took', f"{duration:.4f}")
 
         return {
             'language': info.language,
@@ -128,9 +135,6 @@ async def transcribe(files: list[UploadFile] = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
 
 
 

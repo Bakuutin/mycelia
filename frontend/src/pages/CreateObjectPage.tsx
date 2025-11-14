@@ -1,12 +1,12 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { callResource } from '@/lib/api';
-import type { Object, ObjectFormData } from '@/types/objects';
-import { validateObjectForSave } from '@/types/objects';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { ObjectForm } from '@/components/ObjectForm';
-import { ArrowLeft } from 'lucide-react';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { callResource } from "@/lib/api";
+import type { Object, ObjectFormData } from "@/types/objects";
+import { validateObjectForSave } from "@/types/objects";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ObjectForm } from "@/components/ObjectForm";
+import { ArrowLeft } from "lucide-react";
 
 const CreateObjectPage = () => {
   const navigate = useNavigate();
@@ -14,9 +14,9 @@ const CreateObjectPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [object, setObject] = useState<ObjectFormData>({
-    name: '',
-    details: '',
-    icon: { text: '📦' },
+    name: "",
+    details: "",
+    icon: { text: "📦" },
     aliases: [],
     isPromise: false,
     createdAt: new Date(),
@@ -24,7 +24,8 @@ const CreateObjectPage = () => {
   });
 
   const handleUpdate = async (updates: Partial<ObjectFormData>) => {
-    setObject(prev => ({ ...prev, ...updates }));
+    setObject((prev) => ({ ...prev, ...updates }));
+    return Promise.resolve();
   };
 
   const handleSubmit = async () => {
@@ -38,24 +39,21 @@ const CreateObjectPage = () => {
     setError(null);
 
     try {
-      const result = await callResource("tech.mycelia.mongo", {
-        action: "insertOne",
-        collection: "objects",
-        doc: {
+      const result = await callResource("tech.mycelia.objects", {
+        action: "create",
+        object: {
           ...object,
           name: object.name.trim(),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }
+        },
       });
 
       if (result.insertedId) {
         navigate(`/objects/${result.insertedId}`);
       } else {
-        throw new Error('Failed to create object');
+        throw new Error("Failed to create object");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create object');
+      setError(err instanceof Error ? err.message : "Failed to create object");
     } finally {
       setIsSubmitting(false);
     }
@@ -67,7 +65,7 @@ const CreateObjectPage = () => {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate('/objects')}
+          onClick={() => navigate("/objects")}
           className="flex items-center gap-2"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -78,7 +76,7 @@ const CreateObjectPage = () => {
 
       <Card className="p-6">
         <ObjectForm object={object} onUpdate={handleUpdate} />
-        
+
         {error && (
           <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
             <p className="text-sm text-red-600">{error}</p>
@@ -91,11 +89,11 @@ const CreateObjectPage = () => {
             disabled={isSubmitting || !object.name?.trim()}
             className="flex-1"
           >
-            {isSubmitting ? 'Creating...' : 'Create Object'}
+            {isSubmitting ? "Creating..." : "Create Object"}
           </Button>
           <Button
             variant="outline"
-            onClick={() => navigate('/objects')}
+            onClick={() => navigate("/objects")}
             disabled={isSubmitting}
           >
             Cancel

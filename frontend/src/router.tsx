@@ -1,26 +1,27 @@
-import { createBrowserRouter } from 'react-router-dom';
-import Layout from './components/Layout';
-import HomePage from './pages/HomePage';
-import TimelinePage from './pages/TimelinePage';
-import CreateEventPage from './pages/CreateEventPage';
-import EventDetailPage from './pages/EventDetailPage';
-import PersonDetailPage from './pages/PersonDetailPage';
-import PeoplePage from './pages/PeoplePage';
-import SettingsLayout from './components/SettingsLayout';
-import GeneralSettingsPage from './pages/settings/GeneralSettingsPage';
-import APISettingsPage from './pages/settings/APISettingsPage';
-import LLMSettingsPage from './pages/settings/LLMSettingsPage';
-import CreateLLMPage from './pages/settings/CreateLLMPage';
-import LLMDetailPage from './pages/settings/LLMDetailPage';
-import NotFoundPage from './pages/NotFoundPage';
-import TranscriptPage from './pages/TranscriptPage';
-import ObjectsPage from './pages/ObjectsPage';
-import ObjectDetailPage from './pages/ObjectDetailPage';
-import CreateObjectPage from './pages/CreateObjectPage';
+import { createBrowserRouter } from "react-router-dom";
+import Layout from "./components/Layout";
+import HomePage from "./pages/HomePage";
+import TimelinePage from "./pages/TimelinePage";
+import CreateEventPage from "./pages/CreateEventPage";
+import EventDetailPage from "./pages/EventDetailPage";
+import SettingsLayout from "./components/SettingsLayout";
+import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
+import APISettingsPage from "./pages/settings/APISettingsPage";
+import LLMSettingsPage from "./pages/settings/LLMSettingsPage";
+import CreateLLMPage from "./pages/settings/CreateLLMPage";
+import LLMDetailPage from "./pages/settings/LLMDetailPage";
+import NotFoundPage from "./pages/NotFoundPage";
+import TranscriptPage from "./pages/TranscriptPage";
+import ObjectsPage from "./pages/ObjectsPage";
+import ObjectDetailPage from "./pages/ObjectDetailPage";
+import ObjectHistoryPage from "./pages/ObjectHistoryPage";
+import CreateObjectPage from "./pages/CreateObjectPage";
+import CreateAudioRecordPage from "./pages/CreateAudioRecordPage";
+import AudioPlayerPage from "./pages/AudioPlayerPage";
 
 export const router = createBrowserRouter([
   {
-    path: '/',
+    path: "/",
     element: <Layout />,
     children: [
       {
@@ -28,43 +29,47 @@ export const router = createBrowserRouter([
         element: <HomePage />,
       },
       {
-        path: 'timeline',
+        path: "timeline",
         element: <TimelinePage />,
       },
       {
-        path: 'transcript',
+        path: "transcript",
         element: <TranscriptPage />,
       },
       {
-        path: 'events/new',
+        path: "audio",
+        element: <AudioPlayerPage />,
+      },
+      {
+        path: "audio/record",
+        element: <CreateAudioRecordPage />,
+      },
+      {
+        path: "events/new",
         element: <CreateEventPage />,
       },
       {
-        path: 'events/:id',
+        path: "events/:id",
         element: <EventDetailPage />,
       },
       {
-        path: 'people',
-        element: <PeoplePage />,
-      },
-      {
-        path: 'people/:id',
-        element: <PersonDetailPage />,
-      },
-      {
-        path: 'objects',
+        path: "objects",
         element: <ObjectsPage />,
       },
       {
-        path: 'objects/create',
+        path: "objects/create",
         element: <CreateObjectPage />,
       },
       {
-        path: 'objects/:id',
+        path: "objects/:id",
         element: <ObjectDetailPage />,
       },
       {
-        path: 'settings',
+        path: "objects/:id/history",
+        element: <ObjectHistoryPage />,
+      },
+      {
+        path: "settings",
         element: <SettingsLayout />,
         children: [
           {
@@ -72,25 +77,25 @@ export const router = createBrowserRouter([
             element: <GeneralSettingsPage />,
           },
           {
-            path: 'api',
+            path: "api",
             element: <APISettingsPage />,
           },
           {
-            path: 'llms',
+            path: "llms",
             element: <LLMSettingsPage />,
           },
           {
-            path: 'llms/new',
+            path: "llms/new",
             element: <CreateLLMPage />,
           },
           {
-            path: 'llms/:id',
+            path: "llms/:id",
             element: <LLMDetailPage />,
           },
         ],
       },
       {
-        path: '*',
+        path: "*",
         element: <NotFoundPage />,
       },
     ],

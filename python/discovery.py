@@ -1,7 +1,7 @@
 import platform
 from chunking import get_os_metadata
 from pymongo.collection import Collection
-from utils import mongo, lazy
+from utils import lazy
 import os
 import re
 from datetime import datetime, UTC, timedelta
@@ -25,6 +25,8 @@ import paramiko
 from chunking import get_tmp_dir
 from copy import deepcopy
 
+from lib.resources import call_resource
+
 class Skip(Exception):
     pass
 
@@ -33,9 +35,16 @@ class Metadata(TypedDict):
 
 _IS_AUDIO_RE = re.compile(r"\.(m4a|mp3|wav|opus)$", re.IGNORECASE)
 
-source_files: Collection = mongo['source_files']
 
-_known_discovered_cache = lazy(lambda: set(source_files.distinct("path")))
+
+_known_discovered_cache = lazy(lambda: set(d['path'] for d in call_resource('tech.mycelia.mongo', {
+    "action": "find",
+    "collection": "source_files",
+    "query": {
+        "path": {"$exists": True}
+    },
+    "projection": {"path": 1, "_id": 0},
+})))
 
 
 def is_audio_file(path: str) -> bool:
@@ -44,7 +53,11 @@ def is_audio_file(path: str) -> bool:
 def is_discovered(path: str) -> bool:
     if path in _known_discovered_cache:
         return True
-    found = bool(source_files.find_one({"path": path}))
+    found = bool(call_resource('tech.mycelia.mongo', {
+        "action": "findOne",
+        "collection": "source_files",
+        "query": {"path": path}
+    }))
     if found:
         _known_discovered_cache.add(path)
     return found
@@ -81,7 +94,11 @@ class Importer:
             "start": self.get_start(metadata)
         })
         self.logger.debug("adding %s to source_files", metadata['path'])
-        source_files.insert_one(metadata)
+        call_resource('tech.mycelia.mongo', {
+            "action": "insertOne",
+            "collection": "source_files",
+            "doc": metadata
+        })
 
     def run(self):
         with self.lock:
@@ -197,7 +214,7 @@ class SshFilesystemImporter(FilesystemImporter):
     def clients(self) -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
         with paramiko.SSHClient() as ssh:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(self.host, port=self.port, username=self.username, allow_agent=True, look_for_keys=True)
+            ssh.connect(self.host, port=self.port, username=self.username, allow_agent=True, look_for_keys=True, timeout=10)
             with ssh.open_sftp() as sftp:
                 yield ssh, sftp
 

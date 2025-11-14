@@ -39,7 +39,7 @@ Deno.test("getResource: should get a resource function when resource is register
     code: "test",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -65,7 +65,7 @@ Deno.test("getResource: should allow access when policy matches", async () => {
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -87,7 +87,7 @@ Deno.test("getResource: should deny access when policy effect is deny", async ()
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -108,7 +108,7 @@ Deno.test("getResource: should deny access when no matching policy", async () =>
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -130,7 +130,11 @@ Deno.test("getResource: should apply middleware when modify policy is present", 
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string(), modified: z.boolean() }),
+      response: z.object({
+        id: z.number(),
+        modified: z.boolean(),
+        flag: z.string().optional(),
+      }),
     },
     modifiers: {
       addFlag: {
@@ -169,7 +173,7 @@ Deno.test("getResource: should deny access when modify policy present but modifi
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -195,7 +199,7 @@ Deno.test("getResource: should deny access when modify policy present but schema
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     modifiers: {
       addFlag: {
@@ -230,7 +234,7 @@ Deno.test("getResource: should handle multiple actions from extractActions", asy
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -257,7 +261,7 @@ Deno.test("getResource: should handle multiple action groups from extractActions
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -286,7 +290,7 @@ Deno.test("getResource: should deny access when some actions are not covered by 
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (input: { id: number }) => [
@@ -311,7 +315,7 @@ Deno.test("getResource: should apply multiple modifiers in correct order", async
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string(), calls: z.array(z.string()) }),
+      response: z.object({ id: z.number(), calls: z.array(z.string()) }),
     },
     modifiers: {
       first: {
@@ -370,7 +374,7 @@ Deno.test("getResource: should handle wildcard resource patterns", async () => {
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (
@@ -393,7 +397,7 @@ Deno.test("getResource: should handle wildcard action patterns", async () => {
     code: "users",
     schemas: {
       request: z.object({ id: z.number() }),
-      response: z.object({ id: z.string() }),
+      response: z.object({ id: z.number() }),
     },
     use: async (input: { id: number }) => ({ id: input.id }),
     extractActions: (

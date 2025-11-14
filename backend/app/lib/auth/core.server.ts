@@ -61,7 +61,7 @@ export class Auth {
 
   getResource<Input, Output>(
     code: string,
-  ): Promise<(input: Input) => Promise<Output>> {
+  ): Promise<(input: Input) => Promise<Output | Response>> {
     return defaultResourceManager.getResource(code, this);
   }
 }
@@ -84,10 +84,7 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
 };
 
 export const authenticate = async (request: Request): Promise<Auth | null> => {
-  const cookie = await authCookie.parse(request.headers.get("Cookie"));
-
-  const token =
-    (cookie || request.headers.get("Authorization")?.split(" ")[1]) as string;
+  const token = request.headers.get("Authorization")?.split(" ")[1] as string;
 
   if (!token) {
     return null;
