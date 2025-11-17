@@ -100,12 +100,40 @@ const LLMDetailPage = () => {
     fetchModel();
   }, [id, form]);
 
+  // Check if alias already exists (excluding current model)
+  const checkAliasExists = async (alias: string): Promise<boolean> => {
+    if (!id) return false;
+    try {
+      const existing = await callResource("tech.mycelia.mongo", {
+        action: "findOne",
+        collection: "llm_models",
+        query: {
+          alias: alias,
+          _id: { $ne: { $oid: id } } // Exclude current model
+        },
+      });
+      return !!existing;
+    } catch {
+      return false;
+    }
+  };
+
   const onSubmit = async (data: UpdateModelData) => {
     if (!id) return;
 
     try {
       setSaving(true);
       setError(null);
+
+      // Check if alias is being changed and if new alias already exists
+      if (data.alias && data.alias !== model?.alias) {
+        const aliasExists = await checkAliasExists(data.alias);
+        if (aliasExists) {
+          setError(`A model with alias "${data.alias}" already exists. Each model must have a unique alias.`);
+          setSaving(false);
+          return;
+        }
+      }
 
       await callResource("tech.mycelia.mongo", {
         action: "updateOne",
@@ -121,7 +149,13 @@ const LLMDetailPage = () => {
 
       navigate("/settings/llms");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update model");
+      const errorMessage = err instanceof Error ? err.message : "Failed to update model";
+      // Check if it's a duplicate key error
+      if (errorMessage.includes("duplicate key") || errorMessage.includes("E11000")) {
+        setError(`A model with alias "${data.alias}" already exists. Each model must have a unique alias.`);
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setSaving(false);
     }
@@ -274,7 +308,7 @@ const LLMDetailPage = () => {
                 className={form.formState.errors.alias ? "border-red-500" : ""}
               />
               <p className="text-sm text-muted-foreground">
-                Model alias identifier. You can use predefined aliases (small, medium, large) or create custom ones.
+                Model alias identifier. You can use predefined aliases (small, medium, large) or create custom ones. Each alias must be unique.
               </p>
               {form.formState.errors.alias && (
                 <p className="text-sm text-red-500">

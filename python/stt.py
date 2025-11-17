@@ -112,7 +112,6 @@ def ensure_audio_chunk_indexes():
                 options.get('name'),
                 exc
             )
-            tqdm.write(f"WARNING: Failed to ensure audio_chunks index {options.get('name')}: {exc}")
             break
 
 
@@ -146,7 +145,6 @@ def get_pending_work_stats(extra_filters: dict | None = None) -> tuple[int | Non
         })
         sequences = result[0].get('total', 0) if result else 0
     except Exception as exc:
-        tqdm.write(f"WARNING: Unable to estimate pending sequences: {exc}")
         logger.warning("Unable to estimate pending sequences: %s", exc)
 
     try:
@@ -156,7 +154,6 @@ def get_pending_work_stats(extra_filters: dict | None = None) -> tuple[int | Non
             "query": filters,
         })
     except Exception as exc:
-        tqdm.write(f"WARNING: Unable to count pending chunks: {exc}")
         logger.warning("Unable to count pending chunks: %s", exc)
 
     return sequences, chunks
@@ -266,7 +263,7 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_
                 chunks=[]
             )
             except Exception as e:
-                tqdm.write(f"ERROR: Creating speech sequence for {original_id}: {e}")
+                logger.error(f"Error creating speech sequence for {original_id}: {e}")
                 continue
 
         seq.chunks.append(chunk)
@@ -327,34 +324,35 @@ def process_sequence(sequence: SpeechSequence, worker_id: str, server_url: str):
     start_time = time.time()
     timestamp = sequence.start.strftime("%Y-%m-%d %H:%M:%S")
     chunks_count = len(sequence.chunks)
-    original_id = str(sequence.original_id)
+    original_id = str(sequence.original_id)[:8]
     server_label = format_server_label(server_url)
 
     try:
         if not claim_sequence(sequence, worker_id):
-            tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  skipped (claimed)')
+            logger.debug(f"Sequence {original_id} skipped (already claimed)")
             return {"status": "skipped", "chunks": 0, "duration": 0}
 
+        logger.debug(f"[TRANSCRIBING] {timestamp} | {chunks_count:3d} chunks | {original_id}")
         result = transcribe_sequence(sequence, server_url)
         mark_as_transcribed(sequence)
 
         end_time = time.time()
         duration = end_time - start_time
         status = "empty" if result is NO_SPEECH_DETECTED else "transcribed"
-        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  {duration:5.2f}s  {status}  [{server_label}]')
+        logger.info(f"[{status.upper():11s}] {timestamp} | {chunks_count:3d} chunks | {original_id} | {duration:5.2f}s")
         return {"status": status, "chunks": chunks_count, "duration": duration}
 
     except requests.exceptions.ReadTimeout as e:
         end_time = time.time()
         release_sequence(sequence, worker_id)
-        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout [{server_label}]')
-        tqdm.write(f'  → Increase timeout or check STT server at {server_label}')
+        logger.error(f"[ERROR] {timestamp} | {chunks_count:3d} chunks | {original_id} | ReadTimeout ({format_eta(end_time - start_time)})")
+        logger.error(f"  → Increase timeout or check STT server at {server_label}")
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
     except Exception as e:
         end_time = time.time()
         release_sequence(sequence, worker_id)
-        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)} [{server_label}]')
+        logger.error(f"[ERROR] {timestamp} | {chunks_count:3d} chunks | {original_id} | {str(e)[:50]}")
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
 
@@ -367,11 +365,21 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
     if server_url is None:
         server_url = resolve_server_url()
 
-    ensure_audio_chunk_indexes()
-    tqdm.write(f'Worker ID: {worker_id}')
-    tqdm.write(f'Using {max_workers} parallel worker(s)')
-    tqdm.write(f'STT server: {format_server_label(server_url)}')
+    # Initialize stage
+    logger.info("=" * 60)
+    logger.info("Starting speech transcription")
+    logger.info("=" * 60)
 
+    logger.info(f"[INIT] Worker ID: {worker_id}")
+    logger.info(f"[INIT] Workers: {max_workers}")
+    logger.info(f"[INIT] STT server: {format_server_label(server_url)}")
+    if limit:
+        logger.info(f"[INIT] Limit: {limit} sequences")
+
+    logger.info("[INIT] Ensuring database indexes...")
+    ensure_audio_chunk_indexes()
+
+    logger.info("[STATUS] Checking pending work...")
     estimated_sequences, pending_chunks = get_pending_work_stats(filters)
     if estimated_sequences is not None or pending_chunks is not None:
         parts = []
@@ -379,9 +387,9 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
             parts.append(f"{estimated_sequences} sequences")
         if pending_chunks is not None:
             parts.append(f"{pending_chunks} chunks")
-        tqdm.write(f'Pending work: {", ".join(parts)}')
+        logger.info(f"[STATUS] Pending work: {', '.join(parts)}")
     else:
-        tqdm.write('Pending work: unknown (unable to query MongoDB)')
+        logger.warning("[STATUS] Pending work: unknown (unable to query MongoDB)")
 
     if limit is not None:
         progress_mode = 'sequence_limit'
@@ -407,13 +415,15 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
     total_processing_seconds = 0.0
     batch_size = min(limit if limit else 1000, 1000)
 
+    logger.info("[PROCESSING] Starting transcription...")
     bar_format = '{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]' if progress_total is not None else '{n_fmt} [{elapsed}, {rate_fmt}{postfix}]'
 
-    with tqdm(total=progress_total, desc="Processing", unit=progress_unit, bar_format=bar_format) as pbar:
+    with tqdm(total=progress_total, desc="Processing", unit=progress_unit, bar_format=bar_format, leave=False) as pbar:
 
         if max_workers == 1:
             while True:
                 batch_processed = 0
+                logger.debug("[FETCH] Loading sequences from database...")
                 for sequence in get_speech_sequences(limit=batch_size, filters=filters, worker_id=worker_id):
                     result = process_sequence(sequence, worker_id, server_url)
                     status = result["status"]
@@ -445,14 +455,15 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
                     break
 
                 if batch_processed == 0:
-                    tqdm.write("\nNo more sequences to process")
+                    logger.info("[COMPLETE] No more sequences to process")
                     break
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 while True:
+                    logger.debug("[FETCH] Loading sequences from database...")
                     sequences = list(get_speech_sequences(limit=batch_size, filters=filters, worker_id=worker_id))
                     if not sequences:
-                        tqdm.write("\nNo more sequences to process")
+                        logger.info("[COMPLETE] No more sequences to process")
                         break
 
                     futures = {
@@ -489,10 +500,17 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
                     if limit and processed_count >= limit:
                         break
 
-    tqdm.write("\n" + "=" * 80)
-    tqdm.write(f"Completed: {processed_count} sequences, {total_chunks} chunks")
-    tqdm.write(f"Stats: transcribed={stats['transcribed']}, empty={stats['empty']}, errors={stats['error']}, skipped={stats['skipped']}")
-    tqdm.write("=" * 80)
+    # Final summary
+    logger.info("=" * 60)
+    logger.info("Transcription complete:")
+    logger.info(f"  - Sequences processed: {processed_count}")
+    logger.info(f"  - Chunks processed: {total_chunks}")
+    if total_processing_seconds > 0:
+        avg_time = total_processing_seconds / processed_count if processed_count > 0 else 0
+        logger.info(f"  - Total time: {format_eta(total_processing_seconds)}")
+        logger.info(f"  - Average time per sequence: {avg_time:.2f}s")
+    logger.info(f"  - Results: transcribed={stats['transcribed']}, empty={stats['empty']}, errors={stats['error']}, skipped={stats['skipped']}")
+    logger.info("=" * 60)
 
 
 def transcribe_sequence(sequence: SpeechSequence, server_url: str):
@@ -501,6 +519,7 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
     if api_key:
         headers['X-Api-Key'] = api_key
 
+    logger.debug(f"[API] Sending {len(sequence.chunks)} chunks to STT server...")
     response = requests.post(f'{server_url}/transcribe',
                             files=[
                                 ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
@@ -512,6 +531,7 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
     response.raise_for_status()  # Raise an exception for bad status codes
 
     transcript = response.json()
+    logger.debug(f"[API] Received transcript with {len(transcript.get('segments', []))} segments")
 
     # Extract segments (could be empty, which is valid)
     segments = transcript.get('segments', [])
@@ -543,6 +563,7 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
     duration = 0.0
     if segments:
         duration = segments[-1]['end']
+        logger.debug(f"[SAVE] Saving transcript to database (duration: {duration:.2f}s)")
 
         call_resource('tech.mycelia.mongo', {
             "action": "insertOne",
@@ -557,6 +578,7 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
         })
 
     transcribed_text = ''.join(segment['text'] for segment in segments)
+    logger.debug(f"[FILTER] Kept {len(filtered_segments)} segments after filtering")
     return transcribed_text
 
 

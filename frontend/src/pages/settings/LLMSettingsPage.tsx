@@ -125,91 +125,25 @@ const LLMSettingsPage = () => {
       </div>
 
       <div className="space-y-6">
-        {/* Group models by alias */}
+        {/* Separate predefined and custom models */}
         {(() => {
-          // Group models by alias
-          const modelsByAlias = new Map<string, Model[]>();
-          models.forEach((model) => {
-            const alias = model.alias;
-            if (!modelsByAlias.has(alias)) {
-              modelsByAlias.set(alias, []);
-            }
-            modelsByAlias.get(alias)!.push(model);
-          });
-
-          // Separate predefined and custom aliases
-          const predefinedAliases = Array.from(modelsByAlias.keys()).filter((alias) =>
-            PREDEFINED_ALIASES.includes(alias as any)
+          const predefinedModels = models.filter((m) =>
+            PREDEFINED_ALIASES.includes(m.alias as any)
           );
-          const customAliases = Array.from(modelsByAlias.keys()).filter((alias) =>
-            !PREDEFINED_ALIASES.includes(alias as any)
+          const customModels = models.filter((m) =>
+            !PREDEFINED_ALIASES.includes(m.alias as any)
           );
 
           return (
             <>
-              {/* Predefined Aliases */}
-              {PREDEFINED_ALIASES.map((alias) => {
-                const aliasModels = modelsByAlias.get(alias) || [];
-                return (
-                  <div key={alias} className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-semibold">
-                        {alias.charAt(0).toUpperCase() + alias.slice(1)} Models
-                        {aliasModels.length > 0 && (
-                          <Badge variant="outline" className="ml-2">
-                            {aliasModels.length}
-                          </Badge>
-                        )}
-                      </h3>
-                    </div>
-                    <div className="grid gap-4">
-                      {aliasModels.length > 0
-                        ? (
-                          aliasModels.map((model) => (
-                            <Card key={model._id.toString()} className="p-4">
-                              <div className="flex items-start justify-between">
-                                <div className="flex-1 space-y-2">
-                                  <div className="flex items-center gap-2">
-                                    <h3 className="font-semibold">{model.alias}</h3>
-                                    <Badge variant="secondary">{model.provider}</Badge>
-                                  </div>
-                                  <p className="text-sm text-muted-foreground">
-                                    {model.name} • {model.baseUrl}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Link to={`/settings/llms/${model._id.toString()}`}>
-                                    <Button variant="outline" size="sm">
-                                      <Settings className="w-4 h-4" />
-                                    </Button>
-                                  </Link>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => handleDelete(model._id.toString())}
-                                    className="text-red-500 hover:text-red-700"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </Card>
-                          ))
-                        )
-                        : <ModelSkeleton alias={alias} />}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Custom Aliases */}
-              {customAliases.length > 0 && (
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Custom Models</h3>
-                  <div className="grid gap-4">
-                    {customAliases.map((alias) => {
-                      const aliasModels = modelsByAlias.get(alias) || [];
-                      return aliasModels.map((model) => (
+              {/* Predefined Models */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Predefined Models</h3>
+                <div className="grid gap-4">
+                  {PREDEFINED_ALIASES.map((alias) => {
+                    const model = models.find((m) => m.alias === alias);
+                    return model
+                      ? (
                         <Card key={model._id.toString()} className="p-4">
                           <div className="flex items-start justify-between">
                             <div className="flex-1 space-y-2">
@@ -238,8 +172,47 @@ const LLMSettingsPage = () => {
                             </div>
                           </div>
                         </Card>
-                      ));
-                    })}
+                      )
+                      : <ModelSkeleton key={alias} alias={alias} />;
+                  })}
+                </div>
+              </div>
+
+              {/* Custom Models */}
+              {customModels.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Custom Models</h3>
+                  <div className="grid gap-4">
+                    {customModels.map((model) => (
+                      <Card key={model._id.toString()} className="p-4">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 space-y-2">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-semibold">{model.alias}</h3>
+                              <Badge variant="secondary">{model.provider}</Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {model.name} • {model.baseUrl}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Link to={`/settings/llms/${model._id.toString()}`}>
+                              <Button variant="outline" size="sm">
+                                <Settings className="w-4 h-4" />
+                              </Button>
+                            </Link>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDelete(model._id.toString())}
+                              className="text-red-500 hover:text-red-700"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
                   </div>
                 </div>
               )}

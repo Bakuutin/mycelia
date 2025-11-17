@@ -97,7 +97,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   async getModel(model: string): Promise<Model | null> {
     const rootDb = await getRootDB();
     const modelsCollection = rootDb.collection("llm_models");
-    
+
     // Try to parse as ObjectId first (for direct model ID lookup)
     try {
       const modelId = new ObjectId(model);
@@ -108,7 +108,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     } catch {
       // Not a valid ObjectId, continue with alias lookup
     }
-    
+
     // Fall back to alias lookup (alias is unique, so this will return at most one model)
     return await modelsCollection.findOne({ alias: model }) as Model | null;
   }

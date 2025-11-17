@@ -41,6 +41,7 @@ export const zObject = z.object({
   metadata: z.object({
     extractedWith: z.object({
       model: z.string(),
+      model_name: z.string().optional(),
       timestamp: z.date(),
     }).optional(),
   }).optional(),

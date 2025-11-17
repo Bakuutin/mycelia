@@ -42,22 +42,58 @@ class Conversation(BaseModel):
     emoji: str = Field(description="Single emoji representing the conversation")
 
 
-def get_structured_output(messages: list[SystemMessage | HumanMessage | AIMessage], Output: type[BaseModel], llm: ChatOpenAI) -> BaseModel:
-    response = llm.with_structured_output(Output.model_json_schema(), include_raw=True).invoke([
+def get_structured_output(
+    messages: list[SystemMessage | HumanMessage | AIMessage],
+    Output: type[BaseModel],
+    llm: ChatOpenAI,
+) -> tuple[BaseModel, dict, bool]:
+    """
+    Get structured output from LLM and return the parsed result, response metadata, and
+    whether a refinement pass was required.
+    """
+    response = llm.with_structured_output(
+        Output.model_json_schema(),
+        include_raw=True,
+    ).invoke([
         *messages,
-        HumanMessage(f'Reply only with the JSON object formatted {Output.model_json_schema()} and nothing else.'),
+        HumanMessage(
+            f'Reply only with the JSON object formatted {Output.model_json_schema()} and nothing else.',
+        ),
     ])
 
     try:
-        return Output.model_validate(response['parsed'])
+        parsed = Output.model_validate(response['parsed'])
+        # Extract response metadata from the raw response
+        raw_response = response.get('raw')
+        metadata = {}
+        if raw_response:
+            # Try to get response_metadata from the AIMessage object
+            if hasattr(raw_response, 'response_metadata'):
+                metadata = raw_response.response_metadata or {}
+            elif hasattr(raw_response, '__dict__') and 'response_metadata' in raw_response.__dict__:
+                metadata = raw_response.__dict__.get('response_metadata', {})
+        return parsed, metadata, False
     except ValidationError:
         logger.info("Error getting structured output, refining")
-        refined = llm.with_structured_output(Output.model_json_schema(), include_raw=True).invoke([
+        refined = llm.with_structured_output(
+            Output.model_json_schema(),
+            include_raw=True,
+        ).invoke([
             HumanMessage('I have a JSON response, but it is not following the schema. Please fix it:'),
             HumanMessage(content=response['raw'].content),
             HumanMessage(f'Format this JSON to the schema: {Output.model_json_schema()}.'),
         ])
-        return Output.model_validate(refined['parsed'])
+        parsed = Output.model_validate(refined['parsed'])
+        # Extract response metadata from the refined response
+        raw_response = refined.get('raw')
+        metadata = {}
+        if raw_response:
+            # Try to get response_metadata from the AIMessage object
+            if hasattr(raw_response, 'response_metadata'):
+                metadata = raw_response.response_metadata or {}
+            elif hasattr(raw_response, '__dict__') and 'response_metadata' in raw_response.__dict__:
+                metadata = raw_response.__dict__.get('response_metadata', {})
+        return parsed, metadata, True
 
 
 def clip(x,lower, upper):
@@ -73,7 +109,7 @@ def get_segments(chunk: list[Utterance], model: str = "small") -> list[tuple[Seg
     class Output(BaseModel):
         segments: list[Segment]
 
-    response: Output = get_structured_output([
+    response, _, _ = get_structured_output([
         SystemMessage(system_prompts["segments"]["pre"]["text"]),
         HumanMessage(content=prompt),
     ], Output, llm)
@@ -152,11 +188,35 @@ def process_segment(segment: Segment, utterances: list[Utterance], model: str = 
     system_prompts = get_prompts()
     llm = get_llm(model)
 
-    conversation: Conversation = get_structured_output([
+    conversation, response_metadata, structured_output_refined = get_structured_output([
         SystemMessage(system_prompts["conversation"]["pre"]["text"]),
         HumanMessage(content=prompt),
         AIMessage(content=system_prompts["conversation"]["post"]["text"])
     ], Conversation, llm)
+
+    # Extract model name from response metadata
+    model_name = None
+    if response_metadata:
+        model_name = response_metadata.get('model_name')
+
+    if not model_name:
+        logger.warning(
+            "Model name not found in response metadata for model alias '%s'. "
+            "Continuing with alias only.",
+            model
+        )
+
+    # Build metadata with both alias and model name (if available)
+    extracted_with = {
+        'model': model,  # Model alias
+        'timestamp': datetime.now(tz=UTC),
+    }
+    if model_name:
+        extracted_with['model_name'] = model_name
+    if structured_output_refined:
+        extracted_with['structured_output'] = {
+            'refined': True,
+        }
 
     result = call_resource("tech.mycelia.objects", {
         "action": "create",
@@ -171,15 +231,21 @@ def process_segment(segment: Segment, utterances: list[Utterance], model: str = 
                 'end': segment.end,
             }],
             'metadata': {
-                'extractedWith': {
-                    'model': model,  # Use the actual model parameter instead of hardcoded 'small'
-                    'timestamp': datetime.now(tz=UTC),
-                }
+                'extractedWith': extracted_with
             }
         }
     })
 
     conversation_id = result['insertedId']
+
+    logger.info(
+        "Conversation created id=%s title='%s' model_alias=%s model_name=%s refined=%s",
+        str(conversation_id),
+        segment.title,
+        extracted_with.get('model'),
+        extracted_with.get('model_name'),
+        extracted_with.get('structured_output', {}).get('refined', False),
+    )
 
     for entity in conversation.entities:
         create_relationship(conversation_id, entity)

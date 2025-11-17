@@ -29,7 +29,6 @@ const CreateLLMPage = () => {
   const [searchParams] = useSearchParams();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [checkingAlias, setCheckingAlias] = useState(false);
 
   const form = useForm<CreateModelData>({
     resolver: zodResolver(createModelSchema),
@@ -148,7 +147,7 @@ const CreateLLMPage = () => {
                 className={form.formState.errors.alias ? "border-red-500" : ""}
               />
               <p className="text-sm text-muted-foreground">
-                Use predefined aliases (small, medium, large) or create a custom one.
+                Use predefined aliases (small, medium, large) or create a custom one. Each alias must be unique.
               </p>
               {form.formState.errors.alias && (
                 <p className="text-sm text-red-500">

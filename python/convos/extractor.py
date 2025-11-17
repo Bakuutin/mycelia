@@ -15,7 +15,7 @@ def process_chunk_if_needed(chunk, model: str = "small", force: bool = False):
     chunk_start = chunk[0]["start"]
     chunk_end = chunk[-1]["end"]
     if not force and check_conversations_exist(chunk_start, chunk_end):
-        logger.info("Conversations already exist for this time range, skipping (use --force to recreate)")
+        logger.debug("Conversations already exist for this time range, skipping (use --force to recreate)")
         return -1
 
     if force:
@@ -25,7 +25,7 @@ def process_chunk_if_needed(chunk, model: str = "small", force: bool = False):
         else:
             logger.info("No existing conversations to delete")
     return process_conversation_chunk(chunk, model=model)
-    
+
 
 
 def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[datetime] = None, model: str = "small", force: bool = False):
@@ -92,4 +92,3 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
     logger.info(f"  - Conversations found: {total_conversations}")
     logger.info(f"  - Buckets marked done: {len(bucket_ranges)}")
     logger.info("=" * 60)
-
