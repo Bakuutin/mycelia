@@ -23,7 +23,10 @@ import {
 } from "lucide-react";
 
 const updateModelSchema = z.object({
-  alias: z.enum(["small", "medium", "large"]),
+  alias: z.string().min(1, "Alias is required").max(
+    50,
+    "Alias must be less than 50 characters",
+  ),
   name: z.string().min(1, "Name is required").max(
     100,
     "Name must be less than 100 characters",
@@ -267,8 +270,12 @@ const LLMDetailPage = () => {
               <Input
                 id="alias"
                 {...form.register("alias")}
+                placeholder="e.g., small, medium, large, or custom name"
                 className={form.formState.errors.alias ? "border-red-500" : ""}
               />
+              <p className="text-sm text-muted-foreground">
+                Model alias identifier. You can use predefined aliases (small, medium, large) or create custom ones.
+              </p>
               {form.formState.errors.alias && (
                 <p className="text-sm text-red-500">
                   {form.formState.errors.alias.message}

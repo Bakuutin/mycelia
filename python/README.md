@@ -125,7 +125,7 @@ Optional flags:
 
 - `--limit <N>`: process at most N conversation chunks
 - `--not-later-than <UNIX_TS>`: only process transcripts earlier than the given UNIX timestamp (seconds)
-- `--model {small|medium|large}`: choose LLM size (default: small)
+- `--model <ALIAS>`: choose LLM model alias to use (default: small). Can be any model alias configured in the system (e.g., small, medium, large, or custom aliases).
 - `--force`: force recreation of existing conversations (deletes and recreates)
 
 #### Resume-Safe Processing

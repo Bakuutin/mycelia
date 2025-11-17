@@ -33,7 +33,7 @@ Examples:
     )
     parser.add_argument('--limit', type=int, default=None, help='Limit number of conversation chunks to process')
     parser.add_argument('--not-later-than', type=int, help='Process transcripts not later than this timestamp')
-    parser.add_argument('--model', type=str, choices=['small', 'medium', 'large'], default='small', help='LLM size to use for extraction')
+    parser.add_argument('--model', type=str, default='small', help='LLM model alias to use for extraction (default: small). Can be any model alias configured in the system.')
     parser.add_argument('--force', action='store_true', help='Force recreation of existing conversations (deletes and recreates)')
     args = parser.parse_args()
 
@@ -63,4 +63,3 @@ Examples:
 
 if __name__ == '__main__':
     exit(main())
-

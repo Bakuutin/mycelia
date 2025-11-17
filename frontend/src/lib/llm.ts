@@ -1,9 +1,10 @@
 import { apiClient } from "./api";
 import { ChatOpenAI } from "@langchain/openai";
 
-export type ModelSize = "small" | "medium" | "large";
+// Keep ModelSize for backward compatibility, but allow any string
+export type ModelSize = "small" | "medium" | "large" | string;
 
-export function getLLM(alias: ModelSize): ChatOpenAI {
+export function getLLM(alias: ModelSize | string): ChatOpenAI {
   return new ChatOpenAI({
     model: alias,
     configuration: {

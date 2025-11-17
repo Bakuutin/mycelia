@@ -146,6 +146,16 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
   );
 }
 
+async function ensureLLMModelsIndexes(db: Db): Promise<void> {
+  // Ensure alias is unique - each model must have a unique alias
+  await ensureIndexExists(
+    db,
+    "llm_models",
+    { alias: 1 },
+    { name: "llm_models_alias_unique", unique: true },
+  );
+}
+
 export async function ensureAllCollectionsExist(): Promise<void> {
   const db = await getRootDB();
 
@@ -166,6 +176,7 @@ export async function ensureAllCollectionsExist(): Promise<void> {
   // Ensure indexes for specific collections
   await ensureObjectsIndexes(db);
   await ensureAudioChunksIndexes(db);
+  await ensureLLMModelsIndexes(db);
 
   console.log(
     `All collections and indexes verified (${regularCollections.length} regular collections, ${gridFSBuckets.length} GridFS buckets)`,

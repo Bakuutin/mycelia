@@ -29,6 +29,7 @@ const CreateLLMPage = () => {
   const [searchParams] = useSearchParams();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkingAlias, setCheckingAlias] = useState(false);
 
   const form = useForm<CreateModelData>({
     resolver: zodResolver(createModelSchema),
@@ -60,10 +61,32 @@ const CreateLLMPage = () => {
     }
   }, [searchParams, form]);
 
+  // Check if alias already exists
+  const checkAliasExists = async (alias: string): Promise<boolean> => {
+    try {
+      const existing = await callResource("tech.mycelia.mongo", {
+        action: "findOne",
+        collection: "llm_models",
+        query: { alias: alias },
+      });
+      return !!existing;
+    } catch {
+      return false;
+    }
+  };
+
   const onSubmit = async (data: CreateModelData) => {
     try {
       setSaving(true);
       setError(null);
+
+      // Check if alias already exists
+      const aliasExists = await checkAliasExists(data.alias);
+      if (aliasExists) {
+        setError(`A model with alias "${data.alias}" already exists. Each model must have a unique alias.`);
+        setSaving(false);
+        return;
+      }
 
       const result = await callResource("tech.mycelia.mongo", {
         action: "insertOne",
@@ -83,7 +106,13 @@ const CreateLLMPage = () => {
         setError("Failed to create model");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create model");
+      const errorMessage = err instanceof Error ? err.message : "Failed to create model";
+      // Check if it's a duplicate key error
+      if (errorMessage.includes("duplicate key") || errorMessage.includes("E11000")) {
+        setError(`A model with alias "${data.alias}" already exists. Each model must have a unique alias.`);
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setSaving(false);
     }
@@ -119,8 +148,7 @@ const CreateLLMPage = () => {
                 className={form.formState.errors.alias ? "border-red-500" : ""}
               />
               <p className="text-sm text-muted-foreground">
-                Use predefined aliases (small, medium, large) or create a custom
-                one
+                Use predefined aliases (small, medium, large) or create a custom one.
               </p>
               {form.formState.errors.alias && (
                 <p className="text-sm text-red-500">

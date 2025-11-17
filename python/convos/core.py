@@ -172,7 +172,7 @@ def process_segment(segment: Segment, utterances: list[Utterance], model: str = 
             }],
             'metadata': {
                 'extractedWith': {
-                    'model': 'small',
+                    'model': model,  # Use the actual model parameter instead of hardcoded 'small'
                     'timestamp': datetime.now(tz=UTC),
                 }
             }
