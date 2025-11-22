@@ -73,6 +73,7 @@ class Importer:
         for k, v in kwargs.items():
             setattr(self, k, v)
         self.lock = threading.Lock()
+        self._quiet = False
 
     def discover(self) -> Iterable[Metadata]:
         raise NotImplementedError
@@ -100,15 +101,24 @@ class Importer:
             "doc": metadata
         })
 
-    def run(self):
+    def run(self, quiet: bool = False) -> int:
         with self.lock:
-            new_files = list(self.discover())
+            previous_mode = self._quiet
+            self._quiet = quiet
+            try:
+                new_files = list(self.discover())
+            finally:
+                self._quiet = previous_mode
+
             if new_files:
-                self.logger.info("discovered %s new files in '%s'", len(new_files), self.root)
+                if not quiet:
+                    self.logger.info("discovered %s new files in '%s'", len(new_files), self.root)
                 for item in new_files:
                     self.ingest(item)
-            else:
+            elif not quiet:
                 self.logger.info("no new files found in '%s'", self.root)
+
+            return len(new_files)
 
     def upload(self, source: dict):
         ingest_source(source)
@@ -160,7 +170,12 @@ class AppleVoiceMemosImporter(Importer):
         sqlite_data = self.get_sqlite_data()
         total_memos = len(sqlite_data)
 
-        with tqdm(total=total_memos, desc=f"Discovering {self.code}", unit="files") as pbar:
+        with tqdm(
+            total=total_memos,
+            desc=f"Discovering {self.code}",
+            unit="files",
+            disable=getattr(self, "_quiet", False),
+        ) as pbar:
             for memo in sqlite_data:
                 if not memo["ZPATH"]:
                     pbar.update(1)
