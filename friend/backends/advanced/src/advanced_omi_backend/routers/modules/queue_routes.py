@@ -4,6 +4,7 @@ Provides basic endpoints for viewing job status and statistics.
 """
 
 import logging
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
@@ -23,11 +24,33 @@ async def list_jobs(
     limit: int = Query(20, ge=1, le=100, description="Number of jobs to return"),
     offset: int = Query(0, ge=0, description="Number of jobs to skip"),
     queue_name: str = Query(None, description="Filter by queue name"),
+    start_date: Optional[datetime] = Query(
+        None,
+        alias="startDate",
+        description="Only include jobs created after this timestamp",
+    ),
+    end_date: Optional[datetime] = Query(
+        None,
+        alias="endDate",
+        description="Only include jobs created before this timestamp",
+    ),
     current_user: User = Depends(current_active_user)
 ):
     """List jobs with pagination and filtering."""
     try:
-        result = get_jobs(limit=limit, offset=offset, queue_name=queue_name)
+        if start_date and end_date and end_date < start_date:
+            raise HTTPException(
+                status_code=400,
+                detail="endDate must be after startDate",
+            )
+
+        result = get_jobs(
+            limit=limit,
+            offset=offset,
+            queue_name=queue_name,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
         # Filter jobs by user if not admin
         if not current_user.is_superuser:

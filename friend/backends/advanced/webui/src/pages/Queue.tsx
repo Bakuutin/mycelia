@@ -135,6 +135,7 @@ const Queue: React.FC = () => {
     job_type: '',
     priority: ''
   });
+  const [dateRange, setDateRange] = useState({ startDate: '', endDate: '' });
   const [pagination, setPagination] = useState({
     offset: 0,
     limit: 20,
@@ -265,7 +266,7 @@ const Queue: React.FC = () => {
   // Initial data fetch
   useEffect(() => {
     fetchData();
-  }, [filters, pagination.offset, fetchData]);
+  }, [filters, dateRange, pagination.offset, fetchData]);
 
   const fetchJobs = async () => {
     try {
@@ -279,6 +280,8 @@ const Queue: React.FC = () => {
       if (filters.status) params.append('status', filters.status);
       if (filters.job_type) params.append('job_type', filters.job_type);
       if (filters.priority) params.append('priority', filters.priority);
+      if (dateRange.startDate) params.append('startDate', new Date(dateRange.startDate).toISOString());
+      if (dateRange.endDate) params.append('endDate', new Date(dateRange.endDate).toISOString());
 
       const response = await queueApi.getJobs(params);
       const data = response.data;
@@ -408,12 +411,18 @@ const Queue: React.FC = () => {
   };
 
   const applyFilters = () => {
+    if (dateRange.startDate && dateRange.endDate && new Date(dateRange.endDate) < new Date(dateRange.startDate)) {
+      alert('End date must be after start date');
+      return;
+    }
+
     setPagination(prev => ({ ...prev, offset: 0 }));
     fetchJobs();
   };
 
   const clearFilters = () => {
     setFilters({ status: '', job_type: '', priority: '' });
+    setDateRange({ startDate: '', endDate: '' });
     setPagination(prev => ({ ...prev, offset: 0 }));
   };
 
@@ -1286,7 +1295,7 @@ const Queue: React.FC = () => {
       {/* Filters */}
       <div className="bg-white rounded-lg border p-4">
         <h3 className="text-lg font-medium mb-4">Filters</h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
             <select
@@ -1331,6 +1340,26 @@ const Queue: React.FC = () => {
               <option value="normal">Normal</option>
               <option value="low">Low</option>
             </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="datetime-local"
+                value={dateRange.startDate}
+                onChange={(e) => setDateRange({ ...dateRange, startDate: e.target.value })}
+                className="w-full border border-gray-300 rounded-md px-3 py-2"
+                aria-label="Start date"
+              />
+              <input
+                type="datetime-local"
+                value={dateRange.endDate}
+                onChange={(e) => setDateRange({ ...dateRange, endDate: e.target.value })}
+                className="w-full border border-gray-300 rounded-md px-3 py-2"
+                aria-label="End date"
+              />
+            </div>
           </div>
 
           <div className="flex items-end space-x-2">

@@ -10,6 +10,7 @@ This module provides:
 
 import os
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 import redis
@@ -88,8 +89,6 @@ async def _ensure_beanie_initialized():
 
 def get_job_stats() -> Dict[str, Any]:
     """Get statistics about jobs in all queues matching frontend expectations."""
-    from datetime import datetime
-
     total_jobs = 0
     queued_jobs = 0
     processing_jobs = 0
@@ -122,7 +121,43 @@ def get_job_stats() -> Dict[str, Any]:
     }
 
 
-def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[str, Any]:
+def _normalize_datetime(dt_value: Optional[datetime]) -> Optional[datetime]:
+    if not dt_value:
+        return None
+
+    if dt_value.tzinfo:
+        return dt_value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return dt_value
+
+
+def _job_in_date_range(
+    timestamp: Optional[datetime],
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+) -> bool:
+    if not start_date and not end_date:
+        return True
+
+    if timestamp is None:
+        return False
+
+    if start_date and timestamp < start_date:
+        return False
+
+    if end_date and timestamp > end_date:
+        return False
+
+    return True
+
+
+def get_jobs(
+    limit: int = 20,
+    offset: int = 0,
+    queue_name: str = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Dict[str, Any]:
     """
     Get jobs from a specific queue or all queues.
 
@@ -134,6 +169,9 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
     Returns:
         Dict with jobs list and pagination metadata matching frontend expectations
     """
+    start_boundary = _normalize_datetime(start_date)
+    end_boundary = _normalize_datetime(end_date)
+
     all_jobs = []
 
     queues_to_check = [queue_name] if queue_name else [TRANSCRIPTION_QUEUE, MEMORY_QUEUE, DEFAULT_QUEUE]
@@ -155,6 +193,19 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
                 try:
                     job = Job.fetch(job_id, connection=redis_conn)
 
+                    created_at = job.created_at
+                    started_at = job.started_at
+                    ended_at = job.ended_at
+                    reference_time = created_at or started_at or ended_at
+                    normalized_reference = _normalize_datetime(reference_time)
+
+                    if not _job_in_date_range(
+                        normalized_reference,
+                        start_boundary,
+                        end_boundary,
+                    ):
+                        continue
+
                     # Extract user_id from kwargs if present
                     user_id = job.kwargs.get("user_id", "") if job.kwargs else ""
 
@@ -173,19 +224,20 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
                         },
                         "result": job.result if hasattr(job, 'result') else None,
                         "error_message": str(job.exc_info) if job.exc_info else None,
-                        "created_at": job.created_at.isoformat() if job.created_at else None,
-                        "started_at": job.started_at.isoformat() if job.started_at else None,
-                        "completed_at": job.ended_at.isoformat() if job.ended_at else None,
+                        "created_at": created_at.isoformat() if created_at else None,
+                        "started_at": started_at.isoformat() if started_at else None,
+                        "completed_at": ended_at.isoformat() if ended_at else None,
                         "retry_count": job.retries_left if hasattr(job, 'retries_left') else 0,
                         "max_retries": 3,  # Default max retries
                         "progress_percent": 0,  # RQ doesn't track progress by default
                         "progress_message": "",
+                        "_sort_time": normalized_reference or datetime.min,
                     })
                 except Exception as e:
                     logger.error(f"Error fetching job {job_id}: {e}")
 
     # Sort by created_at (most recent first)
-    all_jobs.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    all_jobs.sort(key=lambda x: x.get("_sort_time", datetime.min), reverse=True)
 
     # Paginate
     total_jobs = len(all_jobs)
@@ -193,7 +245,10 @@ def get_jobs(limit: int = 20, offset: int = 0, queue_name: str = None) -> Dict[s
     has_more = (offset + limit) < total_jobs
 
     return {
-        "jobs": paginated_jobs,
+        "jobs": [
+            {key: value for key, value in job.items() if key != "_sort_time"}
+            for job in paginated_jobs
+        ],
         "pagination": {
             "total": total_jobs,
             "limit": limit,
