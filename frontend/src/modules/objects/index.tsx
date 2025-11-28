@@ -37,7 +37,63 @@ type PlacedObjectRange = {
   lane: number;
   startOffScreen: boolean;
   endOffScreen: boolean;
+  hasNoEnd: boolean;
 } & ExtractedObjectRange;
+
+function getLeftBoundaryPath(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  startOffScreen: boolean,
+  cornerRadius: number,
+  chevronOffset: number,
+): string {
+  if (startOffScreen) {
+    return `M ${x + chevronOffset} ${y}
+      L ${x + chevronOffset / 2} ${y + height / 2}
+      L ${x + chevronOffset} ${y + height}
+      L ${x + width} ${y + height}
+      L ${x + width} ${y}
+      Z`;
+  } else {
+    return `M ${x + cornerRadius} ${y}
+      Q ${x} ${y} ${x} ${y + cornerRadius}
+      L ${x} ${y + height - cornerRadius}
+      Q ${x} ${y + height} ${x + cornerRadius} ${y + height}
+      L ${x + width} ${y + height}
+      L ${x + width} ${y}
+      Z`;
+  }
+}
+
+function getRightBoundaryPath(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  showEndChevron: boolean,
+  cornerRadius: number,
+  chevronOffset: number,
+): string {
+  const rightX = x + width;
+  if (showEndChevron) {
+    return `M ${rightX - chevronOffset} ${y}
+      L ${rightX - chevronOffset / 2} ${y + height / 2}
+      L ${rightX - chevronOffset} ${y + height}
+      L ${x} ${y + height}
+      L ${x} ${y}
+      Z`;
+  } else {
+    return `M ${rightX - cornerRadius} ${y}
+      Q ${rightX} ${y} ${rightX} ${y + cornerRadius}
+      L ${rightX} ${y + height - cornerRadius}
+      Q ${rightX} ${y + height} ${rightX - cornerRadius} ${y + height}
+      L ${x} ${y + height}
+      L ${x} ${y}
+      Z`;
+  }
+}
 
 function RangeBox({ range, width }: { range: PlacedObjectRange; width: number }) {
   const navigate = useNavigate();
@@ -78,61 +134,37 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
   const cornerRadius = 4;
   const chevronOffset = 8;
   const actualEndX = endOffScreen ? width : endX;
+  const showEndChevron = range.hasNoEnd || endOffScreen;
 
-  let pathData: string;
-  if (startOffScreen && endOffScreen) {
-    pathData = `M ${x + chevronOffset} ${y}
-       L ${x + chevronOffset / 2} ${y + height / 2}
-       L ${x + chevronOffset} ${y + height}
-       L ${actualEndX - chevronOffset} ${y + height}
-       L ${actualEndX - chevronOffset / 2} ${y + height / 2}
-       L ${actualEndX - chevronOffset} ${y}
-       L ${x + chevronOffset} ${y}
-       Z`;
-  } else if (startOffScreen) {
-    pathData = `M ${x + chevronOffset} ${y}
-       L ${x + chevronOffset / 2} ${y + height / 2}
-       L ${x + chevronOffset} ${y + height}
-       L ${actualEndX - cornerRadius} ${y + height}
-       Q ${actualEndX} ${y + height} ${actualEndX} ${y + height - cornerRadius}
-       L ${actualEndX} ${y + cornerRadius}
-       Q ${actualEndX} ${y} ${actualEndX - cornerRadius} ${y}
-       L ${x + chevronOffset} ${y}
-       Z`;
-  } else if (endOffScreen) {
-    pathData = `M ${x + cornerRadius} ${y}
-       L ${actualEndX - chevronOffset} ${y}
-       L ${actualEndX - chevronOffset / 2} ${y + height / 2}
-       L ${actualEndX - chevronOffset} ${y + height}
-       L ${x + cornerRadius} ${y + height}
-       Q ${x} ${y + height} ${x} ${y + height - cornerRadius}
-       L ${x} ${y + cornerRadius}
-       Q ${x} ${y} ${x + cornerRadius} ${y}
-       Z`;
-  } else {
-    pathData = `M ${x + cornerRadius} ${y}
-       L ${actualEndX - cornerRadius} ${y}
-       Q ${actualEndX} ${y} ${actualEndX} ${y + cornerRadius}
-       L ${actualEndX} ${y + height - cornerRadius}
-       Q ${actualEndX} ${y + height} ${actualEndX - cornerRadius} ${y + height}
-       L ${x + cornerRadius} ${y + height}
-       Q ${x} ${y + height} ${x} ${y + height - cornerRadius}
-       L ${x} ${y + cornerRadius}
-       Q ${x} ${y} ${x + cornerRadius} ${y}
-       Z`;
-  }
+  const clipPathId = `clip-${range.object._id.toString()}-${range.rangeIndex}`;
+  
+  const leftBoundaryPath = getLeftBoundaryPath(x, y, rangeWidth, height, startOffScreen, cornerRadius, chevronOffset);
+  const rightBoundaryPath = getRightBoundaryPath(x, y, rangeWidth, height, showEndChevron, cornerRadius, chevronOffset);
 
   return (
     <g
       style={{ cursor: "pointer" }}
       onClick={handleClick}
     >
-      {/* Background path */}
-      <path
-        d={pathData}
+      <defs>
+        <clipPath id={`${clipPathId}-left`}>
+          <path d={leftBoundaryPath} />
+        </clipPath>
+        <clipPath id={clipPathId}>
+          <path d={rightBoundaryPath} clipPath={`url(#${clipPathId}-left)`} />
+        </clipPath>
+      </defs>
+
+      {/* Background rectangle */}
+      <rect
+        x={x}
+        y={y}
+        width={rangeWidth}
+        height={height}
         fill={object.color as string || "#6b7280"}
         stroke={selected ? "#2563eb" : "none"}
         strokeWidth={selected ? 3 : 0}
+        clipPath={`url(#${clipPathId})`}
       />
 
       {/* Content container */}
@@ -142,6 +174,7 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
         x={startX}
         y={topMargin + lane * laneHeight}
         className="p-2"
+        clipPath={`url(#${clipPathId})`}
       >
         <div className="h-full flex flex-col justify-center items-start text-white">
           {isRelationship && hasRelationshipData
@@ -274,6 +307,7 @@ function useLaneLayout(
         lane,
         startOffScreen,
         endOffScreen,
+        hasNoEnd: range.end === null,
         ...range,
       });
     }
@@ -303,6 +337,7 @@ function useLaneLayout(
         lane: lane + regularLaneCount,
         startOffScreen,
         endOffScreen,
+        hasNoEnd: range.end === null,
         ...range,
       });
     }

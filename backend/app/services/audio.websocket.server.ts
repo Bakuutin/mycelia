@@ -1,4 +1,4 @@
-import { type Auth, authenticateOr401 } from "@/lib/auth/core.server.ts";
+import { type Auth, authenticate } from "@/lib/auth/core.server.ts";
 import { type WyomingHeader } from "@/lib/audio/wyoming.ts";
 import { Buffer } from "node:buffer";
 import type { IncomingMessage } from "node:http";
@@ -383,7 +383,13 @@ export async function handlePcmWebSocket(
   upgrade: IncomingMessage,
 ): Promise<void> {
   const request = await createRequestFromUpgrade(upgrade);
-  const auth = await authenticateOr401(request);
+  const auth = await authenticate(request);
+  
+  if (!auth) {
+    ws.close(1008, "Unauthorized: Token is missing or invalid");
+    throw new Error("Unauthorized");
+  }
+  
   await defaultResourceManager.ensureAllowed(
     auth,
     { path: "live.audio", actions: ["write"] },

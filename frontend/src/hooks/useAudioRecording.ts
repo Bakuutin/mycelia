@@ -312,6 +312,10 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       data?: Record<string, unknown>,
       payloadLength?: number,
     ) => {
+      if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        console.warn(`Cannot send Wyoming message "${type}": WebSocket is ${ws.readyState === WebSocket.CLOSING ? "CLOSING" : "CLOSED"}`);
+        return false;
+      }
       const header: Record<string, unknown> = { type };
       if (data) {
         header.data = data;
@@ -319,7 +323,13 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       if (payloadLength !== undefined) {
         header.payload_length = payloadLength;
       }
-      ws.send(JSON.stringify(header) + "\n");
+      try {
+        ws.send(JSON.stringify(header) + "\n");
+        return true;
+      } catch (error) {
+        console.error(`Failed to send Wyoming message "${type}":`, error);
+        return false;
+      }
     },
     [],
   );
@@ -530,8 +540,8 @@ export const useAudioRecording = (): AudioRecordingReturn => {
         setCurrentStep("streaming");
 
         keepAliveIntervalRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            sendWyomingMessage(ws, "ping");
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            sendWyomingMessage(wsRef.current, "ping");
           }
         }, 30000) as unknown as number;
       }).catch((err) => {

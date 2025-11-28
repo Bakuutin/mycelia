@@ -128,6 +128,10 @@ deno task dev
 
 Open http://localhost:3001. Configure backend URL and credentials in the settings page.
 
+## LLM Setup
+
+Need to wire up local inference or OpenRouter-hosted models? Check `docs/LLM_DEVELOPER_GUIDE.md` for the short developer guide on hardware picks, setup steps, and how to register models with Mycelia.
+
 ## Commands
 
 ### Backend Server

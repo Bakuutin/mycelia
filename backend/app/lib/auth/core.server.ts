@@ -80,7 +80,32 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
 
 export const authenticate = async (req: Request): Promise<Auth | null> => {
   const authHeader = req.headers.authorization;
-  const token = authHeader?.split(" ")[1] as string;
+  
+  let token: string | undefined;
+  
+  if (authHeader) {
+    token = authHeader.split(" ")[1];
+  }
+  
+  if (!token) {
+    if ("query" in req && req.query) {
+      token = (req.query as any).token as string | undefined;
+    }
+  }
+  
+  if (!token && req.url) {
+    try {
+      const url = new URL(req.url);
+      token = url.searchParams.get("token") || undefined;
+    } catch {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        token = url.searchParams.get("token") || undefined;
+      } catch {
+        token = undefined;
+      }
+    }
+  }
 
   if (!token) {
     return null;
