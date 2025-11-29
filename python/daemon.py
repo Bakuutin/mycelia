@@ -1,16 +1,19 @@
 #%%
 from discovery import Importer
+from diarization import run_voice_activity_detection
 
 import logging
-from datetime import datetime, UTC
-from diarization import run_voice_activity_detection
+import os
+import re
 import time
+from datetime import datetime, UTC, timedelta
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import platform
 
 import io
 from pydub import AudioSegment
-from datetime import timedelta
 
 from lib.resources import call_resource
 
@@ -21,22 +24,77 @@ import settings
 
 logger = logging.getLogger('daemon')
 
-import os
-log_dir = os.path.expanduser('~/Library/mycelia/logs')
+base_dir = Path(__file__).resolve().parent
+log_dir = base_dir / 'logs'
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'daemon.log')
+log_file = log_dir / 'daemon.log'
+
+LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+LOG_BACKUP_COUNT = 5
+MASK = '***'
+SENSITIVE_PATTERNS = [
+    re.compile(r'(?i)(api[_-]?key|token|secret|password|auth(?:orization)?)[=:]\s*([^\s,;]+)'),
+    re.compile(r'(?i)(bearer\s+)([A-Za-z0-9\-_\.=]+)'),
+]
+
+
+def _mask_sensitive_data(message: str) -> str:
+    masked = message
+    for pattern in SENSITIVE_PATTERNS:
+        masked = pattern.sub(lambda m: f"{m.group(1)}{MASK}", masked)
+    return masked
+
+
+class SensitiveDataFilter(logging.Filter):
+    """Masks common credential patterns before they hit any handlers."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+
+        masked = _mask_sensitive_data(message)
+        if masked != message:
+            record.msg = masked
+            record.args = ()
+        return True
+
+
+logger.setLevel(getattr(logging, os.environ.get('MYCELIA_DAEMON_LOG_LEVEL', 'INFO').upper(), logging.INFO))
+logger.propagate = False
+logger.handlers.clear()
 
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.DEBUG)
+file_handler = RotatingFileHandler(
+    log_file,
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.INFO)
 
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console.setFormatter(formatter)
-file_handler.setFormatter(formatter)
 
-logging.basicConfig(level=logging.DEBUG, handlers=[console, file_handler])
+for handler in (console, file_handler):
+    handler.setFormatter(formatter)
+    handler.addFilter(SensitiveDataFilter())
+    logger.addHandler(handler)
+
+# Ensure child loggers (e.g., diarization) reuse the same handlers/filters
+def configure_child_logger(name: str):
+    child_logger = logging.getLogger(name)
+    child_logger.setLevel(logger.level)
+    child_logger.propagate = False
+    child_logger.handlers.clear()
+    for handler in logger.handlers:
+        child_logger.addHandler(handler)
+    return child_logger
+
+
+configure_child_logger('diarization')
 
 logger.info(f"Logging to {log_file}")
 
@@ -115,7 +173,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
         file_path = source.get('path', str(source['_id']))
         file_name = os.path.basename(file_path) if 'path' in source else str(source['_id'])
 
-        logger.info(f"Processing [{idx}/{min(limit or total_pending, total_pending)}]: {file_name}")
+        logger.debug("Processing [%s/%s]: %s", idx, min(limit or total_pending, total_pending), file_name)
 
         try:
             importer = importer_map.get(
@@ -133,7 +191,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
             }}
             })
             processed += 1
-            logger.info(f"✓ Successfully ingested: {file_name}")
+            logger.debug("✓ Successfully ingested: %s", file_name)
         except Exception as e:
             errors += 1
             error_msg = str(e)
@@ -291,7 +349,12 @@ def main():
     ingests_missing_sources(limit=20)
 
     logger.info("\n[3/3] Running voice activity detection...")
-    run_voice_activity_detection(limit=1000)
+    vad_stats = run_voice_activity_detection(limit=1000)
+    if vad_stats:
+        logger.info(
+            "Voice activity detection processed %(processed)s chunks (%(has_speech)s with detected speech)",
+            vad_stats,
+        )
 
     logger.info("=" * 60)
     logger.info("Daemon cycle complete")
@@ -309,7 +372,7 @@ if __name__ == '__main__':
             continue
         end = time.time()
         if end - start < 10:
-            logger.info("Sleeping for a few seconds")
+            logger.debug("Sleeping for a few seconds")
             time.sleep(10)
 
 #%%

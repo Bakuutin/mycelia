@@ -4,6 +4,7 @@ from chunking import ( read_codec,
 from datetime import datetime, UTC
 
 import logging
+import os
 
 from lib.resources import call_resource
 import time
@@ -26,6 +27,11 @@ model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
 
 
 vad_threshold = 0.5
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, '')
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 @torch.no_grad()
@@ -62,8 +68,13 @@ def apply_updates(updates):
     })
 
 
-def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100):
-
+def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100, show_progress=False):
+    progress_enabled = show_progress or _env_flag('MYCELIA_VAD_PROGRESS')
+    logger.info(
+        "VAD starting: limit=%s, batch_size=%s",
+        limit if limit is not None else "∞",
+        batch_size,
+    )
     # Use resumable cursors: getFirstBatch to start
     result = call_resource('tech.mycelia.mongo', {
         "action": "getFirstBatch",
@@ -76,22 +87,27 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100)
         },
         "batchSize": min(batch_size, limit) if limit else batch_size,
     })
-    
+
     cursor_id = result.get("cursorId", "")
     has_more = result.get("hasMore", False)
     chunks = result.get("data", [])
-    
+
     updates = []
     has_speech = 0
     start_time = time.time()
     total_processed = 0
-    pbar = tqdm(total=limit if limit else None, unit="chunks")
-    
+    pbar = tqdm(
+        total=limit if limit else None,
+        unit="chunks",
+        disable=not progress_enabled,
+        leave=False,
+    )
+
     while chunks:
         for chunk in chunks:
             if limit and total_processed >= limit:
                 break
-                
+
             audio = read_codec(chunk["data"], codec="opus", sample_rate=sample_rate)
             prob = get_voice_prob(audio)
             updates.append((
@@ -112,7 +128,7 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100)
                 'ts': chunk['start'].replace(microsecond=0).isoformat() if 'start' in chunk else '',
             })
             pbar.update(1)
-            
+
             if len(updates) >= 30:
                 apply_updates(updates)
                 updates = []
@@ -140,5 +156,26 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100)
 
     pbar.close()
 
+    if total_processed > 0:
+        speech_pct = (has_speech / total_processed) * 100
+        logger.info(
+            "VAD complete: %s processed, %s with speech (%.1f%%)",
+            total_processed,
+            has_speech,
+            speech_pct,
+        )
+    else:
+        logger.info("VAD complete: no eligible chunks")
+
     if verbose_logs:
-        logger.info(f"VAD batch complete: {total_processed} chunks processed, {has_speech} with speech ({(has_speech / total_processed) * 100:.1f}%)" if total_processed > 0 else "VAD batch complete: 0 chunks processed")
+        logger.debug(
+            "VAD verbose summary: limit=%s batch_size=%s cursor_active=%s",
+            limit if limit is not None else "∞",
+            batch_size,
+            bool(cursor_id),
+        )
+
+    return {
+        "processed": total_processed,
+        "has_speech": has_speech,
+    }

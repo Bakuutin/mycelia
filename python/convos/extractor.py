@@ -15,7 +15,7 @@ def process_chunk_if_needed(chunk, model: str = "small", force: bool = False):
     chunk_start = chunk[0]["start"]
     chunk_end = chunk[-1]["end"]
     if not force and check_conversations_exist(chunk_start, chunk_end):
-        logger.info("Conversations already exist for this time range, skipping (use --force to recreate)")
+        logger.debug("Conversations already exist for bucket %s -> %s; skipping (use --force to recreate)", chunk_start, chunk_end)
         return -1
 
     if force:
@@ -23,9 +23,9 @@ def process_chunk_if_needed(chunk, model: str = "small", force: bool = False):
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} existing conversations")
         else:
-            logger.info("No existing conversations to delete")
+            logger.debug("No existing conversations to delete for %s -> %s", chunk_start, chunk_end)
     return process_conversation_chunk(chunk, model=model)
-    
+
 
 
 def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[datetime] = None, model: str = "small", force: bool = False):
@@ -74,12 +74,16 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
             cursor = chunk_start
 
             if (processed + skipped) % 10 == 0:
-                logger.info(f"Progress: {processed} processed, {skipped} skipped, {total_conversations} conversations found")
+                logger.debug("Progress checkpoint: %s processed, %s skipped, %s conversations found", processed, skipped, total_conversations)
 
         for bucket, _ in bucket_ranges.items():
             bucket_end = bucket + delta
             mark_buckets_as("done", "conversations", bucket, bucket_end, scale=scale)
-            logger.info(f"Marked bucket as done: {bucket.strftime('%Y-%m-%d %H:%M')} -> {bucket_end.strftime('%Y-%m-%d %H:%M')}")
+            logger.debug(
+                "Marked bucket as done: %s -> %s",
+                bucket.strftime('%Y-%m-%d %H:%M'),
+                bucket_end.strftime('%Y-%m-%d %H:%M')
+            )
 
     except Exception as e:
         logger.error(f"Error in conversation extraction: {e}")
@@ -92,4 +96,3 @@ def extract_conversations(limit: Optional[int] = None, not_later_than: Optional[
     logger.info(f"  - Conversations found: {total_conversations}")
     logger.info(f"  - Buckets marked done: {len(bucket_ranges)}")
     logger.info("=" * 60)
-
