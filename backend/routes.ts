@@ -5,6 +5,8 @@ import { dataAudioItemsHandler } from "@/routes/data.audio.items.ts";
 import { apiResourceHandler } from "@/routes/api.resource.$name.ts";
 import { apiFilesIdHandler } from "@/routes/api.files.$id.ts";
 import { apiFilesUploadHandler } from "@/routes/api.files.upload.ts";
+import { apiAudioStreamHandler } from "@/routes/api.audio.stream.ts";
+import { apiAudioWavHandler } from "@/routes/api.audio.wav.ts";
 import { mcpGetHandler, mcpPostHandler } from "@/routes/mcp.ts";
 import { llmChatCompletionsHandler } from "@/routes/llm.chat.completions.ts";
 import { oauthTokenHandler } from "@/routes/oauth.token.ts";
@@ -27,6 +29,8 @@ export function registerRoutes(app: Express): void {
   app.post("/api/resource/:name", asyncHandler(apiResourceHandler));
   app.get("/api/files/:id", apiFilesIdHandler);
   app.post("/api/files/upload", apiFilesUploadHandler);
+  app.get("/api/audio/stream", apiAudioStreamHandler);
+  app.get("/api/audio/wav", apiAudioWavHandler);
   app.get("/mcp", mcpGetHandler);
   app.post("/mcp", mcpPostHandler);
   app.post("/llm/chat/completions", llmChatCompletionsHandler);

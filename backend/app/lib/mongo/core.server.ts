@@ -336,8 +336,10 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
 
     try {
       switch (input.action) {
-        case "find":
-          return collection.find(input.query, input.options).toArray();
+        case "find": {
+          const limit = input.options?.limit ?? 1000;
+          return collection.find(input.query, input.options).batchSize(limit).limit(limit).toArray();
+        }
         case "findOne":
           return collection.findOne(input.query, input.options);
         case "getFirstBatch": {

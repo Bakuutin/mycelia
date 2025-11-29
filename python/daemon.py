@@ -1,6 +1,7 @@
 #%%
 from discovery import Importer
 
+import argparse
 import logging
 from datetime import datetime, UTC
 from diarization import run_voice_activity_detection
@@ -359,8 +360,8 @@ def clear_all_errors():
         "query": {"ingestion.error": {"$exists": True}},
         "update": {"$unset": {"ingestion": ""}}
     })
-    logger.info(f"Cleared errors for {result.modified_count} files")
-    return result.modified_count
+    logger.info(f"Cleared errors for {result['modifiedCount']} files")
+    return result['modifiedCount']
 
 
 def add_missing_durations():
@@ -417,17 +418,34 @@ def add_missing_ends():
             }
         })
 
-#%%
-
-import_new_files()
 
 #%%
 
-def main():
+def main(reset_errors=False):
     cycle_started = datetime.now(UTC)
 
+    logger.info("=" * 60)
+    logger.info("Starting daemon cycle")
+    logger.info("=" * 60)
+
+    total_steps = 4 if reset_errors else 3
+    step = 1
+
+    if reset_errors:
+        logger.info(f"\n[{step}/{total_steps}] Resetting previous failed uploads...")
+        cleared_count = clear_all_errors()
+        logger.info(f"Cleared errors for {cleared_count} files")
+        step += 1
+
+    logger.info(f"\n[{step}/{total_steps}] Importing new files from sources...")
     import_summary = import_new_files()
+    step += 1
+
+    logger.info(f"\n[{step}/{total_steps}] Ingesting audio files...")
     ingestion_summary = ingests_missing_sources(limit=20)
+    step += 1
+
+    logger.info(f"\n[{step}/{total_steps}] Running voice activity detection...")
     vad_summary = run_vad_stage(limit=1000)
 
     cycle_finished = datetime.now(UTC)
@@ -489,10 +507,15 @@ def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Mycelia daemon for importing and processing audio files')
+    parser.add_argument('--reset-errors', action='store_true',
+                        help='Reset previous failed uploads on start by clearing error flags')
+    args = parser.parse_args()
+
     while True:
         start = time.time()
         try:
-            main()
+            main(reset_errors=args.reset_errors)
         except Exception as e:
             logger.exception(f"Error in main: {e}")
             time.sleep(10)

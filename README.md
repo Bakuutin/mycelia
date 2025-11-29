@@ -10,43 +10,34 @@ your own words.
 
 ## Roadmap
 
-**Ready to use**
+**Ready now**
 
-😐 Ingestion pipeline for audio files
-
-😐 Audio chunking
-
-😐 Speech Detection + Transcription
-
-😐 Timeline UI for playback & search
-
-😐 Transcript-synced playback
-
-😐 Modular system (add your own!)
-
-😐 MCP (Model Context Protocol)
-
-😐 OAuth2
-
-😐 Summarizations
-
-😐 Full Text Search
-
-😐 Observability
+- ✅ Continuous audio ingestion from Apple Voice Memos, Google Drive, and local libraries.
+- ✅ Smart chunking, diarization-friendly VAD, and waveform normalization for aligned segments.
+- ✅ Speech detection plus Whisper transcription via local or remote servers.
+- ✅ Timeline UI with transcript-synced playback, jump controls, and search overlays.
+- ✅ Modular resource-based backend for pluggable processors, storage, or prompts.
+- ✅ MCP + CLI automation for remote operations and scripting.
+- ✅ OAuth2 flows with `.well-known` metadata, JWT login, and token issuance.
+- ✅ LLM summarizations and conversation extraction across the stack.
+- ✅ MongoDB full-text search alongside GridFS-backed storage.
+- ✅ Structured logging and observability for ingestion, STT, and LLM jobs.
 
 **In Progress**
 
-🫥 Chat with your memory
+- 🚧 Chat with your memory via the Friend-Lite companion app + advanced backend (`friend/`) that is wiring semantic memories and wearable capture back into Mycelia.
+- 🚧 Streaming ingestion & GPU diarization stack replacing the current batch-only flow (`python/diarization_worker.py`, `diarizator/` Helm charts + WebUI).
+- 🚧 Multi-device & multi-modal capture (health, geolocation, photos, sensors) prototyped across `friend/extras/` and `friend/Docs/features.md`.
+- 🚧 Semantic search + vector memory integration that connects the Qdrant-backed pipelines in `friend/backends/advanced/` and the OpenMemory MCP bridges into the main timeline.
 
-🫥 Streaming ingestion (replace batch system)
+**Planned / Up Next**
 
-🫥 Other modalities (health, geolocation, photos, etc.)
-
-🫥 Sharing
-
-🫥 Semantic Search
-
-🫥 Backup Management
+- 🧭 Unified dockerized stack with auto-initialization scripts so `docker compose up` brings up backend, frontend, and Python services (Phase 0 in `docs/DX_ROADMAP.md` & `docs/TASK_BREAKDOWN.md`).
+- 🧭 Guided setup wizard (CLI + web), invite flow, and sample data path outlined in `docs/ONBOARDING_FLOW.md` (Phase 1).
+- 🧭 Managed vs self-hosted inference configuration, remote GPU support, and connection testing UI (Phase 2 in `docs/DX_ROADMAP.md`/`docs/TASK_BREAKDOWN.md`).
+- 🧭 LLM provider + model management, aliasing, quotas, and a model selection wiki (Phase 3 plus `docs/PROCESSING_AND_ARTIFACTS.md` + `docs/DX_ROADMAP.md`).
+- 🧭 Privacy + usage dashboards, token metering, and formal privacy policy with export/acceptance flows (Phase 4 roadmap).
+- 🧭 Processing/artifact templates, batch operations, sharing, and backup/export automation (Phases 5–6; see `docs/PROCESSING_AND_ARTIFACTS.md`).
 
 
 ## 🚀 Quick Start
@@ -87,8 +78,11 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/your-org/mycelia.git
 cd mycelia
 
-# Start the services (MongoDB, Redis)
-docker compose up -d
+# Option A: Bring up databases + frontend in one go
+docker compose up -d --build redis mongo mongo-search frontend
+
+# Option B: Start stateful services only (run apps locally)
+docker compose up -d redis mongo mongo-search
 
 # Configure backend environment
 cd backend
@@ -105,16 +99,14 @@ deno run -A --env server.ts token-create
 deno task dev
 ```
 
-The backend will be available at http://localhost:5173/
+The backend dev server will be available at http://localhost:5173/.
 
 ### 3. Frontend
 
 #### Option A: Run via Docker Compose (production build)
 
 ```bash
-# From repo root
-docker compose build frontend
-docker compose up -d frontend
+docker compose up -d --build frontend
 ```
 
 Open http://localhost:8080.
@@ -127,6 +119,27 @@ deno task dev
 ```
 
 Open http://localhost:3001. Configure backend URL and credentials in the settings page.
+
+### 4. Inference & Diarization Stack (optional)
+
+#### Whisper STT server
+```bash
+cd python/whisper_server
+uv sync
+uv run server.py  # serves on http://localhost:8081 by default
+```
+Point `STT_SERVER_URL` to the host running this process (local or remote).
+
+#### Speaker recognition / diarization service
+Use the dedicated compose file under `diarizator/`:
+```bash
+cd diarizator
+# CPU build
+docker compose --profile cpu up -d speaker-service web-ui
+# GPU build (requires NVIDIA runtime)
+docker compose --profile gpu up -d speaker-service-gpu web-ui nginx
+```
+The web UI lives at `http://localhost:5173` (per `REACT_UI_PORT`) and the API exposes port `8085`. Configure `SPEAKER_SERVICE_URL` in your backend or processors to consume the service.
 
 ## LLM Setup
 
@@ -218,7 +231,7 @@ uv run daemon.py
 
 Quick start:
 
-1. Start a Whisper server (local or remote) as documented in `backend/README.md#speech-to-text-stt`.
+1. Start a Whisper server (local or remote) as documented in [backend/README.md#speech-to-text-stt](backend/README.md#speech-to-text-stt).
 2. Transcribe queued audio:
    ```bash
    cd python

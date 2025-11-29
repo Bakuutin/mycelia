@@ -4,3 +4,4 @@
 *.ipynb
 
 local.py
+pretrained_models/

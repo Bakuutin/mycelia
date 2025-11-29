@@ -1766,6 +1766,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "sentence-transformers" },
     { name = "streamlit" },
+    { name = "tenacity" },
     { name = "torch" },
     { name = "torchaudio" },
     { name = "tqdm" },
@@ -1804,6 +1805,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.6.1" },
     { name = "sentence-transformers", specifier = ">=5.1.0" },
     { name = "streamlit", specifier = ">=1.46.1" },
+    { name = "tenacity", specifier = ">=9.0.0" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "torchaudio", specifier = ">=2.7.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
@@ -2461,6 +2463,7 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e9/00/3b96ca7ad0641e4f64cfaa2af153dc7da0998ff972280e1c1681b1fcc243/pyannote_audio-3.3.2.tar.gz", hash = "sha256:b2115e86b0db5faedb9f36ee1a150cebd07f7758e65e815accdac1a12ca9c777", size = 13664309, upload-time = "2024-09-11T11:07:48.274Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/e6/76049470d90217f9a15a34abf3e92d782cabc3fb4ab27515c9baaa5495d1/pyannote.audio-3.3.2-py2.py3-none-any.whl", hash = "sha256:599c694acd5d193215147ff82d0bf638bb191204ed502bd9fde8ff582e20aa1c", size = 898707, upload-time = "2024-09-11T11:07:46.12Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/9a/98a8992727e762b031ed30451d5726ece46cf8bb7b872a9dba5cef011e5d/pyannote_audio-3.3.2-py2.py3-none-any.whl", hash = "sha256:23e0dcedda920cb2e154e146bcd9663289ee7942d0e012663dad76f2e571ebeb", size = 897827, upload-time = "2025-11-26T16:09:04.748Z" },
 ]
 
 [[package]]

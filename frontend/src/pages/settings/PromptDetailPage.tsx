@@ -9,8 +9,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Save, Trash2 } from "lucide-react";
+import { Save, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils.ts";
+import { SmartBackButton } from "@/components/SmartBackButton";
 
 const PromptDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -105,12 +106,7 @@ const PromptDetailPage = () => {
     return (
       <div className="space-y-6">
         <div className="flex items-center gap-4">
-             <Link to="/settings/prompts">
-                <Button variant="outline" size="sm">
-                    <ArrowLeft className="w-4 h-4 mr-2" />
-                    Back
-                </Button>
-             </Link>
+             <SmartBackButton defaultPath="/settings/prompts" variant="outline" />
              <h2 className="text-2xl font-semibold">Loading...</h2>
         </div>
       </div>
@@ -121,12 +117,7 @@ const PromptDetailPage = () => {
      return (
       <div className="space-y-6">
         <div className="flex items-center gap-4">
-             <Link to="/settings/prompts">
-                <Button variant="outline" size="sm">
-                    <ArrowLeft className="w-4 h-4 mr-2" />
-                    Back
-                </Button>
-             </Link>
+             <SmartBackButton defaultPath="/settings/prompts" variant="outline" />
              <h2 className="text-2xl font-semibold">Error</h2>
         </div>
         <div className="border rounded-lg p-8 text-center">
@@ -139,12 +130,7 @@ const PromptDetailPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Link to="/settings/prompts">
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
-        </Link>
+        <SmartBackButton defaultPath="/settings/prompts" variant="outline" />
         <h2 className="text-2xl font-semibold">
             {isNew ? "Create New Prompt" : "Edit Prompt"}
         </h2>

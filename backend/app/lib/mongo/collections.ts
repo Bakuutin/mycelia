@@ -118,14 +118,23 @@ async function ensureAudioChunksIndexes(db: Db): Promise<void> {
     db,
     "audio_chunks",
     { processing_by: 1 },
-    { name: "audio_chunks_processing_by" },
+    { name: "processing_by" },
   );
 
   await ensureIndexExists(
     db,
     "audio_chunks",
     { transcribed_at: 1 },
-    { name: "audio_chunks_transcribed_at" },
+    { name: "transcribed_at" },
+  );
+
+  await ensureIndexExists(
+    db,
+    "audio_chunks",
+    {
+      start: 1,
+    },
+    { name: "start_1" },
   );
 }
 
@@ -148,14 +157,6 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
       "timestamp": -1,
     },
     { name: "object_id" },
-  );
-  await ensureIndexExists(
-    db,
-    "audio_chunks",
-    {
-      start: 1,
-    },
-    { name: "start_1" },
   );
 }
 

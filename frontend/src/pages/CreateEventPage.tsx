@@ -4,7 +4,7 @@ import { callResource } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 import { ColorInput } from "@/components/forms/ColorInput";
 import { CategoryInput } from "@/components/forms/CategoryInput";
 import { ToggleGroup } from "@/components/ui/toggle-group";
@@ -71,12 +71,7 @@ const CreateEventPage = () => {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="flex items-center gap-4">
-        <Link to="/timeline">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Timeline
-          </Button>
-        </Link>
+        <SmartBackButton defaultPath="/timeline" label="Back to Timeline" />
       </div>
 
       <h1 className="text-3xl font-bold">Create Event</h1>
