@@ -1,7 +1,7 @@
 # Mycelia Developer Experience Roadmap
 
 **Version**: 1.0
-**Last Updated**: 2025-11-27
+**Last Updated**: 2025-11-29
 **Status**: Draft
 
 ---
@@ -577,6 +577,43 @@ Recommended team composition:
 **Pros**: Lower risk, incremental improvements
 **Cons**: Longer time to value, fragmented experience
 **Decision**: Rejected - Users need immediate friction reduction
+
+---
+
+## Known Issues & Near Features
+
+This section tracks bugs, technical debt, and near-term improvements that don't fit into the major phases above.
+
+### Bugs / Technical Debt
+
+| Issue | Description | Status | Priority |
+|-------|-------------|--------|----------|
+| **Stuck diarization claims** | When diarization workers crash or are killed, they leave `processing_by` claims on audio chunks that are never released. Requires manual cleanup using `python/debug/cleanup_claims.py`. [#12](https://github.com/mycelia-tech/mycelia/issues/12) | Open | High |
+
+#### Stuck Diarization Claims - Details
+
+**Problem**: The diarization worker claims audio chunks by setting `processing_by` and `claimed_at` fields in `audio_chunks` collection. If a worker crashes, gets killed, or times out without completing, these claims remain indefinitely, blocking the chunks from being processed.
+
+**Current Workaround**: Use the debug script:
+```bash
+uv run python/debug/cleanup_claims.py           # inspect current claims
+uv run python/debug/cleanup_claims.py --clean   # clear claims (checks for running workers)
+uv run python/debug/cleanup_claims.py --clean --force  # force clear
+```
+
+**Proper Fix Needed**:
+- Implement automatic claim timeout (e.g., release claims older than 30 minutes)
+- Add periodic cleanup job that releases stale claims
+- Consider heartbeat mechanism for long-running workers
+- Make cleanup script obsolete by design
+
+---
+
+### Near Features
+
+| Feature | Description | Status | Priority |
+|---------|-------------|--------|----------|
+| *Add items here* | - | - | - |
 
 ---
 
