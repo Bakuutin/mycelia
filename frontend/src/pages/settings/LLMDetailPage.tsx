@@ -12,7 +12,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ArrowLeft,
   CheckCircle,
   Copy,
   Loader2,
@@ -21,6 +20,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 
 const updateModelSchema = z.object({
   alias: z.enum(["small", "medium", "large"]),
@@ -208,12 +208,7 @@ const LLMDetailPage = () => {
     return (
       <div className="space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/settings/llms">
-            <Button variant="outline" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/settings/llms" variant="outline" />
           <h2 className="text-2xl font-semibold">Error</h2>
         </div>
         <div className="border rounded-lg p-8 text-center">
@@ -227,12 +222,7 @@ const LLMDetailPage = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to="/settings/llms">
-            <Button variant="outline" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/settings/llms" variant="outline" />
           <h2 className="text-2xl font-semibold">{model.alias}</h2>
         </div>
         <div className="flex items-center gap-2">

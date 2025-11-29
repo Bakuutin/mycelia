@@ -8,6 +8,8 @@ from bson import ObjectId
 from datetime import datetime
 import base64
 import pytz
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from requests.exceptions import RequestException, HTTPError
 
 
 class EJsonEncoder(json.JSONEncoder):
@@ -50,6 +52,18 @@ class EJsonDecoder(json.JSONDecoder):
         return dct
 
 
+def _should_retry(exception: Exception) -> bool:
+    if isinstance(exception, HTTPError):
+        return exception.response.status_code >= 500
+    return isinstance(exception, RequestException)
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    retry=retry_if_exception(_should_retry),
+    reraise=True,
+)
 def call_resource(resource_name: str, body: dict) -> Any:
     ensure_authorized()
     response = session.post(

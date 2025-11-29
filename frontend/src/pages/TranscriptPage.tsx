@@ -7,7 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAudioPlayer } from "@/modules/audio/player";
+import { embeddingToColor } from "@/lib/pcaColor";
+import { ObjectId } from "bson";
 
 interface TranscriptSegment {
   start: number; // seconds from transcript start
@@ -19,14 +22,24 @@ interface TranscriptionDoc {
   _id: unknown;
   start: Date;
   end: Date;
+  original_id: ObjectId;
   segments: TranscriptSegment[];
 }
 
 interface RenderSegment {
+  original_id: ObjectId;
   time: Date;
   endTime: Date;
   text: string;
   transcriptStart: Date;
+}
+
+interface DiarizationDoc {
+  _id: unknown;
+  start: Date;
+  end: Date;
+  original: ObjectId;
+  embedding?: number[];
 }
 
 function parseDateParam(value: string | null): Date | null {
@@ -68,6 +81,7 @@ const TranscriptPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [segments, setSegments] = useState<RenderSegment[]>([]);
+  const [diarizations, setDiarizations] = useState<DiarizationDoc[]>([]);
   const [loadingTop, setLoadingTop] = useState(false);
   const [loadingBottom, setLoadingBottom] = useState(false);
   const [displayStart, setDisplayStart] = useState<Date | null>(null);
@@ -123,6 +137,22 @@ const TranscriptPage = () => {
     );
   }
 
+  async function fetchDiarizationsRange(
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Promise<DiarizationDoc[]> {
+    const docs: DiarizationDoc[] = await callResource("tech.mycelia.mongo", {
+      action: "find",
+      collection: "diarizations",
+      query: {
+        start: { $lt: rangeEnd },
+        end: { $gt: rangeStart },
+      },
+      options: { sort: { start: 1 }, limit: 5000 },
+    });
+    return docs;
+  }
+
   async function fetchSegmentsRange(
     rangeStart: Date,
     rangeEnd: Date,
@@ -148,6 +178,7 @@ const TranscriptPage = () => {
             endTime: absEnd,
             text: (s.text || "").replace(/\n/g, " "),
             transcriptStart: doc.start,
+            original_id: doc.original_id,
           });
         }
       }
@@ -168,8 +199,12 @@ const TranscriptPage = () => {
     setError(null);
     setSearchError(null);
     try {
-      const rendered = await fetchSegmentsRange(startNorm, endNorm);
+      const [rendered, diarizationsData] = await Promise.all([
+        fetchSegmentsRange(startNorm, endNorm),
+        fetchDiarizationsRange(startNorm, endNorm),
+      ]);
       setSegments(rendered);
+      setDiarizations(diarizationsData);
       setDisplayStart(startNorm);
       setDisplayEnd(endNorm);
       setFormStartDate(startNorm);
@@ -254,6 +289,7 @@ const TranscriptPage = () => {
               endTime: absEnd,
               text: t,
               transcriptStart: doc.start,
+              original_id: doc.original_id,
             });
           }
         }
@@ -273,9 +309,13 @@ const TranscriptPage = () => {
       let collected: RenderSegment[] = [];
       for (let i = 0; i < 5 && collected.length < 100; i++) {
         const rangeStart = new Date(displayStart.getTime() - windowMs);
-        const segs = await fetchSegmentsRange(rangeStart, displayStart);
+        const [segs, diarizationsData] = await Promise.all([
+          fetchSegmentsRange(rangeStart, displayStart),
+          fetchDiarizationsRange(rangeStart, displayStart),
+        ]);
         collected = segs;
         if (collected.length < 100) windowMs *= 2; // expand window
+        setDiarizations((prev) => [...diarizationsData, ...prev]);
       }
       if (collected.length === 0) return;
       const take = collected.slice(-100);
@@ -296,9 +336,13 @@ const TranscriptPage = () => {
       let collected: RenderSegment[] = [];
       for (let i = 0; i < 5 && collected.length < 100; i++) {
         const rangeEnd = new Date(displayEnd.getTime() + windowMs);
-        const segs = await fetchSegmentsRange(displayEnd, rangeEnd);
+        const [segs, diarizationsData] = await Promise.all([
+          fetchSegmentsRange(displayEnd, rangeEnd),
+          fetchDiarizationsRange(displayEnd, rangeEnd),
+        ]);
         collected = segs;
         if (collected.length < 100) windowMs *= 2; // expand window
+        setDiarizations((prev) => [...prev, ...diarizationsData]);
       }
       if (collected.length === 0) return;
       const take = collected.slice(0, 100);
@@ -339,8 +383,12 @@ const TranscriptPage = () => {
           e = tmp;
           updateRange(s, e);
         }
-        const rendered = await fetchSegmentsRange(s, e);
+        const [rendered, diarizationsData] = await Promise.all([
+          fetchSegmentsRange(s, e),
+          fetchDiarizationsRange(s, e),
+        ]);
         setSegments(rendered);
+        setDiarizations(diarizationsData);
         setDisplayStart(s);
         setDisplayEnd(e);
         setFormStartDate(s);
@@ -493,32 +541,84 @@ const TranscriptPage = () => {
                     )
                     : null;
 
+                  const diarizationsInSegment = !lastSearchedQ
+                    ? diarizations.filter(
+                        (d) =>
+                          d.original === seg.original_id &&
+                          d.start.getTime() < seg.endTime.getTime() &&
+                        d.end.getTime() > seg.time.getTime(),
+                      )
+                    : [];
+
                   return (
                     <div key={idx} className="relative p-4">
                       {gapBadge}
-                      <div className="flex items-center gap-2 mb-1">
-                        <button
-                          type="button"
-                          onClick={() => handlePlayFromSegment(seg.time)}
-                          className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                          title="Play from here"
-                        >
-                          <svg
-                            className="w-3 h-3"
-                            fill="currentColor"
-                            viewBox="0 0 16 16"
-                          >
-                            <path d="M3 2v12l10-6L3 2z" />
-                          </svg>
-                        </button>
-                        <div className="text-xs text-muted-foreground">
-                          {formatTime(seg.time, timeFormat)}
+                      <div className="flex gap-3">
+                        <div className="flex flex-col gap-1 items-center pt-1">
+                          {diarizationsInSegment.map((diarization, diarIdx) => {
+                            const color = embeddingToColor(diarization.embedding) || "#eab308";
+                            return (
+                              <Tooltip key={`${diarization._id}-${diarIdx}`}>
+                                <TooltipTrigger asChild>
+                                  <div
+                                    className="w-2 h-2 rounded-full cursor-help flex-shrink-0"
+                                    style={{ backgroundColor: color }}
+                                  />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <div className="space-y-2">
+                                    <div className="font-semibold">Diarization</div>
+                                    <div className="text-xs">
+                                      <div>Start: {formatTime(diarization.start, timeFormat)}</div>
+                                      <div>End: {formatTime(diarization.end, timeFormat)}</div>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const diarizationId = diarization._id instanceof ObjectId
+                                          ? diarization._id.toString()
+                                          : String(diarization._id);
+                                        navigate(`/diarizations/${diarizationId}`);
+                                      }}
+                                      className="w-full mt-2"
+                                    >
+                                      Go to diarization
+                                    </Button>
+                                  </div>
+                                </TooltipContent>
+                              </Tooltip>
+                            );
+                          })}
                         </div>
-                      </div>
-                      <div className="whitespace-pre-wrap leading-relaxed">
-                        {lastSearchedQ
-                          ? renderHighlightedText(seg.text, lastSearchedQ)
-                          : seg.text}
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <button
+                              type="button"
+                              onClick={() => handlePlayFromSegment(seg.time)}
+                              className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                              title="Play from here"
+                            >
+                              <svg
+                                className="w-3 h-3"
+                                fill="currentColor"
+                                viewBox="0 0 16 16"
+                              >
+                                <path d="M3 2v12l10-6L3 2z" />
+                              </svg>
+                            </button>
+                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                <span>{formatTime(seg.time, timeFormat)}</span>
+                                <span>{formatTimeRangeDuration(seg.time, seg.endTime)}</span>
+                            </div>
+                          </div>
+                          <div className="whitespace-pre-wrap leading-relaxed">
+                            {lastSearchedQ
+                              ? renderHighlightedText(seg.text, lastSearchedQ)
+                              : seg.text}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   );

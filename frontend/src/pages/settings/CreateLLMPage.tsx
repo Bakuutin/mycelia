@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Save } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Save } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 
 const createModelSchema = z.object({
   alias: z.string().min(1, "Alias is required").max(
@@ -92,12 +92,7 @@ const CreateLLMPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Link to="/settings/llms">
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
-        </Link>
+        <SmartBackButton defaultPath="/settings/llms" variant="outline" />
         <h2 className="text-2xl font-semibold">Add LLM Model</h2>
       </div>
 

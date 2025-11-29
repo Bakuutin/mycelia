@@ -1,6 +1,7 @@
 #%%
 from discovery import Importer
 
+import argparse
 import logging
 from datetime import datetime, UTC
 from diarization import run_voice_activity_detection
@@ -215,8 +216,8 @@ def clear_all_errors():
         "query": {"ingestion.error": {"$exists": True}},
         "update": {"$unset": {"ingestion": ""}}
     })
-    logger.info(f"Cleared errors for {result.modified_count} files")
-    return result.modified_count
+    logger.info(f"Cleared errors for {result['modifiedCount']} files")
+    return result['modifiedCount']
 
 
 def add_missing_durations():
@@ -273,24 +274,32 @@ def add_missing_ends():
             }
         })
 
-#%%
-
-import_new_files()
 
 #%%
 
-def main():
+def main(reset_errors=False):
     logger.info("=" * 60)
     logger.info("Starting daemon cycle")
     logger.info("=" * 60)
 
-    logger.info("\n[1/3] Importing new files from sources...")
+    total_steps = 4 if reset_errors else 3
+    step = 1
+
+    if reset_errors:
+        logger.info(f"\n[{step}/{total_steps}] Resetting previous failed uploads...")
+        cleared_count = clear_all_errors()
+        logger.info(f"Cleared errors for {cleared_count} files")
+        step += 1
+
+    logger.info(f"\n[{step}/{total_steps}] Importing new files from sources...")
     import_new_files()
+    step += 1
 
-    logger.info("\n[2/3] Ingesting audio files...")
+    logger.info(f"\n[{step}/{total_steps}] Ingesting audio files...")
     ingests_missing_sources(limit=20)
+    step += 1
 
-    logger.info("\n[3/3] Running voice activity detection...")
+    logger.info(f"\n[{step}/{total_steps}] Running voice activity detection...")
     run_voice_activity_detection(limit=1000)
 
     logger.info("=" * 60)
@@ -299,10 +308,15 @@ def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Mycelia daemon for importing and processing audio files')
+    parser.add_argument('--reset-errors', action='store_true',
+                        help='Reset previous failed uploads on start by clearing error flags')
+    args = parser.parse_args()
+
     while True:
         start = time.time()
         try:
-            main()
+            main(reset_errors=args.reset_errors)
         except Exception as e:
             logger.exception(f"Error in main: {e}")
             time.sleep(10)

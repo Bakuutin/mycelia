@@ -1,6 +1,7 @@
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, History, ChevronDown, ChevronUp } from "lucide-react";
+import { History, ChevronDown, ChevronUp } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 import { useObject, useObjectHistory } from "@/hooks/useObjectQueries";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -348,12 +349,7 @@ const ObjectHistoryPage = () => {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to={id ? `/objects/${id}` : "/objects"}>
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath={id ? `/objects/${id}` : "/objects"} />
         </div>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-muted-foreground">Loading...</p>
@@ -367,12 +363,7 @@ const ObjectHistoryPage = () => {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/objects">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/objects" />
         </div>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-red-500">Object not found</p>
@@ -385,12 +376,7 @@ const ObjectHistoryPage = () => {
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to={object ? `/objects/${id}` : "/objects"}>
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath={object ? `/objects/${id}` : "/objects"} />
           <div>
             <h1 className="text-3xl font-bold">Object History</h1>
             <p className="text-muted-foreground mt-1">

@@ -183,6 +183,26 @@ Discovers and imports new audio files from configured sources.
 ### Voice Activity Detection (`diarization.py`)
 Runs VAD on audio chunks to detect speech segments.
 
+### Diarization Worker (`diarization_worker.py`)
+Consumes pending audio chunks, merges them into short WAVs, and calls the diarization server to write speaker segments back to MongoDB.
+
+#### Running
+
+```bash
+cd python
+uv run diarization_worker.py --limit 25 --max-chunks 10
+```
+
+- `--limit` (optional): stop after processing a specific number of sequences.
+- `--max-chunks` (optional): cap how many consecutive chunks get merged per request (defaults to the `DIARIZATION_MAX_SEQUENCE_CHUNKS` env var, or 6).
+
+Environment variables:
+
+- `DIARIZATION_SERVER_URL` (default `http://localhost:8085`): endpoint that exposes `POST /diarize`.
+- `DIARIZATION_MAX_SEQUENCE_CHUNKS`: fallback for the `--max-chunks` flag; use it when running the worker under a supervisor so uploads stay below the server’s payload limit.
+
+Progress logs stream to the console (via `tqdm`) and to `python/logs/diarization_worker.log`.
+
 ### Transcription (`stt.py`)
 Speech-to-text transcription services.
 

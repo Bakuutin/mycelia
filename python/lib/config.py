@@ -4,9 +4,9 @@ from pathlib import Path
 import urllib.parse
 import os
 
-env_path = Path(__file__).parent.parent.parent / "backend" / ".env"
+env_path = Path(__file__).parent.parent.parent / ".env"
 assert env_path.exists(), f"Environment file not found at {env_path}"
-dotenv.load_dotenv(env_path)
+dotenv.load_dotenv(env_path, override=True)
 
 
 def env(name: str, default: str | None = None) -> str:

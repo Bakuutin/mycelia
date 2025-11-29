@@ -6,7 +6,7 @@ import { validateObjectForSave } from "@/types/objects";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ObjectForm } from "@/components/ObjectForm";
-import { ArrowLeft } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 
 const CreateObjectPage = () => {
   const navigate = useNavigate();
@@ -62,15 +62,7 @@ const CreateObjectPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate("/objects")}
-          className="flex items-center gap-2"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Objects
-        </Button>
+        <SmartBackButton defaultPath="/objects" label="Back to Objects" />
         <h1 className="text-3xl font-bold">Create Object</h1>
       </div>
 

@@ -97,6 +97,26 @@ export class ApiClient {
     return response.json();
   }
 
+  async getBlob(path: string): Promise<Blob> {
+    const { apiEndpoint } = this.getConfig();
+    const url = `${apiEndpoint}${path}`;
+
+    const headers = await this.getAuthHeaders();
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `API request failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return response.blob();
+  }
+
   async testConnection(): Promise<boolean> {
     try {
       await this.fetch("resource", {});

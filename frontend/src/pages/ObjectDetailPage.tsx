@@ -1,7 +1,8 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, History, Trash2 } from "lucide-react";
+import { History, Trash2 } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 import {
   useDeleteObject,
   useObject,
@@ -63,12 +64,7 @@ const ObjectDetailPage = () => {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/objects">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/objects" />
         </div>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-muted-foreground">Loading object...</p>
@@ -81,12 +77,7 @@ const ObjectDetailPage = () => {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/objects">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/objects" />
         </div>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-red-500">
@@ -100,12 +91,7 @@ const ObjectDetailPage = () => {
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <Link to="/objects">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
-        </Link>
+        <SmartBackButton defaultPath="/objects" />
         <div className="flex items-center gap-2">
           {updateObjectMutation.isPending && (
             <span className="text-xs text-muted-foreground">Saving...</span>

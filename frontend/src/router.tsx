@@ -16,6 +16,7 @@ import PromptsPage from "./pages/settings/PromptsPage";
 import PromptDetailPage from "./pages/settings/PromptDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
+import DiarizationDetailPage from "./pages/DiarizationDetailPage";
 import ObjectsPage from "./pages/ObjectsPage";
 import ObjectDetailPage from "./pages/ObjectDetailPage";
 import ObjectHistoryPage from "./pages/ObjectHistoryPage";
@@ -44,6 +45,10 @@ export const router = createBrowserRouter([
       {
         path: "transcript",
         element: <TranscriptPage />,
+      },
+      {
+        path: "diarizations/:id",
+        element: <DiarizationDetailPage />,
       },
       {
         path: "audio",

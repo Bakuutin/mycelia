@@ -73,24 +73,21 @@ async function ensureIndexExists(
   await ensureCollectionExists(db, collectionName);
 
   const collection = db.collection(collectionName);
-  const indexes = await collection.listIndexes().toArray();
   const indexName = options.name;
 
-  const indexExists = indexes.some((index) => {
-    if (indexName) {
-      return index.name === indexName;
-    }
-    // Compare index keys
-    return JSON.stringify(index.key) === JSON.stringify(indexSpec);
-  });
-
-  if (!indexExists) {
+  try {
     await collection.createIndex(indexSpec, options);
     console.log(
       `Created index on ${collectionName}: ${
         indexName || JSON.stringify(indexSpec)
       }`,
     );
+  } catch (error) {
+    // Silently ignore if index already exists (possibly with different name)
+    if (error instanceof Error && error.message.includes("Index already exists")) {
+      return;
+    }
+    throw error;
   }
 }
 
@@ -118,14 +115,23 @@ async function ensureAudioChunksIndexes(db: Db): Promise<void> {
     db,
     "audio_chunks",
     { processing_by: 1 },
-    { name: "audio_chunks_processing_by" },
+    { name: "processing_by" },
   );
 
   await ensureIndexExists(
     db,
     "audio_chunks",
     { transcribed_at: 1 },
-    { name: "audio_chunks_transcribed_at" },
+    { name: "transcribed_at" },
+  );
+
+  await ensureIndexExists(
+    db,
+    "audio_chunks",
+    {
+      start: 1,
+    },
+    { name: "start_1" },
   );
 }
 
@@ -148,14 +154,6 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
       "timestamp": -1,
     },
     { name: "object_id" },
-  );
-  await ensureIndexExists(
-    db,
-    "audio_chunks",
-    {
-      start: 1,
-    },
-    { name: "start_1" },
   );
 }
 

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { callResource } from "@/lib/api";
 import type { EventItem } from "@/types/events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Trash2, X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
+import { SmartBackButton } from "@/components/SmartBackButton";
 import { ColorInput } from "@/components/forms/ColorInput";
 import { CategoryInput } from "@/components/forms/CategoryInput";
 import { ToggleGroup } from "@/components/ui/toggle-group";
@@ -117,12 +118,7 @@ const EventDetailPage = () => {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/timeline">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/timeline" />
         </div>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-muted-foreground">Loading event...</p>
@@ -135,12 +131,7 @@ const EventDetailPage = () => {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
-          <Link to="/timeline">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <SmartBackButton defaultPath="/timeline" />
         </div>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-red-500">Error: {error || "Event not found"}</p>
@@ -152,12 +143,7 @@ const EventDetailPage = () => {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <Link to="/timeline">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Timeline
-          </Button>
-        </Link>
+        <SmartBackButton defaultPath="/timeline" label="Back to Timeline" />
         <div className="flex items-center gap-2">
           {saving && (
             <span className="text-xs text-muted-foreground">Saving...</span>
