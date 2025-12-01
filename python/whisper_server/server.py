@@ -39,7 +39,7 @@ def get_device_config():
     return "cpu", "int8"
 
 device, compute_type = get_device_config()
-model_size = "large-v3"
+model_size = "large-v3-turbo"
 
 print(f"Initializing Whisper model: {model_size}")
 print(f"Device: {device}, Compute type: {compute_type}")

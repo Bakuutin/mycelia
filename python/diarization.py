@@ -142,3 +142,12 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100)
 
     if verbose_logs:
         logger.info(f"VAD batch complete: {total_processed} chunks processed, {has_speech} with speech ({(has_speech / total_processed) * 100:.1f}%)" if total_processed > 0 else "VAD batch complete: 0 chunks processed")
+
+
+if __name__ == "__main__":
+    while True:
+        try:
+            run_voice_activity_detection(limit=1000, verbose_logs=True, batch_size=100)
+        except Exception as e:
+            logger.error(f"Error running voice activity detection: {e}")
+            time.sleep(10)
