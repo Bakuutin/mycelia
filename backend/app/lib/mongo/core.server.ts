@@ -49,17 +49,26 @@ export function sift(query: Filter<unknown>): (item: unknown) => boolean {
   return (item: unknown) => tester(item);
 }
 
+const findBaseOptions = z.object({
+  projection: z.record(z.string(), z.any()).optional(),
+  sort: z.record(z.string(), z.any()).optional(),
+  limit: z.number().optional(),
+  skip: z.number().optional(),
+  hint: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+}).optional();
+
 const findSchema = z.object({
-  action: z.enum(["find", "findOne"]),
+  action: z.literal("find"),
   collection: z.string(),
   query: z.record(z.string(), z.any()),
-  options: z.object({
-    projection: z.record(z.string(), z.any()).optional(),
-    sort: z.record(z.string(), z.any()).optional(),
-    limit: z.number().optional(),
-    skip: z.number().optional(),
-    hint: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
-  }).optional(),
+  options: findBaseOptions,
+});
+
+const findOneSchema = z.object({
+  action: z.literal("findOne"),
+  collection: z.string(),
+  query: z.record(z.string(), z.any()),
+  options: findBaseOptions,
 });
 
 const getFirstBatchSchema = z.object({
@@ -101,19 +110,34 @@ const insertManySchema = z.object({
   docs: z.array(z.record(z.string(), z.any())),
 });
 
-const updateSchema = z.object({
-  action: z.enum(["updateOne", "updateMany"]),
+const updateBaseOptions = z.object({
+  upsert: z.boolean().optional(),
+}).optional();
+
+const updateOneSchema = z.object({
+  action: z.literal("updateOne"),
   collection: z.string(),
   query: z.record(z.string(), z.any()),
   update: z.record(z.string(), z.any()),
-  options: z.object({
-    upsert: z.boolean().optional(),
-    // arrayFilters is not supported yet
-  }).optional(),
+  options: updateBaseOptions,
 });
 
-const deleteSchema = z.object({
-  action: z.enum(["deleteOne", "deleteMany"]),
+const updateManySchema = z.object({
+  action: z.literal("updateMany"),
+  collection: z.string(),
+  query: z.record(z.string(), z.any()),
+  update: z.record(z.string(), z.any()),
+  options: updateBaseOptions,
+});
+
+const deleteOneSchema = z.object({
+  action: z.literal("deleteOne"),
+  collection: z.string(),
+  query: z.record(z.string(), z.any()),
+});
+
+const deleteManySchema = z.object({
+  action: z.literal("deleteMany"),
   collection: z.string(),
   query: z.record(z.string(), z.any()),
 });
@@ -148,10 +172,13 @@ const listIndexesSchema = z.object({
 
 const mongoRequestSchema = z.discriminatedUnion("action", [
   findSchema,
+  findOneSchema,
   insertOneSchema,
   insertManySchema,
-  updateSchema,
-  deleteSchema,
+  updateOneSchema,
+  updateManySchema,
+  deleteOneSchema,
+  deleteManySchema,
   countSchema,
   aggregateSchema,
   bulkWriteSchema,

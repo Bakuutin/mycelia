@@ -1,7 +1,7 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import * as z from "zod";
 
 interface MCPToolMetadata {
   resource: Resource<any, any>;
@@ -11,7 +11,7 @@ interface MCPToolMetadata {
 const toolMetadataMap = new Map<string, MCPToolMetadata>();
 
 function buildMCPInputSchema(schema: any, excludeFields?: string[]): Tool["inputSchema"] {
-  const json = zodToJsonSchema(schema) as Record<string, unknown>;
+  const json = z.toJSONSchema(schema) as Record<string, unknown>;
 
   if (json && typeof json === "object" && (json as any).type === "object") {
     if (excludeFields && excludeFields.length > 0) {
@@ -39,11 +39,15 @@ function buildMCPInputSchema(schema: any, excludeFields?: string[]): Tool["input
 }
 
 function extractActionDescription(schema: any, actionValue: string): string | undefined {
-  if (schema._def?.typeName === "ZodObject") {
-    const shape = schema._def.shape();
-    const actionField = shape.action;
-    if (actionField?._def?.typeName === "ZodLiteral" && actionField._def.value === actionValue) {
-      return actionField._def.description || actionField.description;
+  const def = schema._def || schema.def;
+  if (def?.type === "object") {
+    const shape = def.shape;
+    const actionField = shape?.action;
+    if (actionField) {
+      const actionDef = actionField._def || actionField.def;
+      if (actionDef?.type === "literal" && actionDef.values?.[0] === actionValue) {
+        return actionDef.description || actionField.description;
+      }
     }
   }
   return undefined;
@@ -53,29 +57,43 @@ export function resourceToMCPTools<Input, Output>(
   resource: Resource<Input, Output>,
 ): Tool[] {
   const schema = resource.schemas.request;
+  const def = schema._def as any;
 
-  if (schema.def?.typeName === "ZodDiscriminatedUnion") {
-    const discriminator = schema.def.discriminator;
-    const optionsMap = schema.def.optionsMap;
+  if (def?.type === "union" && def?.discriminator && def?.options) {
+    const discriminator = def.discriminator;
+    const options = def.options;
     const tools: Tool[] = [];
 
-    for (const [actionValue, actionSchema] of optionsMap.entries()) {
-      const toolName = `${resource.code}.${actionValue}`;
-      const actionDescription = extractActionDescription(actionSchema, actionValue);
+    for (const optionSchema of options) {
+      const optionDef = optionSchema._def || optionSchema.def;
+      const shape = optionDef?.shape;
 
-      toolMetadataMap.set(toolName, {
-        resource,
-        action: actionValue,
-      });
+      if (shape && shape[discriminator]) {
+        const discriminatorField = shape[discriminator];
+        const actionDef = discriminatorField._def || discriminatorField.def;
+        const actionValue = actionDef?.values?.[0];
 
-      tools.push({
-        name: toolName,
-        description: actionDescription || actionValue,
-        inputSchema: buildMCPInputSchema(actionSchema, [discriminator]),
-      });
+        if (actionValue) {
+          const toolName = `${resource.code}.${actionValue}`;
+          const actionDescription = extractActionDescription(optionSchema, actionValue);
+
+          toolMetadataMap.set(toolName, {
+            resource,
+            action: actionValue,
+          });
+
+          tools.push({
+            name: toolName,
+            description: actionDescription || actionValue,
+            inputSchema: buildMCPInputSchema(optionSchema, [discriminator]),
+          });
+        }
+      }
     }
 
-    return tools;
+    if (tools.length > 0) {
+      return tools;
+    }
   }
 
   toolMetadataMap.set(resource.code, { resource });
@@ -119,7 +137,7 @@ export async function handleMCPToolCall(
 
     return {
       content: [],
-      structuredContent: { result },
+      structuredContent: result,
       isError: false,
     };
   } catch (error) {
