@@ -4677,7 +4677,7 @@
         "npm:typescript@^5.1.6",
         "npm:yargs@18",
         "npm:zod-to-json-schema@^3.24.6",
-        "npm:zod@^4.1.12"
+        "npm:zod@^4.1.13"
       ]
     }
   }
