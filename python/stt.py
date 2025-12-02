@@ -14,6 +14,8 @@ from lib.resources import call_resource
 
 from lib.transcription import known_errors, remove_if_lonely
 
+from lib.worker import mongo_cursor, claim_chunks, release_chunks
+
 from pydantic import BaseModel
 from datetime import datetime
 from bson import ObjectId
@@ -199,29 +201,6 @@ class SpeechSequence(BaseModel):
         return f'{self.original_id}: {repr(indices)}'
 
 
-def mongo_cursor(collection, query, options, batch_size=200):
-    result = call_resource('tech.mycelia.mongo', {
-        "action": "getFirstBatch",
-        "collection": collection,
-        "query": query,
-        "options": options,
-        "batchSize": batch_size,
-    })
-    cursor_id = result.get("cursorId")
-
-    while result.get("data", []) and result.get("hasMore", False):
-        for c in result['data']:
-            yield c
-
-        result = call_resource('tech.mycelia.mongo', {
-            "action": "getMore",
-            "collection": collection,
-            "cursorId": cursor_id,
-            "batchSize": batch_size,
-        })
-
-
-
 
 def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_id=None) -> Iterator[SpeechSequence]:
     sequences_by_id: dict[ObjectId, SpeechSequence] = {}
@@ -290,38 +269,16 @@ def get_speech_sequences(limit=10, filters=None, max_sequence_length=30, worker_
 
 
 def claim_sequence(seq: SpeechSequence, worker_id: str) -> bool:
-    result = call_resource('tech.mycelia.mongo', {
-        "action": "updateMany",
-        "collection": "audio_chunks",
-        "query": {
-            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
-            'processing_by': None
-        },
-        "update": {
-            '$set': {'processing_by': worker_id, 'claimed_at': datetime.now(tz=UTC)},
-        }
-    })
-
-    success = result['modifiedCount'] == len(seq.chunks)
-
+    chunk_ids = [chunk['_id'] for chunk in seq.chunks]
+    success = claim_chunks(chunk_ids, worker_id)
     if not success:
         release_sequence(seq, worker_id)
-
     return success
 
 
 def release_sequence(seq: SpeechSequence, worker_id: str):
-    call_resource('tech.mycelia.mongo', {
-        "action": "updateMany",
-        "collection": "audio_chunks",
-        "query": {
-            '_id': {'$in': [chunk['_id'] for chunk in seq.chunks]},
-            'processing_by': worker_id
-        },
-        "update": {
-            '$set': {'processing_by': None, 'claimed_at': None},
-        }
-    })
+    chunk_ids = [chunk['_id'] for chunk in seq.chunks]
+    release_chunks(chunk_ids, worker_id)
 
 def process_sequence(sequence: SpeechSequence, worker_id: str, server_url: str):
     start_time = time.time()
