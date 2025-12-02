@@ -8,6 +8,11 @@ interface TimelineDimensions {
   height: number;
 }
 
+export interface TimelineSelection {
+  start: Date | null;
+  end: Date | null;
+}
+
 export function useTimeline() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState<TimelineDimensions>({
@@ -15,6 +20,10 @@ export function useTimeline() {
     height: 100,
   });
   const [transform, setTransform] = useState<d3.ZoomTransform>(d3.zoomIdentity);
+  const [selection, setSelection] = useState<TimelineSelection>({
+    start: null,
+    end: null,
+  });
 
   const { start, end, setRange } = useTimelineRange();
 
@@ -98,11 +107,18 @@ export function useTimeline() {
     };
   }, [zoomBehavior, dimensions.width, dimensions.height]);
 
+  const clearSelection = useCallback(() => {
+    setSelection({ start: null, end: null });
+  }, []);
+
   return {
     containerRef,
     dimensions,
     transform,
     timeScale,
     width: dimensions.width,
+    selection,
+    setSelection,
+    clearSelection,
   };
 }

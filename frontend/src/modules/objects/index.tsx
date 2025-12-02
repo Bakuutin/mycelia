@@ -97,7 +97,8 @@ function getRightBoundaryPath(
 
 function RangeBox({ range, width }: { range: PlacedObjectRange; width: number }) {
   const navigate = useNavigate();
-  const { start, end, startX, endX, lane, object, startOffScreen, endOffScreen } = range;
+  const { start, end, startX: rawStartX, endX, lane, object, startOffScreen, endOffScreen } = range;
+  const startX = rawStartX < 0 ? 0 : rawStartX;
   const { timeFormat } = useSettingsStore();
   const now = useNow();
   const { toggleSelection, isSelected } = useObjectSelectionStore();
@@ -128,6 +129,9 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
     object.objectObject;
 
   const rangeWidth = endX - startX;
+
+  if (rangeWidth <= 0) return null;
+
   const height = laneHeight - 2;
   const x = startX;
   const y = topMargin + lane * laneHeight;

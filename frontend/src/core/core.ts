@@ -1,3 +1,5 @@
+import * as d3 from "d3";
+
 export interface LayerComponentProps {
   scale: d3.ScaleTime<number, number>;
   transform: d3.ZoomTransform;

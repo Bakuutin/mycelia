@@ -1,5 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useCallback, useEffect } from "react";
 import { Layer, LayerComponentProps } from "@/core/core.ts";
+import * as d3 from "d3";
+import { useTimeline } from "@/hooks/useTimeline.ts";
 
 import { Formatter, Label } from "./formatters/types.ts";
 
@@ -17,8 +19,241 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
   options = { formatter: gregorianFormatter },
 ) => {
   return {
-    component: ({ scale, transform, width }: LayerComponentProps) => (
-      <svg width={width} height={40} className="zoomable overflow-visible">
+    component: ({ scale, transform, width }: LayerComponentProps) => {
+      const { selection, setSelection } = useTimeline();
+      const svgRef = useRef<SVGSVGElement>(null);
+      const isSelectingRef = useRef(false);
+      const selectionStartXRef = useRef<number | null>(null);
+      const selectionStartTimeRef = useRef<Date | null>(null);
+      const hasMovedRef = useRef(false);
+      const draggingHandleRef = useRef<"left" | "right" | null>(null);
+      const handleStartTimeRef = useRef<Date | null>(null);
+      const selectionRef = useRef(selection);
+      const scaleRef = useRef(scale);
+      const transformRef = useRef(transform);
+      
+      useEffect(() => {
+        selectionRef.current = selection;
+      }, [selection]);
+
+      useEffect(() => {
+        scaleRef.current = scale;
+        transformRef.current = transform;
+      }, [scale, transform]);
+
+      useEffect(() => {
+        const svg = svgRef.current;
+        if (!svg) return;
+
+        const handleDocumentMouseMove = (e: MouseEvent) => {
+          if (!setSelection || !svg) return;
+
+          const rect = svg.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const rescaledScale = transformRef.current.rescaleX(scaleRef.current);
+          const clampedX = Math.max(0, Math.min(width, x));
+          const newTime = rescaledScale.invert(clampedX);
+
+          if (draggingHandleRef.current === "left") {
+            const currentSelection = selectionRef.current;
+            if (!currentSelection?.end) return;
+            const end = currentSelection.end;
+            if (newTime <= end) {
+              setSelection({ start: newTime, end });
+            } else {
+              setSelection({ start: end, end: newTime });
+            }
+          } else if (draggingHandleRef.current === "right") {
+            const currentSelection = selectionRef.current;
+            if (!currentSelection?.start) return;
+            const start = currentSelection.start;
+            if (newTime >= start) {
+              setSelection({ start, end: newTime });
+            } else {
+              setSelection({ start: newTime, end: start });
+            }
+          } else if (isSelectingRef.current && selectionStartXRef.current !== null && selectionStartTimeRef.current !== null) {
+            const deltaX = Math.abs(x - selectionStartXRef.current);
+            
+            if (deltaX > 3) {
+              hasMovedRef.current = true;
+            }
+            
+            if (hasMovedRef.current) {
+              const endTime = rescaledScale.invert(clampedX);
+              const startTime = selectionStartTimeRef.current;
+              
+              if (startTime <= endTime) {
+                setSelection({ start: startTime, end: endTime });
+              } else {
+                setSelection({ start: endTime, end: startTime });
+              }
+            }
+          } else {
+            return;
+          }
+          
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        const handleDocumentMouseUp = (e: MouseEvent) => {
+          if (!isSelectingRef.current && !draggingHandleRef.current) return;
+          
+          if (draggingHandleRef.current) {
+            draggingHandleRef.current = null;
+            handleStartTimeRef.current = null;
+          } else if (isSelectingRef.current) {
+            if (!hasMovedRef.current && setSelection && selectionStartTimeRef.current) {
+              setSelection({ start: null, end: null });
+            }
+            
+            isSelectingRef.current = false;
+            selectionStartXRef.current = null;
+            selectionStartTimeRef.current = null;
+            hasMovedRef.current = false;
+          }
+          
+          document.removeEventListener("mousemove", handleDocumentMouseMove, { capture: true });
+          document.removeEventListener("mouseup", handleDocumentMouseUp, { capture: true });
+          
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        const handleHandleMouseDown = (e: MouseEvent, handle: "left" | "right") => {
+          if (e.button !== 0) return;
+          if (!setSelection) return;
+          const currentSelection = selectionRef.current;
+          if (!currentSelection?.start || !currentSelection?.end) return;
+
+          draggingHandleRef.current = handle;
+          handleStartTimeRef.current = handle === "left" ? currentSelection.start : currentSelection.end;
+          
+          document.addEventListener("mousemove", handleDocumentMouseMove, { capture: true });
+          document.addEventListener("mouseup", handleDocumentMouseUp, { capture: true });
+          
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        const handleNativeMouseDown = (e: MouseEvent) => {
+          if (e.button !== 0) return;
+          if (!setSelection) return;
+
+          const target = e.target as Element;
+          if (target.classList.contains("selection-handle")) {
+            const handle = target.classList.contains("selection-handle-left") ? "left" : "right";
+            handleHandleMouseDown(e, handle);
+            return;
+          }
+
+          const rect = svg.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          
+          isSelectingRef.current = true;
+          selectionStartXRef.current = x;
+          hasMovedRef.current = false;
+          
+          const rescaledScale = transformRef.current.rescaleX(scaleRef.current);
+          const startTime = rescaledScale.invert(x);
+          selectionStartTimeRef.current = startTime;
+          
+          document.addEventListener("mousemove", handleDocumentMouseMove, { capture: true });
+          document.addEventListener("mouseup", handleDocumentMouseUp, { capture: true });
+          
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        svg.addEventListener("mousedown", handleNativeMouseDown, { capture: true });
+
+        return () => {
+          svg.removeEventListener("mousedown", handleNativeMouseDown, { capture: true });
+          document.removeEventListener("mousemove", handleDocumentMouseMove, { capture: true });
+          document.removeEventListener("mouseup", handleDocumentMouseUp, { capture: true });
+        };
+      }, [width, setSelection]);
+
+      const selectionRect = useMemo(() => {
+        if (!selection?.start || !selection?.end) return null;
+
+        const rescaledScale = transform.rescaleX(scale);
+        const x1 = rescaledScale(selection.start);
+        const x2 = rescaledScale(selection.end);
+        
+        const left = Math.min(x1, x2);
+        const width = Math.abs(x2 - x1);
+
+        return { left, width };
+      }, [selection, scale, transform]);
+
+      return (
+        <svg
+          ref={svgRef}
+          width={width}
+          height={40}
+          className="overflow-visible"
+          style={{ cursor: "crosshair" }}
+        >
+          {selectionRect && (
+            <>
+              <rect
+                x={selectionRect.left}
+                y={0}
+                width={selectionRect.width}
+                height={40}
+                fill="rgba(59, 130, 246, 0.2)"
+                stroke="rgba(59, 130, 246, 0.5)"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+              
+              {/* Visual Handles */}
+              <rect
+                x={selectionRect.left - 2}
+                y={0}
+                width={4}
+                height={40}
+                fill="rgba(59, 130, 246, 0.8)"
+                stroke="rgba(59, 130, 246, 1)"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+              <rect
+                x={selectionRect.left + selectionRect.width - 2}
+                y={0}
+                width={4}
+                height={40}
+                fill="rgba(59, 130, 246, 0.8)"
+                stroke="rgba(59, 130, 246, 1)"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+
+              {/* Interactive Hit Areas */}
+              <rect
+                className="selection-handle selection-handle-left"
+                x={selectionRect.left - 5}
+                y={0}
+                width={10}
+                height={40}
+                fill="transparent"
+                style={{ cursor: "ew-resize" }}
+                pointerEvents="all"
+              />
+              <rect
+                className="selection-handle selection-handle-right"
+                x={selectionRect.left + selectionRect.width - 5}
+                y={0}
+                width={10}
+                height={40}
+                fill="transparent"
+                style={{ cursor: "ew-resize" }}
+                pointerEvents="all"
+              />
+            </>
+          )}
         <TimelineAxis
           scale={scale}
           transform={transform}
@@ -26,7 +261,8 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
           formatter={options.formatter}
         />
       </svg>
-    ),
+      );
+    },
   } as Layer;
 };
 
