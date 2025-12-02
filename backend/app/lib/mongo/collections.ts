@@ -75,7 +75,13 @@ async function ensureIndexExists(
   await ensureCollectionExists(db, collectionName);
 
   const collection = db.collection(collectionName);
-  const indexName = options.name;
+  const indexName: string = options.name as string;
+
+  const exists = await collection.indexExists(indexName);
+
+  if (exists) {
+    return;
+  }
 
   try {
     await collection.createIndex(indexSpec, options);
@@ -85,8 +91,10 @@ async function ensureIndexExists(
       }`,
     );
   } catch (error) {
-    // Silently ignore if index already exists (possibly with different name)
-    if (error instanceof Error && error.message.includes("Index already exists")) {
+    // Silently ignore if index already exists with a different name
+    if (
+      error instanceof Error && error.message.includes("Index already exists")
+    ) {
       return;
     }
     throw error;
@@ -159,12 +167,25 @@ async function ensureObjectsIndexes(db: Db): Promise<void> {
   );
 }
 
+async function ensureTranscriptionsIndexes(db: Db): Promise<void> {
+  await ensureIndexExists(
+    db,
+    "transcriptions",
+    { "segments.text": "text" },
+    {
+      name: "segments.text_text",
+      default_language: "none",
+      language_override: "stem_sep",
+    },
+  );
+}
+
 const promptsYamlSchema = z.array(
   z.object({
     name: z.string(),
     text: z.string(),
     description: z.string().optional(),
-  })
+  }),
 );
 
 const configYamlSchema = z.object({
@@ -210,7 +231,9 @@ async function ensureServerConfig(db: Db): Promise<void> {
     const defaultConfig = configYamlSchema.parse(configData);
 
     const configsCollection = db.collection("configs");
-    const serverConfig = await configsCollection.findOne({ _id: SERVER_CONFIG_ID });
+    const serverConfig = await configsCollection.findOne({
+      _id: SERVER_CONFIG_ID,
+    });
 
     if (!serverConfig) {
       // Resolve prompt names to ObjectIds
@@ -220,7 +243,9 @@ async function ensureServerConfig(db: Db): Promise<void> {
         if (promptId) {
           promptsMap[key] = promptId;
         } else {
-          console.warn(`Warning: Default prompt '${promptName}' for key '${key}' not found.`);
+          console.warn(
+            `Warning: Default prompt '${promptName}' for key '${key}' not found.`,
+          );
         }
       }
 
@@ -264,12 +289,11 @@ async function ensureServerConfig(db: Db): Promise<void> {
               ...updates,
               updatedAt: new Date(),
             },
-          }
+          },
         );
         console.log("Updated server_config with new defaults");
       }
     }
-
   } catch (error) {
     console.error("Failed to ensure server configuration:", error);
     // Don't fail startup, just log error
@@ -295,18 +319,19 @@ export async function ensureAllCollectionsExist(): Promise<void> {
 
   // Ensure indexes for specific collections
   await ensureObjectsIndexes(db);
+  await ensureTranscriptionsIndexes(db);
   await ensureAudioChunksIndexes(db);
   await ensureIndexExists(
     db,
     "messages",
     { chatId: 1, createdAt: 1 },
-    { name: "by_chat_time" }
+    { name: "by_chat_time" },
   );
   await ensureIndexExists(
     db,
     "chats",
     { userId: 1, updatedAt: -1 },
-    { name: "by_user_recent" }
+    { name: "by_user_recent" },
   );
 
   // Ensure server configuration and prompts
