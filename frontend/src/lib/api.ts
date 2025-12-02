@@ -47,17 +47,24 @@ export class ApiClient {
     const { apiEndpoint } = this.getConfig();
     const url = `${apiEndpoint}${path}`;
 
-    const headers = {
-      "Content-Type": "application/json",
-      ...await this.getAuthHeaders(),
-    };
+    const headers = new Headers()
+    
+    for (const [key, value] of Object.entries(await this.getAuthHeaders())) {
+      headers.set(key, value);
+    }
+    for (const [key, value] of Object.entries(options.headers || {})) {
+      headers.set(key, value);
+    }
+
+    if (
+      !headers.has("Content-Type")
+    ) {
+      headers.set("Content-Type", "application/json");
+    }
 
     const response = await fetch(url, {
       ...options,
-      headers: {
-        ...headers,
-        ...options.headers,
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -95,26 +102,6 @@ export class ApiClient {
       method: "DELETE",
     });
     return response.json();
-  }
-
-  async getBlob(path: string): Promise<Blob> {
-    const { apiEndpoint } = this.getConfig();
-    const url = `${apiEndpoint}${path}`;
-
-    const headers = await this.getAuthHeaders();
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers,
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `API request failed: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response.blob();
   }
 
   async testConnection(): Promise<boolean> {

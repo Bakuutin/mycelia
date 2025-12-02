@@ -3,6 +3,7 @@ import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
 import TimelinePage from "./pages/TimelinePage";
 import CreateEventPage from "./pages/CreateEventPage";
+import ChatPage from "./pages/ChatPage";
 import EventDetailPage from "./pages/EventDetailPage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
@@ -42,6 +43,10 @@ export const router = createBrowserRouter([
       {
         path: "timeline",
         element: <TimelinePage />,
+      },
+      {
+        path: "chat",
+        element: <ChatPage />,
       },
       {
         path: "transcript",

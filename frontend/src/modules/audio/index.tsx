@@ -17,12 +17,14 @@ export const AudioPlayerTool: Tool = {
       </>
     );
   },
+  tooltip: "Play/Pause",
 };
 
 export const GainTool: Tool = {
   component: () => {
     return <GainSlider />;
   },
+  tooltip: "Adjust volume gain",
 };
 
 export const DateTimePickerTool: Tool = {
@@ -57,6 +59,7 @@ export const DateTimePickerTool: Tool = {
       />
     );
   },
+  tooltip: "Jump to specific date/time",
 };
 
 export const AudioLayer: () => Layer = () => {

@@ -13,6 +13,7 @@ export type Layer = {
 
 export type Tool = {
   component: React.ComponentType<any>;
+  tooltip?: string;
 };
 
 export type Config = {

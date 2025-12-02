@@ -1,7 +1,10 @@
 import { useMemo, useRef, useCallback, useEffect } from "react";
-import { Layer, LayerComponentProps } from "@/core/core.ts";
+import { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
 import * as d3 from "d3";
-import { useTimeline } from "@/hooks/useTimeline.ts";
+import { Button } from "@/components/ui/button.tsx";
+import { CircleOff } from "lucide-react";
+
+import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore.ts";
 
 import { Formatter, Label } from "./formatters/types.ts";
 
@@ -10,6 +13,24 @@ import siFormatter from "./formatters/si.ts";
 
 export const GregorianFormatter: Formatter = gregorianFormatter;
 export const SiFormatter: Formatter = siFormatter;
+
+export const ClearSelectionTool: Tool = {
+  component: () => {
+    const { selection, clearSelection } = useTimelineSelectionStore();
+    const hasSelection = !!(selection.start && selection.end);
+
+    return (
+      <Button
+        onClick={clearSelection}
+        disabled={!hasSelection}
+        variant="outline"
+      >
+        <CircleOff className="w-4 h-4" />
+      </Button>
+    );
+  },
+  tooltip: "Clear timeline selection",
+};
 
 export type TimeLayerOptions = {
   formatter: Formatter;
@@ -20,7 +41,7 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
 ) => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { selection, setSelection } = useTimeline();
+      const { selection, setSelection } = useTimelineSelectionStore();
       const svgRef = useRef<SVGSVGElement>(null);
       const isSelectingRef = useRef(false);
       const selectionStartXRef = useRef<number | null>(null);
@@ -230,28 +251,6 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
                 strokeWidth={1}
                 pointerEvents="none"
               />
-
-              {/* Interactive Hit Areas */}
-              <rect
-                className="selection-handle selection-handle-left"
-                x={selectionRect.left - 5}
-                y={0}
-                width={10}
-                height={40}
-                fill="transparent"
-                style={{ cursor: "ew-resize" }}
-                pointerEvents="all"
-              />
-              <rect
-                className="selection-handle selection-handle-right"
-                x={selectionRect.left + selectionRect.width - 5}
-                y={0}
-                width={10}
-                height={40}
-                fill="transparent"
-                style={{ cursor: "ew-resize" }}
-                pointerEvents="all"
-              />
             </>
           )}
         <TimelineAxis
@@ -260,6 +259,31 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
           width={width}
           formatter={options.formatter}
         />
+        {selectionRect && (
+          <>
+            {/* Interactive Hit Areas */}
+            <rect
+              className="selection-handle selection-handle-left"
+              x={selectionRect.left - 5}
+              y={0}
+              width={10}
+              height={40}
+              fill="transparent"
+              style={{ cursor: "ew-resize" }}
+              pointerEvents="all"
+            />
+            <rect
+              className="selection-handle selection-handle-right"
+              x={selectionRect.left + selectionRect.width - 5}
+              y={0}
+              width={10}
+              height={40}
+              fill="transparent"
+              style={{ cursor: "ew-resize" }}
+              pointerEvents="all"
+            />
+          </>
+        )}
       </svg>
       );
     },
@@ -285,7 +309,7 @@ const TimelineAxis = ({
   // TODO: Be able Big Bang to the timeline 3.787 ± 0.020 billion years ago. (Doesn't fit in JS number precision rn)
 
   return (
-    <g>
+    <g style={{ pointerEvents: "none" }}>
       <TickLabels labels={labels} />
     </g>
   );
@@ -306,6 +330,7 @@ const TickLabel: React.FC<{
         width={width}
         height="40px"
         className="overflow-visible"
+        style={{ pointerEvents: "none" }}
       >
         <div className="flex flex-col-reverse h-full">
           <p className="text-center text-xs">{first}</p>

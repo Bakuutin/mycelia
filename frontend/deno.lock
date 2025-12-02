@@ -3,6 +3,7 @@
   "specifiers": {
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "jsr:@std/path@^1.0.8": "1.1.3",
+    "npm:@ai-sdk/react@^2.0.105": "2.0.105_react@18.3.1_zod@4.1.12",
     "npm:@deno/vite-plugin@^1.0.5": "1.0.5_vite@6.4.1__jiti@2.6.1__yaml@2.8.1__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.1",
     "npm:@eslint/js@^9.37.0": "9.39.1",
     "npm:@hookform/resolvers@^5.2.2": "5.2.2_react-hook-form@7.66.1__react@18.3.1_react@18.3.1",
@@ -49,7 +50,7 @@
     "npm:@types/react@^18.2.20": "18.3.27",
     "npm:@vitejs/plugin-react@^4.2.1": "4.7.0_vite@6.4.1__jiti@2.6.1__yaml@2.8.1__picomatch@4.0.3_@babel+core@7.28.5_jiti@2.6.1_yaml@2.8.1",
     "npm:@xyflow/react@^12.9.0": "12.9.3_react@18.3.1_react-dom@18.3.1__react@18.3.1_@types+react@18.3.27",
-    "npm:ai@^5.0.78": "5.0.94_zod@4.1.12",
+    "npm:ai@^5.0.105": "5.0.105_zod@4.1.12",
     "npm:autoprefixer@^10.4.19": "10.4.22_postcss@8.5.6",
     "npm:bson@^6.10.4": "6.10.4",
     "npm:class-variance-authority@~0.7.1": "0.7.1",
@@ -119,8 +120,8 @@
     "@adobe/css-tools@4.4.4": {
       "integrity": "sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg=="
     },
-    "@ai-sdk/gateway@2.0.10_zod@4.1.12": {
-      "integrity": "sha512-c++qOKfjKokTPAJ+vP9UXXNuTQ819yEDCZVXBhpZbgRly1P4fHTJbIAwuh+Qxxe9Bmtu8PEta0JGYZxc+hm7/Q==",
+    "@ai-sdk/gateway@2.0.17_zod@4.1.12": {
+      "integrity": "sha512-oVAG6q72KsjKlrYdLhWjRO7rcqAR8CjokAbYuyVZoCO4Uh2PH/VzZoxZav71w2ipwlXhHCNaInGYWNs889MMDA==",
       "dependencies": [
         "@ai-sdk/provider",
         "@ai-sdk/provider-utils",
@@ -128,8 +129,8 @@
         "zod"
       ]
     },
-    "@ai-sdk/provider-utils@3.0.17_zod@4.1.12": {
-      "integrity": "sha512-TR3Gs4I3Tym4Ll+EPdzRdvo/rc8Js6c4nVhFLuvGLX/Y4V9ZcQMa/HTiYsHEgmYrf1zVi6Q145UEZUfleOwOjw==",
+    "@ai-sdk/provider-utils@3.0.18_zod@4.1.12": {
+      "integrity": "sha512-ypv1xXMsgGcNKUP+hglKqtdDuMg68nWHucPPAhIENrbFAI+xCHiqPVN8Zllxyv1TNZwGWUghPxJXU+Mqps0YRQ==",
       "dependencies": [
         "@ai-sdk/provider",
         "@standard-schema/spec",
@@ -141,6 +142,20 @@
       "integrity": "sha512-6o7Y2SeO9vFKB8lArHXehNuusnpddKPk7xqL7T2/b+OvXMRIXUO1rR4wcv1hAFUAT9avGZshty3Wlua/XA7TvA==",
       "dependencies": [
         "json-schema"
+      ]
+    },
+    "@ai-sdk/react@2.0.105_react@18.3.1_zod@4.1.12": {
+      "integrity": "sha512-d/nr3fuAsgLli7g9CcShqME+QdTN3S6vbtyL9ZT8iAWfR0xBKYuNrzX3a89vY49lnbdgAqB65l67hsVNCsmVIg==",
+      "dependencies": [
+        "@ai-sdk/provider-utils",
+        "ai",
+        "react",
+        "swr",
+        "throttleit",
+        "zod"
+      ],
+      "optionalPeers": [
+        "zod"
       ]
     },
     "@alloc/quick-lru@5.2.0": {
@@ -2430,8 +2445,8 @@
     "@ungap/structured-clone@1.3.0": {
       "integrity": "sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g=="
     },
-    "@vercel/oidc@3.0.3": {
-      "integrity": "sha512-yNEQvPcVrK9sIe637+I0jD6leluPxzwJKx/Haw6F4H77CdDsszUn5V3o96LPziXkSNE2B83+Z3mjqGKBK/R6Gg=="
+    "@vercel/oidc@3.0.5": {
+      "integrity": "sha512-fnYhv671l+eTTp48gB4zEsTW/YtRgRPnkI2nT7x6qw5rkI1Lq2hTmQIpHPgyThI0znLK+vX2n9XxKdXZ7BUbbw=="
     },
     "@vitejs/plugin-react@4.7.0_vite@6.4.1__jiti@2.6.1__yaml@2.8.1__picomatch@4.0.3_@babel+core@7.28.5_jiti@2.6.1_yaml@2.8.1": {
       "integrity": "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==",
@@ -2549,8 +2564,8 @@
     "agent-base@7.1.4": {
       "integrity": "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="
     },
-    "ai@5.0.94_zod@4.1.12": {
-      "integrity": "sha512-PQs3H8xDhORG/L6eyR+SxAKUsa0ORO4ENvRovzGgPmPGCIlwle6UD5VIMQFtj1gvZk+BKBUVEFFwtkTeJTAURw==",
+    "ai@5.0.105_zod@4.1.12": {
+      "integrity": "sha512-waQZAvv44KYzys6S3l25ti2jcSuJnkyWFTliSKy3swASL6w6ttPxJTm80d+v9sLWoIxrqE3OwhTJbweNp065fg==",
       "dependencies": [
         "@ai-sdk/gateway",
         "@ai-sdk/provider",
@@ -6237,6 +6252,14 @@
     "supports-preserve-symlinks-flag@1.0.0": {
       "integrity": "sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w=="
     },
+    "swr@2.3.7_react@18.3.1": {
+      "integrity": "sha512-ZEquQ82QvalqTxhBVv/DlAg2mbmUjF4UgpPg9wwk4ufb9rQnZXh1iKyyKBqV6bQGu1Ie7L1QwSYO07qFIa1p+g==",
+      "dependencies": [
+        "dequal",
+        "react",
+        "use-sync-external-store"
+      ]
+    },
     "symbol-tree@3.2.4": {
       "integrity": "sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw=="
     },
@@ -6254,6 +6277,9 @@
     },
     "tapable@2.3.0": {
       "integrity": "sha512-g9ljZiwki/LfxmQADO3dEY1CbpmXT5Hm2fJ+QaGKwSXUylMybePR7/67YW7jOrrvjEgL1Fmz5kzyAjWVWLlucg=="
+    },
+    "throttleit@2.1.0": {
+      "integrity": "sha512-nt6AMGKW1p/70DF/hGBdJB57B8Tspmbp5gfJ8ilhLnt7kkr2ye7hzD6NVG8GGErk2HWF34igrL2CXmNIkzKqKw=="
     },
     "tinybench@2.9.0": {
       "integrity": "sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg=="
@@ -6878,6 +6904,7 @@
     ],
     "packageJson": {
       "dependencies": [
+        "npm:@ai-sdk/react@^2.0.105",
         "npm:@deno/vite-plugin@^1.0.5",
         "npm:@eslint/js@^9.37.0",
         "npm:@hookform/resolvers@^5.2.2",
@@ -6919,7 +6946,7 @@
         "npm:@types/react@^18.2.20",
         "npm:@vitejs/plugin-react@^4.2.1",
         "npm:@xyflow/react@^12.9.0",
-        "npm:ai@^5.0.78",
+        "npm:ai@^5.0.105",
         "npm:autoprefixer@^10.4.19",
         "npm:bson@^6.10.4",
         "npm:class-variance-authority@~0.7.1",

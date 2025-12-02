@@ -1,6 +1,6 @@
 import type { Config } from "@/core/core";
 
-import { TimeLayer } from "@/modules/time/index";
+import { ClearSelectionTool, TimeLayer } from "@/modules/time/index";
 import {
   CreateObjectTool,
   ObjectsLayer,
@@ -18,5 +18,6 @@ export const config: Config = {
     CreateObjectTool,
     RefreshObjectsTool,
     AudioPlayerTool,
+    ClearSelectionTool,
   ],
 };

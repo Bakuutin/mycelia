@@ -11,6 +11,7 @@
     "mycelia": "./bin/dev.js"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.75",
     "@modelcontextprotocol/sdk": "^1.17.2",
     "@oclif/core": "^4.2.10",
     "@opentelemetry/api": "^1.9.0",
@@ -29,6 +30,7 @@
     "@types/luxon": "^3.6.0",
     "@types/minimatch": "^5.1.2",
     "@types/node": "^24.1.0",
+    "ai": "^5.0.105",
     "bson": "^6.10.4",
     "bullmq": "^5.47.1",
     "chokidar": "^4.0.3",

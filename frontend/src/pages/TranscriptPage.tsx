@@ -22,7 +22,7 @@ interface TranscriptionDoc {
   _id: unknown;
   start: Date;
   end: Date;
-  original_id: ObjectId;
+  original: ObjectId;
   segments: TranscriptSegment[];
 }
 
@@ -32,6 +32,7 @@ interface RenderSegment {
   endTime: Date;
   text: string;
   transcriptStart: Date;
+  parent: TranscriptionDoc;
 }
 
 interface DiarizationDoc {
@@ -178,7 +179,8 @@ const TranscriptPage = () => {
             endTime: absEnd,
             text: (s.text || "").replace(/\n/g, " "),
             transcriptStart: doc.start,
-            original_id: doc.original_id,
+            original_id: doc.original,
+            parent: doc,
           });
         }
       }
@@ -289,7 +291,8 @@ const TranscriptPage = () => {
               endTime: absEnd,
               text: t,
               transcriptStart: doc.start,
-              original_id: doc.original_id,
+              parent: doc,
+              original_id: doc.original,
             });
           }
         }
@@ -611,6 +614,27 @@ const TranscriptPage = () => {
                             <div className="text-xs text-muted-foreground flex items-center gap-1">
                                 <span>{formatTime(seg.time, timeFormat)}</span>
                                 <span>{formatTimeRangeDuration(seg.time, seg.endTime)}</span>
+                                {lastSearchedQ && (
+                                  <button
+                                    type="button"
+                                    className="ml-2 text-blue-600 hover:text-blue-800 hover:underline"
+                                    onClick={() => {
+                                      const center = seg.time.getTime();
+                                      const offset = 5 * 60 * 1000;
+                                      setQ("");
+                                      setLastSearchedQ("");
+                                      setSearchSegments([]);
+                                      setSegments([]);
+                                      navigate(
+                                        `?start=${center - offset}&end=${
+                                          center + offset
+                                        }`,
+                                      );
+                                    }}
+                                  >
+                                    Context
+                                  </button>
+                                )}
                             </div>
                           </div>
                           <div className="whitespace-pre-wrap leading-relaxed">

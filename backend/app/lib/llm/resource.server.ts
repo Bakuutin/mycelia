@@ -34,7 +34,7 @@ const toolSchema = z.object({
   function: z.object({
     name: z.string(),
     description: z.string().optional(),
-    parameters: z.record(z.any()).optional(),
+    parameters: z.record(z.string(), z.any()).optional(),
   }),
 });
 
@@ -97,7 +97,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   async getModel(model: string): Promise<Model | null> {
     const rootDb = await getRootDB();
     const modelsCollection = rootDb.collection("llm_models");
-    return await modelsCollection.findOne({ alias: model }) as Model | null;
+    return await modelsCollection.findOne({ alias: model }) as unknown as Model | null;
   }
 
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {

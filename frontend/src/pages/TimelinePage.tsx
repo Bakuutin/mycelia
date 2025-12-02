@@ -4,8 +4,36 @@ import { config } from "@/config";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
+
+const ToolWrapper = ({ tool }: { tool: any }) => {
+  const Component = tool.component;
+
+  if (!tool.tooltip) {
+    return <Component />;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* Wrap in a span because some components might not forward refs or handle events correctly */}
+        <span className="inline-flex">
+          <Component />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{tool.tooltip}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+};
 
 const TimelinePage = () => {
   const { loading, error, objects } = useObjects();
@@ -88,26 +116,22 @@ const TimelinePage = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Timeline</h1>
-        <div className="flex items-center gap-2">
-          {config.tools.map((tool, i) => <tool.component key={i} />)}
-          <Button
-            onClick={clearSelection}
-            disabled={!hasSelection}
-            variant="outline"
-            title="Clear selection"
-          >
-            <X className="w-4 h-4" />
-          </Button>
+    <TooltipProvider>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold">Timeline</h1>
+          <div className="flex items-center gap-2">
+            {config.tools.map((tool, i) => (
+              <ToolWrapper key={i} tool={tool} />
+            ))}
+          </div>
+        </div>
+
+        <div className="border rounded-lg p-2">
+          <TimelineChart />
         </div>
       </div>
-
-      <div className="border rounded-lg p-2">
-        <TimelineChart />
-      </div>
-    </div>
+    </TooltipProvider>
   );
 };
 

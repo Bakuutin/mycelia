@@ -94,17 +94,20 @@ const inputGroupButtonVariants = cva(
   },
 );
 
-function InputGroupButton({
+const InputGroupButton = React.forwardRef<
+  HTMLButtonElement,
+  & Omit<React.ComponentProps<typeof Button>, "size">
+  & VariantProps<typeof inputGroupButtonVariants>
+>(({
   className,
   type = "button",
   variant = "ghost",
   size = "xs",
   ...props
-}:
-  & Omit<React.ComponentProps<typeof Button>, "size">
-  & VariantProps<typeof inputGroupButtonVariants>) {
+}, ref) => {
   return (
     <Button
+      ref={ref}
       type={type}
       data-size={size}
       variant={variant}
@@ -112,7 +115,8 @@ function InputGroupButton({
       {...props}
     />
   );
-}
+});
+InputGroupButton.displayName = "InputGroupButton";
 
 function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
   return (
@@ -126,37 +130,39 @@ function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
   );
 }
 
-function InputGroupInput({
-  className,
-  ...props
-}: React.ComponentProps<"input">) {
-  return (
-    <Input
-      data-slot="input-group-control"
-      className={cn(
-        "flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+const InputGroupInput = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
+  ({ className, ...props }, ref) => {
+    return (
+      <Input
+        ref={ref}
+        data-slot="input-group-control"
+        className={cn(
+          "flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
+          className,
+        )}
+        {...props}
+      />
+    );
+  }
+);
+InputGroupInput.displayName = "InputGroupInput";
 
-function InputGroupTextarea({
-  className,
-  ...props
-}: React.ComponentProps<"textarea">) {
-  return (
-    <Textarea
-      data-slot="input-group-control"
-      className={cn(
-        "flex-1 resize-none rounded-none border-0 bg-transparent py-3 shadow-none focus-visible:ring-0 dark:bg-transparent",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+const InputGroupTextarea = React.forwardRef<HTMLTextAreaElement, React.ComponentProps<"textarea">>(
+  ({ className, ...props }, ref) => {
+    return (
+      <Textarea
+        ref={ref}
+        data-slot="input-group-control"
+        className={cn(
+          "flex-1 resize-none rounded-none border-0 bg-transparent py-3 shadow-none focus-visible:ring-0 dark:bg-transparent",
+          className,
+        )}
+        {...props}
+      />
+    );
+  }
+);
+InputGroupTextarea.displayName = "InputGroupTextarea";
 
 export {
   InputGroup,

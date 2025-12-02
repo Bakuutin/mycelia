@@ -409,6 +409,7 @@ export const CreateObjectTool: Tool = {
       </Button>
     );
   },
+  tooltip: "Create new object",
 };
 
 export const RefreshObjectsTool: Tool = {
@@ -433,4 +434,5 @@ export const RefreshObjectsTool: Tool = {
       </Button>
     );
   },
+  tooltip: "Refresh objects",
 };

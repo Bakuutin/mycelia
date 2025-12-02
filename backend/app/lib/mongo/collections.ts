@@ -17,6 +17,8 @@ export const REGULAR_COLLECTIONS = [
   "object_history",
   "prompts",
   "configs",
+  "chats",
+  "messages",
 ] as const;
 
 export const GRIDFS_BUCKETS = [
@@ -294,6 +296,18 @@ export async function ensureAllCollectionsExist(): Promise<void> {
   // Ensure indexes for specific collections
   await ensureObjectsIndexes(db);
   await ensureAudioChunksIndexes(db);
+  await ensureIndexExists(
+    db,
+    "messages",
+    { chatId: 1, createdAt: 1 },
+    { name: "by_chat_time" }
+  );
+  await ensureIndexExists(
+    db,
+    "chats",
+    { userId: 1, updatedAt: -1 },
+    { name: "by_user_recent" }
+  );
 
   // Ensure server configuration and prompts
   await ensureServerConfig(db);
