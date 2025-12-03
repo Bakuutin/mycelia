@@ -2,11 +2,8 @@ import type { Config } from "@/core/core";
 
 import { TimeLayer } from "@/modules/time/index";
 import {
-  CreateObjectTool,
   ObjectsLayer,
-  RefreshObjectsTool,
 } from "@/modules/objects/index";
-import { AudioPlayerTool } from "@/modules/audio/index";
 
 export const config: Config = {
   layers: [
@@ -14,9 +11,5 @@ export const config: Config = {
     ObjectsLayer(),
 
   ],
-  tools: [
-    CreateObjectTool,
-    RefreshObjectsTool,
-    AudioPlayerTool,
-  ],
+  tools: [],
 };

@@ -112,21 +112,25 @@ export function TimelineProvider({ children }: { children: React.ReactNode }) {
   const zoomTo = useCallback((newStart: Date, newEnd: Date) => {
     if (!dimensions.width) return;
 
-    const s0 = timeScale(newStart);
-    const s1 = timeScale(newEnd);
+    const i = d3.interpolate([start.getTime(), end.getTime()], [newStart.getTime(), newEnd.getTime()]);
 
-    if (s0 === undefined || s1 === undefined || s0 === s1) return;
+    setTransform(d3.zoomIdentity);
+    d3.selectAll<SVGSVGElement, unknown>(".zoomable")
+      .interrupt()
+      .property("__zoom", d3.zoomIdentity);
 
-    const k = dimensions.width / (s1 - s0);
-    const tx = -s0 * k;
-
-    const t = d3.zoomIdentity.translate(tx, 0).scale(k);
-
-    d3.selectAll<SVGSVGElement, unknown>(".zoomable, .zoomed")
-      .transition()
-      .duration(750)
-      .call(zoomBehavior.transform as any, t);
-  }, [dimensions.width, timeScale, zoomBehavior]);
+    if (containerRef.current) {
+      d3.select(containerRef.current)
+        .transition()
+        .duration(250)
+        .tween("zoomTo", () => {
+          return (t) => {
+            const [s, e] = i(t);
+            setRange(new Date(s), new Date(e));
+          };
+        });
+    }
+  }, [dimensions.width, start, end, setRange]);
 
   const value = {
     containerRef,
