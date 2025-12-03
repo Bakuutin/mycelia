@@ -97,7 +97,7 @@ def count_pending_chunks(filters: Optional[dict[str, Any]] = None) -> Optional[i
     Count audio chunks that still need diarization.
     """
     query = _build_pending_chunk_filters(filters)
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "count",
         "collection": "audio_chunks",
         "query": query
@@ -114,7 +114,7 @@ def count_pending_sequences(filters: Optional[dict[str, Any]] = None) -> Optiona
         {"$group": {"_id": "$original_id"}},
         {"$count": "total"},
     ]
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "aggregate",
         "collection": "audio_chunks",
         "pipeline": pipeline,
@@ -231,7 +231,7 @@ def combine_chunks_to_wav(sequence: DiarizationSequence) -> tuple[io.BytesIO, in
 
 
 def _get_claim_owner(chunk_id: ObjectId) -> Optional[str]:
-    doc = call_resource('tech.mycelia.mongo', {
+    doc = call_resource('mongo', {
         "action": "findOne",
         "collection": "audio_chunks",
         "query": {'_id': chunk_id},
@@ -245,7 +245,7 @@ def _get_claim_owner(chunk_id: ObjectId) -> Optional[str]:
 def count_pending_chunks_for_original(original_id: ObjectId) -> Optional[int]:
     filters = {'original_id': original_id}
     query = _build_pending_chunk_filters(filters)
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "count",
         "collection": "audio_chunks",
         "query": query
@@ -346,7 +346,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
             segment_end_absolute = sequence_start_time + timedelta(seconds=segment_end_relative)
 
             # Save segment to diarizations collection
-            call_resource('tech.mycelia.mongo', {
+            call_resource('mongo', {
                 "action": "insertOne",
                 "collection": "diarizations",
                 "doc": {
@@ -445,7 +445,7 @@ def mark_as_diarized(seq: DiarizationSequence) -> int:
     if not chunks_to_mark:
         return 0
 
-    call_resource('tech.mycelia.mongo', {
+    call_resource('mongo', {
         "action": "updateMany",
         "collection": "audio_chunks",
         "query": {

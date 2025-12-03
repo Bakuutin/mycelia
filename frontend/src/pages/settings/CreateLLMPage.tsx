@@ -65,7 +65,7 @@ const CreateLLMPage = () => {
       setSaving(true);
       setError(null);
 
-      const result = await callResource("tech.mycelia.mongo", {
+      const result = await callResource("mongo", {
         action: "insertOne",
         collection: "llm_models",
         doc: {

@@ -139,7 +139,7 @@ Deno.test(
 
     expect(accessLogger).toHaveBeenCalledWith(
       "admin",
-      "tech.mycelia.processors",
+      "processors",
       [{ path: ["processors", "test"], actions: ["acknowledge"] }],
     );
   }),

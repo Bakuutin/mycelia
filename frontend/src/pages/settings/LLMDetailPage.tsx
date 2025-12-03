@@ -69,7 +69,7 @@ const LLMDetailPage = () => {
 
       try {
         setLoading(true);
-        const result = await callResource("tech.mycelia.mongo", {
+        const result = await callResource("mongo", {
           action: "findOne",
           collection: "llm_models",
           query: { _id: { $oid: id } },
@@ -104,7 +104,7 @@ const LLMDetailPage = () => {
       setSaving(true);
       setError(null);
 
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "updateOne",
         collection: "llm_models",
         query: { _id: { $oid: id } },
@@ -130,7 +130,7 @@ const LLMDetailPage = () => {
     }
 
     try {
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "deleteOne",
         collection: "llm_models",
         query: { _id: { $oid: id } },

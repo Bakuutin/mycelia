@@ -155,7 +155,7 @@ const DiarizationDetailPage = () => {
       if (!id) return;
 
       try {
-        const result = await callResource("tech.mycelia.mongo", {
+        const result = await callResource("mongo", {
           action: "findOne",
           collection: "diarizations",
           query: { _id: { $oid: id } },

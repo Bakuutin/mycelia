@@ -38,7 +38,7 @@ const LLMSettingsPage = () => {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const result = await callResource("tech.mycelia.mongo", {
+        const result = await callResource("mongo", {
           action: "find",
           collection: "llm_models",
           query: {},
@@ -63,7 +63,7 @@ const LLMSettingsPage = () => {
     }
 
     try {
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "deleteOne",
         collection: "llm_models",
         query: { _id: { $oid: modelId } },

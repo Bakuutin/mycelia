@@ -32,7 +32,7 @@ function getIdKey(item: HistogramItem): string {
 async function fetchPage(beforeStart: Date | null): Promise<HistogramItem[]> {
   const query: any = { topics: { $exists: true, $ne: [] } };
   if (beforeStart) query.start = { $lt: beforeStart };
-  const result = await callResource("tech.mycelia.mongo", {
+  const result = await callResource("mongo", {
     action: "find",
     collection: "histogram_5min",
     query,

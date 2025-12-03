@@ -12,7 +12,7 @@ interface PersonChipProps {
 
 async function fetchPersonIcon(personId: string): Promise<Icon | undefined> {
   // Fetch a single person to get its icon. Backend collection: "people"
-  const result = await callResource("tech.mycelia.mongo", {
+  const result = await callResource("mongo", {
     action: "findOne",
     collection: "people",
     query: { _id: new ObjectId(personId) },

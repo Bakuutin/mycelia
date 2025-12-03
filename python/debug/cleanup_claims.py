@@ -80,7 +80,7 @@ def fetch_claim_stats(collection: str, worker_id: str | None) -> list[dict[str, 
     ]
 
     stats = call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "aggregate",
             "collection": collection,
@@ -97,7 +97,7 @@ def clear_claims(collection: str, worker_ids: Iterable[str] | None) -> int:
         query["processing_by"]["$in"] = list(worker_ids)
 
     result = call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "updateMany",
             "collection": collection,

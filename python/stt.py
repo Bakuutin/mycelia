@@ -102,7 +102,7 @@ def ensure_audio_chunk_indexes():
 
     for index, options in index_definitions:
         try:
-            call_resource('tech.mycelia.mongo', {
+            call_resource('mongo', {
                 "action": "createIndex",
                 "collection": "audio_chunks",
                 "index": index,
@@ -137,7 +137,7 @@ def get_pending_work_stats(extra_filters: dict | None = None) -> tuple[int | Non
     chunks = None
 
     try:
-        result = call_resource('tech.mycelia.mongo', {
+        result = call_resource('mongo', {
             "action": "aggregate",
             "collection": "audio_chunks",
             "pipeline": [
@@ -152,7 +152,7 @@ def get_pending_work_stats(extra_filters: dict | None = None) -> tuple[int | Non
         logger.warning("Unable to estimate pending sequences: %s", exc)
 
     try:
-        chunks = call_resource('tech.mycelia.mongo', {
+        chunks = call_resource('mongo', {
             "action": "count",
             "collection": "audio_chunks",
             "query": filters,
@@ -501,7 +501,7 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
     if segments:
         duration = segments[-1]['end']
 
-        call_resource('tech.mycelia.mongo', {
+        call_resource('mongo', {
             "action": "insertOne",
             "collection": "transcriptions",
             "doc": {
@@ -521,7 +521,7 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
 def mark_as_transcribed(seq: SpeechSequence):
     chunks_to_mark = seq.chunks[:-1] if seq.is_partial else seq.chunks
     if chunks_to_mark:
-        call_resource('tech.mycelia.mongo', {
+        call_resource('mongo', {
             "action": "updateMany",
             "collection": "audio_chunks",
             "query": {
@@ -550,7 +550,7 @@ if __name__ == '__main__':
     # Handle --count flag
     if args.count:
         try:
-            count = call_resource('tech.mycelia.mongo', {
+            count = call_resource('mongo', {
                 "action": "count",
                 "collection": "audio_chunks",
                 "query": {

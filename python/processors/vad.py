@@ -71,7 +71,7 @@ def claim_batch(batch_size: int) -> list[dict[str, Any]]:
             "sort": {"start": -1},
         },
     }
-    items = call_resource("tech.mycelia.mongo", body)
+    items = call_resource("mongo", body)
     return items or []
 
 
@@ -119,7 +119,7 @@ def acknowledge(statuses: list[dict[str, Any]]) -> None:
         return
     
     call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "bulkWrite",
             "collection": "audio_chunks",

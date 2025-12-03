@@ -39,7 +39,7 @@ def create_mentioned_relationship(entity_id, conversation_id, entity_name, conve
 def find_or_create_entity(entity_name: str) -> ObjectId:
     """Find existing entity or create new one"""
     # Check if entity already exists
-    existing_list = call_resource("tech.mycelia.objects", {
+    existing_list = call_resource("objects", {
         "action": "list",
         "filters": {"name": entity_name},
         "options": {"limit": 1}
@@ -50,7 +50,7 @@ def find_or_create_entity(entity_name: str) -> ObjectId:
 
     # Create new entity
     entity_obj = create_entity_object(entity_name)
-    result = call_resource("tech.mycelia.objects", {
+    result = call_resource("objects", {
         "action": "create",
         "object": entity_obj
     })
@@ -59,7 +59,7 @@ def find_or_create_entity(entity_name: str) -> ObjectId:
 
 def check_conversations_exist(start: datetime, end: datetime) -> bool:
     """Check if conversations already exist for this time range."""
-    existing_list = call_resource("tech.mycelia.objects", {
+    existing_list = call_resource("objects", {
         "action": "list",
         "filters": {
             "isConversation": True,
@@ -77,7 +77,7 @@ def check_conversations_exist(start: datetime, end: datetime) -> bool:
 
 def delete_conversations_in_range(start: datetime, end: datetime) -> int:
     """Delete existing conversations and their relationships in a time range."""
-    conversations = call_resource("tech.mycelia.objects", {
+    conversations = call_resource("objects", {
         "action": "list",
         "filters": {
             "isConversation": True,
@@ -97,13 +97,13 @@ def delete_conversations_in_range(start: datetime, end: datetime) -> int:
 
     # Delete conversations using objects resource (one call per id)
     for conv_id in conversation_ids:
-        call_resource("tech.mycelia.objects", {
+        call_resource("objects", {
             "action": "delete",
             "id": str(conv_id)
         })
 
     # Find and delete relationships
-    relationships = call_resource("tech.mycelia.objects", {
+    relationships = call_resource("objects", {
         "action": "list",
         "filters": {
             "isRelationship": True,
@@ -113,7 +113,7 @@ def delete_conversations_in_range(start: datetime, end: datetime) -> int:
 
     # Delete relationships using objects resource (one call per id)
     for rel in relationships:
-        call_resource("tech.mycelia.objects", {
+        call_resource("objects", {
             "action": "delete",
             "id": str(rel['_id'])
         })

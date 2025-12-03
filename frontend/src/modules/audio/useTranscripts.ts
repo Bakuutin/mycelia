@@ -30,7 +30,7 @@ export const useTranscripts = (cursorDate: Date | null) => {
     const startTime = new Date(cursorDate.getTime() - delta);
     const endTime = new Date(cursorDate.getTime() + delta);
 
-    callResource("tech.mycelia.mongo", {
+    callResource("mongo", {
       action: "find",
       collection: "transcriptions",
       query: {

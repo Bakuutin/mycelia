@@ -48,7 +48,7 @@ export type ProcessorResponse = any;
 
 export class ProcessorResource
   implements Resource<ProcessorRequest, ProcessorResponse> {
-  code = "tech.mycelia.processors";
+  code = "processors";
   description = "Processor management";
   schemas = {
     request: processorRequestSchema as z.ZodType<ProcessorRequest>,
@@ -189,7 +189,7 @@ export class ProcessorResource
 export async function getProcessorResource(
   auth: Auth,
 ): Promise<(input: ProcessorRequest) => Promise<ProcessorResponse>> {
-  return auth.getResource("tech.mycelia.processors");
+  return auth.getResource("processors");
 }
 
 export class Processor {

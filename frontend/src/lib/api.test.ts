@@ -270,13 +270,13 @@ describe("ApiClient", () => {
       (auth.getCurrentJWT as any).mockResolvedValue("jwt-token");
 
       const result = await client.callResource(
-        "tech.mycelia.mongo",
+        "mongo",
         requestBody,
       );
 
       expect(result).toEqual(responseData);
       expect((globalThis as any).fetch).toHaveBeenCalledWith(
-        "http://localhost:8000/api/resource/tech.mycelia.mongo",
+        "http://localhost:8000/api/resource/mongo",
         expect.objectContaining({
           method: "POST",
         }),
@@ -296,7 +296,7 @@ describe("ApiClient", () => {
       (auth.getCurrentJWT as any).mockResolvedValue("jwt-token");
 
       const result = await client.callResource(
-        "tech.mycelia.test",
+        "test",
         requestBody,
       );
 

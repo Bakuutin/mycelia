@@ -37,12 +37,12 @@ const EventDetailPage = () => {
     const fetchData = async () => {
       try {
         const [eventResult, allEventsResult] = await Promise.all([
-          callResource("tech.mycelia.mongo", {
+          callResource("mongo", {
             action: "findOne",
             collection: "events",
             query: { _id: { $oid: id } },
           }),
-          callResource("tech.mycelia.mongo", {
+          callResource("mongo", {
             action: "find",
             collection: "events",
             query: {},
@@ -80,7 +80,7 @@ const EventDetailPage = () => {
         },
       };
 
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "updateOne",
         collection: "events",
         query: { _id: event._id },
@@ -103,7 +103,7 @@ const EventDetailPage = () => {
     if (!confirmed) return;
 
     try {
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "deleteOne",
         collection: "events",
         query: { _id: event._id },

@@ -62,7 +62,7 @@ def mongo_cursor(collection: str, query: dict, options: dict, batch_size: int = 
     Yields:
         Documents from the collection
     """
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "getFirstBatch",
         "collection": collection,
         "query": query,
@@ -78,7 +78,7 @@ def mongo_cursor(collection: str, query: dict, options: dict, batch_size: int = 
         if not result.get("hasMore", False):
             return
 
-        result = call_resource('tech.mycelia.mongo', {
+        result = call_resource('mongo', {
             "action": "getMore",
             "collection": collection,
             "cursorId": cursor_id,
@@ -98,7 +98,7 @@ def claim_chunks(chunk_ids: list[ObjectId], worker_id: str, collection: str = 'a
     Returns:
         True if all chunks were successfully claimed, False otherwise
     """
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "updateMany",
         "collection": collection,
         "query": {
@@ -123,7 +123,7 @@ def release_chunks(chunk_ids: list[ObjectId], worker_id: str, collection: str = 
         worker_id: Worker identifier
         collection: MongoDB collection name
     """
-    call_resource('tech.mycelia.mongo', {
+    call_resource('mongo', {
         "action": "updateMany",
         "collection": collection,
         "query": {

@@ -431,7 +431,7 @@ describe("EventDetailPage", () => {
 
       await waitFor(() => {
         expect(mockCallResource).toHaveBeenCalledWith(
-          "tech.mycelia.mongo",
+          "mongo",
           expect.objectContaining({
             action: "deleteOne",
             collection: "events",
@@ -473,7 +473,7 @@ describe("EventDetailPage", () => {
       }
 
       expect(mockCallResource).not.toHaveBeenCalledWith(
-        "tech.mycelia.mongo",
+        "mongo",
         expect.objectContaining({
           action: "deleteOne",
         }),

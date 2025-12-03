@@ -60,7 +60,7 @@ type TimelineResponse = any;
 
 export class TimelineResource
   implements Resource<TimelineRequest, TimelineResponse> {
-  code = "tech.mycelia.timeline";
+  code = "timeline";
   description = "Timeline management";
   schemas = {
     request: timelineRequestSchema,
@@ -128,5 +128,5 @@ export class TimelineResource
 export function getTimelineResource(
   auth: Auth,
 ): Promise<(input: TimelineRequest) => Promise<TimelineResponse>> {
-  return auth.getResource("tech.mycelia.timeline");
+  return auth.getResource("timeline");
 }

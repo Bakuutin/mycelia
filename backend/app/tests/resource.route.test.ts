@@ -59,7 +59,7 @@ Deno.test(
     "Mongo",
   ], async (authHeaders) => {
     const request = new Request(
-      "http://localhost/api/resource/tech.mycelia.mongo",
+      "http://localhost/api/resource/mongo",
       {
         method: "POST",
         headers: {
@@ -73,7 +73,7 @@ Deno.test(
         }),
       },
     );
-    const params = { name: "tech.mycelia.mongo" };
+    const params = { name: "mongo" };
 
     const response = await action({ request, params } as any);
     expect(response.status).toBe(200);

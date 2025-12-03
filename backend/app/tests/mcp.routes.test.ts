@@ -122,7 +122,7 @@ Deno.test(
         id: 1,
         method: "tools/call",
         params: {
-          name: "tech.mycelia.mongo",
+          name: "mongo",
           arguments: {
             action: "find",
             collection: "test",

@@ -69,19 +69,19 @@ def ingests_missing_sources(limit=None, retry_errors=False):
     if not retry_errors:
         base_query["ingestion.error"] = {"$exists": False}
 
-    total_pending = call_resource('tech.mycelia.mongo', {
+    total_pending = call_resource('mongo', {
         "action": "count",
         "collection": "source_files",
         "query": base_query
     })
 
-    already_ingested = call_resource('tech.mycelia.mongo', {
+    already_ingested = call_resource('mongo', {
         "action": "count",
         "collection": "source_files",
         "query": {"ingested": True}
     })
 
-    errored_count = call_resource('tech.mycelia.mongo', {
+    errored_count = call_resource('mongo', {
         "action": "count",
         "collection": "source_files",
         "query": {
@@ -101,7 +101,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
 
     logger.info(f"Starting ingestion: {total_pending} pending, {already_ingested} already ingested, {errored_count} errored (Total: {total_files} files)")
 
-    query = call_resource('tech.mycelia.mongo', {
+    query = call_resource('mongo', {
         "action": "find",
         "collection": "source_files",
         "query": base_query,
@@ -124,7 +124,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
                 unknown_importer
             )
             importer.upload(source)
-            call_resource('tech.mycelia.mongo', {
+            call_resource('mongo', {
                 "action": "updateOne",
                 "collection": "source_files",
                 "query": {"_id": source["_id"]},
@@ -140,7 +140,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
             error_msg = str(e)
             logger.error(f"✗ Error ingesting {file_name}: {error_msg[:100]}")
 
-            call_resource('tech.mycelia.mongo', {
+            call_resource('mongo', {
                 "action": "updateOne",
                 "collection": "source_files",
                 "query": {"_id": source["_id"]},
@@ -163,7 +163,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
 
 
 def list_errored_files():
-    errored_files = call_resource('tech.mycelia.mongo', {
+    errored_files = call_resource('mongo', {
         "action": "find",
         "collection": "source_files",
         "query": {
@@ -195,7 +195,7 @@ def list_errored_files():
 
 
 def clear_error(file_id):
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "updateOne",
         "collection": "source_files",
         "query": {"_id": file_id},
@@ -210,7 +210,7 @@ def clear_error(file_id):
 
 
 def clear_all_errors():
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "updateMany",
         "collection": "source_files",
         "query": {"ingestion.error": {"$exists": True}},
@@ -225,14 +225,14 @@ def add_missing_durations():
         "duration": {"$exists": False}
     }
 
-    cursor = call_resource('tech.mycelia.mongo', {
+    cursor = call_resource('mongo', {
         "action": "find",
         "collection": "source_files",
         "query": query
     })
     for original in cursor:
         # Find the latest chunk for this original
-        latest_chunk = call_resource('tech.mycelia.mongo', {
+        latest_chunk = call_resource('mongo', {
             "action": "findOne",
             "collection": "audio_chunks",
             "query": {"meta.original_id": original["_id"]},
@@ -242,7 +242,7 @@ def add_missing_durations():
         if latest_chunk:
             end = latest_chunk["start"] + timedelta(seconds=AudioSegment.from_file(io.BytesIO(latest_chunk['data']), format="ogg").duration_seconds)
             duration = end - original["start"]
-            call_resource('tech.mycelia.mongo', {
+            call_resource('mongo', {
                 "action": "updateOne",
                 "collection": "source_files",
                 "query": {"_id": original["_id"]},
@@ -255,7 +255,7 @@ def add_missing_durations():
 
 
 def add_missing_ends():
-    for original in call_resource('tech.mycelia.mongo', {
+    for original in call_resource('mongo', {
         "action": "find",
         "collection": "source_files",
         "query": {
@@ -263,7 +263,7 @@ def add_missing_ends():
             "end": {"$exists": False}
         }
     }):
-        call_resource('tech.mycelia.mongo', {
+        call_resource('mongo', {
             "action": "updateOne",
             "collection": "source_files",
             "query": {"_id": original["_id"]},

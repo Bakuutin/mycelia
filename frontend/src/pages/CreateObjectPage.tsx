@@ -39,7 +39,7 @@ const CreateObjectPage = () => {
     setError(null);
 
     try {
-      const result = await callResource("tech.mycelia.objects", {
+      const result = await callResource("objects", {
         action: "create",
         object: {
           ...object,

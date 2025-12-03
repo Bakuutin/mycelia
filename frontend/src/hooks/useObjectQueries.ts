@@ -26,7 +26,7 @@ export function useObject(id: string | ObjectId | undefined) {
     queryKey: objectKeys.detail(id?.toString()!),
     queryFn: async () => {
       if (!id) throw new Error("Object ID is required");
-      return await callResource("tech.mycelia.objects", {
+      return await callResource("objects", {
         action: "get",
         id: id.toString(),
       });
@@ -40,7 +40,7 @@ export function useObjectSelection() {
   return useQuery({
     queryKey: objectKeys.selection(),
     queryFn: async () => {
-      return await callResource("tech.mycelia.objects", {
+      return await callResource("objects", {
         action: "list",
         filters: { isRelationship: { $ne: true } },
         options: {
@@ -58,7 +58,7 @@ export function useObjectSearch(searchTerm: string = "", limit: number = 50) {
   return useQuery({
     queryKey: [...objectKeys.selection(), "search", searchTerm, limit],
     queryFn: async () => {
-      return await callResource("tech.mycelia.objects", {
+      return await callResource("objects", {
         action: "list",
         filters: { isRelationship: { $ne: true } },
         options: {
@@ -88,7 +88,7 @@ export function getRelationships(
     queryFn: async () => {
       if (!idString) throw new Error("Object ID is required");
 
-      const relationships = await callResource("tech.mycelia.objects", {
+      const relationships = await callResource("objects", {
         action: "getRelationships",
         id: idString,
       });
@@ -124,7 +124,7 @@ export function useUpdateObject() {
       field: string;
       value: any;
     }) => {
-      return await callResource("tech.mycelia.objects", {
+      return await callResource("objects", {
         action: "update",
         id,
         version,
@@ -154,7 +154,7 @@ export function useCreateObject() {
 
   return useMutation({
     mutationFn: async (object: Partial<Object>) => {
-      return await callResource("tech.mycelia.objects", {
+      return await callResource("objects", {
         action: "create",
         object,
       });
@@ -171,7 +171,7 @@ export function useDeleteObject() {
 
   return useMutation({
     mutationFn: async (id: string) => {
-      return await callResource("tech.mycelia.objects", {
+      return await callResource("objects", {
         action: "delete",
         id,
       });
@@ -203,7 +203,7 @@ export function useObjectHistory(
       if (options?.skip != null) {
         body.skip = options.skip;
       }
-      return await callResource("tech.mycelia.objects", body);
+      return await callResource("objects", body);
     },
     enabled: !!idString,
     staleTime: 30 * 1000, // 30 sec

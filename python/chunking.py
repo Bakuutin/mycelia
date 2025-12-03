@@ -148,7 +148,7 @@ def server_side_cursor_find(
         sort: list[tuple[str, int]],
         batch_size: int = 100,
 ):
-    resp = call_resource('tech.mycelia.mongo', {
+    resp = call_resource('mongo', {
         "action": "createCursor",
         "collection": collection,
         "filter": filter,
@@ -158,7 +158,7 @@ def server_side_cursor_find(
     cursor_id = resp["cursor_id"]
 
     while True:
-        batch = call_resource('tech.mycelia.mongo', {
+        batch = call_resource('mongo', {
             "action": "getMore",
             "collection": collection,
             "cursor_id": cursor_id,
@@ -277,7 +277,7 @@ def ingest_source(original: dict):
 
         for i, [offset, file] in tqdm(enumerate(chunk_files)):
             with open(file, "rb") as f:
-                call_resource('tech.mycelia.mongo', {
+                call_resource('mongo', {
                     "action": "insertOne",
                     "collection": "audio_chunks",
                     "doc": {

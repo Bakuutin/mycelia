@@ -112,7 +112,7 @@ pipeline = [
 ]
 
 results = call_resource(
-    "tech.mycelia.mongo",
+    "mongo",
     {
         "action": "aggregate",
         "collection": "transcriptions",
@@ -179,7 +179,7 @@ print(f"  Total segments removed: {total_segments_removed}")
 
 if bulk_operations:
     call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "bulkWrite",
             "collection": "transcriptions",

@@ -46,7 +46,7 @@ type FsRequest = z.infer<typeof fsRequestSchema>;
 type FsResponse = any;
 
 export class FsResource implements Resource<FsRequest, FsResponse> {
-  code = "tech.mycelia.fs";
+  code = "fs";
   description = "GridFS file storage";
   schemas = {
     request: fsRequestSchema,
@@ -112,7 +112,7 @@ export class FsResource implements Resource<FsRequest, FsResponse> {
 export async function getFsResource(
   auth: Auth,
 ): Promise<(input: FsRequest) => Promise<FsResponse>> {
-  return auth.getResource("tech.mycelia.fs");
+  return auth.getResource("fs");
 }
 
 export function getFileExtension(filename: string): string {

@@ -179,7 +179,7 @@ type RedisRequest = z.infer<typeof redisRequestSchema>;
 type RedisResponse = any;
 
 export class RedisResource implements Resource<RedisRequest, RedisResponse> {
-  code = "tech.mycelia.redis";
+  code = "redis";
   description = "Redis operations";
   schemas: {
     request: z.ZodType<RedisRequest>;
@@ -373,5 +373,5 @@ export class RedisResource implements Resource<RedisRequest, RedisResponse> {
 export async function getRedisResource(
   auth: Auth,
 ): Promise<(input: RedisRequest) => Promise<RedisResponse>> {
-  return auth.getResource("tech.mycelia.redis");
+  return auth.getResource("redis");
 }

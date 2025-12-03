@@ -37,7 +37,7 @@ const PromptDetailPage = () => {
 
       try {
         setLoading(true);
-        const result = await callResource("tech.mycelia.mongo", {
+        const result = await callResource("mongo", {
           action: "findOne",
           collection: "prompts",
           query: { _id: { $oid: id } },
@@ -69,7 +69,7 @@ const PromptDetailPage = () => {
       setError(null);
 
       if (isNew) {
-        const result = await callResource("tech.mycelia.mongo", {
+        const result = await callResource("mongo", {
           action: "insertOne",
           collection: "prompts",
           doc: {
@@ -82,7 +82,7 @@ const PromptDetailPage = () => {
             navigate("/settings/prompts");
         }
       } else {
-        await callResource("tech.mycelia.mongo", {
+        await callResource("mongo", {
           action: "updateOne",
           collection: "prompts",
           query: { _id: { $oid: id } },

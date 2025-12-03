@@ -151,10 +151,10 @@ Deno.test("MCP Adapter - MongoDB resource creates valid tool schemas", () => {
   expect(tools.length).toBeGreaterThan(0);
 
   // Find some expected MongoDB actions
-  const findTool = tools.find((t) => t.name === "tech.mycelia.mongo.find");
-  const findOneTool = tools.find((t) => t.name === "tech.mycelia.mongo.findOne");
-  const insertOneTool = tools.find((t) => t.name === "tech.mycelia.mongo.insertOne");
-  const countTool = tools.find((t) => t.name === "tech.mycelia.mongo.count");
+  const findTool = tools.find((t) => t.name === "mongo_find");
+  const findOneTool = tools.find((t) => t.name === "mongo_findOne");
+  const insertOneTool = tools.find((t) => t.name === "mongo_insertOne");
+  const countTool = tools.find((t) => t.name === "mongo_count");
 
   expect(findTool).toBeDefined();
   expect(findOneTool).toBeDefined();

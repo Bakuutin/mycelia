@@ -9,7 +9,7 @@ start = datetime.fromtimestamp(1744669200, tz=UTC)
 end = start + timedelta(seconds=25)
 
 
-diarizations = call_resource('tech.mycelia.mongo', {
+diarizations = call_resource('mongo', {
     "action": "find",
     "collection": "diarizations",
     "query": {
@@ -107,7 +107,7 @@ def get_speaker_by_id(diarization_id: str) -> str | None:
 
 speaker_average_embeddings = {}
 for speaker_name, speaker_data in KNOWN_SPEAKERS.items():
-    speaker_diarizations = call_resource('tech.mycelia.mongo', {
+    speaker_diarizations = call_resource('mongo', {
         "action": "find",
         "collection": "diarizations",
         "query": {
@@ -282,7 +282,7 @@ df[mask].sort_values(by='start_rel')[[
 import subprocess
 
 def download_by_id(diarization_id: str, pad_seconds: int = 0):
-    diarization = call_resource('tech.mycelia.mongo', {
+    diarization = call_resource('mongo', {
         "action": "findOne",
         "collection": "diarizations",
         "query": {
@@ -313,7 +313,7 @@ display_by_id('67fed55d7ce486f7496d2d81')
 
 
 
-diarization = call_resource('tech.mycelia.mongo', {
+diarization = call_resource('mongo', {
         "action": "findOne",
         "collection": "diarizations",
         "query": {

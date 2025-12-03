@@ -35,14 +35,14 @@ Deno.test(
     expect(result).toHaveLength(1);
     expect(result[0].name).toEqual("test");
 
-    expect(accessLogger).toHaveBeenCalledWith("admin", "tech.mycelia.mongo", [
+    expect(accessLogger).toHaveBeenCalledWith("admin", "mongo", [
       {
         path: ["db", "test"],
         actions: ["write"],
       },
     ]);
 
-    expect(accessLogger).toHaveBeenCalledWith("admin", "tech.mycelia.mongo", [
+    expect(accessLogger).toHaveBeenCalledWith("admin", "mongo", [
       {
         path: ["db", "test"],
         actions: ["read"],

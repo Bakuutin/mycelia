@@ -247,7 +247,7 @@ To keep queue checks (`transcribed_at=null`, `processing_by=null`) fast, Mycelia
 
 ```bash
 cd backend
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.mongo \
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo \
   -a '{"action":"createIndex","collection":"audio_chunks","index":{"transcribed_at":1,"processing_by":1,"vad.has_speech":1,"start":-1},"options":{"name":"audio_chunks_pending_work","partialFilterExpression":{"transcribed_at":null,"processing_by":null,"vad.has_speech":true}}}'
 ```
 
@@ -304,31 +304,31 @@ deno run --env -E='MYCELIA_*' --allow-net cli.ts audio import /path/to/file.wav
 # Timeline operations via MCP
 
 # Mark timeline data as stale
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.timeline -a '{"action": "invalidate", "start": "10d"}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call timeline -a '{"action": "invalidate", "start": "10d"}'
 
 # Recalculate timeline histograms
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.timeline -a '{"action": "recalculate", "all": true}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call timeline -a '{"action": "recalculate", "all": true}'
 
 # Ensure timeline indexes
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.timeline -a '{"action": "ensureIndex"}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call timeline -a '{"action": "ensureIndex"}'
 
 # MongoDB operations via MCP
 # Find documents
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.mongo -a '{"action": "find", "collection": "audio_chunks", "query": {}, "options": {"limit": 10}}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo -a '{"action": "find", "collection": "audio_chunks", "query": {}, "options": {"limit": 10}}'
 
 # Count documents
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.mongo -a '{"action": "count", "collection": "transcriptions", "query": {}}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo -a '{"action": "count", "collection": "transcriptions", "query": {}}'
 
 # Redis operations via MCP
 # Get value
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.redis -a '{"action": "get", "key": "some-key"}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call redis -a '{"action": "get", "key": "some-key"}'
 
 # Set value
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.redis -a '{"action": "set", "key": "some-key", "value": "some-value"}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call redis -a '{"action": "set", "key": "some-key", "value": "some-value"}'
 
 # GridFS operations via MCP
 # Find files
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call tech.mycelia.fs -a '{"action": "find", "bucket": "uploads", "query": {}}'
+deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call fs -a '{"action": "find", "bucket": "uploads", "query": {}}'
 ```
 
 ## Contributing

@@ -37,7 +37,7 @@ export async function createSourceFile(
   createdBy: string,
 ): Promise<ObjectId> {
   const auth = await getServerAuth();
-  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+  const mongoResource = await auth.getResource("mongo");
 
   const extension = filename.split(".").pop() || "unknown";
 
@@ -72,7 +72,7 @@ export async function getSourceFile(
   sourceFileId: ObjectId,
 ): Promise<SourceFile | null> {
   const auth = await getServerAuth();
-  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+  const mongoResource = await auth.getResource("mongo");
 
   return await mongoResource({
     action: "findOne",
@@ -313,7 +313,7 @@ export async function createAudioChunk(
   }
 
   const auth = await getServerAuth();
-  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+  const mongoResource = await auth.getResource("mongo");
 
   const chunk: AudioChunk = {
     format: "opus",
@@ -344,7 +344,7 @@ export async function getSessionChunks(
   sessionId: string,
 ): Promise<AudioChunk[]> {
   const auth = await getServerAuth();
-  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+  const mongoResource = await auth.getResource("mongo");
 
   return await mongoResource({
     action: "find",
@@ -360,7 +360,7 @@ export async function insertTranscriptionWithInvalidation(
   endTime?: Date,
 ): Promise<ObjectId> {
   const auth = await getServerAuth();
-  const mongoResource = await auth.getResource("tech.mycelia.mongo");
+  const mongoResource = await auth.getResource("mongo");
 
   const result = await mongoResource({
     action: "insertOne",

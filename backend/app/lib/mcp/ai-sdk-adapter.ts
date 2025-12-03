@@ -30,21 +30,24 @@ export function resourceToAiSdkTools<Input, Output>(
   auth: Auth
 ): Record<string, Tool> {
   const schema = resource.schemas.request;
-  const def = schema._def as any;
+  const def = schema.def as any;
   const tools: Record<string, Tool> = {};
 
-  if (def?.type === "discriminatedUnion" && def?.discriminator && def?.options) {
+  if ((def?.type === "discriminatedUnion" || def?.type === "union") && def?.discriminator && def?.options) {
     const discriminator = def.discriminator;
     const options = def.optionsMap ? Array.from(def.optionsMap.values()) : def.options;
+    console.log("Found discriminated union. Discriminator:", discriminator);
+    console.log("Options length:", options.length);
 
     for (const optionSchema of options as z.ZodObject<any>[]) {
       const shape = optionSchema.shape;
+      console.log("Checking option shape for discriminator:", discriminator);
 
       if (shape && shape[discriminator]) {
         const discriminatorField = shape[discriminator];
-        // @ts-ignore: Zod internals
         const actionDef = discriminatorField._def || discriminatorField.def;
         const actionValue = actionDef?.value; // For ZodLiteral
+        console.log("Action value:", actionValue);
 
         if (actionValue) {
           const toolName = `${resource.code.replace(/\./g, "_")}_${actionValue}`;
@@ -55,19 +58,25 @@ export function resourceToAiSdkTools<Input, Output>(
           let inputSchema = optionSchema;
           if (inputSchema instanceof z.ZodObject) {
              inputSchema = inputSchema.omit({ [discriminator]: true });
+          } else {
+             // Check if it is a ZodObject but maybe via internal property
+             // In Zod v4 or cross-version, instanceof might fail
+             if ((inputSchema as any).omit) {
+                inputSchema = (inputSchema as any).omit({ [discriminator]: true });
+             }
           }
 
           tools[toolName] = tool({
             description: actionDescription || resource.description || actionValue,
             parameters: inputSchema,
-            execute: async (args) => {
+            execute: async (args: any) => {
               const input = {
                 ...args,
                 [discriminator]: actionValue,
               };
               return resource.use(input as any, auth);
             },
-          });
+          } as any);
         }
       }
     }
@@ -78,13 +87,13 @@ export function resourceToAiSdkTools<Input, Output>(
   }
 
   // Default case: single tool for the resource
-  tools[resource.code.replace(/\./g, "_")] = tool({
+  tools[resource.code] = tool({
     description: resource.description,
     parameters: schema,
-    execute: async (args) => {
+    execute: async (args: any) => {
       return resource.use(args, auth);
     },
-  });
+  } as any);
 
   return tools;
 }

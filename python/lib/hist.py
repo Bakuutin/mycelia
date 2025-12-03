@@ -48,7 +48,7 @@ def ensure_buckets_exist(start: datetime, end: datetime, scale: Scale):
         return
 
     call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "bulkWrite",
             "collection": f"histogram_{scale}",
@@ -83,7 +83,7 @@ def mark_buckets_as(
         query["start"]["$lt"] = now_bucket
 
     call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "updateMany",
             "collection": f"histogram_{scale}",
@@ -104,7 +104,7 @@ def get_next(worker: str, scale: Scale, cursor: datetime | None, sort: Literal[1
             query["start"] = {"$lt": cursor}
 
     return call_resource(
-        "tech.mycelia.mongo",
+        "mongo",
         {
             "action": "findOne",
             "collection": f"histogram_{scale}",

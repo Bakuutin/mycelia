@@ -37,7 +37,7 @@ _IS_AUDIO_RE = re.compile(r"\.(m4a|mp3|wav|opus)$", re.IGNORECASE)
 
 
 
-_known_discovered_cache = lazy(lambda: set(d['path'] for d in call_resource('tech.mycelia.mongo', {
+_known_discovered_cache = lazy(lambda: set(d['path'] for d in call_resource('mongo', {
     "action": "find",
     "collection": "source_files",
     "query": {
@@ -53,7 +53,7 @@ def is_audio_file(path: str) -> bool:
 def is_discovered(path: str) -> bool:
     if path in _known_discovered_cache:
         return True
-    found = bool(call_resource('tech.mycelia.mongo', {
+    found = bool(call_resource('mongo', {
         "action": "findOne",
         "collection": "source_files",
         "query": {"path": path}
@@ -94,7 +94,7 @@ class Importer:
             "start": self.get_start(metadata)
         })
         self.logger.debug("adding %s to source_files", metadata['path'])
-        call_resource('tech.mycelia.mongo', {
+        call_resource('mongo', {
             "action": "insertOne",
             "collection": "source_files",
             "doc": metadata

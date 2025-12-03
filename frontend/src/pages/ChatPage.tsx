@@ -23,7 +23,7 @@ import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 
 async function fetchMessages(chatId: string) {
-  const messages = await callResource("tech.mycelia.mongo", {
+  const messages = await callResource("mongo", {
     action: "find",
     collection: "messages",
     query: {

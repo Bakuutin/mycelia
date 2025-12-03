@@ -39,7 +39,7 @@ const APIKeysPage = () => {
   const fetchApiKeys = async () => {
     try {
       setLoading(true);
-      const result = await callResource("tech.mycelia.apikeys", {
+      const result = await callResource("apikeys", {
         action: "list",
       });
       setApiKeys(result);
@@ -66,7 +66,7 @@ const APIKeysPage = () => {
     setError(null);
 
     try {
-      const result = await callResource("tech.mycelia.apikeys", {
+      const result = await callResource("apikeys", {
         action: "create",
         name: newKeyName,
         owner: newKeyOwner,
@@ -90,7 +90,7 @@ const APIKeysPage = () => {
     }
 
     try {
-      await callResource("tech.mycelia.apikeys", {
+      await callResource("apikeys", {
         action: "revoke",
         id,
         owner,
@@ -118,7 +118,7 @@ const APIKeysPage = () => {
     setError(null);
 
     try {
-      await callResource("tech.mycelia.apikeys", {
+      await callResource("apikeys", {
         action: "update",
         id,
         owner,

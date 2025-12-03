@@ -28,12 +28,12 @@ const PromptsPage = () => {
     const fetchData = async () => {
       try {
         const [configData, promptsData] = await Promise.all([
-          callResource("tech.mycelia.mongo", {
+          callResource("mongo", {
             action: "findOne",
             collection: "configs",
             query: { _id: { $oid: SERVER_CONFIG_ID } },
           }),
-          callResource("tech.mycelia.mongo", {
+          callResource("mongo", {
             action: "find",
             collection: "prompts",
             query: {},
@@ -74,7 +74,7 @@ const PromptsPage = () => {
     setConfig(newConfig);
 
     try {
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "updateOne",
         collection: "configs",
         query: { _id: { $oid: SERVER_CONFIG_ID } },
@@ -103,7 +103,7 @@ const PromptsPage = () => {
     }
 
     try {
-      await callResource("tech.mycelia.mongo", {
+      await callResource("mongo", {
         action: "deleteOne",
         collection: "prompts",
         query: { _id: { $oid: promptId } },

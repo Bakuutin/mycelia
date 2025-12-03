@@ -48,7 +48,7 @@ def get_voice_prob(audio):
     return max_prob
 
 def apply_updates(updates):
-    call_resource('tech.mycelia.mongo', {
+    call_resource('mongo', {
         "action": "bulkWrite",
         "collection": "audio_chunks",
         "operations": [
@@ -65,7 +65,7 @@ def apply_updates(updates):
 def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100):
 
     # Use resumable cursors: getFirstBatch to start
-    result = call_resource('tech.mycelia.mongo', {
+    result = call_resource('mongo', {
         "action": "getFirstBatch",
         "collection": "audio_chunks",
         "query": {
@@ -122,7 +122,7 @@ def run_voice_activity_detection(limit=1000, verbose_logs=False, batch_size=100)
 
         # Get more batches if available
         if has_more and cursor_id:
-            result = call_resource('tech.mycelia.mongo', {
+            result = call_resource('mongo', {
                 "action": "getMore",
                 "collection": "audio_chunks",
                 "cursorId": cursor_id,

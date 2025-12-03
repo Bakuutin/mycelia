@@ -216,7 +216,7 @@ function getNestedValue(obj: any, path: string): any {
 
 export class ObjectsResource
   implements Resource<ObjectsRequest, ObjectsResponse> {
-  code = "tech.mycelia.objects";
+  code = "objects";
   description =
     "Manage timeline objects (people, events, places, relationships, promises). Objects form a graph where relationships connect entities with temporal data. Supports optimistic locking for concurrent updates. Use 'list' to find objects, 'get' for details, 'getRelationships' to explore connections, 'exploreTimeRange' to find objects active during a time period, 'create' for new entities, 'update' for field changes, and 'getHistory' for version tracking.";
   schemas = {
@@ -774,6 +774,6 @@ export function getObjectsResource(
   auth: Auth,
 ): Promise<(input: ObjectsRequest) => Promise<ObjectsResponse>> {
   return auth.getResource<ObjectsRequest, ObjectsResponse>(
-    "tech.mycelia.objects",
+    "objects",
   );
 }

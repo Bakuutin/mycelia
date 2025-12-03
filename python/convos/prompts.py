@@ -31,7 +31,7 @@ def chunk_to_prompt(chunk: list[dict]):
 
 
 def get_prompts():
-    config = call_resource("tech.mycelia.mongo", {
+    config = call_resource("mongo", {
         "action": "findOne",
         "collection": "configs",
         "query": {"_id": SERVER_CONFIG_ID}
@@ -42,7 +42,7 @@ def get_prompts():
 
     prompt_ids = list(config["prompts"].values())
 
-    prompts_list = call_resource("tech.mycelia.mongo", {
+    prompts_list = call_resource("mongo", {
         "action": "find",
         "collection": "prompts",
         "query": {"_id": {"$in": prompt_ids}}

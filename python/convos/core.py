@@ -133,7 +133,7 @@ def process_conversation_chunk(chunk: list[Utterance], model: str = "small") -> 
 
 
 def create_relationship(conversation_id, mentioned_entity_name):
-    call_resource("tech.mycelia.objects", {
+    call_resource("objects", {
         "action": "create",
         "object": {
             'isRelationship': True,
@@ -158,7 +158,7 @@ def process_segment(segment: Segment, utterances: list[Utterance], model: str = 
         AIMessage(content=prompts["summarization_guidance"])
     ], Conversation, llm)
 
-    result = call_resource("tech.mycelia.objects", {
+    result = call_resource("objects", {
         "action": "create",
         "object": {
             'isConversation': True,

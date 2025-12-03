@@ -50,7 +50,7 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
 }));
 
 async function fetchObjects(): Promise<Object[]> {
-  return callResource("tech.mycelia.objects", {
+  return callResource("objects", {
     action: "list",
     options: {
       hasTimeRanges: true,

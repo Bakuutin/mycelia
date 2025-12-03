@@ -210,7 +210,7 @@ const actionMap = {
 } satisfies { [K in MongoRequest["action"]]: string[] };
 
 export class MongoResource implements Resource<MongoRequest, MongoResponse> {
-  code = "tech.mycelia.mongo";
+  code = "mongo";
   description = "MongoDB operations";
   schemas = {
     request: mongoRequestSchema,
@@ -504,5 +504,5 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
 export function getMongoResource(
   auth: Auth,
 ): Promise<(input: MongoRequest) => Promise<MongoResponse>> {
-  return auth.getResource("tech.mycelia.mongo");
+  return auth.getResource("mongo");
 }

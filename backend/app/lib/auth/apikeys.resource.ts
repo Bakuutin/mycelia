@@ -42,7 +42,7 @@ export type ApiKeysResponse = any;
 
 export class ApiKeysResource
   implements Resource<ApiKeysRequest, ApiKeysResponse> {
-  code = "tech.mycelia.apikeys";
+  code = "apikeys";
   description = "API key management";
   schemas = {
     request: apiKeysRequestSchema as z.ZodType<ApiKeysRequest>,

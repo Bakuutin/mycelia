@@ -59,7 +59,7 @@ const CreateEventPage = () => {
         },
       } as const;
 
-      await callResource("tech.mycelia.mongo", doc);
+      await callResource("mongo", doc);
       navigate("/timeline");
     } catch (err) {
       console.error("Failed to create event:", err);

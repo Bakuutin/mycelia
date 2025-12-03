@@ -84,7 +84,7 @@ type Model = {
 };
 
 export class LLMResource implements Resource<LLMRequest, LLMResponse> {
-  code = "tech.mycelia.llm";
+  code = "llm";
   description = "LLM chat completions";
   schemas: {
     request: z.ZodType<LLMRequest>;
@@ -246,5 +246,5 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 export async function getLLMResource(
   auth: Auth,
 ): Promise<(input: LLMRequest) => Promise<LLMResponse>> {
-  return auth.getResource("tech.mycelia.llm");
+  return auth.getResource("llm");
 }

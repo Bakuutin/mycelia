@@ -101,7 +101,7 @@ uv run python -m convos.cli --model summary --limit 20
 ---
 
 ## Switching Paths Later
-- Update aliases instead of changing every script. Just edit the `llm_models` record (UI or `tech.mycelia.mongo` resource) and rerun jobs.
+- Update aliases instead of changing every script. Just edit the `llm_models` record (UI or `mongo` resource) and rerun jobs.
 - Keep at least one lightweight local alias (`small`) so developer tooling still works when the internet or OpenRouter is unavailable.
 - For bulk updates, export/import the `llm_models` collection with your preferred Mongo tool—no code changes are required.
 

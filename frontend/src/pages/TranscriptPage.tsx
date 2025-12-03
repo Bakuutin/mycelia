@@ -142,7 +142,7 @@ const TranscriptPage = () => {
     rangeStart: Date,
     rangeEnd: Date,
   ): Promise<DiarizationDoc[]> {
-    const docs: DiarizationDoc[] = await callResource("tech.mycelia.mongo", {
+    const docs: DiarizationDoc[] = await callResource("mongo", {
       action: "find",
       collection: "diarizations",
       query: {
@@ -158,7 +158,7 @@ const TranscriptPage = () => {
     rangeStart: Date,
     rangeEnd: Date,
   ): Promise<RenderSegment[]> {
-    const docs: TranscriptionDoc[] = await callResource("tech.mycelia.mongo", {
+    const docs: TranscriptionDoc[] = await callResource("mongo", {
       action: "find",
       collection: "transcriptions",
       query: {
@@ -266,7 +266,7 @@ const TranscriptPage = () => {
       { $limit: 200 },
     ];
 
-    const docs: TranscriptionDoc[] = await callResource("tech.mycelia.mongo", {
+    const docs: TranscriptionDoc[] = await callResource("mongo", {
       action: "aggregate",
       collection: "transcriptions",
       pipeline,

@@ -332,7 +332,7 @@ export async function fetchTimelineData(
   const queryStart = new Date(startDate.getTime() - duration - binSize);
   const queryEnd = new Date(endDate.getTime() + duration + binSize);
 
-  const mongo = await auth.getResource("tech.mycelia.mongo");
+  const mongo = await auth.getResource("mongo");
 
   const histogramData = await mongo({
     action: "find",

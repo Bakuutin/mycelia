@@ -33,7 +33,7 @@ def iterate_transcripts(not_later_than: datetime | None = None, batch_size: int 
         cursor = shift_if_in_known_range(cursor)
 
         transcripts = call_resource(
-            "tech.mycelia.mongo",
+            "mongo",
             {
                 "action": "find",
                 "collection": "transcriptions",

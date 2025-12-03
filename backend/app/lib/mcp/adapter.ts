@@ -110,6 +110,7 @@ export async function handleMCPToolCall(
   auth: Auth,
   args: unknown,
 ): Promise<CallToolResult> {
+  toolName = toolName.replace(/^tech\.mycelia\./g, ""); // support for legacy tech.mycelia. prefix; TODO: remove
   const metadata = toolMetadataMap.get(toolName);
 
   if (!metadata) {

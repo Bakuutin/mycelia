@@ -236,7 +236,7 @@ const ObjectsPage = () => {
           { $limit: 100 },
         ];
 
-        const result = await callResource("tech.mycelia.mongo", {
+        const result = await callResource("mongo", {
           action: "aggregate",
           collection: "objects",
           pipeline,
