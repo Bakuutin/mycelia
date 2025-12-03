@@ -699,16 +699,30 @@ export const PromptInput = ({
     event.preventDefault();
 
     const form = event.currentTarget;
+    // If using provider, get value from context.
+    // If NOT using provider, we must get value from the input directly via ref or formData.
+    // However, the textInput state in provider is updated via onChange on the textarea.
+    // When NOT using provider, 'controller' is null, so we fall back to formData or local state if it were lifted.
+    
+    // The issue: PromptInputTextarea uses 'controller.textInput.value' if provider exists.
+    // If no provider, it just passes 'onChange' through.
+    // In ChatPage, we pass 'value={input}' and 'onChange={handleTextareaChange}' to PromptInputTextarea.
+    // But PromptInputTextarea implementation:
+    /*
+      const controlledProps = controller
+        ? { value: controller.textInput.value, onChange: ... }
+        : { onChange }; // <--- MISSING value prop pass-through!
+    */
+
     const text = usingProvider ? controller.textInput.value : (() => {
+      // When not using provider, we rely on the form data or the controlled value passed from parent.
+      // But since we don't have access to parent's state here easily without props drilling 'value',
+      // we can use FormData.
       const formData = new FormData(form);
       return (formData.get("message") as string) || "";
     })();
 
-    // Reset form immediately after capturing text to avoid race condition
-    // where user input during async blob conversion would be lost
-    if (!usingProvider) {
-      form.reset();
-    }
+    // ... rest of function
 
     // Convert blob URLs to data URLs asynchronously
     Promise.all(
@@ -864,6 +878,7 @@ export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, PromptInputTe
     }
     : {
       onChange,
+      value: props.value, // Ensure value prop is passed through when not using provider
     };
 
   return (

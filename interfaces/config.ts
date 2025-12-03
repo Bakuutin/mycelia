@@ -17,6 +17,7 @@ const PROMPT_LABELS = {
   segmentation_guidance: "Topic Finder Response Format",
   summarization_system: "Analyze Conversation Details",
   summarization_guidance: "Analysis Response Format",
+  chat_system: "Mycelia Assistant Personality",
 } as const;
 
 export const zServerConfigPrompts = z.object({
@@ -24,6 +25,7 @@ export const zServerConfigPrompts = z.object({
   segmentation_guidance: z.instanceof(ObjectId).describe("Ensures the topic finder responds in the correct JSON format. Usually just tells the AI to return JSON only."),
   summarization_system: z.instanceof(ObjectId).describe("Analyzes each conversation topic to extract details: writes a summary, picks an emoji, finds people/things mentioned, and notes if they agreed on anything. Creates the actual conversation objects you see in your timeline."),
   summarization_guidance: z.instanceof(ObjectId).describe("Ensures the conversation analyzer responds in the correct JSON format. Usually just tells the AI to return JSON only."),
+  chat_system: z.instanceof(ObjectId).optional().describe("The personality and core instructions for the Mycelia chat assistant."),
 });
 
 export const PROMPT_TASK_LABELS = PROMPT_LABELS;

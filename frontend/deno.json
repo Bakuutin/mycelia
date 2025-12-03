@@ -46,7 +46,7 @@
     "@rjsf/validator-ajv8": "npm:@rjsf/validator-ajv8@^6.1.1",
     "@tanstack/react-query": "npm:@tanstack/react-query@^5.59.20",
     "@std/path": "jsr:@std/path@^1.0.8",
-    "bson": "npm:bson@^6.10.4",
+    "bson": "npm:bson@^7.0.0",
     "class-variance-authority": "npm:class-variance-authority@^0.7.1",
     "clsx": "npm:clsx@^2.1.1",
     "cmdk": "npm:cmdk@^1.1.1",

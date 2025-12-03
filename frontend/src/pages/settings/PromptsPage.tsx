@@ -150,7 +150,8 @@ const PromptsPage = () => {
       <Card className="p-6">
         <h3 className="text-lg font-semibold mb-4">Prompt Assignments</h3>
         <div className="space-y-4">
-          {Object.entries(config.prompts).map(([taskKey, currentPromptId]) => {
+          {Object.keys(zServerConfigPrompts.shape).map((taskKey) => {
+             const currentPromptId = config.prompts[taskKey as keyof ServerConfig["prompts"]];
             return (
             <div key={taskKey} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
               <div className="md:col-span-2">

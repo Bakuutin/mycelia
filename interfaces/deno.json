@@ -4,7 +4,7 @@
   },
   "imports": {
     "zod": "npm:zod@^4.1.12",
-    "bson": "npm:bson@^6.10.4"
+    "bson": "npm:bson@^7.0.0"
   }
 }
 

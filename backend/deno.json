@@ -32,6 +32,7 @@
     "bullmq": "npm:bullmq@^5.1.1",
     "formdata-node": "npm:formdata-node@^6.0.0",
     "yaml": "jsr:@std/yaml@^1.0.10",
+    "bson": "npm:bson@^6.10.4",
     "zod": "npm:zod@^4.1.12"
   },
   "compilerOptions": {
