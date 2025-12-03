@@ -1,9 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { callResource } from "@/lib/api";
 import { TimelineChart } from "@/components/timeline/TimelineChart";
 import { config } from "@/config";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
+import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
+import { useTimeline } from "@/hooks/useTimeline";
 import {
   Tooltip,
   TooltipContent,
@@ -11,7 +15,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { X } from "lucide-react";
+import { X, Maximize2, CircleOff, RefreshCw, CalendarPlus, Loader2, Minimize2 } from "lucide-react";
 
 const ToolWrapper = ({ tool }: { tool: any }) => {
   const Component = tool.component;
@@ -36,26 +40,65 @@ const ToolWrapper = ({ tool }: { tool: any }) => {
 };
 
 const TimelinePage = () => {
+  const navigate = useNavigate();
   const { loading, error, objects } = useObjects();
   const { setRange } = useTimelineRange();
-  const { clearSelection, selectedIds } = useObjectSelectionStore();
+  const { clearSelection: clearObjectSelection, selectedIds } = useObjectSelectionStore();
+  const { selection: timeSelection, clearSelection: clearTimeSelection } = useTimelineSelectionStore();
   const hasRescaledRef = useRef(false);
-  const hasSelection = selectedIds.size > 0;
+  const [recalculating, setRecalculating] = useState(false);
+  const timeline = useTimeline();
+  const { zoomTo } = timeline;
+  const hasObjectSelection = selectedIds.size > 0;
+  const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
 
   // Clear selection when navigating away
   useEffect(() => {
     return () => {
-      clearSelection();
+      clearObjectSelection();
+      clearTimeSelection();
     };
-  }, [clearSelection]);
+  }, [clearObjectSelection, clearTimeSelection]);
 
-  // Rescale timeline to fit all objects when they finish loading
-  useEffect(() => {
-    if (loading || hasRescaledRef.current || !objects || objects.length === 0) {
-      return;
+  const handleZoomToSelection = () => {
+    if (timeSelection.start && timeSelection.end) {
+      zoomTo(timeSelection.start, timeSelection.end);
     }
+  };
 
-    // Extract all time ranges from objects
+  const handleRecalculate = async () => {
+    if (!timeSelection.start || !timeSelection.end) return;
+    setRecalculating(true);
+    try {
+      await callResource("timeline", {
+        action: "recalculate",
+        start: timeSelection.start,
+        end: timeSelection.end,
+      });
+      console.log("Recalculation triggered");
+    } catch (e) {
+      console.error("Failed to recalculate:", e);
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const handleCreateEvent = () => {
+    if (!timeSelection.start) return;
+    
+    const params = new URLSearchParams();
+    params.set("start", timeSelection.start.getTime().toString());
+    if (timeSelection.end) {
+      params.set("end", timeSelection.end.getTime().toString());
+    }
+    navigate(`/objects/create?${params.toString()}`);
+  };
+
+  const handleZoomToFit = useCallback(() => {
+    if (!objects || objects.length === 0) return;
+
+    console.log("Zooming to fit", objects.length, "objects");
+
     const allTimes: Date[] = [];
     for (const object of objects) {
       if (object.timeRanges && object.timeRanges.length > 0) {
@@ -64,31 +107,34 @@ const TimelinePage = () => {
           if (range.end) {
             allTimes.push(range.end);
           } else {
-            // If no end time, use start time as end (for point events)
             allTimes.push(range.start);
           }
         }
       }
     }
 
-    if (allTimes.length === 0) {
-      return;
-    }
+    if (allTimes.length === 0) return;
 
-    // Find earliest and latest times
     const earliest = new Date(Math.min(...allTimes.map(t => t.getTime())));
     const latest = new Date(Math.max(...allTimes.map(t => t.getTime())));
 
-    // Add padding (5% on each side)
     const duration = latest.getTime() - earliest.getTime();
     const padding = duration * 0.05;
     const paddedStart = new Date(earliest.getTime() - padding);
     const paddedEnd = new Date(latest.getTime() + padding);
+    zoomTo(paddedStart, paddedEnd);
+  }, [objects, zoomTo]);
 
-    // Set the range
-    setRange(paddedStart, paddedEnd);
-    hasRescaledRef.current = true;
-  }, [loading, objects, setRange]);
+  useEffect(() => {
+    if (!loading && objects && objects.length > 0 && !hasRescaledRef.current) {
+      setTimeout(() => {
+        handleZoomToFit();
+      }, 500);
+      hasRescaledRef.current = true;
+    }
+  }, [loading, objects, handleZoomToFit]);
+
+
 
   if (loading) {
     return (
@@ -120,15 +166,99 @@ const TimelinePage = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">Timeline</h1>
-          <div className="flex items-center gap-2">
-            {config.tools.map((tool, i) => (
-              <ToolWrapper key={i} tool={tool} />
-            ))}
+          <div className="flex items-center flex-1 justify-end gap-2 ml-4">
+            {hasTimeSelection && (
+              <div className="flex items-center gap-2 mr-auto">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={handleZoomToSelection}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <Maximize2 className="w-4 h-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Zoom to selected range</p>
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={handleRecalculate}
+                      variant="outline"
+                      size="icon"
+                      disabled={recalculating}
+                    >
+                      {recalculating ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Recalculate histograms</p>
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={handleCreateEvent}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <CalendarPlus className="w-4 h-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Create object from range</p>
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={clearTimeSelection}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <CircleOff className="w-4 h-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Clear selection</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={handleZoomToFit}
+                    variant="outline"
+                    size="icon"
+                  >
+                    <Minimize2 className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Zoom to fit all objects</p>
+                </TooltipContent>
+              </Tooltip>
+              {config.tools.map((tool, i) => (
+                <ToolWrapper key={i} tool={tool} />
+              ))}
+            </div>
           </div>
         </div>
 
         <div className="border rounded-lg p-2">
-          <TimelineChart />
+          <TimelineChart timeline={timeline} />
         </div>
       </div>
     </TooltipProvider>

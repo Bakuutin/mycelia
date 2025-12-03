@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { callResource } from "@/lib/api";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { validateObjectForSave } from "@/types/objects";
@@ -10,8 +10,17 @@ import { SmartBackButton } from "@/components/SmartBackButton";
 
 const CreateObjectPage = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Initialize from URL params if available
+  const initialStart = searchParams.get("start")
+    ? new Date(Number(searchParams.get("start")))
+    : undefined;
+  const initialEnd = searchParams.get("end")
+    ? new Date(Number(searchParams.get("end")))
+    : undefined;
 
   const [object, setObject] = useState<ObjectFormData>({
     name: "",
@@ -19,6 +28,10 @@ const CreateObjectPage = () => {
     icon: { text: "📦" },
     aliases: [],
     isPromise: false,
+    isEvent: !!initialStart, // Auto-check "Is Event" if start time is provided
+    timeRanges: initialStart
+      ? [{ start: initialStart, end: initialEnd }]
+      : [],
     createdAt: new Date(),
     updatedAt: new Date(),
   });

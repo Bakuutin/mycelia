@@ -8,12 +8,15 @@ import { AudioLayer } from "@/modules/audio/index.tsx";
 interface TimelineChartProps {
   layers?: Layer[];
   className?: string;
+  timeline?: ReturnType<typeof useTimeline>;
 }
 
 export const TimelineChart: React.FC<TimelineChartProps> = (
-  { layers, className },
+  { layers, className, timeline: providedTimeline },
 ) => {
-  const { containerRef, width, timeScale, transform } = useTimeline();
+  const internalTimeline = useTimeline();
+  const timeline = providedTimeline || internalTimeline;
+  const { containerRef, width, timeScale, transform } = timeline;
 
   const resolvedLayers = useMemo<Layer[]>(() => {
     if (layers && layers.length > 0) return layers;

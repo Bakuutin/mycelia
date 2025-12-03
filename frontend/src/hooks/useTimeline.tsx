@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import _ from "lodash";
 import { useTimelineRange } from "../stores/timelineRange.ts";
@@ -8,8 +8,19 @@ interface TimelineDimensions {
   height: number;
 }
 
-export function useTimeline() {
-  const [containerRef, setContainerRef] = useState<HTMLDivElement | null>(null);
+interface TimelineContextValue {
+  containerRef: React.RefObject<HTMLDivElement>;
+  dimensions: TimelineDimensions;
+  transform: d3.ZoomTransform;
+  timeScale: d3.ScaleTime<number, number>;
+  width: number;
+  zoomTo: (newStart: Date, newEnd: Date) => void;
+}
+
+const TimelineContext = createContext<TimelineContextValue | null>(null);
+
+export function TimelineProvider({ children }: { children: React.ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState<TimelineDimensions>({
     width: 800,
     height: 100,
@@ -19,18 +30,18 @@ export function useTimeline() {
   const { start, end, setRange } = useTimelineRange();
 
   useEffect(() => {
-    if (!containerRef) return;
+    if (!containerRef.current) return;
     const ro = new ResizeObserver(([{ contentRect }]) => {
       setDimensions((prev) => ({ ...prev, width: contentRect.width }));
     });
-    ro.observe(containerRef);
+    ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, [containerRef]);
+  }, []);
 
   const timeScale = useMemo(() =>
     d3.scaleTime()
       .domain([start, end])
-      .range([0, dimensions.width]), [dimensions.width]);
+      .range([0, dimensions.width]), [start, end, dimensions.width]);
 
   const onZoom = useCallback(
     _.debounce((start: Date, end: Date) => {
@@ -100,7 +111,6 @@ export function useTimeline() {
 
   const zoomTo = useCallback((newStart: Date, newEnd: Date) => {
     if (!dimensions.width) return;
-    console.log("Zooming to", newStart, newEnd);
 
     const s0 = timeScale(newStart);
     const s1 = timeScale(newEnd);
@@ -118,12 +128,26 @@ export function useTimeline() {
       .call(zoomBehavior.transform as any, t);
   }, [dimensions.width, timeScale, zoomBehavior]);
 
-  return {
-    containerRef: setContainerRef,
+  const value = {
+    containerRef,
     dimensions,
     transform,
     timeScale,
     width: dimensions.width,
     zoomTo,
   };
+
+  return (
+    <TimelineContext.Provider value={value}>
+      {children}
+    </TimelineContext.Provider>
+  );
+}
+
+export function useTimeline() {
+  const context = useContext(TimelineContext);
+  if (!context) {
+    throw new Error("useTimeline must be used within a TimelineProvider");
+  }
+  return context;
 }

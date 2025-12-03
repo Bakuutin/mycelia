@@ -18,6 +18,7 @@ const checkHasTime = (ticks: Tick[]): boolean => {
 };
 
 const checkHasWeekdays = (ticks: Tick[]): boolean => {
+  if (ticks.length < 2) return false;
   const [first, last] = [ticks[0].value, ticks[ticks.length - 1].value];
   return last.getTime() - first.getTime() < 30 * day;
 };

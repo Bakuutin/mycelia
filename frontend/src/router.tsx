@@ -2,9 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
 import TimelinePage from "./pages/TimelinePage";
-import CreateEventPage from "./pages/CreateEventPage";
 import ChatPage from "./pages/ChatPage";
-import EventDetailPage from "./pages/EventDetailPage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
@@ -71,14 +69,6 @@ export const router = createBrowserRouter([
       {
         path: "audio/export",
         element: <AudioExportPage />,
-      },
-      {
-        path: "events/new",
-        element: <CreateEventPage />,
-      },
-      {
-        path: "events/:id",
-        element: <EventDetailPage />,
       },
       {
         path: "objects",

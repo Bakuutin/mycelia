@@ -1,8 +1,6 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@std/internal@^1.0.12": "1.0.12",
-    "jsr:@std/path@^1.0.8": "1.1.3",
     "npm:@ai-sdk/openai@^3.0.0-beta.78": "3.0.0-beta.78_zod@4.1.13",
     "npm:@ai-sdk/react@^3.0.0-beta.129": "3.0.0-beta.129_react@18.3.1_zod@4.1.13",
     "npm:@deno/vite-plugin@^1.0.5": "1.0.5_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2",
@@ -102,17 +100,6 @@
     "npm:zod-to-json-schema@^3.25.0": "3.25.0_zod@4.1.13",
     "npm:zod@^4.1.12": "4.1.13",
     "npm:zustand@^5.0.2": "5.0.9_@types+react@18.3.27_react@18.3.1"
-  },
-  "jsr": {
-    "@std/internal@1.0.12": {
-      "integrity": "972a634fd5bc34b242024402972cd5143eac68d8dffaca5eaa4dba30ce17b027"
-    },
-    "@std/path@1.1.3": {
-      "integrity": "b015962d82a5e6daea980c32b82d2c40142149639968549c649031a230b1afb3",
-      "dependencies": [
-        "jsr:@std/internal"
-      ]
-    }
   },
   "npm": {
     "@acemir/cssom@0.9.24": {
