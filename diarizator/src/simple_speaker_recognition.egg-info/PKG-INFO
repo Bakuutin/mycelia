@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: simple-speaker-recognition
+Version: 1.0.0
+Summary: Minimal pyannote diarization service with embeddings
+Requires-Python: >=3.10
+Requires-Dist: fastapi>=0.115.12
+Requires-Dist: uvicorn>=0.34.2
+Requires-Dist: scipy>=1.10.0
+Requires-Dist: pyannote.audio>=3.3.2
+Requires-Dist: python-multipart>=0.0.6
+Requires-Dist: soundfile>=0.12
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scikit-learn>=1.4.0
+Provides-Extra: cpu
+Requires-Dist: torch>=2.0.0; extra == "cpu"
+Requires-Dist: torchaudio>=2.0.0; extra == "cpu"
+Provides-Extra: cu121
+Requires-Dist: torch>=2.0.0; extra == "cu121"
+Requires-Dist: torchaudio>=2.0.0; extra == "cu121"
+Provides-Extra: cu126
+Requires-Dist: torch>=2.0.0; extra == "cu126"
+Requires-Dist: torchaudio>=2.0.0; extra == "cu126"
+Provides-Extra: cu128
+Requires-Dist: torch>=2.0.0; extra == "cu128"
+Requires-Dist: torchaudio>=2.0.0; extra == "cu128"
