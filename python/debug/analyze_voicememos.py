@@ -2,8 +2,16 @@
 """
 Analyze Apple Voice Memos CloudRecordings.db database.
 Shows all metadata fields and provides statistics about recordings.
+
+Usage:
+    uv run debug/analyze_voicememos.py                    # Full database analysis
+    uv run debug/analyze_voicememos.py --find "Recording 367"  # Find specific recording
+    uv run debug/analyze_voicememos.py --find "Bali"           # Search by partial name
 """
+import argparse
+import json
 import sqlite3
+import subprocess
 import os
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -11,9 +19,10 @@ from collections import defaultdict
 # Apple's reference date: January 1, 2001 00:00:00 UTC
 APPLE_REFERENCE_DATE = 978307200
 
-DB_PATH = os.path.expanduser(
-    "~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/CloudRecordings.db"
+RECORDINGS_DIR = os.path.expanduser(
+    "~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
 )
+DB_PATH = os.path.join(RECORDINGS_DIR, "CloudRecordings.db")
 
 
 def apple_to_datetime(apple_timestamp):
@@ -36,6 +45,135 @@ def format_duration(seconds):
         return f"{minutes}m {secs}s"
     else:
         return f"{secs}s"
+
+
+def get_file_metadata(filepath):
+    """Extract metadata from m4a file using ffprobe."""
+    if not os.path.exists(filepath):
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", filepath],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+    except (subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+        pass
+    return None
+
+
+def find_recording(search_term):
+    """Find recordings by name/title and display detailed info."""
+    if not os.path.exists(DB_PATH):
+        print(f"Database not found at: {DB_PATH}")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # Get folder map
+    cursor.execute("SELECT Z_PK, ZENCRYPTEDNAME FROM ZFOLDER")
+    folder_map = {row['Z_PK']: row['ZENCRYPTEDNAME'] for row in cursor.fetchall()}
+
+    # Search by title, custom label, or path
+    cursor.execute("""
+        SELECT * FROM ZCLOUDRECORDING
+        WHERE ZENCRYPTEDTITLE LIKE ?
+           OR ZCUSTOMLABEL LIKE ?
+           OR ZPATH LIKE ?
+           OR ZUNIQUEID LIKE ?
+        ORDER BY ZDATE DESC
+    """, (f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", f"%{search_term}%"))
+
+    recordings = cursor.fetchall()
+    conn.close()
+
+    if not recordings:
+        print(f"No recordings found matching: '{search_term}'")
+        return
+
+    print(f"\nFound {len(recordings)} recording(s) matching '{search_term}':\n")
+
+    for rec in recordings:
+        print("=" * 70)
+        print(f"📝 {rec['ZENCRYPTEDTITLE'] or rec['ZCUSTOMLABEL'] or 'Untitled'}")
+        print("=" * 70)
+
+        # Database info
+        print("\n📊 DATABASE INFO:")
+        print(f"  ID (Z_PK):        {rec['Z_PK']}")
+        print(f"  UUID:             {rec['ZUNIQUEID']}")
+        print(f"  Recorded at:      {apple_to_datetime(rec['ZDATE'])}")
+        print(f"  Duration:         {format_duration(rec['ZDURATION'])}")
+        print(f"  Local duration:   {format_duration(rec['ZLOCALDURATION'])}")
+        print(f"  Title:            {rec['ZENCRYPTEDTITLE']}")
+        print(f"  Custom label:     {rec['ZCUSTOMLABEL']}")
+        print(f"  Filename:         {rec['ZPATH'] or '(cloud-only)'}")
+        print(f"  Folder:           {folder_map.get(rec['ZFOLDER'], 'Unfiled')}")
+        print(f"  Flags:            {rec['ZFLAGS']} (4=synced, 0=cloud-only)")
+        print(f"  Shared flags:     {rec['ZSHAREDFLAGS']}")
+        print(f"  Playback pos:     {format_duration(rec['ZPLAYBACKPOSITION'])}")
+        print(f"  Playback rate:    {rec['ZPLAYBACKRATE']}x")
+        print(f"  Silence removal:  {'Yes' if rec['ZSILENCEREMOVERENABLED'] else 'No'}")
+
+        if rec['ZEVICTIONDATE']:
+            print(f"  Evicted at:       {apple_to_datetime(rec['ZEVICTIONDATE'])}")
+
+        # File metadata (if file exists locally)
+        if rec['ZPATH']:
+            filepath = os.path.join(RECORDINGS_DIR, rec['ZPATH'])
+            if os.path.exists(filepath):
+                file_meta = get_file_metadata(filepath)
+                if file_meta:
+                    print("\n📱 DEVICE & FILE INFO (from m4a metadata):")
+                    tags = file_meta.get('format', {}).get('tags', {})
+
+                    encoder = tags.get('encoder', 'Unknown')
+                    print(f"  Encoder:          {encoder}")
+
+                    # Parse device from encoder string
+                    if 'Watch' in encoder:
+                        device_type = "Apple Watch"
+                    elif 'iPhone' in encoder:
+                        device_type = "iPhone"
+                    elif 'iPad' in encoder:
+                        device_type = "iPad"
+                    elif 'MacBook' in encoder or 'MBP' in encoder:
+                        device_type = "Mac"
+                    elif 'iOS' in encoder:
+                        device_type = "iPhone/iPad"
+                    else:
+                        device_type = "Unknown"
+                    print(f"  Device type:      {device_type}")
+
+                    print(f"  Creation time:    {tags.get('creation_time', 'N/A')}")
+
+                    # Audio stream info
+                    streams = file_meta.get('streams', [])
+                    for stream in streams:
+                        if stream.get('codec_type') == 'audio':
+                            print(f"  Audio codec:      {stream.get('codec_long_name', 'N/A')}")
+                            print(f"  Sample rate:      {stream.get('sample_rate', 'N/A')} Hz")
+                            print(f"  Channels:         {stream.get('channels', 'N/A')} ({stream.get('channel_layout', 'N/A')})")
+                            print(f"  Bitrate:          {int(stream.get('bit_rate', 0)) // 1000} kbps")
+
+                    # File size
+                    fmt = file_meta.get('format', {})
+                    size_bytes = int(fmt.get('size', 0))
+                    if size_bytes > 0:
+                        size_mb = size_bytes / (1024 * 1024)
+                        print(f"  File size:        {size_mb:.1f} MB")
+            else:
+                print(f"\n⚠️  File not found locally: {filepath}")
+        else:
+            print("\n☁️  Recording is cloud-only (not downloaded to this device)")
+
+        print()
+
+    print(f"Total: {len(recordings)} recording(s) found")
 
 
 def analyze_database():
@@ -331,4 +469,25 @@ def analyze_database():
 
 
 if __name__ == "__main__":
-    analyze_database()
+    parser = argparse.ArgumentParser(
+        description="Analyze Apple Voice Memos database",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  uv run debug/analyze_voicememos.py                      # Full analysis
+  uv run debug/analyze_voicememos.py --find "Recording 367"    # Find by title
+  uv run debug/analyze_voicememos.py --find "Bali"             # Partial search
+  uv run debug/analyze_voicememos.py --find "6EF88D2A"         # Search by UUID
+        """
+    )
+    parser.add_argument(
+        "--find", "-f",
+        metavar="NAME",
+        help="Find recordings by name, title, UUID, or filename (partial match)"
+    )
+    args = parser.parse_args()
+
+    if args.find:
+        find_recording(args.find)
+    else:
+        analyze_database()
