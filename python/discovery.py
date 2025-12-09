@@ -1,6 +1,5 @@
 import platform
 from chunking import get_os_metadata
-from pymongo.collection import Collection
 from utils import lazy
 import os
 import re
@@ -77,21 +76,6 @@ def extract_device_info(filepath: str) -> dict | None:
             device_info["device_type"] = "mac"
         elif "iOS" in encoder:
             device_info["device_type"] = "iphone"  # iOS without device name is usually iPhone
-
-        # Try to extract OS version
-        version_match = re.search(r"Version\s+([\d.]+)", encoder)
-        if version_match:
-            device_info["os_version"] = version_match.group(1)
-
-        # Try to extract build number
-        build_match = re.search(r"Build\s+([A-Za-z0-9]+)", encoder)
-        if build_match:
-            device_info["build"] = build_match.group(1)
-
-        # Try to extract device name (for older formats like "MacBook Pro" or custom names)
-        name_match = re.search(r"com\.apple\.VoiceMemos \(([^()]+?)(?:\s+Version|\s*\(null\)|\s*$)", encoder)
-        if name_match:
-            device_info["device_name"] = name_match.group(1).strip()
 
         return device_info
 

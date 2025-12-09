@@ -1,9 +1,5 @@
-import { useMemo, useRef, useCallback, useEffect } from "react";
-import { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
-import * as d3 from "d3";
-import { Button } from "@/components/ui/button.tsx";
-import { CircleOff } from "lucide-react";
-
+import { useMemo, useRef, useEffect } from "react";
+import { Layer, LayerComponentProps } from "@/core/core.ts";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore.ts";
 
 import { Formatter, Label } from "./formatters/types.ts";
@@ -14,23 +10,7 @@ import siFormatter from "./formatters/si.ts";
 export const GregorianFormatter: Formatter = gregorianFormatter;
 export const SiFormatter: Formatter = siFormatter;
 
-export const ClearSelectionTool: Tool = {
-  component: () => {
-    const { selection, clearSelection } = useTimelineSelectionStore();
-    const hasSelection = !!(selection.start && selection.end);
-
-    return (
-      <Button
-        onClick={clearSelection}
-        disabled={!hasSelection}
-        variant="outline"
-      >
-        <CircleOff className="w-4 h-4" />
-      </Button>
-    );
-  },
-  tooltip: "Clear timeline selection",
-};
+export * from "./ClearSelectionTool";
 
 export type TimeLayerOptions = {
   formatter: Formatter;
