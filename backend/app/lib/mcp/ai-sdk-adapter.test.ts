@@ -72,7 +72,7 @@ Deno.test("AI SDK Adapter - Simple resource creates valid tool schema", () => {
   const tools = resourceToAiSdkTools(resource, mockAuth);
 
   expect(Object.keys(tools).length).toBe(1);
-  const tool = tools["test.simple"];
+  const tool = tools["test_simple"];
   expect(tool).toBeDefined();
   
   // In AI SDK, the tool itself doesn't expose the raw Zod schema easily on the 'parameters' property 
@@ -90,11 +90,11 @@ Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with corr
   const resource = new DiscriminatedUnionResource();
   const tools = resourceToAiSdkTools(resource, mockAuth);
 
-  expect(Object.keys(tools)).toBe([
-    1, 2
+  expect(Object.keys(tools)).toEqual([
+    "test_discriminated_get",
+    "test_discriminated_set",
   ]);
 
-  expect(Object.keys(tools).length).toBe(2);
 
   const getTool = tools["test_discriminated_get"];
   const setTool = tools["test_discriminated_set"];
