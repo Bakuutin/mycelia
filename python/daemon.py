@@ -1,5 +1,5 @@
 #%%
-from discovery import Importer
+from discovery import Importer, extract_device_info
 
 import argparse
 import logging
@@ -275,6 +275,65 @@ def add_missing_ends():
         })
 
 
+def backfill_device_info(limit=100):
+    """
+    Backfill device info for source_files that don't have it yet.
+    Only processes files from apple_voicememos importer that have local paths.
+    """
+    # Find records without device info that are from voice memos
+    query = {
+        "device": {"$exists": False},
+        "platform.importer": "apple_voicememos",
+        "path": {"$exists": True},
+    }
+
+    total_missing = call_resource('mongo', {
+        "action": "count",
+        "collection": "source_files",
+        "query": query
+    })
+
+    if total_missing == 0:
+        logger.info("✓ All voice memos have device info")
+        return 0
+
+    logger.info(f"Found {total_missing} voice memos without device info, processing up to {limit}...")
+
+    records = call_resource('mongo', {
+        "action": "find",
+        "collection": "source_files",
+        "query": query,
+        "limit": limit,
+    })
+
+    updated = 0
+    errors = 0
+
+    for record in records:
+        path = record.get('path')
+        if not path or not os.path.exists(path):
+            continue
+
+        try:
+            device_info = extract_device_info(path)
+            if device_info:
+                call_resource('mongo', {
+                    "action": "updateOne",
+                    "collection": "source_files",
+                    "query": {"_id": record["_id"]},
+                    "update": {"$set": {"device": device_info}}
+                })
+                updated += 1
+                logger.debug(f"Added device info for {os.path.basename(path)}: {device_info.get('device_type')}")
+        except Exception as e:
+            errors += 1
+            logger.warning(f"Error extracting device info for {path}: {e}")
+
+    remaining = total_missing - updated
+    logger.info(f"✓ Device info backfill: {updated} updated, {errors} errors, {remaining} remaining")
+    return updated
+
+
 #%%
 
 def main(reset_errors=False):
@@ -282,7 +341,7 @@ def main(reset_errors=False):
     logger.info("Starting daemon cycle")
     logger.info("=" * 60)
 
-    total_steps = 4 if reset_errors else 3
+    total_steps = 5 if reset_errors else 4
     step = 1
 
     if reset_errors:
@@ -297,6 +356,10 @@ def main(reset_errors=False):
 
     logger.info(f"\n[{step}/{total_steps}] Ingesting audio files...")
     ingests_missing_sources(limit=20)
+    step += 1
+
+    logger.info(f"\n[{step}/{total_steps}] Backfilling device info...")
+    backfill_device_info(limit=50)
     step += 1
 
     logger.info(f"\n[{step}/{total_steps}] Running voice activity detection...")

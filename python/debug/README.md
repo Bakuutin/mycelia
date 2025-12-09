@@ -73,6 +73,52 @@ cd python
 
 ---
 
+### `backfill_devices.py`
+
+Manually backfill device info for voice memo records that don't have it yet.
+
+**Show stats only:**
+```bash
+cd python
+uv run debug/backfill_devices.py --stats
+```
+
+**Backfill records:**
+```bash
+uv run debug/backfill_devices.py              # Up to 100 records
+uv run debug/backfill_devices.py --limit 500  # Up to 500 records
+uv run debug/backfill_devices.py --all        # All records
+uv run debug/backfill_devices.py -v           # Verbose output
+```
+
+---
+
+## Device Info Tracking
+
+The daemon automatically extracts device information from Voice Memo m4a files and stores it in the `device` field of `source_files`:
+
+```json
+{
+  "device": {
+    "encoder": "com.apple.VoiceMemos (Watch Version 26.1 (Build 23S37))",
+    "device_type": "apple_watch",
+    "os_version": "26.1",
+    "build": "23S37"
+  }
+}
+```
+
+**Device types detected:**
+- `apple_watch` - Apple Watch recordings
+- `iphone` - iPhone recordings
+- `ipad` - iPad recordings
+- `mac` - Mac recordings
+- `unknown` - Unrecognized encoder
+
+**Backfill runs automatically** in the daemon cycle for existing records without device info.
+
+---
+
 ## Common Paths
 
 | Resource | Path |

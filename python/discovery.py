@@ -4,6 +4,8 @@ from pymongo.collection import Collection
 from utils import lazy
 import os
 import re
+import json
+import subprocess
 from datetime import datetime, UTC, timedelta
 
 from typing import Iterable, TypedDict
@@ -26,6 +28,75 @@ from chunking import get_tmp_dir
 from copy import deepcopy
 
 from lib.resources import call_resource
+
+
+def extract_device_info(filepath: str) -> dict | None:
+    """
+    Extract device info from m4a file using ffprobe.
+    Returns dict with device_type, encoder, os_version, etc.
+    """
+    if not os.path.exists(filepath):
+        return None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", filepath],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+
+        data = json.loads(result.stdout)
+        tags = data.get("format", {}).get("tags", {})
+        encoder = tags.get("encoder", "")
+
+        if not encoder:
+            return None
+
+        # Parse device type from encoder string
+        # Examples:
+        # - "com.apple.VoiceMemos (Watch Version 26.1 (Build 23S37))"
+        # - "com.apple.VoiceMemos (iPhone Version 18.3 (Build 22D5034e))"
+        # - "com.apple.VoiceMemos (iPad Version 15.4.1 (Build 24E263))"
+        # - "com.apple.VoiceMemos (MacBook Pro (null))"
+        # - "com.apple.VoiceMemos (iOS 13.1.2)"
+
+        device_info = {
+            "encoder": encoder,
+            "device_type": "unknown",
+        }
+
+        if "Watch" in encoder:
+            device_info["device_type"] = "apple_watch"
+        elif "iPhone" in encoder:
+            device_info["device_type"] = "iphone"
+        elif "iPad" in encoder:
+            device_info["device_type"] = "ipad"
+        elif "MacBook" in encoder or "MBP" in encoder or "Mac" in encoder:
+            device_info["device_type"] = "mac"
+        elif "iOS" in encoder:
+            device_info["device_type"] = "iphone"  # iOS without device name is usually iPhone
+
+        # Try to extract OS version
+        version_match = re.search(r"Version\s+([\d.]+)", encoder)
+        if version_match:
+            device_info["os_version"] = version_match.group(1)
+
+        # Try to extract build number
+        build_match = re.search(r"Build\s+([A-Za-z0-9]+)", encoder)
+        if build_match:
+            device_info["build"] = build_match.group(1)
+
+        # Try to extract device name (for older formats like "MacBook Pro" or custom names)
+        name_match = re.search(r"com\.apple\.VoiceMemos \(([^()]+?)(?:\s+Version|\s*\(null\)|\s*$)", encoder)
+        if name_match:
+            device_info["device_name"] = name_match.group(1).strip()
+
+        return device_info
+
+    except (subprocess.SubprocessError, json.JSONDecodeError, subprocess.TimeoutExpired, FileNotFoundError):
+        return None
 
 class Skip(Exception):
     pass
@@ -171,7 +242,7 @@ class AppleVoiceMemosImporter(Importer):
                     pbar.update(1)
                     continue
 
-                yield {
+                metadata = {
                     **get_os_metadata(path),
                     "voicememo": {
                         "ZENCRYPTEDTITLE": memo["ZENCRYPTEDTITLE"],
@@ -180,6 +251,13 @@ class AppleVoiceMemosImporter(Importer):
                     },
                     "duration": memo["ZDURATION"],
                 }
+
+                # Extract device info from m4a file
+                device_info = extract_device_info(path)
+                if device_info:
+                    metadata["device"] = device_info
+
+                yield metadata
                 pbar.update(1)
 
 

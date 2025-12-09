@@ -74,7 +74,7 @@ try {
     print('WARNING: No PRIMARY found, waiting for election...');
   }
 } catch (error) {
-  if (error.message.includes('no replset config has been received') || 
+  if (error.message.includes('no replset config has been received') ||
       error.message.includes('not yet initialized')) {
     print('Initializing replicaset with hostname mongo:27017...');
     rs.initiate({
@@ -125,4 +125,3 @@ done
 # Wait for MongoDB process (keep container running)
 echo "MongoDB initialization complete. Process PID: $MONGO_PID"
 wait $MONGO_PID
-
