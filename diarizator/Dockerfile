@@ -31,7 +31,7 @@ COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 RUN uv sync --no-dev --extra ${PYTORCH_CUDA_VERSION}
 
 # Create directories
-RUN mkdir -p /app/audio_chunks /app/debug /app/data /models
+RUN mkdir -p /app/debug /models
 
 # Set environment variables
 ENV HF_HOME=/models
