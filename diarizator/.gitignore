@@ -1,0 +1,9 @@
+.venv
+*.local
+__pycache__
+*.pyc
+.env
+model_cache
+debug
+speaker_data
+audio_chunks
