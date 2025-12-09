@@ -11,6 +11,8 @@ import { ObjectId } from "mongodb";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
+const RESOURCES_FOR_AI = ["mongo", "timeline", "objects"];
+
 export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);
 
@@ -82,8 +84,9 @@ export async function apiChatHandler(req: Request, res: Response) {
   });
 
   // Setup tools
-  const resources = defaultResourceManager.listResources();
-  const tools = createAiSdkToolsFromResources(resources, auth);
+  const resources = defaultResourceManager.listResources().filter(resource => RESOURCES_FOR_AI.includes(resource.code));
+
+  const tools = createAiSdkToolsFromResources(resources, auth)
 
   // Fetch System Prompt
   let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";

@@ -33,34 +33,30 @@ export function resourceToAiSdkTools<Input, Output>(
   const def = schema.def as any;
   const tools: Record<string, Tool> = {};
 
-  if ((def?.type === "discriminatedUnion" || def?.type === "union") && def?.discriminator && def?.options) {
+  if ((def?.type === "union")) {
     const discriminator = def.discriminator;
     const options = def.optionsMap ? Array.from(def.optionsMap.values()) : def.options;
-    console.log("Found discriminated union. Discriminator:", discriminator);
-    console.log("Options length:", options.length);
-
+    
     for (const optionSchema of options as z.ZodObject<any>[]) {
       const shape = optionSchema.shape;
-      console.log("Checking option shape for discriminator:", discriminator);
 
       if (shape && shape[discriminator]) {
         const discriminatorField = shape[discriminator];
-        const actionDef = discriminatorField._def || discriminatorField.def;
-        const actionValue = actionDef?.value; // For ZodLiteral
-        console.log("Action value:", actionValue);
+        const actionDef = discriminatorField.def;
+
+        if (actionDef?.values?.length !== 1) {
+          throw new Error(`Expected 1 value for discriminator ${discriminator}, got ${JSON.stringify(actionDef)}`);
+        } 
+        const actionValue = actionDef?.values?.[0];
 
         if (actionValue) {
           const toolName = `${resource.code.replace(/\./g, "_")}_${actionValue}`;
           const actionDescription = extractActionDescription(optionSchema, actionValue);
           
-          // Create a schema that omits the discriminator
-          // We use omit() if it's a ZodObject
           let inputSchema = optionSchema;
           if (inputSchema instanceof z.ZodObject) {
              inputSchema = inputSchema.omit({ [discriminator]: true });
           } else {
-             // Check if it is a ZodObject but maybe via internal property
-             // In Zod v4 or cross-version, instanceof might fail
              if ((inputSchema as any).omit) {
                 inputSchema = (inputSchema as any).omit({ [discriminator]: true });
              }
@@ -86,7 +82,6 @@ export function resourceToAiSdkTools<Input, Output>(
     }
   }
 
-  // Default case: single tool for the resource
   tools[resource.code] = tool({
     description: resource.description,
     parameters: schema,

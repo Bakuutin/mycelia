@@ -24,5 +24,4 @@ export async function setupResources(): Promise<void> {
   for (const entry of resources) {
     defaultResourceManager.registerResource(entry);
   }
-  console.log(defaultResourceManager.listResources().map((r) => r.code));
 }
