@@ -20,6 +20,7 @@ import { shutdownTelemetry } from "@/lib/telemetry.ts";
 import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { registerRoutes } from "./routes.ts";
 import { errorHandler } from "@/middleware/errorHandler.ts";
+import { getRootDB } from "@/lib/mongo/core.server.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -80,7 +81,8 @@ function cleanupLogging() {
 async function startServer(host: string, port: number, skipChecks = false) {
   await setupResources();
   if (!skipChecks) {
-    await ensureAllCollectionsExist();
+    const db = await getRootDB();
+    await ensureAllCollectionsExist(db);
   }
 
   const app = express();

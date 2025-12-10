@@ -136,7 +136,7 @@ defineFixture({
       mongoContainer.getMappedPort(27017)
     }`;
     const databaseName = new UUID().toString();
-    Deno.env.set("MONGO_URL", "SHOULD_NOT_BE_USED");
+    Deno.env.set("MONGO_URL", mongoUri);
     Deno.env.set("DATABASE_NAME", databaseName);
     const resource = new MongoResource();
     const client = new MongoClient(
