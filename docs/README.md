@@ -16,6 +16,13 @@ This documentation package provides a comprehensive plan for transforming Myceli
 
 ## Documents in This Package
 
+### Quick Reference Guides
+
+- **[MCP Guide](MCP_GUIDE.md)** - Chat & MCP setup, API access
+- **[Messenger Guide](MESSENGER_GUIDE.md)** - Multi-platform messenger, Telegram import
+
+---
+
 ### 1. [Developer Experience Roadmap](DX_ROADMAP.md)
 **Purpose**: Strategic roadmap for DX improvements over 16 weeks
 

@@ -77,5 +77,19 @@ The frontend connects to the Mycelia backend API server (default: http://localho
 
 - **Timeline View** - Interactive timeline with audio, events, and objects
 - **Events** - Create and organize life events
+- **Messenger** - Unified view for chats from multiple platforms (Telegram, Signal, Mycelia)
+- **Chat** - AI-powered conversations with your data
 - **Dark Mode** - Built-in dark mode support
 - **Responsive** - Mobile-friendly interface
+
+## Routes
+
+| Route | Description |
+|-------|-------------|
+| `/` | Dashboard home |
+| `/timeline` | Interactive timeline view |
+| `/messaging` | Multi-platform messenger |
+| `/messaging/:chatId` | Specific chat view |
+| `/chat` | AI chat interface |
+| `/objects` | Object browser |
+| `/settings` | Configuration |

@@ -74,6 +74,17 @@ Features:
 3. Messages saved to `messages` collection
 4. Chat sessions saved to `chats` collection
 
+## Messenger (Multi-Platform)
+
+Access at: **http://localhost:5173/messaging**
+
+Unified interface for viewing chats from multiple platforms:
+- **Telegram** - Import via export data
+- **Signal** - Basic message support
+- **Mycelia** - Native AI chats
+
+See [MESSENGER_GUIDE.md](MESSENGER_GUIDE.md) for import instructions and customization.
+
 ## MCP CLI
 
 For programmatic access without the frontend.
