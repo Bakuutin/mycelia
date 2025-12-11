@@ -7,6 +7,8 @@ Usage:
     uv run debug/analyze_voicememos.py                    # Full database analysis
     uv run debug/analyze_voicememos.py --find "Recording 367"  # Find specific recording
     uv run debug/analyze_voicememos.py --find "Bali"           # Search by partial name
+    uv run debug/analyze_voicememos.py --date 2024-12-04       # Find by date
+    uv run debug/analyze_voicememos.py --date 2024-12-04 --find "Bali"  # Combined search
 """
 import argparse
 import json
@@ -64,8 +66,30 @@ def get_file_metadata(filepath):
     return None
 
 
-def find_recording(search_term):
-    """Find recordings by name/title and display detailed info."""
+def parse_date(date_str):
+    """Parse various date formats into a date object."""
+    formats = [
+        "%Y-%m-%d",    # 2024-12-04
+        "%Y/%m/%d",    # 2024/12/04
+        "%d-%m-%Y",    # 04-12-2024
+        "%d/%m/%Y",    # 04/12/2024
+        "%m-%d",       # 12-04 (current year)
+        "%m/%d",       # 12/04 (current year)
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            # If year not specified, use current year
+            if "%Y" not in fmt:
+                dt = dt.replace(year=datetime.now().year)
+            return dt.date()
+        except ValueError:
+            continue
+    return None
+
+
+def find_recording(search_term=None, date_filter=None):
+    """Find recordings by name/title and/or date, display detailed info."""
     if not os.path.exists(DB_PATH):
         print(f"Database not found at: {DB_PATH}")
         return
@@ -78,24 +102,55 @@ def find_recording(search_term):
     cursor.execute("SELECT Z_PK, ZENCRYPTEDNAME FROM ZFOLDER")
     folder_map = {row['Z_PK']: row['ZENCRYPTEDNAME'] for row in cursor.fetchall()}
 
-    # Search by title, custom label, or path
-    cursor.execute("""
-        SELECT * FROM ZCLOUDRECORDING
-        WHERE ZENCRYPTEDTITLE LIKE ?
+    # Build query based on filters
+    conditions = []
+    params = []
+
+    if search_term:
+        conditions.append("""(ZENCRYPTEDTITLE LIKE ?
            OR ZCUSTOMLABEL LIKE ?
            OR ZPATH LIKE ?
-           OR ZUNIQUEID LIKE ?
-        ORDER BY ZDATE DESC
-    """, (f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", f"%{search_term}%"))
+           OR ZUNIQUEID LIKE ?)""")
+        params.extend([f"%{search_term}%"] * 4)
 
+    if date_filter:
+        parsed_date = parse_date(date_filter)
+        if parsed_date:
+            # Convert to Apple timestamp range for that day
+            day_start = datetime.combine(parsed_date, datetime.min.time())
+            day_end = datetime.combine(parsed_date, datetime.max.time())
+            apple_start = day_start.timestamp() - APPLE_REFERENCE_DATE
+            apple_end = day_end.timestamp() - APPLE_REFERENCE_DATE
+            conditions.append("ZDATE BETWEEN ? AND ?")
+            params.extend([apple_start, apple_end])
+        else:
+            print(f"Invalid date format: '{date_filter}'. Use YYYY-MM-DD or MM-DD")
+            conn.close()
+            return
+
+    if conditions:
+        where_clause = " AND ".join(conditions)
+        query = f"SELECT * FROM ZCLOUDRECORDING WHERE {where_clause} ORDER BY ZDATE DESC"
+    else:
+        query = "SELECT * FROM ZCLOUDRECORDING ORDER BY ZDATE DESC"
+
+    cursor.execute(query, params)
     recordings = cursor.fetchall()
     conn.close()
 
+    # Build description of what we searched for
+    search_desc = []
+    if search_term:
+        search_desc.append(f"'{search_term}'")
+    if date_filter:
+        search_desc.append(f"date {date_filter}")
+    desc = " + ".join(search_desc) if search_desc else "all"
+
     if not recordings:
-        print(f"No recordings found matching: '{search_term}'")
+        print(f"No recordings found matching: {desc}")
         return
 
-    print(f"\nFound {len(recordings)} recording(s) matching '{search_term}':\n")
+    print(f"\nFound {len(recordings)} recording(s) matching {desc}:\n")
 
     for rec in recordings:
         print("=" * 70)
@@ -478,6 +533,9 @@ Examples:
   uv run debug/analyze_voicememos.py --find "Recording 367"    # Find by title
   uv run debug/analyze_voicememos.py --find "Bali"             # Partial search
   uv run debug/analyze_voicememos.py --find "6EF88D2A"         # Search by UUID
+  uv run debug/analyze_voicememos.py --date 2024-12-04         # Find by date
+  uv run debug/analyze_voicememos.py --date 12-04              # Date (current year)
+  uv run debug/analyze_voicememos.py --date 2024-12-04 --find "Bali"  # Combined
         """
     )
     parser.add_argument(
@@ -485,9 +543,14 @@ Examples:
         metavar="NAME",
         help="Find recordings by name, title, UUID, or filename (partial match)"
     )
+    parser.add_argument(
+        "--date", "-d",
+        metavar="DATE",
+        help="Filter by date (YYYY-MM-DD or MM-DD for current year)"
+    )
     args = parser.parse_args()
 
-    if args.find:
-        find_recording(args.find)
+    if args.find or args.date:
+        find_recording(search_term=args.find, date_filter=args.date)
     else:
         analyze_database()
