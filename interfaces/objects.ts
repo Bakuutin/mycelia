@@ -28,8 +28,6 @@ export const zObject = z.object({
   isPromise: z.boolean().optional(),
   isConversation: z.boolean().optional(),
 
-  // Visibility Tier (1, 2, 3, etc.) - 1: Public/Core, 2: Protected, 3: Private/Raw
-  visibilityTier: z.number().optional(),
 
   relationship: z.object({
     object: z.instanceof(ObjectId),
@@ -76,7 +74,6 @@ export const zObject = z.object({
 
 export type Object = z.infer<typeof zObject>;
 
-// Form Data (Frontend specific, but useful to keep here for shared validation logic if needed)
 export type ObjectFormData = {
   _id?: ObjectId;
   name?: string;
@@ -89,7 +86,6 @@ export type ObjectFormData = {
   isRelationship?: boolean;
   isPromise?: boolean;
   
-  visibilityTier?: number;
 
   relationship?: {
     object?: ObjectId;

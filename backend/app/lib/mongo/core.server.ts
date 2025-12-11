@@ -391,7 +391,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
         case "insertMany":
           return collection.insertMany(input.docs);
         case "updateOne":
-          return collection.updateOne(input.query, input.update);
+          return collection.updateOne(input.query, input.update, input.options);
         case "updateMany":
           return collection.updateMany(
             input.query,

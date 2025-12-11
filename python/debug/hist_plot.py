@@ -1,7 +1,7 @@
 #%%
 from lib.resources import call_resource
 
-untranscribed = call_resource('tech.mycelia.mongo', {
+untranscribed = call_resource('mongo', {
     "action": "count",
     "collection": "audio_chunks",
     "query": {'transcribed_at': {'$eq': None}, 'processing_by': {'$eq': None}, 'vad.has_speech': True},
@@ -11,7 +11,7 @@ untranscribed
 untranscribed
 # %%
 from lib.resources import call_resource
-call_resource('tech.mycelia.timeline', {
+call_resource('timeline', {
     "action": "recalculate",
     "start": "30d",
 })
@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 end = datetime.now(pytz.UTC)
 start = end - timedelta(days=30)
 
-histogram_data = call_resource('tech.mycelia.mongo', {
+histogram_data = call_resource('mongo', {
     "action": "find",
     "collection": "histogram_1day",
     "query": {

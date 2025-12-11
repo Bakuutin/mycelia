@@ -3,6 +3,11 @@
 @import "react-day-picker/style.css";
 @custom-variant dark (&:is(.dark *));
 
+[data-radix-scroll-area-viewport] > div {
+  display: block !important;
+  min-height: auto !important;
+}
+
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);

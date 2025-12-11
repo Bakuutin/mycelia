@@ -618,7 +618,7 @@ export function ObjectForm(
                     });
                   }}
                 >
-                  <X className="w-4 h-4" />
+                  <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
 

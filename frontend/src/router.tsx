@@ -23,6 +23,7 @@ import CreateObjectPage from "./pages/CreateObjectPage";
 import CreateAudioRecordPage from "./pages/CreateAudioRecordPage";
 import AudioPlayerPage from "./pages/AudioPlayerPage";
 import AudioExportPage from "./pages/AudioExportPage";
+import MessengerPage from "./pages/MessengerPage";
 import OAuthConsentPage from "./pages/OAuthConsentPage";
 
 export const router = createBrowserRouter([
@@ -41,6 +42,14 @@ export const router = createBrowserRouter([
       {
         path: "timeline",
         element: <TimelinePage />,
+      },
+      {
+        path: "messaging",
+        element: <MessengerPage />,
+      },
+      {
+        path: "messaging/:chatId",
+        element: <MessengerPage />,
       },
       {
         path: "chat",
