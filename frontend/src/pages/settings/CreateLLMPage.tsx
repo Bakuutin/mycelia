@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -191,11 +191,13 @@ const CreateLLMPage = () => {
           </div>
 
           <div className="flex justify-end gap-4">
-            <Link to="/settings/llms">
-              <Button type="button" variant="outline">
-                Cancel
-              </Button>
-            </Link>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate("/settings/llms")}
+            >
+              Cancel
+            </Button>
             <Button type="submit" disabled={saving}>
               {saving
                 ? (
