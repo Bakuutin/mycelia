@@ -1,0 +1,170 @@
+# Mycelia AI Services - Remote Deployment
+# Deploy Ollama, Whisper STT, and Diarization on a remote GPU server
+#
+# Usage:
+#   # Start all services (GPU)
+#   docker compose --profile gpu up -d
+#
+#   # Start all services (CPU only)
+#   docker compose --profile cpu up -d
+#
+#   # Start specific service
+#   docker compose --profile gpu up -d ollama whisper
+#
+# Required environment variables (create .env file):
+#   HF_TOKEN=your_huggingface_token
+#   OLLAMA_MODELS=qwen2.5:7b
+#   API_KEY=your_api_key (optional, for whisper auth)
+
+services:
+  # ===========================================
+  # OLLAMA - LLM Inference
+  # ===========================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["gpu", "cpu"]
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Ollama model puller (runs once)
+  ollama-setup:
+    image: ollama/ollama:latest
+    container_name: ollama-setup
+    profiles: ["gpu", "cpu"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling Ollama models..."
+        for model in $$(echo "$${OLLAMA_MODELS:-qwen2.5:7b}" | tr ',' ' '); do
+          echo "Pulling: $$model"
+          ollama pull $$model
+        done
+        echo "All models ready!"
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_MODELS=${OLLAMA_MODELS:-qwen2.5:7b}
+    network_mode: "service:ollama"
+
+  # ===========================================
+  # WHISPER - Speech-to-Text
+  # ===========================================
+  whisper:
+    build:
+      context: ../python/whisper_server
+      dockerfile: Dockerfile
+    image: mycelia-whisper:latest
+    container_name: whisper
+    profiles: ["gpu"]
+    restart: unless-stopped
+    ports:
+      - "${WHISPER_PORT:-8081}:8087"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - API_KEY=${API_KEY:-}
+    volumes:
+      - whisper_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===========================================
+  # DIARIZATION - Speaker Recognition
+  # ===========================================
+  diarization:
+    build:
+      context: ../diarizator
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cu121}
+    image: mycelia-diarization:latest
+    container_name: diarization
+    profiles: ["gpu"]
+    restart: unless-stopped
+    ports:
+      - "${DIARIZATION_PORT:-8085}:8085"
+    environment:
+      - HF_HOME=/models
+      - HF_TOKEN=${HF_TOKEN}
+      - SPEAKER_SERVICE_HOST=0.0.0.0
+      - SPEAKER_SERVICE_PORT=8085
+      - COMPUTE_MODE=gpu
+    volumes:
+      - diarization_models:/models
+      - diarization_debug:/app/debug
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # CPU-only diarization (no GPU)
+  diarization-cpu:
+    build:
+      context: ../diarizator
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: cpu
+    image: mycelia-diarization-cpu:latest
+    container_name: diarization
+    profiles: ["cpu"]
+    restart: unless-stopped
+    ports:
+      - "${DIARIZATION_PORT:-8085}:8085"
+    environment:
+      - HF_HOME=/models
+      - HF_TOKEN=${HF_TOKEN}
+      - SPEAKER_SERVICE_HOST=0.0.0.0
+      - SPEAKER_SERVICE_PORT=8085
+      - COMPUTE_MODE=cpu
+    volumes:
+      - diarization_models:/models
+      - diarization_debug:/app/debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  ollama_data:
+  whisper_cache:
+  diarization_models:
+  diarization_debug:
