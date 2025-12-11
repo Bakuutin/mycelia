@@ -6,7 +6,7 @@ Deploy Ollama on a remote server for LLM processing in Mycelia.
 
 ```bash
 # 1. On your remote server (SSH)
-curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/olama-setup/deploy/ollama/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/ollama/setup.sh -o setup.sh
 chmod +x setup.sh
 ./setup.sh --preset medium   # Choose preset based on your server RAM
 
@@ -52,7 +52,7 @@ ssh root@YOUR_SERVER_IP
 
 ```bash
 # Download the script
-curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/olama-setup/deploy/ollama/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/ollama/setup.sh -o setup.sh
 chmod +x setup.sh
 ```
 
@@ -294,7 +294,7 @@ If you prefer Docker:
 ```bash
 # On server
 mkdir -p ~/ollama && cd ~/ollama
-curl -O https://raw.githubusercontent.com/mycelia-tech/mycelia/olama-setup/deploy/ollama/docker-compose.yml
+curl -O https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/ollama/docker-compose.yml
 
 # Start with your chosen model
 OLLAMA_MODELS="llama3.3:70b-instruct-q4_K_M" docker compose up -d

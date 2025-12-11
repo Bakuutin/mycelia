@@ -1,345 +1,300 @@
 # Mycelia Remote Server Deployment
 
-Deploy all Mycelia AI services (Ollama, Whisper STT, Diarization) on a remote GPU server.
+Deploy Ollama, Whisper STT, and Diarization on a remote GPU server.
 
-## Services Overview
-
-| Service | Port | Description | GPU Required |
-|---------|------|-------------|--------------|
-| **Ollama** | 11434 | LLM inference (summaries, chat) | Recommended |
-| **Whisper** | 8081 | Speech-to-text transcription | Recommended |
-| **Diarization** | 8085 | Speaker recognition | Recommended |
-
-## Quick Start
-
-### 1. Server Requirements
-
-**Minimum (CPU-only):**
-- 16GB RAM
-- 50GB disk space
-- Ubuntu 22.04+
-
-**Recommended (GPU):**
-- 24GB+ VRAM (RTX 3090, RTX 4090, A100)
-- 32GB RAM
-- 100GB disk space
-- NVIDIA drivers + Docker with nvidia-container-toolkit
-
-### 2. Connect to Server
+## One-Liner Setup (Copy & Paste)
 
 ```bash
+apt update && apt install -y curl && curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/setup.sh | bash
+```
+
+That's it! The script will install everything: Docker, GPU support, Ollama, Whisper, Diarization, zsh, tmux, btop.
+
+---
+
+## Quick Start Guide
+
+### Step 1: Get a GPU Server
+
+**Recommended specs:**
+- GPU: RTX 3090/4090 or better (24GB+ VRAM)
+- RAM: 32GB+
+- Disk: 100GB+
+
+**Providers:**
+- [Akash Network](https://akash.network) - Decentralized, cheap
+- [Vast.ai](https://vast.ai) - Cheap GPU rentals
+- [RunPod](https://runpod.io) - Easy setup
+- [Lambda Labs](https://lambdalabs.com) - High-end GPUs
+
+### Step 2: Connect via SSH
+
+```bash
+# Standard server
 ssh root@YOUR_SERVER_IP
+
+# Akash/Custom port (example: port 32701)
+ssh -p 32701 root@provider.example.com
 ```
 
-### 3. Install Prerequisites
+### Step 3: Run Setup
 
 ```bash
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-
-# Install NVIDIA Container Toolkit (for GPU)
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-
-# Verify GPU is available
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+apt update && apt install -y curl && curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/setup.sh | bash
 ```
 
-### 4. Clone Repository
+### Step 4: Connect Ports
+
+Choose one method:
+
+#### Option A: SSH Tunnel (Recommended for Akash/restricted ports)
+
+No need to open firewall ports. Run this **on your local machine**:
 
 ```bash
-git clone https://github.com/mycelia-tech/mycelia.git
-cd mycelia/deploy
+# Fill in your server details:
+SERVER=provider.example.com
+PORT=32701  # SSH port (22 if standard)
+
+# Connect with port forwarding
+ssh -p $PORT \
+  -L 11434:localhost:11434 \
+  -L 8081:localhost:8081 \
+  -L 8085:localhost:8085 \
+  root@$SERVER
 ```
 
-### 5. Configure Environment
+Now services are available at `localhost:11434`, etc.
 
+#### Option B: Open Firewall Ports (Standard VPS)
+
+On the server:
 ```bash
-cp .env.example .env
-nano .env
+# UFW
+ufw allow 11434/tcp && ufw allow 8081/tcp && ufw allow 8085/tcp
+
+# Or iptables
+iptables -A INPUT -p tcp --dport 11434 -j ACCEPT
+iptables -A INPUT -p tcp --dport 8081 -j ACCEPT
+iptables -A INPUT -p tcp --dport 8085 -j ACCEPT
 ```
 
-Required variables:
-```bash
-# Hugging Face token (required for diarization)
-# Get from: https://huggingface.co/settings/tokens
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
+### Step 5: Configure Mycelia
 
-# Ollama models to pull
-OLLAMA_MODELS=qwen2.5:7b
-
-# Optional: API key for Whisper authentication
-API_KEY=your-secret-key
-```
-
-### 6. Start Services
-
-```bash
-# Start all services with GPU
-docker compose --profile gpu up -d
-
-# Or CPU-only (slower, no Whisper)
-docker compose --profile cpu up -d
-
-# Check status
-docker compose ps
-```
-
-### 7. Open Firewall
-
-```bash
-# Open required ports
-sudo ufw allow 11434/tcp  # Ollama
-sudo ufw allow 8081/tcp   # Whisper
-sudo ufw allow 8085/tcp   # Diarization
-sudo ufw reload
-```
-
-### 8. Verify Services
-
-```bash
-# Check all services
-curl http://localhost:11434/api/tags      # Ollama
-curl http://localhost:8081/docs           # Whisper
-curl http://localhost:8085/health         # Diarization
-
-# From your local machine
-curl http://YOUR_SERVER_IP:11434/api/tags
-curl http://YOUR_SERVER_IP:8085/health
-```
-
-### 9. Connect Mycelia
-
-On your local machine:
+On your **local machine**:
 
 ```bash
 cd backend
 
-# Configure LLM
-deno task cli llm ollama-setup http://YOUR_SERVER_IP:11434
+# Add LLM (use localhost if using SSH tunnel, or SERVER_IP if ports are open)
+deno task cli llm ollama-setup http://localhost:11434
 
-# Update .env with service URLs
-echo "STT_SERVER_URL=http://YOUR_SERVER_IP:8081" >> .env
-echo "DIARIZATION_SERVER_URL=http://YOUR_SERVER_IP:8085" >> .env
+# Add to .env
+echo 'STT_SERVER_URL=http://localhost:8081' >> .env
+echo 'DIARIZATION_SERVER_URL=http://localhost:8085' >> .env
+
+# Test
+deno task cli llm test small
 ```
 
 ---
 
-## Individual Service Setup
+## 🧙 Connection Wizard
 
-### Ollama Only
+Fill in your details and copy the commands:
 
-See [ollama/README.md](./ollama/README.md) for standalone Ollama setup.
+### Your Server Info
 
-```bash
-cd ollama
-./setup.sh --preset medium
+```
+SERVER_HOST = _______________  (e.g., provider.4090.akash.pub)
+SSH_PORT    = _______________  (e.g., 32701, or 22 for standard)
 ```
 
-### Whisper Only
+### Generated Commands
 
+**1. Connect to server:**
 ```bash
-# Build and run
-docker build -t whisper ../python/whisper_server
-docker run -d --gpus all -p 8081:8087 \
-  -e API_KEY=your-key \
-  --name whisper whisper
+ssh -p SSH_PORT root@SERVER_HOST
 ```
 
-### Diarization Only
-
+**2. Install everything:**
 ```bash
-# Build and run
-cd ../diarizator
-docker compose --profile gpu up -d diarization-service-gpu
+apt update && apt install -y curl && curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/setup.sh | bash
 ```
 
----
-
-## Port Reference
-
-| Port | Service | Protocol | Required |
-|------|---------|----------|----------|
-| 11434 | Ollama API | TCP | Yes |
-| 8081 | Whisper API | TCP | Yes |
-| 8085 | Diarization API | TCP | Yes |
-| 22 | SSH | TCP | Yes (for access) |
-
-### Verify Ports (on server)
-
+**3. Port forwarding (run on LOCAL machine):**
 ```bash
-# Check listening ports
-ss -tlnp | grep -E '11434|8081|8085'
+ssh -p SSH_PORT -L 11434:localhost:11434 -L 8081:localhost:8081 -L 8085:localhost:8085 root@SERVER_HOST
+```
 
-# Check firewall
-sudo ufw status
-
-# Check from outside (on local machine)
-nc -zv YOUR_SERVER_IP 11434
-nc -zv YOUR_SERVER_IP 8081
-nc -zv YOUR_SERVER_IP 8085
+**4. Configure Mycelia (run on LOCAL machine):**
+```bash
+cd ~/repo/mycelia/backend
+deno task cli llm ollama-setup http://localhost:11434
+echo 'STT_SERVER_URL=http://localhost:8081' >> .env
+echo 'DIARIZATION_SERVER_URL=http://localhost:8085' >> .env
 ```
 
 ---
 
-## Service Configuration
+## Services & Ports
 
-### Ollama Models
-
-```bash
-# Pull additional models
-docker exec ollama ollama pull llama3.3:70b-instruct-q4_K_M
-docker exec ollama ollama pull mistral:7b
-
-# List models
-docker exec ollama ollama list
-```
-
-### Whisper Configuration
-
-The Whisper server uses `large-v3` model by default. To change:
-
-```bash
-# Edit server.py before building
-model_size = "medium"  # or "small", "base", "tiny"
-```
-
-### Diarization Configuration
-
-Requires accepting Hugging Face model terms:
-1. https://huggingface.co/pyannote/speaker-diarization-3.1
-2. https://huggingface.co/pyannote/segmentation-3.0
-3. https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
+| Service | Port | Description |
+|---------|------|-------------|
+| **Ollama** | 11434 | LLM inference (summaries, chat) |
+| **Whisper** | 8081 | Speech-to-text transcription |
+| **Diarization** | 8085 | Speaker recognition |
 
 ---
 
-## Monitoring
-
-### View Logs
+## Setup Options
 
 ```bash
-# All services
-docker compose logs -f
+# Full setup (default)
+curl ... | bash
 
-# Specific service
-docker compose logs -f ollama
-docker compose logs -f whisper
-docker compose logs -f diarization
+# Only Ollama (faster, less memory)
+curl ... | bash -s -- --ollama-only
+
+# Specific model
+curl ... | bash -s -- --model llama3.3:70b-instruct-q4_K_M
+
+# Skip dev tools (no zsh/tmux/btop)
+curl ... | bash -s -- --no-tools
+
+# CPU-only mode
+curl ... | bash -s -- --cpu
 ```
 
-### Resource Usage
+### Model Presets
+
+| Model | VRAM | Flag |
+|-------|------|------|
+| `llama3.2:3b` | 4GB | `--model llama3.2:3b` |
+| `qwen2.5:7b` | 8GB | (default) |
+| `llama3.3:70b-instruct-q4_K_M` | 16GB | `--model llama3.3:70b-instruct-q4_K_M` |
+| `llama3.3:70b` | 32GB | `--model llama3.3:70b` |
+| `llama4:scout` | 48GB | `--model llama4:scout` |
+
+---
+
+## After Setup
+
+### Useful Commands
 
 ```bash
-# Container stats
-docker stats
+# Switch to zsh (better shell)
+exec zsh
 
-# GPU usage
-nvidia-smi -l 1
+# Mycelia shortcuts (after zsh)
+mstatus    # Show services & GPU
+mup        # Start services
+mdown      # Stop services
+mlogs      # View logs
+mps        # Service status
 
-# Ollama model memory
-docker exec ollama ollama ps
+# GPU monitoring
+gpu        # nvidia-smi
+gpuw       # Watch GPU live
+btop       # Beautiful system monitor
+
+# tmux (keep session running after disconnect)
+tmux new -s mycelia     # Create session
+tmux attach -t mycelia  # Reconnect
+# Ctrl+A, d             # Detach
 ```
 
-### Health Checks
+### Verify Services
 
 ```bash
-# Quick health check script
-curl -s http://localhost:11434/api/tags > /dev/null && echo "✓ Ollama OK" || echo "✗ Ollama FAIL"
-curl -s http://localhost:8081/docs > /dev/null && echo "✓ Whisper OK" || echo "✗ Whisper FAIL"
-curl -s http://localhost:8085/health > /dev/null && echo "✓ Diarization OK" || echo "✗ Diarization FAIL"
+# On server
+curl localhost:11434/api/tags      # Ollama
+curl localhost:8081/docs           # Whisper
+curl localhost:8085/health         # Diarization
+
+# Check GPU
+nvidia-smi
 ```
 
 ---
 
 ## Troubleshooting
 
-### GPU Not Detected
+### "Connection refused" from local machine
 
+Make sure SSH tunnel is running:
 ```bash
-# Check NVIDIA driver
-nvidia-smi
-
-# Check Docker GPU support
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
-
-# If fails, reinstall nvidia-container-toolkit
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
+ssh -p PORT -L 11434:localhost:11434 -L 8081:localhost:8081 -L 8085:localhost:8085 root@SERVER
 ```
 
-### Out of GPU Memory
-
-```bash
-# Check GPU memory
-nvidia-smi
-
-# Use smaller models
-OLLAMA_MODELS=qwen2.5:7b docker compose up -d ollama
-
-# Or run services one at a time
-docker compose stop whisper  # Free GPU memory
-```
-
-### Service Won't Start
+### Services not starting
 
 ```bash
 # Check logs
-docker compose logs servicename
+docker compose logs -f
 
-# Common issues:
-# - HF_TOKEN not set (diarization)
-# - Port already in use
-# - Insufficient disk space
+# Restart
+docker compose restart
 ```
 
-### Connection Refused
+### GPU not detected
 
 ```bash
-# Check service is running
-docker compose ps
+# Check driver
+nvidia-smi
 
-# Check it's listening
-ss -tlnp | grep PORT
+# Check Docker GPU
+docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+```
 
-# Check firewall
-sudo ufw status
+### Out of memory
 
-# Check cloud firewall (AWS/GCP/Hetzner console)
+Use smaller model:
+```bash
+# Edit .env
+nano ~/mycelia/deploy/.env
+# Change OLLAMA_MODELS=qwen2.5:7b to smaller model
+
+# Restart
+docker compose restart ollama
 ```
 
 ---
 
-## Stopping Services
+## Stopping & Cleanup
 
 ```bash
-# Stop all
+# Stop services (keeps data)
+cd ~/mycelia/deploy
 docker compose down
 
-# Stop specific service
-docker compose stop ollama
-
-# Full cleanup (removes data)
+# Full cleanup (removes everything)
 docker compose down -v
+rm -rf ~/mycelia
 ```
 
 ---
 
-## Security Notes
+## Architecture
 
-⚠️ **Warning:** These services are exposed without authentication by default.
-
-For production:
-1. Use a firewall to restrict access to known IPs
-2. Set API_KEY for Whisper authentication
-3. Put services behind a reverse proxy with auth
-4. Or use SSH tunneling:
-   ```bash
-   ssh -L 11434:localhost:11434 -L 8081:localhost:8081 -L 8085:localhost:8085 server
-   ```
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Remote GPU Server                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
+│  │   Ollama    │  │   Whisper   │  │   Diarization   │ │
+│  │   :11434    │  │    :8081    │  │      :8085      │ │
+│  └─────────────┘  └─────────────┘  └─────────────────┘ │
+│                         │                               │
+│                    Docker + GPU                         │
+└─────────────────────────────────────────────────────────┘
+                          │
+                     SSH Tunnel
+                          │
+┌─────────────────────────────────────────────────────────┐
+│                    Local Machine                         │
+│  ┌─────────────────────────────────────────────────────┐│
+│  │              Mycelia Backend                        ││
+│  │  localhost:11434  localhost:8081  localhost:8085   ││
+│  └─────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────┘
+```
