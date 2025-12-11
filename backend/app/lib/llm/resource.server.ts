@@ -67,8 +67,31 @@ const chatCompletionRequestSchema = z.object({
   parallel_tool_calls: z.boolean().optional(),
 });
 
+const addModelRequestSchema = z.object({
+  action: z.literal("addModel"),
+  model: z.object({
+    alias: z.string(),
+    name: z.string(),
+    provider: z.string(),
+    baseUrl: z.string(),
+    apiKey: z.string(),
+  }),
+});
+
+const listModelsRequestSchema = z.object({
+  action: z.literal("listModels"),
+});
+
+const removeModelRequestSchema = z.object({
+  action: z.literal("removeModel"),
+  alias: z.string(),
+});
+
 const llmRequestSchema = z.discriminatedUnion("action", [
   chatCompletionRequestSchema,
+  addModelRequestSchema,
+  listModelsRequestSchema,
+  removeModelRequestSchema,
 ]);
 
 type LLMRequest = z.infer<typeof llmRequestSchema>;
@@ -105,14 +128,52 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     const span = tracer.startSpan("llm_resource_use", {
       attributes: {
         "llm.action": input.action,
-        "llm.model": input.model,
+        "llm.model": "model" in input ? input.model : "n/a",
       },
     });
 
     try {
-      llmRequestCounter.add(1, { action: input.action, model: input.model });
+      llmRequestCounter.add(1, {
+        action: input.action,
+        model: "model" in input ? input.model : "n/a",
+      });
 
       switch (input.action) {
+        case "addModel": {
+          const rootDb = await getRootDB();
+          const modelsCollection = rootDb.collection("llm_models");
+
+          // Upsert model by alias
+          await modelsCollection.updateOne(
+            { alias: input.model.alias },
+            { $set: input.model },
+            { upsert: true },
+          );
+
+          span.setStatus({ code: 1 });
+          return { success: true, alias: input.model.alias };
+        }
+
+        case "listModels": {
+          const rootDb = await getRootDB();
+          const modelsCollection = rootDb.collection("llm_models");
+          const models = await modelsCollection
+            .find({}, { projection: { apiKey: 0 } })
+            .toArray();
+
+          span.setStatus({ code: 1 });
+          return models;
+        }
+
+        case "removeModel": {
+          const rootDb = await getRootDB();
+          const modelsCollection = rootDb.collection("llm_models");
+          const result = await modelsCollection.deleteOne({ alias: input.alias });
+
+          span.setStatus({ code: 1 });
+          return { success: result.deletedCount > 0 };
+        }
+
         case "completions": {
           const { action, ...body } = input;
 
@@ -233,11 +294,19 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   }
 
   extractActions(input: LLMRequest) {
+    if (input.action === "completions") {
+      return [{
+        path: ["llm", "chat"],
+        actions: [input.action],
+      }, {
+        path: ["llm", "models", input.model],
+        actions: [input.action],
+      }];
+    }
+
+    // Model management actions
     return [{
-      path: ["llm", "chat"],
-      actions: [input.action],
-    }, {
-      path: ["llm", "models", input.model],
+      path: ["llm", "models"],
       actions: [input.action],
     }];
   }

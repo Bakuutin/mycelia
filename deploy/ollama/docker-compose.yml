@@ -1,0 +1,58 @@
+# Ollama Docker Deployment
+# Usage: docker compose up -d
+#
+# Environment variables:
+#   OLLAMA_MODELS - model to pull (default: qwen2.5:7b)
+#   OLLAMA_PORT   - port to expose (default: 11434)
+#
+# Presets (set OLLAMA_MODELS):
+#   tiny:   llama3.2:3b
+#   small:  qwen2.5:7b (default)
+#   medium: llama3.3:70b-instruct-q4_K_M
+#   large:  llama3.3:70b
+#   xlarge: llama4:scout
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+    # GPU support - remove this section if no GPU available
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Helper service to pull models on startup
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ollama-pull
+    depends_on:
+      - ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Ollama server..."
+        sleep 10
+        for model in $$(echo "$${OLLAMA_MODELS:-qwen2.5:7b}" | tr ',' ' '); do
+          echo "Pulling model: $$model"
+          ollama pull $$model
+        done
+        echo "All models pulled!"
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - OLLAMA_MODELS=${OLLAMA_MODELS:-qwen2.5:7b}
+    network_mode: "service:ollama"
+
+volumes:
+  ollama_data:
