@@ -6,7 +6,7 @@ Deploy Ollama on a remote server for LLM processing in Mycelia.
 
 ```bash
 # 1. On your remote server (SSH)
-curl -fsSL https://raw.githubusercontent.com/user/mycelia/main/deploy/ollama/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/olama-setup/deploy/ollama/setup.sh -o setup.sh
 chmod +x setup.sh
 ./setup.sh --preset medium   # Choose preset based on your server RAM
 
@@ -52,7 +52,7 @@ ssh root@YOUR_SERVER_IP
 
 ```bash
 # Download the script
-curl -fsSL https://raw.githubusercontent.com/user/mycelia/main/deploy/ollama/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/olama-setup/deploy/ollama/setup.sh -o setup.sh
 chmod +x setup.sh
 ```
 
@@ -89,17 +89,82 @@ Or use custom models:
 4. ✅ Start the server
 5. ✅ Show connection details
 
-### Step 5: Open Firewall
+### Step 5: Open Firewall & Verify Ports
 
-The script will remind you, but make sure port 11434 is open:
+#### Required Ports
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| **11434** | TCP | Ollama API (required) |
+| 22 | TCP | SSH access (you probably already have this) |
+
+#### Open Port on Ubuntu/Debian
 
 ```bash
-# Ubuntu/Debian with UFW
-sudo ufw allow 11434/tcp
+# Check if UFW is active
+sudo ufw status
 
-# CentOS/RHEL with firewalld
+# If UFW is active, open port 11434
+sudo ufw allow 11434/tcp
+sudo ufw reload
+
+# Verify the rule was added
+sudo ufw status | grep 11434
+```
+
+#### Open Port on CentOS/RHEL
+
+```bash
 sudo firewall-cmd --permanent --add-port=11434/tcp
 sudo firewall-cmd --reload
+sudo firewall-cmd --list-ports
+```
+
+#### Verify Port is Open (on server)
+
+```bash
+# Check if Ollama is listening on the port
+ss -tlnp | grep 11434
+# Expected output: LISTEN 0 ... *:11434 ... users:(("ollama",...))
+
+# Alternative check
+netstat -tlnp | grep 11434
+
+# Check if service is running
+systemctl status ollama
+```
+
+#### Verify Port is Accessible (from your local machine)
+
+```bash
+# Simple connectivity test
+nc -zv YOUR_SERVER_IP 11434
+# Expected: Connection to YOUR_SERVER_IP 11434 port [tcp/*] succeeded!
+
+# Or using curl
+curl -s http://YOUR_SERVER_IP:11434/api/tags
+# Expected: JSON with models list
+
+# Or using telnet
+telnet YOUR_SERVER_IP 11434
+# Type: GET /api/tags HTTP/1.0 [Enter][Enter]
+```
+
+#### Troubleshooting Port Issues
+
+```bash
+# On server: Check if Ollama binds to all interfaces (not just localhost)
+cat /etc/systemd/system/ollama.service.d/override.conf
+# Should show: OLLAMA_HOST=0.0.0.0:11434
+
+# Check cloud provider firewall (AWS/GCP/Hetzner/etc)
+# Most providers have a separate firewall in their web console
+# Make sure to allow inbound TCP 11434 there too!
+
+# Test locally on server first
+curl http://localhost:11434/api/tags
+# If this works but remote doesn't → firewall issue
+# If this fails → Ollama not running or misconfigured
 ```
 
 ### Step 6: Verify Server is Running
@@ -229,7 +294,7 @@ If you prefer Docker:
 ```bash
 # On server
 mkdir -p ~/ollama && cd ~/ollama
-curl -O https://raw.githubusercontent.com/user/mycelia/main/deploy/ollama/docker-compose.yml
+curl -O https://raw.githubusercontent.com/mycelia-tech/mycelia/olama-setup/deploy/ollama/docker-compose.yml
 
 # Start with your chosen model
 OLLAMA_MODELS="llama3.3:70b-instruct-q4_K_M" docker compose up -d

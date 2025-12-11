@@ -144,3 +144,4 @@ deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call llm.chatCompletion \
 | Diarization | 8085 |
 | MongoDB | 27017 |
 | Redis | 6379 |
+
