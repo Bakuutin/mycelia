@@ -19,7 +19,7 @@ export async function apiChatHandler(req: Request, res: Response) {
   // 2. Load or Create Chat Session (Persistence)
   const db = await getRootDB();
 
-  let { messages, chatId } = req.body;
+  let { messages, chatId, model: requestedModel } = req.body;
 
   // Normalize messages: map 'parts' to 'content' if needed (AI SDK Core format compatibility)
   if (Array.isArray(messages)) {
@@ -31,16 +31,20 @@ export async function apiChatHandler(req: Request, res: Response) {
     });
   }
 
+  // Validate requested model (must be small, medium, or large)
+  const validModels = ["small", "medium", "large"];
+  const selectedModel = validModels.includes(requestedModel) ? requestedModel : "medium";
+
   let activeChatId: string | undefined = chatId;
-  let chatModel = "medium";
+  let chatModel = selectedModel;
 
   if (!activeChatId) {
-    // Use medium model by default if creating new chat
+    // Use selected model for new chat
     const llmResource = new LLMResource();
-    const modelConfig = await llmResource.getModel("medium");
+    const modelConfig = await llmResource.getModel(selectedModel);
 
     if (!modelConfig) {
-      res.status(500).json({ error: "Default model 'medium' not configured" });
+      res.status(500).json({ error: `Model '${selectedModel}' not configured` });
       return;
     }
 
@@ -50,7 +54,7 @@ export async function apiChatHandler(req: Request, res: Response) {
       userId: auth.principal, // Auth object uses principal as user identifier
       title: 'New Chat', // This might be renamed later by AI or user
       name: 'New Chat', // Align with new schema 'name'
-      model: "medium",
+      model: selectedModel,
       platform: "mycelia",
       externalId: newChatId.toString(),
       type: "private",
@@ -61,16 +65,26 @@ export async function apiChatHandler(req: Request, res: Response) {
     activeChatId = chatResult.insertedId.toString();
   } else {
     // 3. Get Chat Model Config & Verify Ownership
-    const chat = await db.collection("chats").findOne({ 
+    const chat = await db.collection("chats").findOne({
       _id: new ObjectId(activeChatId),
-      userId: auth.principal 
+      userId: auth.principal
     });
-    
+
     if (!chat) {
        res.status(404).json({ error: "Chat not found or access denied" });
        return;
     }
-    chatModel = chat.model || "medium";
+
+    // Allow updating chat model if a different valid model is requested
+    if (requestedModel && validModels.includes(requestedModel) && chat.model !== requestedModel) {
+      await db.collection("chats").updateOne(
+        { _id: new ObjectId(activeChatId) },
+        { $set: { model: requestedModel, updatedAt: new Date() } }
+      );
+      chatModel = requestedModel;
+    } else {
+      chatModel = chat.model || "medium";
+    }
   }
 
   const llmResource = new LLMResource();
@@ -87,10 +101,10 @@ export async function apiChatHandler(req: Request, res: Response) {
   await db.collection("messages").insertOne({
     _id: userMessageId,
     chatId: new ObjectId(activeChatId),
-    role: "user", // Retain role for AI context, though new schema relies on senderId. 
+    role: "user", // Retain role for AI context, though new schema relies on senderId.
     // We might need to map 'role: user' to senderId = auth.principal (Person ID) later.
     // For now, storing as raw or extending schema is needed if we want to keep AI roles.
-    // Let's store role in 'raw' or root if we allow flexible schema. 
+    // Let's store role in 'raw' or root if we allow flexible schema.
     // The new schema doesn't strictly forbid extra fields, but let's be cleaner.
     senderId: new ObjectId(auth.principal), // Assuming principal is a valid ObjectId for a Person
     content: lastMessage.content,
@@ -130,18 +144,18 @@ export async function apiChatHandler(req: Request, res: Response) {
       model: createOpenAI({
         baseURL: modelConfig.baseUrl,
         apiKey: modelConfig.apiKey,
-      }).chat(modelConfig.name), 
+      }).chat(modelConfig.name),
       tools,
       instructions: systemPrompt,
       async onFinish(result) {
         console.log(result);
         const { content, usage: totalUsage } = result as any;
-        
+
         const assistantMessageId = new ObjectId();
         await db.collection("messages").insertOne({
           _id: assistantMessageId,
           chatId: new ObjectId(activeChatId),
-          // role: "assistant", 
+          // role: "assistant",
           // senderId for assistant? Maybe null or a specific System Agent ID.
           content,
           platform: "mycelia",
@@ -149,20 +163,20 @@ export async function apiChatHandler(req: Request, res: Response) {
           timestamp: new Date(),
           createdAt: new Date(),
           updatedAt: new Date(),
-          raw: { 
+          raw: {
             role: "assistant",
-            usage: totalUsage 
+            usage: totalUsage
           }
         });
-        
+
         // Update chat timestamp
         await db.collection("chats").updateOne(
             { _id: new ObjectId(activeChatId) },
-            { 
-              $set: { 
+            {
+              $set: {
                 updatedAt: new Date(),
                 lastMessageDate: new Date()
-              } 
+              }
             }
         );
       },

@@ -18,7 +18,14 @@ import { Message, MessageContent, MessageAvatar } from "@/components/ai-elements
 import { Response } from "@/components/ai-elements/response";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Loader } from "@/components/ai-elements/loader";
-import { Paperclip, UserIcon, BotIcon } from "lucide-react";
+import { Paperclip, UserIcon, BotIcon, Cpu } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 
@@ -76,7 +83,7 @@ function ChatMessageContent({ message }: { message: any }) {
     return (
       <>
         {items.map((part: any, index: number) => {
-          
+
           if (typeof part === 'string' || (typeof part === 'object' && part.type === 'text')) {
             return <Response key={index}>{typeof part === 'string' ? part : part.text}</Response>;
           }
@@ -118,8 +125,15 @@ export default function ChatPage() {
   const navigate = useNavigate();
   const chatId = params.chatId ?? searchParams.get("id") ?? undefined;
   const [input, setInput] = useState("");
+  const [model, setModel] = useState<"small" | "medium" | "large">("medium");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const newChatIdRef = useRef<string | null>(null);
+  const modelRef = useRef(model);
+
+  // Keep ref in sync with state for use in fetch callback
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   const chat = useChat({
     id: chatId,
@@ -136,6 +150,13 @@ export default function ChatPage() {
       api: "/api/chat",
       fetch: async (input, init) => {
         const path = input.toString();
+
+        // Inject model into request body
+        if (init?.body) {
+          const body = JSON.parse(init.body as string);
+          body.model = modelRef.current;
+          init = { ...init, body: JSON.stringify(body) };
+        }
 
         const response = await apiClient.fetch(path, init);
 
@@ -192,6 +213,17 @@ export default function ChatPage() {
           />
           <PromptInputFooter>
             <PromptInputTools>
+              <Select value={model} onValueChange={(v) => setModel(v as "small" | "medium" | "large")}>
+                <SelectTrigger className="w-[100px] h-8 text-xs">
+                  <Cpu className="size-3 mr-1" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="small">Small</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="large">Large</SelectItem>
+                </SelectContent>
+              </Select>
               <PromptInputActionMenu>
                 <PromptInputActionMenuTrigger>
                   <Paperclip className="size-4" />
