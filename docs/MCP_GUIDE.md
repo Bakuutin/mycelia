@@ -146,3 +146,4 @@ deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call llm.chatCompletion \
 | Redis | 6379 |
 
 
+

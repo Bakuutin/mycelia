@@ -3,7 +3,7 @@
 # Sets up: Ollama, Whisper, Diarization + zsh, tmux, btop
 #
 # Usage (on fresh server):
-#   curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mycelia-tech/mycelia/refs/heads/olama-setup/deploy/ollama/setup.sh | bash
 #
 # Or with options:
 #   ./setup.sh --ollama-only    # Only Ollama (no Whisper/Diarization)

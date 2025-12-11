@@ -1,0 +1,11 @@
+# Mycelia Remote Server Configuration
+# Edit this file with your server details
+
+# Server hostname or IP
+SERVER_HOST=provider.4090.mycelia.ai
+
+# SSH port (22 for standard, or custom port for Akash/etc)
+SSH_PORT=22
+
+# SSH user
+SSH_USER=root

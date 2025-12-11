@@ -15,3 +15,6 @@ coverage
 .vscode
 debug.*
 **/logs/*
+
+# Deploy config (contains server credentials)
+deploy/.server.conf
