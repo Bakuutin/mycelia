@@ -42,93 +42,41 @@ your own words.
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites
+### Prerequisites
 
-Install these system dependencies:
+**Docker only!** Install Docker Desktop (includes Docker Compose):
 
-**macOS:**
-```bash
-brew install portaudio deno ffmpeg
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop
-```
+- **macOS/Windows**: [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- **Linux**: [Docker Engine](https://docs.docker.com/engine/install/)
 
-**Linux:**
-```bash
-sudo apt install portaudio19-dev ffmpeg
-curl -fsSL https://deno.land/install.sh | sh
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install Docker: https://docs.docker.com/engine/install/
-```
-
-**Windows:**
-```powershell
-# Install Deno
-irm https://deno.land/install.ps1 | iex
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install FFmpeg: https://ffmpeg.org/download.html
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop
-```
-
-### 2. Setup & Run
+### Setup & Run (All-in-Docker)
 
 ```bash
 # Clone the repo
 git clone https://github.com/your-org/mycelia.git
 cd mycelia
 
-# Option A: Bring up databases + frontend in one go
+# Start all services (databases + frontend)
 docker compose up -d --build redis mongo mongo-search frontend
-
-# Option B: Start stateful services only (run apps locally)
-docker compose up -d redis mongo mongo-search
-
-# Configure backend environment
-cd backend
-cp .env.example .env
-# Edit .env with your preferred settings
-# Make sure Mongo uses the direct connection string from .env:
-# MONGO_URL=mongodb://localhost:27017?directConnection=true
-
-# Generate auth credentials (requires services running)
-deno run -A --env server.ts token-create
-# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
-
-# Start the backend server
-deno task dev
 ```
 
-The backend dev server will be available at http://localhost:5173/.
+**That's it!** The frontend will be available at http://localhost:8080.
 
-### 3. Frontend
+### Next Steps
 
-#### Option A: Run via Docker Compose (production build)
+1. **Configure backend** (uncomment backend service in docker-compose.yml for fully dockerized setup)
+2. **Add inference**: Start the Whisper STT server (see below)
+3. **Import audio**: Use the audio import daemon (see Audio Import section)
 
-```bash
-docker compose up -d --build frontend
-```
+### Optional: Inference & Diarization Stack
 
-Open http://localhost:8080.
-
-#### Option B: Run in dev mode (Deno + Vite)
-
-```bash
-cd frontend
-deno task dev
-```
-
-Open http://localhost:3001. Configure backend URL and credentials in the settings page.
-
-### 4. Inference & Diarization Stack (optional)
-
-#### Whisper STT server
+#### Whisper STT server (Docker)
 ```bash
 cd python/whisper_server
-uv sync
-uv run server.py  # serves on http://localhost:8081 by default
+docker build -t mycelia-whisper .
+docker run -p 8081:8081 mycelia-whisper
 ```
-Point `STT_SERVER_URL` to the host running this process (local or remote).
+Point `STT_SERVER_URL` to `http://localhost:8081` in your backend config.
 
 #### Speaker recognition / diarization service
 Use the dedicated compose file under `diarizator/`:
@@ -139,7 +87,82 @@ docker compose --profile cpu up -d speaker-service web-ui
 # GPU build (requires NVIDIA runtime)
 docker compose --profile gpu up -d speaker-service-gpu web-ui nginx
 ```
-The web UI lives at `http://localhost:5173` (per `REACT_UI_PORT`) and the API exposes port `8085`. Configure `SPEAKER_SERVICE_URL` in your backend or processors to consume the service.
+The web UI lives at `http://localhost:5173` and the API exposes port `8085`. Configure `SPEAKER_SERVICE_URL` in your backend config.
+
+---
+
+## 🛠 Local Development Setup
+
+For contributors and advanced users who want to run services locally:
+
+### Prerequisites
+
+**macOS:**
+```bash
+brew install portaudio deno ffmpeg
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Linux:**
+```bash
+sudo apt install portaudio19-dev ffmpeg
+curl -fsSL https://deno.land/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Windows:**
+```powershell
+irm https://deno.land/install.ps1 | iex  # Install Deno
+curl -LsSf https://astral.sh/uv/install.sh | sh  # Install uv
+# Install FFmpeg: https://ffmpeg.org/download.html
+```
+
+### Backend (Local Dev)
+
+```bash
+# Start databases only
+docker compose up -d redis mongo mongo-search
+
+# Configure environment
+cd backend
+cp .env.example .env
+# Edit .env - use: MONGO_URL=mongodb://localhost:27017?directConnection=true
+
+# Generate auth credentials
+deno run -A --env server.ts token-create
+# Copy MYCELIA_TOKEN and MYCELIA_CLIENT_ID to .env
+
+# Start backend dev server
+deno task dev  # Available at http://localhost:5173
+```
+
+### Frontend (Local Dev)
+
+```bash
+cd frontend
+deno task dev  # Available at http://localhost:3001
+```
+
+Configure backend URL and credentials in the settings page.
+
+### Python Services (Local Dev)
+
+```bash
+# Whisper STT server
+cd python/whisper_server
+uv sync
+uv run server.py  # Serves on http://localhost:8081
+
+# Audio import daemon
+cd python
+uv run daemon.py
+
+# STT processing
+uv run stt.py
+
+# Conversation extraction
+uv run python -m convos.cli --limit 5
+```
 
 ## LLM Setup
 
@@ -147,7 +170,23 @@ Need to wire up local inference or OpenRouter-hosted models? Check `docs/LLM_DEV
 
 ## Commands
 
-### Backend Server
+### Docker Operations
+
+```bash
+# Start all services
+docker compose up -d --build
+
+# View logs
+docker compose logs -f [service-name]
+
+# Stop all services
+docker compose down
+
+# Rebuild a specific service
+docker compose up -d --build frontend
+```
+
+### Backend Server (Local Dev)
 
 ```bash
 cd backend
@@ -159,7 +198,7 @@ deno run -A --env server.ts token-create
 deno task dev
 ```
 
-### Frontend Development
+### Frontend Development (Local Dev)
 
 ```bash
 cd frontend
@@ -179,6 +218,8 @@ deno lint
 
 ### Audio Import Setup
 
+> **Note**: Audio import currently requires local Python setup (see Local Development section above).
+
 1. The `python/settings.py` works out-of-the-box and auto-detects:
    - Apple Voice Memos (if `CloudRecordings.db` exists)
    - Google Drive Easy Voice Recorder (scans `~/Library/CloudStorage/GoogleDrive-*`)
@@ -193,11 +234,11 @@ deno lint
 
 2. **macOS only**: Grant Full Disk Access to your terminal app (Terminal, iTerm, VS Code, etc.) via System Settings → Privacy & Security → Full Disk Access. Restart the terminal after granting access.
 
-3. Start the daemon, which will automatically import new recordings from your sources in the background.
+3. Install Python dependencies and start the daemon:
 
 ```bash
-# Run recordings import daemon
 cd python
+uv sync
 uv run daemon.py
 ```
 
@@ -231,15 +272,20 @@ uv run daemon.py
 
 Quick start:
 
-1. Start a Whisper server (local or remote) as documented in [backend/README.md#speech-to-text-stt](backend/README.md#speech-to-text-stt).
-2. Transcribe queued audio:
+1. **Start Whisper server** (choose one):
+   - **Docker** (recommended): See "Optional: Inference & Diarization Stack" above
+   - **Local**: See [backend/README.md#speech-to-text-stt](backend/README.md#speech-to-text-stt)
+
+2. **Transcribe queued audio** (requires local Python setup):
    ```bash
    cd python
+   uv sync
    uv run stt.py [--server https://your-stt-server.com/]
    ```
-3. Inspect the backlog without processing: `uv run stt.py --count`.
 
-Detailed setup, advanced flags, queue/index maintenance, and Mongo helper commands now live in `backend/README.md`.
+3. **Inspect backlog**: `uv run stt.py --count`
+
+Detailed setup, advanced flags, queue/index maintenance, and Mongo helper commands live in `backend/README.md`.
 
 #### Ensure Audio Chunk Indexes
 
@@ -254,24 +300,25 @@ deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo \
 If you routinely query `processing_by != null` or `transcribed_at != null`, there are also single-field helper indexes (`audio_chunks_processing_by`, `audio_chunks_transcribed_at`) created alongside the compound one.
 
 
-### Conversation Extraction (python/convos)
+### Conversation Extraction
+
+> **Note**: Requires local Python setup (see Local Development section above).
 
 `python/convos` scans recent transcripts, groups them into time-bounded conversation chunks, uses an LLM to extract structured conversations, then writes conversation objects and "mentioned in" relationships to MongoDB.
 
-When to run:
-- After your audio has been imported and transcribed. In sequence: Import/daemon → STT → Conversation extraction → (optionally) timeline histogram recalculation.
+**When to run:**
+After your audio has been imported and transcribed. Sequence: Import/daemon → STT → Conversation extraction → (optionally) timeline histogram recalculation.
 
-What it does:
+**What it does:**
 - Groups adjacent transcript segments into conversations based on silence gaps and total content length
 - Prompts an LLM to extract: title, summary, entities, start/end, emoji
 - Creates conversation objects in `objects` collection and links mentioned entities via relationships
 
-How to run:
+**How to run:**
 ```bash
 cd python
-uv run python -m convos.cli \
-  --limit 5 \
-  --model small
+uv sync
+uv run python -m convos.cli --limit 5 --model small
 ```
 
 Flags:
@@ -291,7 +338,9 @@ Notes:
 
 ### Remote Operations (cli.ts)
 
-For operations against a remote server (requires login & API key), from /backend directory:
+> **Note**: Requires local Deno setup (see Local Development section above).
+
+For operations against a remote server (requires login & API key):
 
 ```bash
 # Login to remote server
