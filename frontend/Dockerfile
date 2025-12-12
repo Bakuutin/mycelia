@@ -14,7 +14,7 @@ RUN deno cache --node-modules-dir --lock=deno.lock --reload npm:vite
 
 # Copy the rest of the source
 COPY ./frontend .
-COPY ./interfaces ../interfaces
+COPY ./interfaces ./interfaces
 # Build static assets using Deno task (runs: deno run -A npm:vite build)
 RUN deno task build
 

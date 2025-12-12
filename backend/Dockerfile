@@ -12,9 +12,6 @@ RUN DENO_FUTURE=1 deno install --lock=deno.lock
 
 COPY . /app
 
-# Build Remix/Vite assets (production)
-RUN deno run -A npm:@remix-run/dev vite:build
-
 # Allow sourcing generated credentials (MYCELIA_TOKEN / MYCELIA_CLIENT_ID)
 RUN chmod +x /app/docker/entrypoint.sh
 
