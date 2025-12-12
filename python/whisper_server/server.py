@@ -40,15 +40,15 @@ async def verify_api_key(x_api_key: str = Header(None)):
     if not API_KEY:
         # If no API key is configured, allow all requests
         return True
-    
+
     if not x_api_key:
         logger.warning("Missing X-API-Key header")
         raise HTTPException(status_code=401, detail="Missing API key")
-    
+
     if x_api_key != API_KEY:
         logger.warning(f"Invalid API key provided: {x_api_key[:8]}...")
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
+
     return True
 
 def wav_to_array(source: io.BytesIO) -> np.ndarray:
@@ -184,5 +184,5 @@ async def transcribe(files: list[UploadFile] = File(...), prompt: str = Form(Non
 
 if __name__ == '__main__':
     import uvicorn
-    logger.info("Starting Whisper transcription server on 0.0.0.0:8087")
-    uvicorn.run(app, host='0.0.0.0', port=8087)
+    logger.info("Starting Whisper transcription server on 0.0.0.0:8081")
+    uvicorn.run(app, host='0.0.0.0', port=8081)

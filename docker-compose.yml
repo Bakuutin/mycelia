@@ -7,6 +7,13 @@ services:
       - redis_data:/bitnamilegacy/redis/data
     environment:
       - REDIS_PASSWORD
+    networks:
+      - mycelia-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD:-}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
   mongo:
     image: mongo:8.2
     entrypoint: ["/mongo-entrypoint.sh"]
@@ -19,9 +26,13 @@ services:
       - ./init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
       - ./mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
     restart: unless-stopped
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD
+    networks:
+      - mycelia-network
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping')\" >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
   mongo-search:
     image: mongodb/mongodb-community-search:latest
     entrypoint: ["/mongot-entrypoint.sh"]
@@ -32,40 +43,107 @@ services:
       - mongo_search_data:/data/mongot
       - ./mongot.conf:/mongot-community/config.default.yml:ro
       - ./mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
+    networks:
+      - mycelia-network
 
   frontend:
     build:
       context: .
       dockerfile: ./frontend/Dockerfile
     ports:
-      - "8080:8080"
+      - "3001:3001"
+    networks:
+      - mycelia-network
     volumes:
-      - ./frontend:/app
+      - audio_files:/data/audio
+    depends_on:
+      backend:
+        condition: service_healthy
 
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "5173:5173"
-  #   command: deno task dev
-  #   environment:
-  #     MONGO_URL: ${MONGO_URL}
-  #     SECRET_KEY: ${SECRET_KEY}
-  #     DATABASE_NAME: ${DATABASE_NAME}
-  #     REDIS_HOST: redis
-  #     REDIS_PORT: 6379
-  #     REDIS_PASSWORD: ${REDIS_PASSWORD}
-  #   volumes:
-  #     - ./backend:/app
+  init:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      MONGO_URL: mongodb://mongo:27017?directConnection=true
+      DATABASE_NAME: ${DATABASE_NAME:-mycelia}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      MYCELIA_SECRETS_FILE: /run/mycelia/mycelia.env
+      MYCELIA_INIT_OWNER: ${MYCELIA_INIT_OWNER:-admin}
+      MYCELIA_INIT_TOKEN_NAME: ${MYCELIA_INIT_TOKEN_NAME:-docker_init}
+    volumes:
+      - mycelia_secrets:/run/mycelia
+    networks:
+      - mycelia-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["deno", "run", "-A", "scripts/init_credentials.ts"]
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      MONGO_URL: mongodb://mongo:27017?directConnection=true
+      DATABASE_NAME: ${DATABASE_NAME:-mycelia}
+      SECRET_KEY: ${SECRET_KEY:-11111111-1111-1111-1111-111111111111}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      MYCELIA_FRONTEND_HOST: http://localhost:3001
+      MYCELIA_SECRETS_FILE: /run/mycelia/mycelia.env
+    volumes:
+      - audio_files:/data/audio
+      - mycelia_secrets:/run/mycelia
+    networks:
+      - mycelia-network
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+      mongo-search:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  pipeline:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    environment:
+      MYCELIA_URL: http://backend:5173
+      MYCELIA_ENV_FILE: /run/mycelia/mycelia.env
+      MYCELIA_SECRETS_FILE: /run/mycelia/mycelia.env
+    volumes:
+      - audio_files:/data/audio
+      - mycelia_secrets:/run/mycelia
+    networks:
+      - mycelia-network
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
 
 
 volumes:
   mongo_data:
   mongo_search_data:
   redis_data:
+  audio_files:
+  mycelia_secrets:
+
+networks:
+  mycelia-network:

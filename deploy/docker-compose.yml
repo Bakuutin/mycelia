@@ -79,7 +79,7 @@ services:
     profiles: ["gpu"]
     restart: unless-stopped
     ports:
-      - "${WHISPER_PORT:-8081}:8087"
+      - "${WHISPER_PORT:-8081}:8081"
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - API_KEY=${API_KEY:-}
@@ -93,7 +93,7 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8087/docs"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/docs"]
       interval: 30s
       timeout: 10s
       retries: 3

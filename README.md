@@ -53,18 +53,21 @@ your own words.
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/mycelia.git
+git clone https://github.com/mycelia-tech/mycelia.git
 cd mycelia
 
-# Start all services (databases + frontend)
-docker compose up -d --build redis mongo mongo-search frontend
+# Start everything (db + backend + frontend + pipeline)
+docker compose up -d --build
 ```
 
-**That's it!** The frontend will be available at http://localhost:8080.
+**That's it!**
+- Web UI: `http://localhost:3001`
+- Backend: `http://localhost:5173`
 
 ### Next Steps
 
-1. **Configure backend** (uncomment backend service in docker-compose.yml for fully dockerized setup)
+1. **Credentials**: On first run, Docker will auto-generate `MYCELIA_TOKEN` + `MYCELIA_CLIENT_ID`.
+   - View them via: `docker compose logs init`
 2. **Add inference**: Start the Whisper STT server (see below)
 3. **Import audio**: Use the audio import daemon (see Audio Import section)
 
@@ -128,9 +131,8 @@ cd backend
 cp .env.example .env
 # Edit .env - use: MONGO_URL=mongodb://localhost:27017?directConnection=true
 
-# Generate auth credentials
+# (Optional) Generate an API token (prints MYCELIA_TOKEN + MYCELIA_CLIENT_ID)
 deno run -A --env server.ts token-create
-# Copy MYCELIA_TOKEN and MYCELIA_CLIENT_ID to .env
 
 # Start backend dev server
 deno task dev  # Available at http://localhost:5173
@@ -161,7 +163,7 @@ uv run daemon.py
 uv run stt.py
 
 # Conversation extraction
-uv run python -m convos.cli --limit 5
+uv run -m convos.cli --limit 5
 ```
 
 ## LLM Setup
@@ -318,7 +320,7 @@ After your audio has been imported and transcribed. Sequence: Import/daemon → 
 ```bash
 cd python
 uv sync
-uv run python -m convos.cli --limit 5 --model small
+uv run -m convos.cli --limit 5 --model small
 ```
 
 Flags:

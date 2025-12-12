@@ -76,11 +76,12 @@ docker compose up
 
 #### Milestones
 1. **Unified Docker Compose Configuration** (Main Stack)
-   - Add backend service (Deno container)
-   - Add frontend service (Vite production build)
-   - Add Python pipeline service
-   - Network all services properly
-   - Volume mounts for persistent data
+   - Enable backend container (Deno) on `localhost:5173` with `/health`
+   - Enable frontend production build container on `localhost:3001`
+   - Add Python pipeline service container (runs via `uv run daemon.py`)
+   - Put all services on a single `mycelia-network`
+   - Add persistent volumes (`mongo_data`, `mongo_search_data`, `redis_data`, `audio_files`)
+   - Add first-run auto-init for `MYCELIA_TOKEN` + `MYCELIA_CLIENT_ID` (one-shot init service)
 
 2. **Inference Stack Docker Compose** (Separate, Optional)
    - Create `docker-compose.inference.yml`:

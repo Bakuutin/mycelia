@@ -1,7 +1,7 @@
 import "@/lib/telemetry.ts";
 import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
-import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
+import { generateApiKeyWithId, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
 import { type Policy } from "@/lib/auth/resources.ts";
@@ -215,10 +215,11 @@ async function configureCli() {
         console.log(`Owner: ${owner}`);
         console.log(`Name: ${name}`);
         console.log("Generating token...");
-        const key = await generateApiKey(owner, name, [
+        const { apiKey, clientId } = await generateApiKeyWithId(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
-        console.log(`MYCELIA_TOKEN=${key}`);
+        console.log(`MYCELIA_TOKEN=${apiKey}`);
+        console.log(`MYCELIA_CLIENT_ID=${clientId}`);
       },
     )
     .command(

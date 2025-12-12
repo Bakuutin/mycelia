@@ -68,7 +68,6 @@ export async function generateApiKeyWithId(
     doc: newApiKey,
   });
   const clientId = result.insertedId.toString();
-  console.log(`MYCELIA_CLIENT_ID=${clientId}`);
 
   return { apiKey, clientId };
 }
