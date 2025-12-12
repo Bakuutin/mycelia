@@ -43,10 +43,15 @@ echo -e "${BLUE}Checking connection...${NC}"
 if ! ssh -p $SSH_PORT -o BatchMode=yes -o ConnectTimeout=5 $REMOTE "echo 'Connection OK'" &> /dev/null; then
     echo -e "${RED}Cannot connect to $REMOTE on port $SSH_PORT.${NC}"
     echo -e "Please ensure:"
-    echo -e "1. You have SSH access (ssh-copy-id recommended)"
-    echo -e "2. The server key is accepted (try manually ssh-ing first)"
+    echo -e "1. You have SSH access. Try running this manually to accept the host key:"
+    echo -e "   ${YELLOW}ssh -p $SSH_PORT $REMOTE${NC}"
+    echo -e "2. If that works, run this script again."
     exit 1
 fi
+
+# Ensure rsync is installed on remote (needed for minimal images)
+echo -e "${BLUE}Checking remote prerequisites...${NC}"
+ssh -p $SSH_PORT $REMOTE "command -v rsync >/dev/null || (echo 'Installing rsync...' && apt-get update && apt-get install -y rsync)"
 
 # Sync files
 echo -e "${BLUE}Syncing files...${NC}"
