@@ -39,6 +39,7 @@ while [[ $# -gt 0 ]]; do
         --cpu) MODE="cpu"; shift ;;
         --ollama-only) SERVICES="ollama"; shift ;;
         --no-tools) INSTALL_TOOLS="no"; shift ;;
+        --no-clone) SKIP_CLONE="yes"; shift ;;
         --model) OLLAMA_MODEL="$2"; shift 2 ;;
         --help|-h)
             echo "Mycelia AI Services Setup"
@@ -196,23 +197,33 @@ fi
 step "Step 3/7: Installing Docker"
 
 if command -v docker &> /dev/null; then
-    log "Docker already installed: $(docker --version)"
+    log "Docker already installed (command found): $(docker --version)"
+elif dpkg -l | grep -q "docker-ce"; then
+    log "Docker installed (dpkg found)"
 else
-    curl -fsSL https://get.docker.com | sh
+    info "Docker not found. Installing via get.docker.com..."
+    curl -fsSL https://get.docker.com | sh || error "Docker installation script failed"
+
     systemctl enable docker 2>/dev/null || true
     systemctl start docker 2>/dev/null || true
-    log "Docker installed"
+    log "Docker installed successfully"
 fi
 
 # Verify Docker works
-docker ps > /dev/null 2>&1 || {
-    # Maybe running in container without systemd
-    dockerd &> /tmp/dockerd.log &
+if docker ps > /dev/null 2>&1; then
+    log "Docker is running"
+else
+    warn "Docker is not running/accessible. Trying to start..."
+    # Try starting dockerd in background (useful for some containers)
+    dockerd > /tmp/dockerd.log 2>&1 &
     sleep 3
-}
 
-docker ps > /dev/null 2>&1 || error "Docker not working. Check logs."
-log "Docker is running"
+    if docker ps > /dev/null 2>&1; then
+        log "Docker started successfully"
+    else
+        error "Docker check failed. Error output: $(docker ps 2>&1)"
+    fi
+fi
 
 # ============================================
 # STEP 4: Setup NVIDIA Container Toolkit
@@ -264,23 +275,26 @@ fi
 # ============================================
 step "Step 5/7: Setting up Mycelia"
 
-cd ~
-
-if [[ -d "mycelia" ]]; then
-    info "Mycelia repo exists, updating..."
-    cd mycelia
-    git fetch origin
-    git checkout olama-setup 2>/dev/null || git checkout -b olama-setup origin/olama-setup
-    git pull origin olama-setup || true
+if [[ "$SKIP_CLONE" == "yes" ]]; then
+    info "Skipping clone (--no-clone set). Using current directory."
 else
-    info "Cloning Mycelia..."
-    git clone https://github.com/mycelia-tech/mycelia.git
-    cd mycelia
-    git checkout olama-setup 2>/dev/null || git checkout -b olama-setup origin/olama-setup
+    cd ~
+    if [[ -d "mycelia" ]]; then
+        info "Mycelia repo exists, updating..."
+        cd mycelia
+        git fetch origin
+        git checkout olama-setup 2>/dev/null || git checkout -b olama-setup origin/olama-setup
+        git pull origin olama-setup || true
+    else
+        info "Cloning Mycelia..."
+        git clone https://github.com/mycelia-tech/mycelia.git
+        cd mycelia
+        git checkout olama-setup 2>/dev/null || git checkout -b olama-setup origin/olama-setup
+    fi
+    cd deploy
 fi
 
-cd deploy
-log "Mycelia ready at ~/mycelia/deploy"
+log "Mycelia Setup Context: $(pwd)"
 
 # ============================================
 # STEP 6: Configure Environment

@@ -62,9 +62,9 @@ rsync -avz -e "ssh -p $SSH_PORT" \
     --exclude '*.pyc' \
     --exclude '.DS_Store' \
     --exclude '.env' \
-    deploy/ \
-    python/ \
-    scripts/ \
+    deploy \
+    python \
+    scripts \
     docker-compose.inference.yml \
     $REMOTE:$REMOTE_DIR/
 
@@ -88,7 +88,7 @@ ssh -p $SSH_PORT -t $REMOTE << EOF
     # Run Setup (installs Docker, Drivers etc)
     # We pass --no-tools to skip heavy zsh/tmux if just deploying stack, or keep it if user wants full env.
     # Let's default to full setup for "straightforward" request.
-    ./setup.sh --gpu
+    ./setup.sh --gpu --no-clone
 
     # Start Inference Stack
     echo -e "\n${GREEN}Starting Inference Stack...${NC}"
