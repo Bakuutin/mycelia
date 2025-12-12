@@ -1,4 +1,4 @@
-FROM python:3.12-bookworm
+FROM python:3.10-bookworm
 
 ARG PYTORCH_CUDA_VERSION
 

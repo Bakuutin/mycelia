@@ -255,23 +255,32 @@ if [[ "$MODE" == "gpu" ]]; then
             info "Installing NVIDIA Container Toolkit..."
 
             curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-                $PREPEND gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
+                gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
 
             curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
                 sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-                $PREPEND tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+                tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
 
-            $PREPEND apt-get update
-            $PREPEND apt-get install -y nvidia-container-toolkit
+            apt-get update
+            apt-get install -y nvidia-container-toolkit
 
-            $PREPEND nvidia-ctk runtime configure --runtime=docker 2>/dev/null || true
-            $PREPEND systemctl restart docker 2>/dev/null || true
+            # Configure runtime
+            nvidia-ctk runtime configure --runtime=docker || true
+
+            # Force restart docker to pick up changes (systemctl might fail on some VMs)
+            info "Restarting Docker to apply GPU config..."
+            pkill dockerd || true
+            sleep 2
+            dockerd > /tmp/dockerd.log 2>&1 &
+            sleep 5
 
             # Verify
-            if docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
-                log "NVIDIA Container Toolkit installed"
+            if docker run --rm --gpus all nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
+                log "NVIDIA Container Toolkit installed & Verified"
             else
-                warn "GPU in Docker may not work. Continuing anyway..."
+                warn "GPU in Docker verification failed."
+                warn "Falling back to CPU mode to ensure services at least start."
+                MODE="cpu"
             fi
         fi
     else

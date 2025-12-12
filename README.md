@@ -70,24 +70,201 @@ docker compose up -d --build redis mongo mongo-search frontend
 
 ### Optional: Inference & Diarization Stack
 
-#### Whisper STT server (Docker)
-```bash
-cd python/whisper_server
-docker build -t mycelia-whisper .
-docker run -p 8081:8081 mycelia-whisper
-```
-Point `STT_SERVER_URL` to `http://localhost:8081` in your backend config.
+The inference stack provides GPU-accelerated (or CPU fallback) services for:
+- **Whisper STT** - Speech-to-text transcription
+- **Diarization** - Speaker identification
+- **Ollama** - Local LLM inference
 
-#### Speaker recognition / diarization service
-Use the dedicated compose file under `diarizator/`:
+---
+
+## 🖥️ Remote GPU Server Deployment
+
+Deploy the full inference stack to a remote GPU server with one command.
+
+### Prerequisites
+
+1. **Remote server** with SSH access (Ubuntu 22.04/24.04 recommended)
+2. **GPU** (optional but recommended) - NVIDIA with 8GB+ VRAM
+3. **Configure server details**:
+   ```bash
+   cp deploy/.server.conf.example deploy/.server.conf
+   # Edit with your server details:
+   # SERVER_HOST=your-server-ip
+   # SSH_USER=your-username
+   # SSH_PORT=22
+   ```
+
+4. **Set up SSH key** (recommended):
+   ```bash
+   ssh-copy-id -p 22 user@your-server-ip
+   ```
+
+### Deploy
+
 ```bash
-cd diarizator
-# CPU build
-docker compose --profile cpu up -d speaker-service web-ui
-# GPU build (requires NVIDIA runtime)
-docker compose --profile gpu up -d speaker-service-gpu web-ui nginx
+./deploy-remote.sh
 ```
-The web UI lives at `http://localhost:5173` and the API exposes port `8085`. Configure `SPEAKER_SERVICE_URL` in your backend config.
+
+This will:
+1. ✅ Sync files to the remote server
+2. ✅ Install Docker, NVIDIA drivers (if GPU detected), dev tools
+3. ✅ Configure NVIDIA Container Toolkit
+4. ✅ Build and start all inference containers
+5. ✅ Display service URLs when complete
+
+### After Deployment
+
+If you see "**REBOOT required**" (first-time GPU driver install):
+```bash
+ssh -p 22 user@your-server-ip
+sudo reboot
+# Wait 1 minute, then run deploy again:
+./deploy-remote.sh
+```
+
+---
+
+## 🏠 Local Inference Setup
+
+Run the inference stack on your local machine.
+
+### Quick Start (Local)
+
+```bash
+# 1. Configure environment
+cp .env.example .env
+# Edit .env - add your HF_TOKEN for diarization (optional)
+
+# 2. Start the stack
+./scripts/start-inference.sh
+```
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `HF_TOKEN` | Hugging Face token for diarization models | For diarization only |
+| `WHISPER_PORT` | Whisper STT port (default: 8081) | No |
+| `DIARIZATION_PORT` | Diarization port (default: 8085) | No |
+| `OLLAMA_PORT` | Ollama port (default: 11434) | No |
+
+**Get HF_TOKEN**: https://huggingface.co/settings/tokens
+**Accept model terms**:
+- https://huggingface.co/pyannote/speaker-diarization-3.1
+- https://huggingface.co/pyannote/segmentation-3.0
+
+---
+
+## 📁 Script Reference
+
+| Script | Run From | Purpose |
+|--------|----------|---------|
+| `./deploy-remote.sh` | Your Mac/local | Full deployment to remote server (syncs files + setup + start) |
+| `./scripts/start-inference.sh` | Remote server (SSH) | Quick start/restart containers only |
+| `./deploy/setup.sh` | Remote server | Install Docker, drivers, dev tools (called by deploy-remote.sh) |
+
+### When to Use Each
+
+| Situation | Command |
+|-----------|---------|
+| First deploy to new server | `./deploy-remote.sh` (from local) |
+| Changed code locally | `./deploy-remote.sh` (from local) |
+| Restart after server reboot | `sudo ./scripts/start-inference.sh` (on server) |
+| Just restart containers | `sudo ./scripts/start-inference.sh` (on server) |
+
+### Running on Server
+
+```bash
+# SSH into your server
+ssh -p 22 user@your-server-ip
+
+# Navigate to the deployment directory
+cd ~/mycelia-inference
+
+# Start/restart the stack
+sudo ./scripts/start-inference.sh
+
+# Or if you're in the docker group:
+./scripts/start-inference.sh
+```
+
+**To avoid needing sudo:**
+```bash
+sudo usermod -aG docker $USER
+# Logout and login again
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### GPU Not Detected
+```bash
+# Check if nvidia-smi works
+nvidia-smi
+
+# If "command not found", drivers aren't installed
+# The setup script will auto-install, but needs reboot:
+sudo reboot
+```
+
+### Docker Permission Denied
+```bash
+# Run with sudo
+sudo ./scripts/start-inference.sh
+
+# Or add yourself to docker group (permanent fix)
+sudo usermod -aG docker $USER
+exit  # logout and login again
+```
+
+### "could not select device driver nvidia"
+The NVIDIA Container Toolkit isn't configured. Run:
+```bash
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+# Or on VMs without systemd:
+sudo pkill dockerd && sudo dockerd &
+```
+
+### Check Service Status
+```bash
+docker compose -f docker-compose.inference.yml ps
+docker compose -f docker-compose.inference.yml logs -f
+```
+
+---
+
+## 📊 Service Endpoints
+
+After successful deployment:
+
+| Service | URL | Health Check |
+|---------|-----|--------------|
+| Whisper STT | http://localhost:8081 | /health |
+| Diarization | http://localhost:8085 | /health |
+| Ollama | http://localhost:11434 | /api/tags |
+
+---
+
+## 🛠 Dev Tools Installed
+
+The setup script installs these tools on the server:
+- `zsh` + Oh My Zsh
+- `tmux` - Terminal multiplexer
+- `btop` - Beautiful system monitor
+- `nvtop` - GPU process monitor
+- `htop`, `ncdu`, `tree`, `jq`
+
+**Useful aliases** (after setup):
+```bash
+mstatus  # Show services & GPU status
+mlogs    # View container logs
+mup      # Start services
+mdown    # Stop services
+gpu      # nvidia-smi
+gpuw     # Watch GPU (updates every second)
+```
 
 ---
 

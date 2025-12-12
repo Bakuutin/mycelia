@@ -18,7 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 cpu = [
     "torch>=2.0.0",
-    "torchaudio>=2.0.0",
+    "torchaudio>=2.0.0,<2.2.0",
 ]
 
 cu121 = [

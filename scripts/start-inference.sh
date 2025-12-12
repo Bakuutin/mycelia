@@ -77,6 +77,7 @@ if ! check_docker; then
     fi
 
     # If still failed, try VFS fallback (common for Akash)
+    # If still failed, try VFS fallback (common for Akash)
     if ! check_docker; then
         echo -e "${YELLOW}Standard start failed. Retrying with VFS driver (for remote/Akash)...${NC}"
         pkill dockerd || true
