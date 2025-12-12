@@ -11,7 +11,8 @@ import logging
 
 sample_rate = 16000
 
-device = "cuda"
+
+device = os.getenv("WHISPER_DEVICE", "cuda")
 model_size = "large-v3"
 
 # Configure logging
@@ -31,8 +32,17 @@ if not API_KEY:
     logger.warning("API_KEY environment variable not set. Authentication disabled.")
 
 logger.info(f"Initializing WhisperModel with size: {model_size}, device: {device}")
-model = WhisperModel(model_size, device=device, num_workers=1, cpu_threads=1)
-logger.info("WhisperModel initialized successfully")
+try:
+    model = WhisperModel(model_size, device=device, num_workers=1, cpu_threads=1)
+    logger.info("WhisperModel initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize WhisperModel: {e}")
+    if device == "cuda":
+        logger.warning("Falling back to CPU")
+        device = "cpu"
+        model = WhisperModel(model_size, device="cpu", num_workers=1, cpu_threads=1)
+    else:
+        raise e
 
 # Authentication dependency
 async def verify_api_key(x_api_key: str = Header(None)):
@@ -40,15 +50,15 @@ async def verify_api_key(x_api_key: str = Header(None)):
     if not API_KEY:
         # If no API key is configured, allow all requests
         return True
-    
+
     if not x_api_key:
         logger.warning("Missing X-API-Key header")
         raise HTTPException(status_code=401, detail="Missing API key")
-    
+
     if x_api_key != API_KEY:
         logger.warning(f"Invalid API key provided: {x_api_key[:8]}...")
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
+
     return True
 
 def wav_to_array(source: io.BytesIO) -> np.ndarray:
@@ -125,6 +135,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "device": device, "model": model_size}
+
 @app.post("/transcribe")
 async def transcribe(files: list[UploadFile] = File(...), prompt: str = Form(None), _: bool = Depends(verify_api_key)):
     logger.info(f"Received transcription request with {len(files)} files")
@@ -184,5 +198,5 @@ async def transcribe(files: list[UploadFile] = File(...), prompt: str = Form(Non
 
 if __name__ == '__main__':
     import uvicorn
-    logger.info("Starting Whisper transcription server on 0.0.0.0:8087")
-    uvicorn.run(app, host='0.0.0.0', port=8087)
+    logger.info("Starting Whisper transcription server on 0.0.0.0:8081")
+    uvicorn.run(app, host='0.0.0.0', port=8081)
