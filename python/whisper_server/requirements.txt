@@ -4,3 +4,4 @@ numpy==1.24.3
 ffmpeg-python==0.2.0
 uvicorn[standard]==0.24.0
 python-multipart
+requests>=2.31.0

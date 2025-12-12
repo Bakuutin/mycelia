@@ -81,14 +81,18 @@ fi
 echo -e "${BLUE}Running remote setup...${NC}"
 ssh -p $SSH_PORT -t $REMOTE << EOF
     cd $REMOTE_DIR
+    set -e
+
+    # Symlink docker-compose.inference.yml to docker-compose.yml so setup.sh finds it
+    ln -sf docker-compose.inference.yml docker-compose.yml
 
     # Make scripts executable
-    chmod +x scripts/*.sh setup.sh connect.sh server-tools.sh
+    chmod +x scripts/*.sh deploy/*.sh
 
     # Run Setup (installs Docker, Drivers etc)
     # We pass --no-tools to skip heavy zsh/tmux if just deploying stack, or keep it if user wants full env.
     # Let's default to full setup for "straightforward" request.
-    ./setup.sh --gpu --no-clone
+    ./deploy/setup.sh --gpu --no-clone
 
     # Start Inference Stack
     echo -e "\n${GREEN}Starting Inference Stack...${NC}"

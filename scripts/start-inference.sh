@@ -8,6 +8,13 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# Determine Docker command (use sudo if not in docker group)
+if groups | grep -q "docker"; then
+    DOCKER_CMD="docker"
+else
+    DOCKER_CMD="sudo docker"
+fi
+
 echo -e "${BLUE}=== Inference Stack Startup ===${NC}"
 
 # Check for .env file
@@ -33,6 +40,63 @@ if grep -q "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" .env || ! grep -q "HF_TOKEN" .
     read -p "Continue anyway? (y/n) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+# Check and Auto-Start Docker
+echo -e "${BLUE}Checking Docker...${NC}"
+check_docker() {
+    if docker ps > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+if ! check_docker; then
+    echo -e "${YELLOW}Docker is not running. Attempting to start...${NC}"
+
+    # Try standard start
+    if command -v dockerd &> /dev/null; then
+        dockerd > /tmp/dockerd.log 2>&1 &
+
+        # Wait up to 10s
+        for i in {1..10}; do
+            if check_docker; then
+                echo -e "${GREEN}Docker started successfully.${NC}"
+                break
+            fi
+            sleep 1
+        done
+    else
+        # Try systemctl if dockerd command not found or as fallback
+        if command -v systemctl &> /dev/null; then
+             systemctl start docker || true
+             sleep 3
+        fi
+    fi
+
+    # If still failed, try VFS fallback (common for Akash)
+    if ! check_docker; then
+        echo -e "${YELLOW}Standard start failed. Retrying with VFS driver (for remote/Akash)...${NC}"
+        pkill dockerd || true
+        sleep 2
+        dockerd --storage-driver=vfs > /tmp/dockerd-vfs.log 2>&1 &
+
+        # Wait up to 15s
+        for i in {1..15}; do
+            if check_docker; then
+                echo -e "${GREEN}Docker started successfully (VFS mode).${NC}"
+                break
+            fi
+            sleep 1
+        done
+    fi
+
+    # Final Check
+    if ! check_docker; then
+        echo -e "${RED}ERROR: Could not start Docker Daemon.${NC}"
+        echo -e "${RED}Please check /tmp/dockerd.log or /tmp/dockerd-vfs.log${NC}"
         exit 1
     fi
 fi

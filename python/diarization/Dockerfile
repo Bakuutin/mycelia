@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
-    # portaudio19-dev \
-    # libasound2-dev \
+# portaudio19-dev \
+# libasound2-dev \
 
 WORKDIR /app
 
@@ -33,6 +33,9 @@ RUN uv sync --no-dev --extra ${PYTORCH_CUDA_VERSION}
 # Create directories
 RUN mkdir -p /app/debug /models
 
+# Copy application code
+COPY src src
+
 # Set environment variables
 ENV HF_HOME=/models
 ENV PYTHONPATH=/app
@@ -42,4 +45,4 @@ EXPOSE 8085
 
 # Run the service
 # Use shell form to allow environment variable expansion
-CMD uv run --extra ${PYTORCH_CUDA_VERSION} --no-dev simple-speaker-service 
+CMD uv run --extra ${PYTORCH_CUDA_VERSION} --no-dev simple-speaker-service

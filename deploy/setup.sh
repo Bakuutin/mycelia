@@ -40,30 +40,26 @@ while [[ $# -gt 0 ]]; do
         --ollama-only) SERVICES="ollama"; shift ;;
         --no-tools) INSTALL_TOOLS="no"; shift ;;
         --no-clone) SKIP_CLONE="yes"; shift ;;
-        --model) OLLAMA_MODEL="$2"; shift 2 ;;
         --help|-h)
             echo "Mycelia AI Services Setup"
-            echo ""
             echo "Usage: $0 [OPTIONS]"
-            echo ""
             echo "Options:"
             echo "  --gpu          GPU mode (default)"
             echo "  --cpu          CPU-only mode"
             echo "  --ollama-only  Only install Ollama"
             echo "  --no-tools     Skip zsh/tmux/btop installation"
             echo "  --model NAME   Ollama model (default: qwen2.5:7b)"
-            echo ""
-            echo "Model presets:"
-            echo "  llama3.2:3b                  - 4GB  (tiny)"
-            echo "  qwen2.5:7b                   - 8GB  (small, default)"
-            echo "  llama3.3:70b-instruct-q4_K_M - 16GB (medium)"
-            echo "  llama3.3:70b                 - 32GB (large)"
-            echo "  llama4:scout                 - 48GB (xlarge)"
             exit 0
             ;;
-        *) error "Unknown option: $1. Use --help for usage." ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# Ensure root privileges
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root. Attempting to restart with sudo..."
+   exec sudo "$0" "$@"
+fi
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════════════╗"
@@ -221,7 +217,23 @@ else
     if docker ps > /dev/null 2>&1; then
         log "Docker started successfully"
     else
-        error "Docker check failed. Error output: $(docker ps 2>&1)"
+        warn "Standard dockerd start failed. Logs:"
+        tail -n 5 /tmp/dockerd.log || true
+
+        warn "Retrying with vfs storage driver (common workaround for Akash/dind)..."
+        pkill dockerd || true
+        dockerd --storage-driver=vfs > /tmp/dockerd-vfs.log 2>&1 &
+        $PREPEND pkill dockerd || true
+        $PREPEND dockerd --storage-driver=vfs > /tmp/dockerd-vfs.log 2>&1 &
+        sleep 5
+
+        if docker ps > /dev/null 2>&1; then
+             log "Docker started successfully (vfs mode)"
+        else
+             echo -e "${RED}Docker Daemon Logs (vfs mode):${NC}"
+             tail -n 20 /tmp/dockerd-vfs.log || echo "No log file found"
+             error "Docker check failed. Please check logs above."
+        fi
     fi
 fi
 
@@ -243,17 +255,17 @@ if [[ "$MODE" == "gpu" ]]; then
             info "Installing NVIDIA Container Toolkit..."
 
             curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-                gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
+                $PREPEND gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
 
             curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
                 sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-                tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+                $PREPEND tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
 
-            apt-get update
-            apt-get install -y nvidia-container-toolkit
+            $PREPEND apt-get update
+            $PREPEND apt-get install -y nvidia-container-toolkit
 
-            nvidia-ctk runtime configure --runtime=docker 2>/dev/null || true
-            systemctl restart docker 2>/dev/null || true
+            $PREPEND nvidia-ctk runtime configure --runtime=docker 2>/dev/null || true
+            $PREPEND systemctl restart docker 2>/dev/null || true
 
             # Verify
             if docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
