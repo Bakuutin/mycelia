@@ -119,6 +119,33 @@ export function DateTimePicker({
     return date;
   };
 
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLInputElement>) => {
+      const text = e.clipboardData.getData("text");
+      
+      if (!text) return;
+
+      const trimmedText = text.trim();
+      
+
+      // Check if it looks like an ISO date or formatted date (contains separators)
+      // This avoids intercepting simple numbers like "2024" or "12"
+      if (/[-\/:T]/.test(trimmedText)) {
+        
+        const date = new Date(trimmedText);
+      
+        if (!isNaN(date.getTime())) {
+          
+          e.preventDefault();
+          setDate(date);
+        } else {
+          console.error("Invalid date from trimmed text");
+        }
+      }
+    },
+    [setDate],
+  );
+
   const handleDaySelect = (localDate: Date | undefined) => {
     if (localDate === undefined) {
       return;
@@ -228,6 +255,7 @@ export function DateTimePicker({
                   : parseInt(e.target.value) || new Date().getFullYear(),
               )}
             onFocus={(e) => e.target.select()}
+            onPaste={handlePaste}
             className="h-8 w-[80px]"
           />
         </div>
@@ -249,6 +277,7 @@ export function DateTimePicker({
                 e.target.value === "" ? "" : parseInt(e.target.value) || 1,
               )}
             onFocus={(e) => e.target.select()}
+            onPaste={handlePaste}
             className="h-8 w-[50px]"
           />
         </div>
@@ -268,6 +297,7 @@ export function DateTimePicker({
                 e.target.value === "" ? "" : parseInt(e.target.value) || 1,
               )}
             onFocus={(e) => e.target.select()}
+            onPaste={handlePaste}
             className="h-8 w-[50px]"
           />
         </div>
@@ -289,6 +319,7 @@ export function DateTimePicker({
                 e.target.value === "" ? "" : parseInt(e.target.value) || 0,
               )}
             onFocus={(e) => e.target.select()}
+            onPaste={handlePaste}
             className="h-8 w-[50px]"
           />
         </div>
@@ -310,6 +341,7 @@ export function DateTimePicker({
                 e.target.value === "" ? "" : parseInt(e.target.value) || 0,
               )}
             onFocus={(e) => e.target.select()}
+            onPaste={handlePaste}
             className="h-8 w-[50px]"
           />
         </div>
@@ -331,6 +363,7 @@ export function DateTimePicker({
                 e.target.value === "" ? "" : parseInt(e.target.value) || 0,
               )}
             onFocus={(e) => e.target.select()}
+            onPaste={handlePaste}
             className="h-8 w-[50px]"
           />
         </div>

@@ -55,8 +55,7 @@
     "sqlite3": "^5.1.7",
     "testcontainers": "^11.4.0",
     "yargs": "^18.0.0",
-    "zod": "^4.1.13",
-    "zod-to-json-schema": "^3.24.6"
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.8",

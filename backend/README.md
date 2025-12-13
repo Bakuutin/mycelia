@@ -71,25 +71,11 @@ uv run stt.py [--server https://override-stt.example]
 
 Use these when you want explicit counts from MongoDB without running `stt.py`:
 
-```bash
-# All pending chunks (includes silent ones the worker skips)
-cd backend
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo \
-  -a '{"action":"count","collection":"audio_chunks","query":{"transcribed_at":{"$eq":null},"processing_by":{"$eq":null}}}'
+(MCP call commands have been removed)
 
-# Pending chunks that still have speech (matches the STT progress bar total)
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo \
-  -a '{"action":"count","collection":"audio_chunks","query":{"transcribed_at":{"$eq":null},"processing_by":{"$eq":null},"vad.has_speech":true}}'
-```
 
 ### Ensure Audio Chunk Indexes
 
-The backend creates required indexes at startup, but you can rebuild them manually:
-
-```bash
-cd backend
-deno run --env -E='MYCELIA_*' --allow-net cli.ts mcp call mongo \
-  -a '{"action":"createIndex","collection":"audio_chunks","index":{"transcribed_at":1,"processing_by":1,"vad.has_speech":1,"start":-1},"options":{"name":"audio_chunks_pending_work","partialFilterExpression":{"transcribed_at":null,"processing_by":null,"vad.has_speech":true}}}'
-```
+The backend creates required indexes at startup.
 
 Helper indexes on `processing_by` and `transcribed_at` are created automatically alongside the partial compound index.

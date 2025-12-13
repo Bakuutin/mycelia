@@ -2,7 +2,7 @@ import { exit } from "node:process";
 import { Command } from "@cliffy/command";
 import { CompletionsCommand } from "@cliffy/command/completions";
 import { handleLogin } from "./cli/auth.ts";
-import { handleMCPCallTool, handleMCPListTools } from "./cli/mcp.ts";
+import { handleMCPListTools } from "./cli/mcp.ts";
 import { getConfig } from "./cli/config.ts";
 
 const root = new Command()
@@ -32,25 +32,6 @@ const root = new Command()
             const config = getConfig();
             await handleMCPListTools(config);
           }),
-      )
-      .command(
-        "call",
-        new Command()
-          .description("Call an MCP tool")
-          .arguments("<tool:string>")
-          .option(
-            "-a, --args <args>",
-            "Tool arguments as JSON string",
-          )
-          .action(
-            async (
-              options: { args?: string },
-              tool: string,
-            ) => {
-              const config = getConfig();
-              await handleMCPCallTool(config, tool, options.args);
-            },
-          ),
       ),
   );
 
