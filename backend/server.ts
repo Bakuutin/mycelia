@@ -15,12 +15,14 @@ import { WebSocketServer } from "npm:ws@^8.18.0";
 
 import { requestCounter } from "@/lib/telemetry.ts";
 import { handlePcmWebSocket } from "@/services/audio.websocket.server.ts";
+import { handleUpdatesWebSocket } from "@/services/updates.websocket.server.ts";
 import { setupResources } from "@/lib/resources/registry.ts";
 import { shutdownTelemetry } from "@/lib/telemetry.ts";
 import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { registerRoutes } from "./routes.ts";
 import { errorHandler } from "@/middleware/errorHandler.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -85,6 +87,8 @@ async function startServer(host: string, port: number, skipChecks = false) {
     await ensureAllCollectionsExist(db);
   }
 
+  startWorkers();
+
   const app = express();
   const httpServer = createHttpServer(app);
 
@@ -117,6 +121,15 @@ async function startServer(host: string, port: number, skipChecks = false) {
           }
         });
       });
+    } else if (url.pathname === "/ws") {
+      wss.handleUpgrade(request, socket, head, (ws: any) => {
+        handleUpdatesWebSocket(ws, request).catch((error) => {
+          console.error("WebSocket updates error:", error);
+          if (ws.readyState === 1) {
+            ws.close(1011, "Internal server error");
+          }
+        });
+      });
     } else {
       socket.destroy();
     }
@@ -142,6 +155,7 @@ async function startServer(host: string, port: number, skipChecks = false) {
     process.once(signal, async () => {
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
+      await stopWorkers();
       await shutdownTelemetry();
       cleanupLogging();
     });

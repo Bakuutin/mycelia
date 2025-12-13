@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { callResource } from "@/lib/api";
+import { api, callResource } from "@/lib/api";
 import { TimelineChart } from "@/components/timeline/TimelineChart";
 import { config } from "@/config";
 import { useObjects } from "@/modules/objects/useObjects";
@@ -8,6 +8,8 @@ import { useTimelineRange } from "@/stores/timelineRange";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useTimeline } from "@/hooks/useTimeline";
+import type { Model } from "@/types/llm";
+import type { Prompt } from "@/types/config";
 import {
   Tooltip,
   TooltipContent,
@@ -15,7 +17,17 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { X, Maximize2, CircleOff, RefreshCw, CalendarPlus, Loader2, Minimize2 } from "lucide-react";
+import {
+  X,
+  Maximize2,
+  CircleOff,
+  RefreshCw,
+  CalendarPlus,
+  Loader2,
+  Minimize2,
+  Wand2,
+} from "lucide-react";
+import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 
 const ToolWrapper = ({ tool }: { tool: any }) => {
   const Component = tool.component;
@@ -43,14 +55,24 @@ const TimelinePage = () => {
   const navigate = useNavigate();
   const { loading, error, objects } = useObjects();
   const { setRange } = useTimelineRange();
-  const { clearSelection: clearObjectSelection, selectedIds } = useObjectSelectionStore();
-  const { selection: timeSelection, clearSelection: clearTimeSelection } = useTimelineSelectionStore();
+  const { clearSelection: clearObjectSelection, selectedIds } =
+    useObjectSelectionStore();
+  const { selection: timeSelection, clearSelection: clearTimeSelection } =
+    useTimelineSelectionStore();
   const hasRescaledRef = useRef(false);
   const [recalculating, setRecalculating] = useState(false);
+  const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
+
   const timeline = useTimeline();
   const { zoomTo } = timeline;
   const hasObjectSelection = selectedIds.size > 0;
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
+
+  const isShortRange =
+    timeSelection.start &&
+    timeSelection.end &&
+    timeSelection.end.getTime() - timeSelection.start.getTime() <
+      24 * 60 * 60 * 1000;
 
   // Clear selection when navigating away
   useEffect(() => {
@@ -70,22 +92,42 @@ const TimelinePage = () => {
     if (!timeSelection.start || !timeSelection.end) return;
     setRecalculating(true);
     try {
-      await callResource("timeline", {
-        action: "recalculate",
-        start: timeSelection.start,
-        end: timeSelection.end,
+      await api.post("/api/jobs", {
+        type: "histRecalculation",
+        start: timeSelection.start.toISOString(),
+        end: timeSelection.end.toISOString(),
+        all: false,
       });
-      console.log("Recalculation triggered");
+      console.log("Recalculation job queued");
     } catch (e) {
-      console.error("Failed to recalculate:", e);
+      console.error("Failed to queue recalculation job:", e);
     } finally {
-      setRecalculating(false);
+      // Short delay to show feedback, as the job is async
+      setTimeout(() => setRecalculating(false), 500);
+    }
+  };
+
+  const handleSummarize = async (prompt?: string, model?: string) => {
+    if (!timeSelection.start || !timeSelection.end) return;
+
+    try {
+      await api.post("/api/jobs", {
+        type: "summarization",
+        start: timeSelection.start.toISOString(),
+        end: timeSelection.end.toISOString(),
+        prompt: prompt || undefined,
+        model: model || undefined,
+      });
+      console.log("Summarization job queued");
+    } catch (e) {
+      console.error("Failed to queue summarization job:", e);
+      throw e; // Let the dialog handle error
     }
   };
 
   const handleCreateEvent = () => {
     if (!timeSelection.start) return;
-    
+
     const params = new URLSearchParams();
     params.set("start", timeSelection.start.getTime().toString());
     if (timeSelection.end) {
@@ -115,8 +157,8 @@ const TimelinePage = () => {
 
     if (allTimes.length === 0) return;
 
-    const earliest = new Date(Math.min(...allTimes.map(t => t.getTime())));
-    const latest = new Date(Math.max(...allTimes.map(t => t.getTime())));
+    const earliest = new Date(Math.min(...allTimes.map((t) => t.getTime())));
+    const latest = new Date(Math.max(...allTimes.map((t) => t.getTime())));
 
     const duration = latest.getTime() - earliest.getTime();
     const padding = duration * 0.05;
@@ -133,8 +175,6 @@ const TimelinePage = () => {
       hasRescaledRef.current = true;
     }
   }, [loading, objects, handleZoomToFit]);
-
-
 
   if (loading) {
     return (
@@ -203,6 +243,30 @@ const TimelinePage = () => {
                     <p>Recalculate histograms</p>
                   </TooltipContent>
                 </Tooltip>
+
+                {isShortRange && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setIsSummarizeOpen(true)}
+                        >
+                          <Wand2 className="w-4 h-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Summarize range</p>
+                      </TooltipContent>
+                    </Tooltip>
+                    <SummarizeDialog
+                      open={isSummarizeOpen}
+                      onOpenChange={setIsSummarizeOpen}
+                      onSummarize={handleSummarize}
+                    />
+                  </>
+                )}
 
                 <Tooltip>
                   <TooltipTrigger asChild>

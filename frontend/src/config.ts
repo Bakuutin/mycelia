@@ -2,7 +2,7 @@ import type { Config } from "@/core/core";
 
 import { TimeLayer } from "@/modules/time/index";
 import {
-  ObjectsLayer,
+  ObjectsLayer, RefreshObjectsTool,
 } from "@/modules/objects/index";
 
 export const config: Config = {
@@ -11,5 +11,7 @@ export const config: Config = {
     ObjectsLayer(),
 
   ],
-  tools: [],
+  tools: [
+    RefreshObjectsTool,
+  ],
 };

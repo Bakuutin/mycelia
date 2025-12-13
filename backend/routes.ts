@@ -22,7 +22,6 @@ import { wellKnownOauthProtectedResourceHandler } from "@/routes/[.]well-known.o
 import { apiChatHandler } from "@/routes/api.chat.ts";
 import { apiJobsHandler } from "@/routes/api.jobs.ts";
 import { apiJobsIdHandler } from "@/routes/api.jobs.$id.ts";
-import { apiJobsIdProgressHandler } from "@/routes/api.jobs.$id.progress.ts";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
 
 export function registerRoutes(app: Express): void {
@@ -34,7 +33,6 @@ export function registerRoutes(app: Express): void {
   app.post("/api/chat", asyncHandler(apiChatHandler));
   app.post("/api/jobs", asyncHandler(apiJobsHandler));
   app.get("/api/jobs/:id", asyncHandler(apiJobsIdHandler));
-  app.get("/api/jobs/:id/progress", asyncHandler(apiJobsIdProgressHandler));
   app.get("/api/files/:id", apiFilesIdHandler);
   app.post("/api/files/upload", apiFilesUploadHandler);
   app.get("/api/audio/stream", apiAudioStreamHandler);

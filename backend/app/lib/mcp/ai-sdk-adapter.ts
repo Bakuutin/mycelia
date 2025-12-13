@@ -3,13 +3,6 @@ import { Auth } from "@/lib/auth/core.server.ts";
 import { z } from "zod";
 import { tool, Tool } from "ai";
 
-interface AiSdkToolMetadata {
-  resource: Resource<any, any>;
-  action?: string;
-}
-
-const toolMetadataMap = new Map<string, AiSdkToolMetadata>();
-
 function extractActionDescription(schema: any, actionValue: string): string | undefined {
   const def = schema._def || schema.def;
   if (def?.type === "object") {
@@ -25,13 +18,13 @@ function extractActionDescription(schema: any, actionValue: string): string | un
   return undefined;
 }
 
-export function resourceToAiSdkTools<Input, Output>(
+export function resourceToTools<Input, Output>(
   resource: Resource<Input, Output>,
   auth: Auth
-): Record<string, Tool> {
+): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> {
   const schema = resource.schemas.request;
   const def = schema.def as any;
-  const tools: Record<string, Tool> = {};
+  const tools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> = {};
 
   if ((def?.type === "union")) {
     const discriminator = def.discriminator;
@@ -62,9 +55,9 @@ export function resourceToAiSdkTools<Input, Output>(
              }
           }
 
-          tools[toolName] = tool({
+          tools[toolName] = {
             description: actionDescription || resource.description || actionValue,
-            parameters: inputSchema,
+            inputSchema: inputSchema,
             execute: async (args: any) => {
               const input = {
                 ...args,
@@ -72,7 +65,7 @@ export function resourceToAiSdkTools<Input, Output>(
               };
               return resource.use(input as any, auth);
             },
-          } as any);
+          };
         }
       }
     }
@@ -82,28 +75,41 @@ export function resourceToAiSdkTools<Input, Output>(
     }
   }
 
-  tools[resource.code] = tool({
+  tools[resource.code] = {
     description: resource.description,
-    parameters: schema,
+    inputSchema: schema,
     execute: async (args: any) => {
       return resource.use(args, auth);
     },
-  } as any);
-
+  };
   return tools;
+}
+
+export function createMCPToolsFromResources(
+  resources: Resource<any, any>[],
+  auth: Auth
+): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> {
+  let allTools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> = {};
+  for (const resource of resources) {
+    const resourceTools = resourceToTools(resource, auth);
+    allTools = { ...allTools, ...resourceTools };
+  }
+  return allTools;
 }
 
 export function createAiSdkToolsFromResources(
   resources: Resource<any, any>[],
   auth: Auth
 ): Record<string, Tool> {
-  let allTools: Record<string, Tool> = {};
-  
-  for (const resource of resources) {
-    const resourceTools = resourceToAiSdkTools(resource, auth);
-    allTools = { ...allTools, ...resourceTools };
+  const tools = createMCPToolsFromResources(resources, auth);
+  const aiSdkTools: Record<string, Tool> = {};
+  for (const [name, params] of Object.entries(tools)) {
+    aiSdkTools[name] = tool({
+      description: params.description,
+      inputSchema: params.inputSchema,
+      execute: params.execute,
+    });
   }
-  
-  return allTools;
+  return aiSdkTools;
 }
 

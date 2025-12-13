@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Clock, Home, Package, Settings, MessageSquare } from "lucide-react";
+import { Clock, Home, Package, Settings, MessageSquare, Activity } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player.tsx";
@@ -15,6 +15,7 @@ const Layout = () => {
     { name: "Timeline", path: "/timeline", icon: Clock },
     { name: "Chat", path: "/chat", icon: MessageSquare },
     { name: "Objects", path: "/objects", icon: Package },
+    { name: "Jobs", path: "/jobs", icon: Activity },
     { name: "Settings", path: "/settings", icon: Settings },
   ];
 

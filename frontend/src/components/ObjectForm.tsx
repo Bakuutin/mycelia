@@ -15,6 +15,8 @@ import {
   RefreshCcw,
   Trash2,
   X,
+  Wand2,
+  Loader2,
 } from "lucide-react";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 import { ObjectId } from "bson";
@@ -25,6 +27,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
+import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+import { api } from "@/lib/api";
+import { pollJob } from "@/lib/jobs";
+import { useQueryClient } from "@tanstack/react-query";
+import { objectKeys } from "@/hooks/useObjectQueries";
 
 interface ObjectFormProps {
   object: ObjectFormData;
@@ -109,12 +116,15 @@ function useDebouncedUpdate(
 export function ObjectForm(
   { object, onUpdate, onFieldUpdate }: ObjectFormProps,
 ) {
+  const queryClient = useQueryClient();
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
   const [newFieldType, setNewFieldType] = useState<
     "string" | "number" | "boolean"
   >("string");
   const [showAddField, setShowAddField] = useState(false);
+  const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
 
   const updateField = (field: string, value: any) => {
     if (onFieldUpdate) {
@@ -152,6 +162,37 @@ export function ObjectForm(
   const extraFields = Object.entries(object).filter(
     ([key]) => !KNOWN_FIELDS.has(key),
   );
+
+  const handleSummarize = async (prompt?: string, model?: string) => {
+    if (!object._id || !object.timeRanges?.[0]) return;
+
+    const range = object.timeRanges[0];
+    if (!range.start || !range.end) return;
+
+    setIsSummarizing(true);
+    try {
+      const response = await api.post<{ jobId: string; jobType: string }>("/api/jobs", {
+        type: "summarization",
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+        prompt: prompt || undefined,
+        model: model || undefined,
+        objectId: object._id.toString(),
+      });
+
+      // Wait for completion
+      await pollJob(response.jobId, response.jobType);
+
+      // Refetch the object from backend to get the updated description and version
+      queryClient.invalidateQueries({
+        queryKey: objectKeys.detail(object._id.toString())
+      });
+    } catch (e) {
+      console.error("Summarization job failed:", e);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
 
   const handleAddCustomField = () => {
     if (!newFieldName.trim()) return;
@@ -203,16 +244,50 @@ export function ObjectForm(
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2 relative">
         <Label htmlFor="details">Details</Label>
-        <textarea
-          id="details"
-          value={detailsValue}
-          onChange={(e) => setDetailsValue(e.target.value)}
-          placeholder="Optional details about this object"
-          className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
+        <div className="relative">
+          <textarea
+            id="details"
+            value={detailsValue}
+            onChange={(e) => setDetailsValue(e.target.value)}
+            placeholder="Optional details about this object"
+            className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring pr-10"
+          />
+          {object.isConversation && !detailsValue && object.timeRanges?.[0]?.start && object.timeRanges?.[0]?.end && (
+            <div className="absolute bottom-2 right-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-primary"
+                    onClick={() => setIsSummarizeOpen(true)}
+                    disabled={isSummarizing}
+                  >
+                    {isSummarizing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Auto-summarize conversation</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+        </div>
       </div>
+
+      <SummarizeDialog
+        open={isSummarizeOpen}
+        onOpenChange={setIsSummarizeOpen}
+        onSummarize={handleSummarize}
+        title="Summarize Conversation"
+        description="Generate a summary for this conversation based on its time range."
+      />
 
       <div className="flex gap-6">
         <div className="flex items-center space-x-2">

@@ -97,7 +97,6 @@
     "npm:vite@^6.3.5": "6.4.1_jiti@2.6.1_yaml@2.8.2_picomatch@4.0.3",
     "npm:vitest@^3.2.4": "3.2.4_jsdom@27.2.0_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2",
     "npm:yaml@^2.8.1": "2.8.2",
-    "npm:zod-to-json-schema@^3.25.0": "3.25.0_zod@4.1.13",
     "npm:zod@^4.1.12": "4.1.13",
     "npm:zustand@^5.0.2": "5.0.9_@types+react@18.3.27_react@18.3.1"
   },
@@ -6721,7 +6720,6 @@
       "npm:react@^18.3.1",
       "npm:tailwind-merge@^3.3.1",
       "npm:tailwindcss-animate@^1.0.7",
-      "npm:zod-to-json-schema@^3.25.0",
       "npm:zod@^4.1.12",
       "npm:zustand@^5.0.2"
     ],

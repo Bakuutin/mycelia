@@ -65,6 +65,12 @@ const chatCompletionRequestSchema = z.object({
   tools: z.array(toolSchema).optional(),
   tool_choice: toolChoiceSchema.optional(),
   parallel_tool_calls: z.boolean().optional(),
+  response_format: z
+    .union([
+      z.object({ type: z.literal("text") }),
+      z.object({ type: z.literal("json_object") }),
+    ])
+    .optional(),
 });
 
 const llmRequestSchema = z.discriminatedUnion("action", [

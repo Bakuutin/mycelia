@@ -26,7 +26,7 @@ export type Fixture = {
 
 export const testFixtures = new Map<any, Fixture>();
 
-function defineFixture(fixture: Fixture) {
+export function defineFixture(fixture: Fixture) {
   testFixtures.set(fixture.token, fixture);
 }
 

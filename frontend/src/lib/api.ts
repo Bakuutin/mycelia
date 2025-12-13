@@ -124,6 +124,9 @@ export class ApiClient {
 
 export const apiClient = new ApiClient();
 
+// Backwards compatibility alias
+export const api = apiClient;
+
 export const callResource = (resource: string, body: any) => {
   return apiClient.callResource(resource, body);
 };

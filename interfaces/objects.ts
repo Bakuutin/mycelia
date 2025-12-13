@@ -27,7 +27,7 @@ export const zObject = z.object({
   isRelationship: z.boolean().optional(),
   isPromise: z.boolean().optional(),
   isConversation: z.boolean().optional(),
-
+  agreed_upon_something: z.boolean().optional(),
 
   relationship: z.object({
     object: z.instanceof(ObjectId),
@@ -85,7 +85,8 @@ export type ObjectFormData = {
   isPerson?: boolean;
   isRelationship?: boolean;
   isPromise?: boolean;
-  
+  isConversation?: boolean;
+  agreed_upon_something?: boolean;
 
   relationship?: {
     object?: ObjectId;

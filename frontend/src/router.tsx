@@ -25,6 +25,7 @@ import AudioPlayerPage from "./pages/AudioPlayerPage";
 import AudioExportPage from "./pages/AudioExportPage";
 import MessengerPage from "./pages/MessengerPage";
 import OAuthConsentPage from "./pages/OAuthConsentPage";
+import JobsPage from "./pages/JobsPage";
 
 export const router = createBrowserRouter([
   {
@@ -42,6 +43,10 @@ export const router = createBrowserRouter([
       {
         path: "timeline",
         element: <TimelinePage />,
+      },
+      {
+        path: "jobs",
+        element: <JobsPage />,
       },
       {
         path: "messaging",

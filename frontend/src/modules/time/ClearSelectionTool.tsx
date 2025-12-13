@@ -21,3 +21,4 @@ export const ClearSelectionTool: Tool = {
   tooltip: "Clear timeline selection",
 };
 
+

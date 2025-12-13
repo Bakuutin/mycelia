@@ -10,8 +10,9 @@ import {
   Prompt,
   GetPromptResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { createMCPToolsFromResources, handleMCPToolCall } from "./adapter.ts";
+import { createMCPToolsFromResources } from "./ai-sdk-adapter.ts"
 import { EJSON } from "bson";
+import { z } from "zod";
 
 // Detect JSON-RPC message type
 export type JSONRPCMessageType =
@@ -83,14 +84,14 @@ export async function handleMCPRequest(
       }
 
       case "tools/list": {
-        // List all available tools using proper schemas from adapter
         const resources = resourceManager.listResources();
-        console.log(
-          `${resources.length} resources found: ${
-            resources.map((r) => r.code).join(", ")
-          }`,
-        );
-        const tools = createMCPToolsFromResources(resources);
+        const toolsMap = createMCPToolsFromResources(resources, auth);
+
+        const tools = Object.entries(toolsMap).map(([name, tool]) => ({
+          name,
+          description: tool.description,
+          inputSchema: z.toJSONSchema(tool.inputSchema),
+        }));
 
         return {
           jsonrpc: "2.0",
@@ -100,32 +101,70 @@ export async function handleMCPRequest(
       }
 
       case "tools/call": {
-        const { name, arguments: args } = request.params as {
+        const params = request.params as {
           name: string;
           arguments?: Record<string, any>;
         };
 
-        if (!name) {
+        if (!params || !params.name) {
           return {
             jsonrpc: "2.0",
             id: request.id,
             error: {
               code: -32602,
-              message: "Tool name is required",
+              message: "Invalid params: name is required",
             },
-          } as JSONRPCError;
+          };
         }
 
         const resources = resourceManager.listResources();
-        createMCPToolsFromResources(resources);
+        const toolsMap = createMCPToolsFromResources(resources, auth);
+        const tool = toolsMap[params.name];
 
-        const result = await handleMCPToolCall(name, auth, args ?? {});
+        if (!tool) {
+          return {
+            jsonrpc: "2.0",
+            id: request.id,
+            error: {
+              code: -32601,
+              message: `Tool not found: ${params.name}`,
+            },
+          };
+        }
 
-        return {
-          jsonrpc: "2.0",
-          id: request.id,
-          result,
-        };
+        try {
+          const result = await tool.execute(params.arguments || {});
+
+          // Format result for MCP
+          // If result is simple string, wrap in text content
+          // If result is object, stringify it
+          const content = typeof result === "string" 
+            ? result 
+            : EJSON.stringify(result, { relaxed: true });
+
+          return {
+            jsonrpc: "2.0",
+            id: request.id,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: content,
+                },
+              ],
+            },
+          };
+        } catch (error: any) {
+          return {
+            jsonrpc: "2.0",
+            id: request.id,
+            error: {
+              code: -32000,
+              message: error.message || "Internal error",
+              data: error.stack,
+            },
+          };
+        }
       }
 
       default:
@@ -134,42 +173,35 @@ export async function handleMCPRequest(
           id: request.id,
           error: {
             code: -32601,
-            message: `Unknown method: ${request.method}`,
+            message: "Method not found",
           },
-        } as JSONRPCError;
+        };
     }
-  } catch (error) {
+  } catch (error: any) {
     return {
       jsonrpc: "2.0",
       id: request.id,
       error: {
         code: -32603,
-        message: (error as Error).message,
+        message: "Internal JSON-RPC error",
+        data: error.message,
       },
-    } as JSONRPCError;
+    };
   }
 }
 
-// Handle MCP notifications (no response expected)
 export async function handleMCPNotification(
   notification: JSONRPCNotification,
 ): Promise<void> {
-  try {
-    switch (notification.method) {
-      case "initialized":
-        // Client has finished initialization
-        console.log("MCP client initialized");
-        break;
-
-      case "notifications/message":
-        // Handle client notification
-        console.log("Client notification:", notification.params);
-        break;
-
-      default:
-        console.warn(`Unknown notification method: ${notification.method}`);
-    }
-  } catch (error) {
-    console.error("Error handling notification:", error);
+  switch (notification.method) {
+    case "notifications/initialized":
+      // Client initialized
+      break;
+    case "notifications/cancelled":
+      // Request cancelled
+      break;
+    default:
+      // Unknown notification
+      break;
   }
 }
