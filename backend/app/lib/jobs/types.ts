@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Resolution } from "@/types/resolution.ts";
 
 export const JobTypeSchema = z.enum([
   "vad",
@@ -32,6 +33,7 @@ export const PipelineRecalculationJobDataSchema = z.object({
 export type PipelineRecalculationJobData = z.infer<
   typeof PipelineRecalculationJobDataSchema
 >;
+
 
 export const SummarizationJobDataSchema = z.object({
   type: z.literal("summarization"),

@@ -23,7 +23,7 @@ import {
 import { SmartBackButton } from "@/components/SmartBackButton";
 
 const updateModelSchema = z.object({
-  alias: z.enum(["small", "medium", "large"]),
+  alias: z.string(),
   name: z.string().min(1, "Name is required").max(
     100,
     "Name must be less than 100 characters",

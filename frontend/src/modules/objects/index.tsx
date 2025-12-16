@@ -128,9 +128,10 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
   const hasRelationshipData = object.relationship && object.subjectObject &&
     object.objectObject;
 
-  const rangeWidth = endX - startX;
+  let rangeWidth = endX - startX;
 
-  if (rangeWidth <= 0) return null;
+  if (Number.isNaN(rangeWidth) || rangeWidth <= 0) return null;
+  if (rangeWidth < 2) rangeWidth = 2;
 
   const height = laneHeight - 2;
   const x = startX;

@@ -9,8 +9,6 @@ export function useMessageRenderer(message: Message) {
     return registry.get(platformId) || registry.getDefault();
   }, [platformId]);
 
-  console.log("platform", platform);
-
   return platform?.MessageComponent;
 }
 

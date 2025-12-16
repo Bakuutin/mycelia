@@ -78,6 +78,19 @@ const HomePage = () => {
             Export audio segments as WAV files by selecting a time range
           </p>
         </Link>
+
+        <Link
+          to="/messaging"
+          className="p-6 border rounded-lg hover:border-primary transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-semibold">Messenger</h2>
+            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+          </div>
+          <p className="text-muted-foreground">
+            Chat history across platforms
+          </p>
+        </Link>
       </div>
 
       <div className="p-6 border rounded-lg bg-muted/50">

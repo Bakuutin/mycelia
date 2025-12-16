@@ -1,6 +1,6 @@
 import React from "react";
+import { useNavigate } from "react-router-dom";
 import type { Platform } from "../core/types.ts";
-import { Response } from "@/components/ai-elements/response";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { useFormattedTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
@@ -42,14 +42,14 @@ MessageContent.displayName = "MessageContent";
 
 function renderMessageText(text: any): React.ReactNode {
   if (typeof text === 'string') {
-      return <Response>{text}</Response>;
+      return <span className="whitespace-pre-wrap">{text}</span>;
   }
   
   if (Array.isArray(text)) {
     return (
         <div className="flex flex-col gap-1">
             {text.map((part, i) => {
-                if (typeof part === 'string') return <Response key={i}>{part}</Response>;
+                if (typeof part === 'string') return <span key={i} className="whitespace-pre-wrap">{part}</span>;
                 if (typeof part === 'object' && part !== null) {
                     if (part.text) {
                         if (part.type === 'bold') return <strong key={i}>{part.text}</strong>;
@@ -67,7 +67,7 @@ function renderMessageText(text: any): React.ReactNode {
   }
   
   if (typeof text === 'object' && text !== null && text.text) {
-      return <Response>{text.text}</Response>;
+      return <span className="whitespace-pre-wrap">{text.text}</span>;
   }
   
   return null;
@@ -75,6 +75,7 @@ function renderMessageText(text: any): React.ReactNode {
 
 // Ensure type handles children appropriately
 const DefaultMessageComponent: Platform["MessageComponent"] = ({ message, children }) => {
+  const navigate = useNavigate();
   const formattedDate = useFormattedTime(new Date(message.timestamp));
   const senderName = message.raw?.from || message.raw?.sender_name || "Unknown";
 
@@ -84,11 +85,30 @@ const DefaultMessageComponent: Platform["MessageComponent"] = ({ message, childr
       : (Array.isArray(message.text as any) && (message.text as any).length > 0) || (typeof message.text === 'object' && message.text !== null)
   );
 
+  const handleSenderClick = () => {
+    if (message.senderId) {
+      navigate(`/objects/${message.senderId.toString()}`);
+    }
+  };
+
   return (
     <Message isUser={false}>
         <div className="flex flex-col gap-1 max-w-[80%] min-w-0">
             <div className="flex items-center gap-2 mb-1 px-1">
-                <span className="font-semibold text-xs text-muted-foreground">{senderName}</span>
+                <span 
+                  className="font-semibold text-xs text-muted-foreground hover:text-foreground cursor-pointer underline-offset-2 hover:underline transition-colors"
+                  onClick={handleSenderClick}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleSenderClick();
+                    }
+                  }}
+                >
+                  {senderName}
+                </span>
                 <span className="text-[10px] text-muted-foreground opacity-70">{formattedDate}</span>
             </div>
             

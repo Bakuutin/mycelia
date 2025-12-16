@@ -16,7 +16,7 @@ const acknowledgeBatchSchema = z.object({
         z.object({
           id: z.instanceof(ObjectId),
           status: z.literal("done"),
-        }).passthrough(),
+        }).loose(),
         z.object({
           id: z.instanceof(ObjectId),
           status: z.literal("failed"),

@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, callResource } from "@/lib/api";
+import { subscribeToJob } from "@/lib/jobs";
 import {
   Dialog,
   DialogContent,
@@ -18,13 +20,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import type { Model } from "@/types/llm";
 import type { Prompt } from "@/types/config";
 
 interface SummarizeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSummarize: (prompt?: string, model?: string) => Promise<void>;
+  startDate: Date;
+  endDate: Date;
+  objectId?: string;
   title?: string;
   description?: string;
 }
@@ -32,18 +37,22 @@ interface SummarizeDialogProps {
 export function SummarizeDialog({
   open,
   onOpenChange,
-  onSummarize,
+  startDate,
+  endDate,
+  objectId,
   title = "Summarize Range",
   description = "Create a summary of all conversations within the selected time range.",
 }: SummarizeDialogProps) {
+  const navigate = useNavigate();
   const [summarizePrompt, setSummarizePrompt] = useState("");
   const [models, setModels] = useState<Model[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedPromptId, setSelectedPromptId] = useState<string>("custom");
-  const [loading, setLoading] = useState(false);
+  const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  // Fetch Models and Prompts when Dialog opens
   useEffect(() => {
     if (open) {
       const fetchData = async () => {
@@ -66,7 +75,6 @@ export function SummarizeDialog({
           setModels(modelsData);
           setPrompts(promptsData);
 
-          // Set default model if available
           if (modelsData.length > 0 && !selectedModel) {
             const defaultModel =
               modelsData.find((m: any) => m.alias === "medium") ||
@@ -75,11 +83,25 @@ export function SummarizeDialog({
           }
         } catch (e) {
           console.error("Failed to fetch models or prompts", e);
+          setError("Failed to load models and prompts");
         }
       };
       fetchData();
+    } else {
+      resetDialog();
     }
   }, [open]);
+
+  const resetDialog = () => {
+    setJobStatus(null);
+    setError(null);
+    setSummarizePrompt("");
+    setSelectedPromptId("custom");
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+  };
 
   const handlePromptChange = (promptId: string) => {
     setSelectedPromptId(promptId);
@@ -94,18 +116,78 @@ export function SummarizeDialog({
   };
 
   const handleSubmit = async () => {
-    setLoading(true);
+    setJobStatus("starting");
+    setError(null);
+
     try {
-      await onSummarize(summarizePrompt, selectedModel);
-      setSummarizePrompt("");
-      setSelectedPromptId("custom");
-      onOpenChange(false);
+      const response = await api.post("/api/jobs", {
+        type: "summarization",
+        start: startDate.toISOString(),
+        end: endDate.toISOString(),
+        prompt: summarizePrompt || undefined,
+        model: selectedModel || undefined,
+        objectId: objectId || undefined,
+      }) as { jobId?: string; jobType?: string };
+
+      const jobId = response.jobId;
+      if (!jobId) {
+        throw new Error("No job ID returned");
+      }
+
+      setJobStatus("waiting");
+
+      unsubscribeRef.current = subscribeToJob(jobId, (update) => {
+        setJobStatus(update.state);
+
+        if (update.state === "completed") {
+          setTimeout(() => {
+            onOpenChange(false);
+            if (objectId) {
+              navigate(`/objects/${objectId}`);
+            }
+          }, 1500);
+        } else if (update.state === "failed") {
+          setError(update.failedReason || "Summarization job failed");
+        }
+      });
     } catch (e) {
-      console.error("Summarization failed", e);
-    } finally {
-      setLoading(false);
+      console.error("Failed to start summarization", e);
+      setError("Failed to start summarization job");
+      setJobStatus(null);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, []);
+
+  const getButtonText = () => {
+    switch (jobStatus) {
+      case "starting":
+        return "Starting...";
+      case "waiting":
+        return "Waiting...";
+      case "active":
+        return "Processing...";
+      case "delayed":
+        return "Delayed...";
+      case "completed":
+        return "Completed";
+      case "failed":
+        return "Failed";
+      default:
+        return "Start Job";
+    }
+  };
+
+  const isJobInProgress = jobStatus && ["starting", "waiting", "active", "delayed"].includes(jobStatus);
+  const isJobComplete = jobStatus === "completed";
+  const isJobFailed = jobStatus === "failed";
+  const isButtonDisabled = isJobInProgress || isJobComplete;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -115,9 +197,27 @@ export function SummarizeDialog({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="grid w-full gap-4 py-4">
+          {error && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <XCircle className="h-4 w-4" />
+              {error}
+            </div>
+          )}
+
+          {isJobComplete && (
+            <div className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-600 dark:text-green-400">
+              <CheckCircle2 className="h-4 w-4" />
+              Summary completed successfully
+            </div>
+          )}
+
           <div className="grid gap-2">
             <Label htmlFor="model">Model</Label>
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
+            <Select 
+              value={selectedModel} 
+              onValueChange={setSelectedModel}
+              disabled={isJobInProgress || isJobComplete}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select model" />
               </SelectTrigger>
@@ -133,7 +233,11 @@ export function SummarizeDialog({
 
           <div className="grid gap-2">
             <Label htmlFor="prompt-select">Prompt Template</Label>
-            <Select value={selectedPromptId} onValueChange={handlePromptChange}>
+            <Select 
+              value={selectedPromptId} 
+              onValueChange={handlePromptChange}
+              disabled={isJobInProgress || isJobComplete}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select prompt" />
               </SelectTrigger>
@@ -162,16 +266,27 @@ export function SummarizeDialog({
                 if (selectedPromptId !== "custom") setSelectedPromptId("custom");
               }}
               className="min-h-[100px]"
+              disabled={isJobInProgress || isJobComplete}
             />
           </div>
         </div>
         <DialogFooter>
-          <Button onClick={handleSubmit} disabled={loading}>
-            {loading ? "Starting..." : "Start Job"}
+          <Button onClick={handleSubmit} disabled={isButtonDisabled}>
+            {isJobInProgress && (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            )}
+            {isJobComplete && (
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+            )}
+            {isJobFailed && (
+              <XCircle className="mr-2 h-4 w-4" />
+            )}
+            {getButtonText()}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
+
 

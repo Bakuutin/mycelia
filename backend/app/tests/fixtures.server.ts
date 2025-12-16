@@ -16,6 +16,7 @@ import { generateApiKey } from "@/lib/auth/tokens.ts";
 import { accessLogger } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
+import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 
 export type Fixture = {
   token: any;
@@ -151,6 +152,7 @@ defineFixture({
     const timeline = new TimelineResource();
     const processor = new ProcessorResource();
     const objects = new ObjectsResource();
+    const messenger = new MessengerResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
     processor.getRootDB = async () => isolatedDB;
@@ -160,6 +162,7 @@ defineFixture({
     defaultResourceManager.registerResource(timeline);
     defaultResourceManager.registerResource(processor);
     defaultResourceManager.registerResource(objects);
+    defaultResourceManager.registerResource(messenger);
 
     return {
       db: isolatedDB,

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useWebSocketSubscription } from "@/hooks/useWebSocket";
 import {
@@ -22,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
 
 type JobInfo = {
@@ -82,11 +83,39 @@ export default function JobsPage() {
     return `${(ms / 1000).toFixed(1)}s`;
   };
 
+  const handleCancelAll = async () => {
+    if (
+      !confirm(
+        "Are you sure you want to cancel all running jobs and clear queues? This action cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await api.callResource("worker_progress", {
+        action: "cancel_all",
+      });
+      refetch();
+    } catch (error) {
+      console.error("Failed to cancel jobs:", error);
+      alert("Failed to cancel jobs");
+    }
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">System Jobs</h1>
         <div className="flex items-center gap-2">
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleCancelAll}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Cancel All
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -125,7 +154,7 @@ export default function JobsPage() {
           </div>
 
           <div className="w-[100px]">
-             <Select value={limit.toString()} onValueChange={(v) => setLimit(parseInt(v))}>
+            <Select value={limit.toString()} onValueChange={(v) => setLimit(parseInt(v))}>
               <SelectTrigger>
                 <SelectValue placeholder="Limit" />
               </SelectTrigger>
@@ -151,7 +180,6 @@ export default function JobsPage() {
                 <TableHead>Created</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Progress</TableHead>
-                <TableHead className="text-right">Info</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -171,16 +199,24 @@ export default function JobsPage() {
                 jobs?.map((job) => (
                   <TableRow key={job.id}>
                     <TableCell>
-                      <Badge
-                        variant="secondary"
-                        className={getStatusColor(job.state)}
+                      <Link
+                        to={`/jobs/${job.id}?type=${job.type}`}
                       >
-                        {job.state}
-                      </Badge>
+                        <Badge
+                          variant="secondary"
+                          className={getStatusColor(job.state)}
+                        >
+                          {job.state}
+                        </Badge>
+                      </Link>
                     </TableCell>
                     <TableCell className="font-medium">{job.type}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
-                      {job.id}
+                      <Link
+                        to={`/jobs/${job.id}?type=${job.type}`}
+                      >
+                        {job.id}
+                      </Link>
                     </TableCell>
                     <TableCell className="text-sm">
                       {job.timestamp
@@ -208,21 +244,6 @@ export default function JobsPage() {
                         </div>
                       ) : (
                         "-"
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right text-xs max-w-[200px] truncate">
-                      {job.failedReason ? (
-                        <span className="text-red-500" title={job.failedReason}>
-                          {job.failedReason}
-                        </span>
-                      ) : (
-                        <span
-                          className="text-muted-foreground"
-                          title={JSON.stringify(job.data)}
-                        >
-                          {JSON.stringify(job.data).slice(0, 50)}
-                          {JSON.stringify(job.data).length > 50 ? "..." : ""}
-                        </span>
                       )}
                     </TableCell>
                   </TableRow>

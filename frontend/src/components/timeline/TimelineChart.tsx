@@ -4,6 +4,7 @@ import { useTimeline } from "@/hooks/useTimeline";
 import { TimeLayer } from "@/modules/time";
 import { ObjectsLayer } from "@/modules/objects";
 import { AudioLayer } from "@/modules/audio/index.tsx";
+import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
 
 interface TimelineChartProps {
   layers?: Layer[];
@@ -20,11 +21,11 @@ export const TimelineChart: React.FC<TimelineChartProps> = (
 
   const resolvedLayers = useMemo<Layer[]>(() => {
     if (layers && layers.length > 0) return layers;
-    return [TimeLayer(), ObjectsLayer(), AudioLayer()];
+    return [ProcessingLayer(), TimeLayer(), ObjectsLayer(), AudioLayer()];
   }, [layers]);
 
   return (
-    <div ref={containerRef} className={className}>
+    <div ref={containerRef} className={`relative ${className || ""}`}>
       <div className="flex flex-col gap-1">
         {resolvedLayers.map((layer, idx) => {
           const Component = layer.component;

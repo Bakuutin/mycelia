@@ -7,6 +7,7 @@ import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { zServerConfig } from "@interfaces/config.ts";
+import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { ObjectId } from "mongodb";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
@@ -84,22 +85,28 @@ export async function apiChatHandler(req: Request, res: Response) {
   // Save user message
   const lastMessage = messages[messages.length - 1];
   const userMessageId = new ObjectId();
+  
+  // Get or create Person for the user
+  // Use auth.principal as the external ID for mycelia platform
+  const userPersonResult = await getOrCreatePersonByMessengerId({
+    platform: "mycelia",
+    externalId: auth.principal,
+    name: "User",
+    auth,
+  });
+  const userPersonId = userPersonResult._id;
+  
   await db.collection("messages").insertOne({
     _id: userMessageId,
     chatId: new ObjectId(activeChatId),
-    role: "user", // Retain role for AI context, though new schema relies on senderId. 
-    // We might need to map 'role: user' to senderId = auth.principal (Person ID) later.
-    // For now, storing as raw or extending schema is needed if we want to keep AI roles.
-    // Let's store role in 'raw' or root if we allow flexible schema. 
-    // The new schema doesn't strictly forbid extra fields, but let's be cleaner.
-    senderId: new ObjectId(auth.principal), // Assuming principal is a valid ObjectId for a Person
-    content: lastMessage.content,
+    senderId: userPersonId,
+    text: typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content),
     platform: "mycelia",
     externalId: userMessageId.toString(),
     timestamp: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
-    raw: { role: "user" }
+    raw: { role: "user", content: lastMessage.content }
   });
 
   // Setup tools
@@ -138,12 +145,21 @@ export async function apiChatHandler(req: Request, res: Response) {
         const { content, usage: totalUsage } = result as any;
         
         const assistantMessageId = new ObjectId();
+        
+        // Get or create Person for the AI assistant
+        const assistantPersonResult = await getOrCreatePersonByMessengerId({
+          platform: "mycelia",
+          externalId: "system_assistant",
+          name: "Mycelia Assistant",
+          auth,
+        });
+        const assistantPersonId = assistantPersonResult._id;
+        
         await db.collection("messages").insertOne({
           _id: assistantMessageId,
           chatId: new ObjectId(activeChatId),
-          // role: "assistant", 
-          // senderId for assistant? Maybe null or a specific System Agent ID.
-          content,
+          senderId: assistantPersonId,
+          text: typeof content === 'string' ? content : JSON.stringify(content),
           platform: "mycelia",
           externalId: assistantMessageId.toString(),
           timestamp: new Date(),
@@ -151,7 +167,8 @@ export async function apiChatHandler(req: Request, res: Response) {
           updatedAt: new Date(),
           raw: { 
             role: "assistant",
-            usage: totalUsage 
+            usage: totalUsage,
+            content
           }
         });
         

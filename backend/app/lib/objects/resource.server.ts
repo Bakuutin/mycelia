@@ -73,7 +73,7 @@ const zObjectInput = z.object({
   })).optional().describe(
     "Time periods when this object/relationship was active. Multiple ranges supported for non-continuous periods."
   ),
-}).passthrough();
+}).loose();
 
 const createObjectSchema = z.object({
   action: z.literal("create").describe("Create a new object"),

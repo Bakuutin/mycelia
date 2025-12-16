@@ -11,6 +11,7 @@ from lib.api import session, ensure_authorized
 from lib.config import get_url
 import base64
 from tqdm import tqdm
+import re
 
 export_dir = Path('/Users/igor/Downloads/Telegram Lite/DataExport_2025-12-09 (1)/')
 
@@ -62,195 +63,148 @@ data['chats']['list'][0].keys()
 # ['name', 'type', 'id', 'messages']
 
 # %%
-# Select a chat to import (e.g., the first one for testing)
-# We can filter by name if needed
+# Import all chats from the export
 
-target_chat = None
-for chat in data['chats']['list']:
-    if chat['id'] == 84380711:
-        target_chat = chat
-        break
+all_chats = data['chats']['list']
+print(f"Found {len(all_chats)} chats to import")
 
-if not target_chat:
-    target_chat = data['chats']['list'][0]
+for chat_idx, target_chat in enumerate(all_chats):
+    messages = target_chat.get('messages', [])
 
-messages = target_chat['messages']
+    print(f"\n[{chat_idx + 1}/{len(all_chats)}] Importing chat: {target_chat.get('name', 'Unknown')} (ID: {target_chat['id']})")
+    print(f"Total messages: {len(messages)}")
 
-print(f"Importing chat: {target_chat.get('name', 'Unknown')} (ID: {target_chat['id']})")
-print(f"Total messages: {len(messages)}")
-
-#%%
-#%%
-
-# {'id': 2117043,
-#  'type': 'message',
-#  'date': '2025-03-13T10:58:53',
-#  'date_unixtime': '1741859933',
-#  'from': 'Petr Korolev',
-#  'from_id': 'user84380711',
-#  'text': 'Привет, Паша сказал мы даже с тобой виделись где-то?',
-#  'text_entities': [{'type': 'plain',
-#    'text': 'Привет, Паша сказал мы даже с тобой виделись где-то?'}]}
-# %%
-# 1. Create or Update Chat
-# Mapping Telegram chat to our Chat schema
-
-chat_doc = {
-    "platform": "telegram",
-    "externalId": target_chat['id'], # Preserve original type (likely number for TG)
-    "name": target_chat.get('name'),
-    "createdAt": datetime.now().isoformat(),
-    "updatedAt": datetime.now().isoformat(),
-    "raw": {k: v for k, v in target_chat.items() if k != 'messages'}
-}
-
-# Using mongo resource directly to upsert the chat
-# We want to find by platform+externalId, or insert
-upsert_chat_result = call_resource("mongo", {
-    "action": "updateOne",
-    "collection": "chats",
-    "query": {
-        "platform": "telegram",
-        "externalId": target_chat['id']
-    },
-    "update": {
-        "$set": chat_doc
-    },
-    "options": {
-        "upsert": True
-    }
-})
-
-print("Chat upsert result:", upsert_chat_result)
-#%%
-# We need the _id of the chat for the messages
-# If upserted, we might get upsertedId. If updated, we need to fetch it.
-if upsert_chat_result.get('upsertedId'):
-    chat_id = upsert_chat_result['upsertedId']
-else:
-    # Fetch the chat to get the ID
-    fetched_chat = call_resource("mongo", {
-        "action": "findOne",
-        "collection": "chats",
-        "query": {
-            "platform": "telegram",
-            "externalId": target_chat['id']
-        }
-    })
-    chat_id = fetched_chat['_id']
-
-print(f"Chat ObjectID: {chat_id}")
-
-# %%
-# 2. Import Messages
-
-messages = target_chat.get('messages', [])
-batch_size = 100
-operations = []
-
-print("Preparing messages...")
-
-for msg in tqdm(messages):
-    # Skip service messages without ID if necessary, but Telegram usually has IDs
-    if 'id' not in msg:
+    if not messages:
+        print("No messages, skipping.")
         continue
-        
-    msg_external_id = msg['id'] # Preserve original type
-    timestamp = datetime.fromtimestamp(int(msg['date_unixtime']))
-    
-    # Handle media
-    media_items = []
-    
-    # # Check for photo
-    # if 'photo' in msg:
-    #     photo_path = export_dir / msg['photo']
-    #     file_id = upload_file_to_gridfs(photo_path)
-    #     if file_id:
-    #         media_items.append({
-    #             "type": "image",
-    #             "url": f"/api/files/{file_id}",
-    #             "fileId": file_id,
-    #             "path": msg['photo'],
-    #             "fileName": Path(msg['photo']).name
-    #         })
 
-    # # Check for file
-    # if 'file' in msg:
-    #     file_path = export_dir / msg['file']
-    #     file_id = upload_file_to_gridfs(file_path)
-    #     if file_id:
-    #         # Determine type
-    #         media_type = "file"
-    #         if msg.get('media_type') in ['voice_message', 'audio_file']:
-    #             media_type = "audio"
-    #         elif msg.get('media_type') in ['video_message', 'video_file', 'animation']:
-    #             media_type = "video"
-    #         elif msg.get('media_type') == 'sticker':
-    #             media_type = "sticker"
-                
-    #         media_items.append({
-    #             "type": media_type,
-    #             "url": f"/api/files/{file_id}",
-    #             "fileId": file_id,
-    #             "path": msg['file'],
-    #             "fileName": Path(msg['file']).name,
-    #             "mimeType": msg.get('mime_type')
-    #         })
+    batch_size = 1000
+    message_batch = []
+    total_processed = 0
 
-    message_doc = {
-        "chatId": chat_id,
-        "platform": "telegram",
-        "externalId": msg_external_id,
-        "timestamp": timestamp,
-        "text": msg.get('text'), # Changed from content
-        "raw": msg, # Store full raw message
-        "createdAt": datetime.now(),
-        "updatedAt": datetime.now(),
-        "type": "message" # Explicit type for discrimination if needed
-    }
-    
-    if media_items:
-        message_doc["media"] = media_items
-    
-    # Add to bulk operations (upsert based on platform + chatId + externalId)
-    # Using updateOne with upsert to avoid duplicates
-    operations.append({
-        "updateOne": {
-            "filter": {
-                "platform": "telegram",
-                "chatId": chat_id,
-                "externalId": msg_external_id
-            },
-            "update": {
-                "$set": message_doc
-            },
-            "upsert": True
+    for msg in tqdm(messages, desc=f"Chat {chat_idx + 1}"):
+        # Skip service messages without ID
+        if 'id' not in msg:
+            continue
+
+        # Skip messages without sender
+        if 'from_id' not in msg:
+            continue
+
+        msg_external_id = msg['id']
+        timestamp = datetime.fromtimestamp(int(msg['date_unixtime']))
+
+        # Parse Telegram from_id (e.g., 'user84380711' -> 84380711)
+        from_id_str = msg['from_id']
+        match = re.search(r'\d+', from_id_str)
+        if not match:
+            continue
+
+        telegram_user_id = int(match.group())
+        sender_name = msg.get('from', f'Telegram User {telegram_user_id}')
+
+        # Extract text from message (handle both string and array formats)
+        text_content = msg.get('text')
+        if isinstance(text_content, list):
+            text_parts = []
+            for item in text_content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif isinstance(item, dict) and 'text' in item:
+                    text_parts.append(item['text'])
+            text_content = ''.join(text_parts)
+        elif text_content is None:
+            text_content = ''
+
+        # Handle media (currently commented out - can be enabled later)
+        media_items = []
+
+        # # Check for photo
+        # if 'photo' in msg:
+        #     photo_path = export_dir / msg['photo']
+        #     file_id = upload_file_to_gridfs(photo_path)
+        #     if file_id:
+        #         media_items.append({
+        #             "type": "image",
+        #             "url": f"/api/files/{file_id}",
+        #             "fileId": file_id,
+        #             "path": msg['photo'],
+        #             "fileName": Path(msg['photo']).name
+        #         })
+
+        # # Check for file
+        # if 'file' in msg:
+        #     file_path = export_dir / msg['file']
+        #     file_id = upload_file_to_gridfs(file_path)
+        #     if file_id:
+        #         media_type = "file"
+        #         if msg.get('media_type') in ['voice_message', 'audio_file']:
+        #             media_type = "audio"
+        #         elif msg.get('media_type') in ['video_message', 'video_file', 'animation']:
+        #             media_type = "video"
+        #         elif msg.get('media_type') == 'sticker':
+        #             media_type = "sticker"
+
+        #         media_items.append({
+        #             "type": media_type,
+        #             "url": f"/api/files/{file_id}",
+        #             "fileId": file_id,
+        #             "path": msg['file'],
+        #             "fileName": Path(msg['file']).name,
+        #             "mimeType": msg.get('mime_type')
+        #         })
+
+        # Build message for messenger resource
+        message_data = {
+            "platform": "telegram",
+            "chatExternalId": target_chat['id'],
+            "externalId": msg_external_id,
+            "timestamp": timestamp,
+            "senderExternalId": telegram_user_id,
+            "senderName": sender_name,
+            "text": text_content,
+            "raw": msg,
         }
-    })
 
-    if len(operations) >= batch_size:
-        call_resource("mongo", {
-            "action": "bulkWrite",
-            "collection": "messages",
-            "operations": operations
-        })
-        operations = []
+        # Add optional chat metadata (will be used if chat needs to be created)
+        if target_chat.get('name'):
+            message_data["chatName"] = target_chat.get('name')
 
-# Flush remaining
-if operations:
-    call_resource("mongo", {
-        "action": "bulkWrite",
-        "collection": "messages",
-        "operations": operations
-    })
+        if media_items:
+            message_data["media"] = media_items
 
-print("Import complete.")
+        message_batch.append(message_data)
 
+        # Process batch when it reaches batch_size
+        if len(message_batch) >= batch_size:
+            try:
+                result = call_resource("messenger", {
+                    "action": "upsertMessageBatch",
+                    "messages": message_batch
+                })
+                total_processed += result['processed']
+                print(f"  Batch: {result['processed']} processed, {result['created']} created (total: {total_processed}/{len(messages)})")
+                message_batch = []
+            except Exception as e:
+                print(f"  Error processing batch: {e}")
+                print(f"  Batch size: {len(message_batch)} messages")
+                if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                    print(f"  Response: {e.response.text[:500]}")
+                message_batch = []
 
-#%%
+    # Flush remaining messages for this chat
+    if message_batch:
+        try:
+            result = call_resource("messenger", {
+                "action": "upsertMessageBatch",
+                "messages": message_batch
+            })
+            total_processed += result['processed']
+            print(f"  Final batch: {result['processed']} processed, {result['created']} created (total: {total_processed}/{len(messages)})")
+        except Exception as e:
+            print(f"  Error processing final batch: {e}")
+            print(f"  Batch size: {len(message_batch)} messages")
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                print(f"  Response: {e.response.text[:500]}")
 
-messages[0]
-# %%
-
-
-# %%
+print("\nAll chats imported.")

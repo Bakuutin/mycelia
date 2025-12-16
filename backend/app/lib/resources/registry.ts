@@ -9,6 +9,7 @@ import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { ApiKeysResource } from "@/lib/auth/apikeys.resource.ts";
 import { WorkerProgressResource } from "@/lib/resources/worker.ts";
+import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -20,6 +21,7 @@ const resources = [
   ObjectsResource,
   ApiKeysResource,
   WorkerProgressResource,
+  MessengerResource,
 ];
 
 export async function setupResources(): Promise<void> {

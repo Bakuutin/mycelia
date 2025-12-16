@@ -32,7 +32,7 @@ export type Chat = z.infer<typeof zChat>;
 export const zMessage = zBase.extend({
   // Relationships
   chatId: z.instanceof(ObjectId), // Reference to Chat
-  senderId: z.instanceof(ObjectId).optional(), // Reference to Person object (if mapped)
+  senderId: z.instanceof(ObjectId), // Reference to Person object (required)
   
   // Content
   text: z.string().optional(), // Text content

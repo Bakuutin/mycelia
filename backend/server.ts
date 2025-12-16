@@ -23,6 +23,7 @@ import { registerRoutes } from "./routes.ts";
 import { errorHandler } from "@/middleware/errorHandler.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
+import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -80,14 +81,22 @@ function cleanupLogging() {
   }
 }
 
-async function startServer(host: string, port: number, skipChecks = false) {
+async function startServer(
+  host: string,
+  port: number,
+  skipChecks = false,
+  noWorkers = false,
+) {
   await setupResources();
   if (!skipChecks) {
     const db = await getRootDB();
     await ensureAllCollectionsExist(db);
   }
 
-  startWorkers();
+  if (!noWorkers) {
+    startWorkers();
+    await startChangeStreamWorker();
+  }
 
   const app = express();
   const httpServer = createHttpServer(app);
@@ -156,6 +165,7 @@ async function startServer(host: string, port: number, skipChecks = false) {
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await stopWorkers();
+      await stopChangeStreamWorker();
       await shutdownTelemetry();
       cleanupLogging();
     });
@@ -187,15 +197,26 @@ async function configureCli() {
             type: "boolean",
             describe: "Skip MongoDB collection and index checks.",
             default: false,
+          })
+          .option("workers", {
+            type: "boolean",
+            describe: "Start background workers.",
+            default: true,
           }),
       async (
-        args: ArgumentsCamelCase<{ host: string; port: number; skipChecks?: boolean }>,
+        args: ArgumentsCamelCase<{
+          host: string;
+          port: number;
+          skipChecks?: boolean;
+          workers?: boolean;
+        }>,
       ) => {
         try {
           const host = String(args.host);
           const port = Number(args.port);
           const skipChecks = Boolean(args.skipChecks);
-          await startServer(host, port, skipChecks);
+          const noWorkers = !args.workers;
+          await startServer(host, port, skipChecks, noWorkers);
           await new Promise((resolve) => {
             process.on("SIGINT", resolve);
             process.on("SIGTERM", resolve);

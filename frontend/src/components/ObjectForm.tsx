@@ -16,7 +16,7 @@ import {
   Trash2,
   X,
   Wand2,
-  Loader2,
+  Eye,
 } from "lucide-react";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 import { ObjectId } from "bson";
@@ -26,12 +26,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
-import { api } from "@/lib/api";
-import { pollJob } from "@/lib/jobs";
-import { useQueryClient } from "@tanstack/react-query";
-import { objectKeys } from "@/hooks/useObjectQueries";
 
 interface ObjectFormProps {
   object: ObjectFormData;
@@ -73,8 +76,81 @@ const formatValue = (value: any): string => {
   if (Array.isArray(value)) {
     return value.map((v) => String(v)).join(", ");
   }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
   return String(value);
 };
+
+const getNestedValue = (obj: any, path: string): any => {
+  const parts = path.split(".");
+  let current = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = current[part];
+  }
+  return current;
+};
+
+const setNestedValue = (obj: any, path: string, value: any): any => {
+  const parts = path.split(".");
+  const result = { ...obj };
+  let current = result;
+
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!(part in current) || typeof current[part] !== "object" || current[part] === null || Array.isArray(current[part])) {
+      current[part] = {};
+    } else {
+      current[part] = { ...current[part] };
+    }
+    current = current[part];
+  }
+
+  const lastPart = parts[parts.length - 1];
+  if (value === null) {
+    delete current[lastPart];
+    
+    for (let i = parts.length - 2; i >= 0; i--) {
+      let parentRef = result;
+      for (let j = 0; j <= i; j++) {
+        if (parentRef === null || parentRef === undefined) break;
+        parentRef = parentRef[parts[j]];
+      }
+      if (parentRef && Object.keys(parentRef).length === 0) {
+        let grandParentRef = result;
+        for (let j = 0; j < i; j++) {
+          grandParentRef = grandParentRef[parts[j]];
+        }
+        delete grandParentRef[parts[i]];
+      } else {
+        break;
+      }
+    }
+  } else {
+    current[lastPart] = value;
+  }
+
+  return result;
+};
+
+const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
+  const result: Array<[string, any]> = [];
+  
+  for (const [key, value] of Object.entries(obj)) {
+    const fullPath = prefix ? `${prefix}.${key}` : key;
+    
+    if (value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date) && !(value instanceof ObjectId)) {
+      const nested = flattenNestedFields(value, fullPath);
+      result.push(...nested);
+    } else {
+      result.push([fullPath, value]);
+    }
+  }
+  
+  return result;
+};
+
 
 // Custom hook for debounced auto-save
 function useDebouncedUpdate(
@@ -116,7 +192,6 @@ function useDebouncedUpdate(
 export function ObjectForm(
   { object, onUpdate, onFieldUpdate }: ObjectFormProps,
 ) {
-  const queryClient = useQueryClient();
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
   const [newFieldType, setNewFieldType] = useState<
@@ -124,13 +199,23 @@ export function ObjectForm(
   >("string");
   const [showAddField, setShowAddField] = useState(false);
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
-  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [selectedSummary, setSelectedSummary] = useState<any>(null);
 
   const updateField = (field: string, value: any) => {
-    if (onFieldUpdate) {
-      onFieldUpdate(field, value);
-    } else if (onUpdate) {
-      onUpdate({ [field]: value } as Partial<ObjectFormData>);
+    if (field.includes(".")) {
+      const updated = setNestedValue(object, field, value);
+      if (onUpdate) {
+        onUpdate(updated as Partial<ObjectFormData>);
+      } else if (onFieldUpdate) {
+        const topLevelKey = field.split(".")[0];
+        onFieldUpdate(topLevelKey, updated[topLevelKey]);
+      }
+    } else {
+      if (onFieldUpdate) {
+        onFieldUpdate(field, value);
+      } else if (onUpdate) {
+        onUpdate({ [field]: value } as Partial<ObjectFormData>);
+      }
     }
   };
 
@@ -159,40 +244,16 @@ export function ObjectForm(
     "details",
   );
 
-  const extraFields = Object.entries(object).filter(
-    ([key]) => !KNOWN_FIELDS.has(key),
+  const extraFieldsFlat = flattenNestedFields(
+    Object.fromEntries(
+      Object.entries(object).filter(([key]) => !KNOWN_FIELDS.has(key))
+    )
   );
-
-  const handleSummarize = async (prompt?: string, model?: string) => {
-    if (!object._id || !object.timeRanges?.[0]) return;
-
-    const range = object.timeRanges[0];
-    if (!range.start || !range.end) return;
-
-    setIsSummarizing(true);
-    try {
-      const response = await api.post<{ jobId: string; jobType: string }>("/api/jobs", {
-        type: "summarization",
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-        prompt: prompt || undefined,
-        model: model || undefined,
-        objectId: object._id.toString(),
-      });
-
-      // Wait for completion
-      await pollJob(response.jobId, response.jobType);
-
-      // Refetch the object from backend to get the updated description and version
-      queryClient.invalidateQueries({
-        queryKey: objectKeys.detail(object._id.toString())
-      });
-    } catch (e) {
-      console.error("Summarization job failed:", e);
-    } finally {
-      setIsSummarizing(false);
-    }
-  };
+  
+  const extraFields = extraFieldsFlat.filter(([path]) => {
+    const topLevelKey = path.split(".")[0];
+    return !KNOWN_FIELDS.has(topLevelKey);
+  });
 
   const handleAddCustomField = () => {
     if (!newFieldName.trim()) return;
@@ -206,7 +267,17 @@ export function ObjectForm(
       value = newFieldValue;
     }
 
-    updateField(newFieldName, value);
+    if (newFieldName.includes(".")) {
+      const updated = setNestedValue(object, newFieldName, value);
+      if (onUpdate) {
+        onUpdate(updated as Partial<ObjectFormData>);
+      } else if (onFieldUpdate) {
+        const topLevelKey = newFieldName.split(".")[0];
+        onFieldUpdate(topLevelKey, updated[topLevelKey]);
+      }
+    } else {
+      updateField(newFieldName, value);
+    }
 
     setNewFieldName("");
     setNewFieldValue("");
@@ -215,8 +286,22 @@ export function ObjectForm(
   };
 
   const handleDeleteCustomField = (fieldName: string) => {
-    // Use the actual field name with value null to remove it
-    updateField(fieldName, null);
+    if (fieldName.includes(".")) {
+      const updated = setNestedValue(object, fieldName, null);
+      if (onUpdate) {
+        onUpdate(updated as Partial<ObjectFormData>);
+      } else if (onFieldUpdate) {
+        const topLevelKey = fieldName.split(".")[0];
+        const topLevelValue = updated[topLevelKey];
+        if (topLevelValue !== undefined) {
+          onFieldUpdate(topLevelKey, topLevelValue);
+        } else {
+          onFieldUpdate(topLevelKey, null);
+        }
+      }
+    } else {
+      updateField(fieldName, null);
+    }
   };
 
   return (
@@ -244,50 +329,145 @@ export function ObjectForm(
         </div>
       </div>
 
-      <div className="space-y-2 relative">
+      <div className="space-y-2">
         <Label htmlFor="details">Details</Label>
-        <div className="relative">
-          <textarea
-            id="details"
-            value={detailsValue}
-            onChange={(e) => setDetailsValue(e.target.value)}
-            placeholder="Optional details about this object"
-            className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring pr-10"
-          />
-          {object.isConversation && !detailsValue && object.timeRanges?.[0]?.start && object.timeRanges?.[0]?.end && (
-            <div className="absolute bottom-2 right-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-primary"
-                    onClick={() => setIsSummarizeOpen(true)}
-                    disabled={isSummarizing}
-                  >
-                    {isSummarizing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Wand2 className="h-4 w-4" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Auto-summarize conversation</p>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          )}
-        </div>
+        <textarea
+          id="details"
+          value={detailsValue}
+          onChange={(e) => setDetailsValue(e.target.value)}
+          placeholder="Optional details about this object"
+          className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
       </div>
 
       <SummarizeDialog
         open={isSummarizeOpen}
         onOpenChange={setIsSummarizeOpen}
-        onSummarize={handleSummarize}
+        startDate={object.timeRanges?.[0]?.start || new Date()}
+        endDate={object.timeRanges?.[0]?.end || new Date()}
+        objectId={object._id?.toString()}
         title="Summarize Conversation"
         description="Generate a summary for this conversation based on its time range."
       />
+
+      <Dialog open={selectedSummary !== null} onOpenChange={(open) => !open && setSelectedSummary(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Summary Details</DialogTitle>
+          </DialogHeader>
+          {selectedSummary && (
+            <div className="space-y-4">
+              
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-sm font-medium">Model</Label>
+                  <div className="mt-1 text-sm">
+                    {selectedSummary.model} ({selectedSummary.modelName})
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Generated</Label>
+                  <div className="mt-1 text-sm">
+                    {new Date(selectedSummary.date).toLocaleString([], {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {selectedSummary.usage && (
+                <div>
+                  <Label className="text-sm font-medium">Token Usage</Label>
+                  <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Prompt</div>
+                      <div className="font-medium">{selectedSummary.usage.promptTokens.toLocaleString()}</div>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Completion</div>
+                      <div className="font-medium">{selectedSummary.usage.completionTokens.toLocaleString()}</div>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Total</div>
+                      <div className="font-medium">{selectedSummary.usage.totalTokens.toLocaleString()}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedSummary.prompt && (
+                <div>
+                  <Label className="text-sm font-medium">System Prompt</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+                    {selectedSummary.prompt}
+                  </div>
+                </div>
+              )}
+
+              {selectedSummary.jobId && (
+                <div>
+                  <Label className="text-sm font-medium">Job ID</Label>
+                  <div className="mt-1 text-sm font-mono text-muted-foreground">
+                    {selectedSummary.jobId}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {object.summaries && object.summaries.length > 0 && (
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">{object.summaries.length > 1 ? 'Summaries' : 'Summary'}</Label>
+          <div className="space-y-3">
+            {[...object.summaries].reverse().map((summary, index) => (
+              <div
+                key={index}
+                className="border rounded-lg p-4 space-y-3 bg-muted/30"
+              >
+                <div className="text-sm whitespace-pre-wrap">{summary.text}</div>
+                <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">Model:</span>
+                    <span>{summary.model} ({summary.modelName})</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">Date:</span>
+                    <span>
+                      {new Date(summary.date).toLocaleString([], {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  {(summary.usage || summary.prompt || summary.jobId) && (
+                    <Button 
+                      variant="link" 
+                      size="sm"
+                      onClick={() => setSelectedSummary(summary)}
+                      className="p-0 h-auto"
+                    >
+                      <span className="text-xs text-muted-foreground hover:text-foreground">
+                        See all details...
+                      </span>
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-6">
         <div className="flex items-center space-x-2">
@@ -769,9 +949,7 @@ export function ObjectForm(
       </div>
 
       <div className="space-y-2">
-        {extraFields.length > 0 && (
-          <Label className="text-sm font-medium">Custom Fields</Label>
-        )}
+
         {showAddField && (
           <div className="border rounded-lg p-4 space-y-3 bg-muted/50">
             <div className="grid grid-cols-2 gap-3">
@@ -855,34 +1033,75 @@ export function ObjectForm(
 
         {extraFields.length > 0 && (
           <div className="border rounded-lg divide-y">
-            {extraFields.map(([key, value]) => (
-              <div
-                key={key}
-                className="p-3 grid grid-cols-[auto_1fr_auto_auto] gap-3 items-center"
-              >
-                <div className="font-mono text-sm font-medium">{key}</div>
-                <div className="text-sm text-muted-foreground truncate">
-                  {formatValue(value)}
-                </div>
-                <div className="text-xs text-muted-foreground font-mono bg-muted px-2 py-1 rounded">
-                  {getTypeString(value)}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDeleteCustomField(key)}
-                  className="h-8 w-8 p-0"
+            {extraFields.map(([key, value]) => {
+              const valueType = getTypeString(value);
+              const isBoolean = valueType === "boolean";
+              const isNumber = valueType === "number";
+              const isString = valueType === "string";
+              const isArray = valueType.includes("[]");
+              
+              return (
+                <div
+                  key={key}
+                  className="p-3 grid grid-cols-[auto_1fr_auto] gap-3 items-center"
                 >
-                  <Trash2 className="w-4 h-4 text-destructive" />
-                </Button>
-              </div>
-            ))}
+                  <div className="font-mono text-sm font-medium">{key}</div>
+                  {isBoolean ? (
+                    <select
+                      value={String(value)}
+                      onChange={(e) => {
+                        const newValue = e.target.value === "true";
+                        updateField(key, newValue);
+                      }}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : isNumber ? (
+                    <Input
+                      type="number"
+                      step="any"
+                      value={value ?? ""}
+                      onChange={(e) => {
+                        const numValue = e.target.value === "" ? null : parseFloat(e.target.value);
+                        updateField(key, numValue);
+                      }}
+                      className="text-sm"
+                    />
+                  ) : isArray ? (
+                    <Input
+                      value={formatValue(value)}
+                      readOnly
+                      className="text-sm bg-muted"
+                      title="Array values are not directly editable"
+                    />
+                  ) : (
+                    <Input
+                      value={typeof value === "string" ? value : String(value ?? "")}
+                      onChange={(e) => {
+                        updateField(key, e.target.value);
+                      }}
+                      className="text-sm"
+                    />
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDeleteCustomField(key)}
+                    className="h-8 w-8 p-0"
+                  >
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  </Button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
       {/* Add Buttons Section */}
-      <div className="flex flex-wrap gap-2 pt-4 border-t">
+      <div className="flex flex-wrap gap-2 pt-4">
         <Button
           variant="outline"
           size="sm"
@@ -926,6 +1145,17 @@ export function ObjectForm(
           <Plus className="w-4 h-4 mr-2" />
           Add Time Range
         </Button>
+
+        {object.isConversation && object.timeRanges?.[0]?.start && object.timeRanges?.[0]?.end && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsSummarizeOpen(true)}
+          >
+            <Wand2 className="w-4 h-4 mr-2" />
+            Generate Summary
+          </Button>
+        )}
 
         {!showAddField && (
           <Button

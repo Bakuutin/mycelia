@@ -362,6 +362,82 @@ export async function fetchTimelineData(
   };
 }
 
+export async function getStaleRanges(
+  auth: Auth,
+  resolution: Resolution,
+  start?: Date,
+  end?: Date,
+): Promise<Array<{ start: Date; end: Date }>> {
+  const mongo = await getMongoResource(auth);
+  const binSize = RESOLUTION_TO_MS[resolution];
+
+  const query: any = { stale: true };
+  if (start && end) {
+    query.start = { $gte: start, $lt: end };
+  }
+
+  const staleBuckets = await mongo({
+    action: "find",
+    collection: `histogram_${resolution}`,
+    query,
+    options: { sort: { start: 1 } },
+  });
+
+  if (staleBuckets.length === 0) {
+    return [];
+  }
+
+  const ranges: Array<{ start: Date; end: Date }> = [];
+  let currentRangeStart: Date = staleBuckets[0].start;
+  let currentRangeEnd: Date = new Date(staleBuckets[0].start.getTime() + binSize);
+
+  for (let i = 1; i < staleBuckets.length; i++) {
+    const bucket = staleBuckets[i];
+    const bucketStart = bucket.start;
+
+    if (bucketStart.getTime() === currentRangeEnd.getTime()) {
+      currentRangeEnd = new Date(bucketStart.getTime() + binSize);
+    } else {
+      ranges.push({ start: currentRangeStart, end: currentRangeEnd });
+      currentRangeStart = bucketStart;
+      currentRangeEnd = new Date(bucketStart.getTime() + binSize);
+    }
+  }
+
+  ranges.push({ start: currentRangeStart, end: currentRangeEnd });
+
+  return ranges;
+}
+
+export function splitRangeIntoChunks(
+  start: Date,
+  end: Date,
+  resolution: Resolution,
+): Array<{ start: Date; end: Date }> {
+  const chunkSize = (resolution === "5min" || resolution === "1hour")
+    ? 7 * 24 * 60 * 60 * 1000
+    : 28 * 24 * 60 * 60 * 1000;
+
+  const duration = end.getTime() - start.getTime();
+
+  if (duration <= chunkSize) {
+    return [{ start, end }];
+  }
+
+  const chunks: Array<{ start: Date; end: Date }> = [];
+  let currentStart = start;
+
+  while (currentStart.getTime() < end.getTime()) {
+    const currentEnd = new Date(
+      Math.min(currentStart.getTime() + chunkSize, end.getTime()),
+    );
+    chunks.push({ start: currentStart, end: currentEnd });
+    currentStart = currentEnd;
+  }
+
+  return chunks;
+}
+
 export async function updateAllHistogram(
   auth: Auth,
   start?: Date,

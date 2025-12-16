@@ -46,18 +46,32 @@ export const zObject = z.object({
     name: z.string().optional(),
   })).optional(),
   
+  summaries: z.array(z.object({
+    text: z.string(),
+    model: z.string(),
+    modelName: z.string(),
+    date: z.date(),
+    prompt: z.string().optional(),
+    usage: z.object({
+      promptTokens: z.number(),
+      completionTokens: z.number(),
+      totalTokens: z.number(),
+    }).optional(),
+    jobId: z.string().optional(),
+  })).optional(),
+  
   metadata: z.object({
     extractedWith: z.object({
       model: z.string(),
       timestamp: z.date(),
     }).optional(),
     // Allow other metadata
-  }).passthrough().optional(),
+  }).loose().optional(),
   
   createdAt: z.date(),
   updatedAt: z.date(),
   version: z.number().optional(),
-}).passthrough().refine(
+}).loose().refine(
   (data) => {
     if (data.isPromise) {
       return data.isRelationship === true &&
@@ -101,6 +115,20 @@ export type ObjectFormData = {
     start: Date;
     end?: Date;
     name?: string;
+  }>;
+  
+  summaries?: Array<{
+    text: string;
+    model: string;
+    modelName: string;
+    date: Date;
+    prompt?: string;
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    };
+    jobId?: string;
   }>;
   
   version?: number;

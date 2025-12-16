@@ -278,7 +278,7 @@ export function DateTimePicker({
               )}
             onFocus={(e) => e.target.select()}
             onPaste={handlePaste}
-            className="h-8 w-[50px]"
+            className="h-8 w-[43px]"
           />
         </div>
         <div>
@@ -298,7 +298,7 @@ export function DateTimePicker({
               )}
             onFocus={(e) => e.target.select()}
             onPaste={handlePaste}
-            className="h-8 w-[50px]"
+            className="h-8 w-[43px]"
           />
         </div>
         <div>
@@ -320,7 +320,7 @@ export function DateTimePicker({
               )}
             onFocus={(e) => e.target.select()}
             onPaste={handlePaste}
-            className="h-8 w-[50px]"
+            className="h-8 w-[43px]"
           />
         </div>
         <div>
@@ -342,7 +342,7 @@ export function DateTimePicker({
               )}
             onFocus={(e) => e.target.select()}
             onPaste={handlePaste}
-            className="h-8 w-[50px]"
+            className="h-8 w-[43px]"
           />
         </div>
         <div>
@@ -364,7 +364,7 @@ export function DateTimePicker({
               )}
             onFocus={(e) => e.target.select()}
             onPaste={handlePaste}
-            className="h-8 w-[50px]"
+            className="h-8 w-[43px]"
           />
         </div>
 

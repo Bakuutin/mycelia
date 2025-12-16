@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, callResource } from "@/lib/api";
 import { TimelineChart } from "@/components/timeline/TimelineChart";
@@ -8,6 +8,7 @@ import { useTimelineRange } from "@/stores/timelineRange";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useTimeline } from "@/hooks/useTimeline";
+// import { useTimelineRecalc } from "@/hooks/useTimelineRecalc";
 import type { Model } from "@/types/llm";
 import type { Prompt } from "@/types/config";
 import {
@@ -28,6 +29,10 @@ import {
   Wand2,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+
+// Yes, it's module level
+// We wanted it that way :)
+let hasZoomedToFit = false;
 
 const ToolWrapper = ({ tool }: { tool: any }) => {
   const Component = tool.component;
@@ -59,11 +64,11 @@ const TimelinePage = () => {
     useObjectSelectionStore();
   const { selection: timeSelection, clearSelection: clearTimeSelection } =
     useTimelineSelectionStore();
-  const hasRescaledRef = useRef(false);
   const [recalculating, setRecalculating] = useState(false);
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
 
   const timeline = useTimeline();
+  // const { processingRanges } = useTimelineRecalc(); // Moved to ProcessingLayer
   const { zoomTo } = timeline;
   const hasObjectSelection = selectedIds.size > 0;
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
@@ -104,24 +109,6 @@ const TimelinePage = () => {
     } finally {
       // Short delay to show feedback, as the job is async
       setTimeout(() => setRecalculating(false), 500);
-    }
-  };
-
-  const handleSummarize = async (prompt?: string, model?: string) => {
-    if (!timeSelection.start || !timeSelection.end) return;
-
-    try {
-      await api.post("/api/jobs", {
-        type: "summarization",
-        start: timeSelection.start.toISOString(),
-        end: timeSelection.end.toISOString(),
-        prompt: prompt || undefined,
-        model: model || undefined,
-      });
-      console.log("Summarization job queued");
-    } catch (e) {
-      console.error("Failed to queue summarization job:", e);
-      throw e; // Let the dialog handle error
     }
   };
 
@@ -168,11 +155,11 @@ const TimelinePage = () => {
   }, [objects, zoomTo]);
 
   useEffect(() => {
-    if (!loading && objects && objects.length > 0 && !hasRescaledRef.current) {
+    if (!loading && objects && objects.length > 0 && !hasZoomedToFit) {
       setTimeout(() => {
         handleZoomToFit();
       }, 500);
-      hasRescaledRef.current = true;
+      hasZoomedToFit = true;
     }
   }, [loading, objects, handleZoomToFit]);
 
@@ -263,7 +250,8 @@ const TimelinePage = () => {
                     <SummarizeDialog
                       open={isSummarizeOpen}
                       onOpenChange={setIsSummarizeOpen}
-                      onSummarize={handleSummarize}
+                      startDate={timeSelection.start || new Date()}
+                      endDate={timeSelection.end || new Date()}
                     />
                   </>
                 )}
@@ -322,7 +310,9 @@ const TimelinePage = () => {
         </div>
 
         <div className="border rounded-lg p-2">
-          <TimelineChart timeline={timeline} />
+          <TimelineChart
+            timeline={timeline}
+          />
         </div>
       </div>
     </TooltipProvider>

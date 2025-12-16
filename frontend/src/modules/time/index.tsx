@@ -186,6 +186,8 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
         const left = Math.min(x1, x2);
         const width = Math.abs(x2 - x1);
 
+        if (Number.isNaN(width)) return null;
+
         return { left, width };
       }, [selection, scale, transform]);
 

@@ -33,66 +33,12 @@ const ListJobsSchema = z.object({
   limit: z.number().optional(),
 });
 
-// Use a discriminated union if possible, but for mixed schemas where discriminator is optional, 
-// we need to be careful.
-// UpdateProgressSchema has optional action 'update_progress', or undefined.
-// ListJobsSchema has required action 'list'.
-//
-// Zod unions try each schema in order.
-// If input is { action: 'list', ... }, it fails UpdateProgressSchema (action mismatch).
-// Then it tries ListJobsSchema.
-//
-// If input is { jobId: '...', ... } (no action), it matches UpdateProgressSchema.
-//
-// The error suggests it tried to match ListJobsSchema against { action: "list" } but failed on other fields?
-// No, the error shows it failed to match the input against EITHER schema.
-//
-// The error details show "invalid_union" with errors for both branches.
-//
-// Branch 0 (UpdateProgressSchema):
-// - "invalid_value" at ["action"]: expected "update_progress" (input had "list")
-//
-// Branch 1 (ListJobsSchema):
-// - "invalid_type" at ["types"]: expected array, received null (input had types: null?)
-//
-// Ah, the error message says:
-// path: ["types"], message: "Invalid input: expected array, received null"
-//
-// This means the frontend sent `types: null` explicitly?
-// Or maybe `undefined` serialized as `null` in JSON?
-//
-// Let's check JobsPage.tsx:
-// types: filterType === "all" ? undefined : [filterType],
-//
-// If undefined is sent in JSON.stringify, the key is omitted.
-// So input would be { action: "list", limit: 50 }.
-//
-// Wait, if the key is missing, z.array(...).optional() should handle it.
-// UNLESS the input actually has `types: null`.
-//
-// The error says "received null". So `types` key exists and is null.
-//
-// In backend/app/lib/resources/worker.ts:
-// types: z.array(JobTypeSchema).optional()
-//
-// .optional() handles undefined, but NOT null.
-// .nullable() handles null.
-//
-// If the API client or some middleware converts undefined to null, that's the issue.
-// Or if JSON.stringify preserves it as null? No, JSON.stringify({a: undefined}) -> {}.
-//
-// Let's check how api.callResource sends data.
-// It uses EJSON.stringify(body).
-// EJSON might serialize undefined differently or the frontend logic result is actually null?
-//
-// In JobsPage.tsx:
-// filterType === "all" ? undefined : [filterType]
-//
-// If filterType is "all", it returns undefined.
-//
-// Let's make the schema more permissive: .nullable().optional()
+const CancelAllJobsSchema = z.object({
+  action: z.literal("cancel_all"),
+});
 
-const RequestSchema = z.union([UpdateProgressSchema, ListJobsSchema]);
+
+const RequestSchema = z.union([UpdateProgressSchema, ListJobsSchema, CancelAllJobsSchema]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
 
@@ -120,6 +66,18 @@ export class WorkerProgressResource
   };
 
   async use(input: WorkerProgressRequest): Promise<void | JobInfo[]> {
+    // Handle "cancel_all" action
+    if ("action" in input && input.action === "cancel_all") {
+      const types = JobTypeSchema.options;
+      for (const type of types) {
+        const queue = getQueue(type);
+        // We use obliterate to clear the queue completely.
+        // force: true is required if there are active jobs.
+        await queue.obliterate({ force: true });
+      }
+      return;
+    }
+
     // Handle "list" action
     if ("action" in input && input.action === "list") {
       const types = input.types || JobTypeSchema.options;
@@ -129,7 +87,7 @@ export class WorkerProgressResource
         "delayed",
         "paused",
         "failed",
-        "completed", // include completed by default? might be too many.
+        "completed",
       ];
       // Default statuses if not provided: active, waiting, delayed, failed.
       // If user asks for 'list', they likely want to see what's happening.
@@ -201,8 +159,16 @@ export class WorkerProgressResource
     });
   }
 
-  extractActions(): { path: string[]; actions: string[] }[] {
-    return [{ path: [], actions: ["read", "write"] }];
+  extractActions(input: WorkerProgressRequest): { path: string[]; actions: string[] }[] {
+    switch (input.action) {
+      case "list":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "cancel_all":
+        return [{ path: ["jobs"], actions: ["write"] }];
+      case "update_progress":
+        return [{ path: [], actions: ["write"] }];
+    }
+    return [{ path: ["jobs"], actions: ["read", "write"] }];
   }
 }
 
