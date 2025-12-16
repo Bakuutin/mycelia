@@ -36,13 +36,11 @@ Click **Apply** to generate the summary. The AI will process the audio transcrip
 If you have an existing conversation object (marked with "Is Conversation"):
 
 1. Open the conversation object
-2. **Clear the Details field** - delete any existing description text
-3. A **magic wand icon** (✨) will appear in the bottom-right corner of the empty Details field
-4. Click the magic wand to open the summarization dialog
-5. The conversation's time range will be used automatically
-6. Select a prompt and click Apply to generate a summary
+2. Click the "Generate Summary" button
+3. Select a model and prompt
+4. Click "Apply"
+5. The summary will be generated and displayed in the conversation object
 
-The generated summary will be filled into the Details field.
 
 ## Creating Custom Prompts
 
@@ -63,15 +61,3 @@ Your new prompt will appear in the dropdown list when summarizing conversations.
 - `frontend/src/components/dialogs/SummarizeDialog.tsx` - Summarization dialog component
 - `frontend/src/pages/TimelinePage.tsx` - Timeline interface with selection handling
 - `frontend/src/modules/time/index.tsx` - Time range selection tools
-
-## How to add a new Summary
-
-1. Open an existing conversation
-
-2. Click the "Generate Summary" button
-
-3. Select a model and prompt
-
-4. Click "Apply"
-
-5. The summary will be generated and displayed in the conversation object
