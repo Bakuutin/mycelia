@@ -312,6 +312,7 @@ const TimelinePage = () => {
         <div className="border rounded-lg p-2">
           <TimelineChart
             timeline={timeline}
+            layers={config.layers}
           />
         </div>
       </div>
