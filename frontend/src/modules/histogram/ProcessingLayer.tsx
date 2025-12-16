@@ -17,6 +17,7 @@ export const ProcessingLayer = (): Layer => {
           start: new Date(range.start),
           end: new Date(range.end),
           addedAt: range.addedAt,
+          key: range.key,
         };
       });
 
@@ -42,7 +43,7 @@ export const ProcessingLayer = (): Layer => {
 
             return (
               <rect
-                key={`${range.start.toISOString()}-${range.end.toISOString()}`}
+                key={range.key}
                 x={renderX}
                 y={0}
                 width={renderWidth}

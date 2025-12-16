@@ -121,8 +121,7 @@ export const authenticateOr401 = async (
   const auth = await authenticate(req);
 
   if (!auth) {
-    res.status(401).json({ error: "Token is missing or invalid" });
-    throw new Error("Unauthorized");
+    permissionDenied("Token is missing or invalid");
   }
 
   return auth;

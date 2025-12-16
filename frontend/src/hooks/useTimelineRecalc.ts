@@ -38,6 +38,7 @@ export function useTimelineRecalc() {
         start,
         end,
         addedAt: Date.now(),
+        key: document._id.toString(),
       }]);
     },
     true,
