@@ -1,12 +1,13 @@
+from __future__ import annotations
+
 import os
 import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Any, Dict, Optional
-from datetime import datetime
+from typing import Any, Dict
 import requests
-from lib.resources import call_resource
-from lib.api import api_client
+
+from jobs.vad import VadJobData
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +23,9 @@ MYCELIA_API_KEY = os.environ.get("MYCELIA_API_KEY")
 
 class JobRequest(BaseModel):
     jobId: str
-    data: Dict[str, Any]
+    data: VadJobData
+
+
 
 
 def update_progress(job_id: str, job_type: str, progress: Dict[str, Any]):

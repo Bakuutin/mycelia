@@ -1,26 +1,19 @@
 import { expect } from "@std/expect";
-import { action } from "@/routes/api.resource.$name.tsx";
+import { apiResourceHandler } from "@/routes/api.resource.$name.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-
-Deno.test("Resource route - should require POST method", async () => {
-  const request = new Request("http://localhost/api/resource/test", {
-    method: "GET",
-  });
-  const params = { name: "test" };
-
-  const response = await action({ request, params } as any);
-  expect(response.status).toBe(405);
-});
+import { callExpressHandler } from "@/tests/express-helpers.ts";
 
 Deno.test("Resource route - should require resource name", async () => {
-  const request = new Request("http://localhost/api/resource/", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
-  });
-  const params = { name: undefined };
-
-  const response = await action({ request, params } as any);
+  const response = await callExpressHandler(
+    apiResourceHandler,
+    "http://localhost/api/resource/",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {},
+      params: { name: "" },
+    },
+  );
   expect(response.status).toBe(400);
 
   const data = await response.json();
@@ -33,17 +26,19 @@ Deno.test(
   withFixtures([
     "AdminAuthHeaders",
   ], async (authHeaders) => {
-    const request = new Request("http://localhost/api/resource/nonexistent", {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
+    const response = await callExpressHandler(
+      apiResourceHandler,
+      "http://localhost/api/resource/nonexistent",
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: {},
+        params: { name: "nonexistent" },
       },
-      body: JSON.stringify({}),
-    });
-    const params = { name: "nonexistent" };
-
-    const response = await action({ request, params } as any);
+    );
     expect(response.status).toBe(404);
 
     const data = await response.json();
@@ -58,7 +53,8 @@ Deno.test(
     "AdminAuthHeaders",
     "Mongo",
   ], async (authHeaders) => {
-    const request = new Request(
+    const response = await callExpressHandler(
+      apiResourceHandler,
       "http://localhost/api/resource/mongo",
       {
         method: "POST",
@@ -66,16 +62,14 @@ Deno.test(
           ...authHeaders,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
+        body: {
           action: "count",
           collection: "audio_chunks",
           query: {},
-        }),
+        },
+        params: { name: "mongo" },
       },
     );
-    const params = { name: "mongo" };
-
-    const response = await action({ request, params } as any);
     expect(response.status).toBe(200);
 
     const data = await response.json();

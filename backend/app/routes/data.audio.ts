@@ -35,11 +35,20 @@ export async function dataAudioHandler(req: Request, res: Response) {
       return;
     }
 
-    const queryParams = zAudioQueryParams.parse({
-      start: startParam,
-      lastId: lastIdParam,
-      limit: limitParam,
-    });
+    let queryParams;
+    try {
+      queryParams = zAudioQueryParams.parse({
+        start: startParam,
+        lastId: lastIdParam,
+        limit: limitParam,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid start parameter" });
+        return;
+      }
+      throw error;
+    }
 
     const startDate = new Date(queryParams.start);
     const limit: number = 1;
@@ -56,7 +65,7 @@ export async function dataAudioHandler(req: Request, res: Response) {
         action: "find",
         collection: "audio_chunks",
         query: filter,
-        options: { sort: { start: 1 }, limit, hint: "start_1" } as any,
+        options: { sort: { start: 1 }, limit } as any,
       });
 
     let segments: any[] = [];
@@ -98,6 +107,12 @@ export async function dataAudioHandler(req: Request, res: Response) {
     const response = { segments };
     res.json(zAudioResponse.parse(response));
   } catch (error) {
+    if (error instanceof globalThis.Response) {
+      const status = error.status;
+      const body = await error.json().catch(() => ({}));
+      res.status(status === 403 ? 401 : status).json(body);
+      return;
+    }
     if (error instanceof Error && error.message === "Unauthorized") {
       return;
     }

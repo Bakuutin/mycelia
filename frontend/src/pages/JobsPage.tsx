@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -23,8 +23,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2 } from "lucide-react";
+import { RefreshCw, Trash2, Play } from "lucide-react";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { FormField } from "@/components/forms/FormField";
 
 type JobInfo = {
   id: string;
@@ -39,9 +40,68 @@ type JobInfo = {
   failedReason?: string;
 };
 
+type VadJobFormData = {
+  limit: number;
+  batchSize: number;
+  originalId?: string;
+  start?: Date;
+  end?: Date;
+};
+
 export default function JobsPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [limit, setLimit] = useState<number>(50);
+
+  const [vadFormData, setVadFormData] = useState<VadJobFormData>({
+    limit: 1000,
+    batchSize: 100,
+  });
+
+  const launchVadMutation = useMutation({
+    mutationFn: async (data: VadJobFormData) => {
+      const jobData: any = {
+        type: "vad",
+        limit: data.limit,
+        batchSize: data.batchSize,
+      };
+
+      if (data.originalId) {
+        jobData.originalId = data.originalId;
+      }
+      if (data.start) {
+        jobData.start = data.start.toISOString();
+      }
+      if (data.end) {
+        jobData.end = data.end.toISOString();
+      }
+
+      const response = await api.post("/api/jobs", jobData);
+      return response.data;
+    },
+    onSuccess: () => {
+      setVadFormData({
+        limit: 1000,
+        batchSize: 100,
+      });
+      refetch();
+    },
+  });
+
+  const handleLaunchVad = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (vadFormData.limit < 1 || vadFormData.limit > 10000) {
+      alert("Limit must be between 1 and 10000");
+      return;
+    }
+
+    if (vadFormData.batchSize < 1 || vadFormData.batchSize > 1000) {
+      alert("Batch size must be between 1 and 1000");
+      return;
+    }
+
+    launchVadMutation.mutate(vadFormData);
+  };
 
   const { data: jobs, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["jobs", filterType, limit],
@@ -129,6 +189,148 @@ export default function JobsPage() {
           </Button>
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Launch VAD Job</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleLaunchVad} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                label="Limit"
+                htmlFor="vad-limit"
+                error={
+                  vadFormData.limit < 1 || vadFormData.limit > 10000
+                    ? "Must be between 1 and 10000"
+                    : undefined
+                }
+              >
+                <Input
+                  id="vad-limit"
+                  type="number"
+                  value={vadFormData.limit}
+                  onChange={(e) =>
+                    setVadFormData({
+                      ...vadFormData,
+                      limit: parseInt(e.target.value) || 0,
+                    })
+                  }
+                  placeholder="1000"
+                />
+              </FormField>
+
+              <FormField
+                label="Batch Size"
+                htmlFor="vad-batch-size"
+                error={
+                  vadFormData.batchSize < 1 || vadFormData.batchSize > 1000
+                    ? "Must be between 1 and 1000"
+                    : undefined
+                }
+              >
+                <Input
+                  id="vad-batch-size"
+                  type="number"
+                  value={vadFormData.batchSize}
+                  onChange={(e) =>
+                    setVadFormData({
+                      ...vadFormData,
+                      batchSize: parseInt(e.target.value) || 0,
+                    })
+                  }
+                  placeholder="100"
+                />
+              </FormField>
+            </div>
+
+            <FormField
+              label="Original ID (Optional)"
+              htmlFor="vad-original-id"
+            >
+              <Input
+                id="vad-original-id"
+                value={vadFormData.originalId || ""}
+                onChange={(e) =>
+                  setVadFormData({
+                    ...vadFormData,
+                    originalId: e.target.value || undefined,
+                  })
+                }
+                placeholder="Filter by specific audio file"
+              />
+            </FormField>
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                label="Start Date (Optional)"
+                htmlFor="vad-start"
+              >
+                <DateTimePicker
+                  value={vadFormData.start}
+                  onChange={(date) =>
+                    setVadFormData({
+                      ...vadFormData,
+                      start: date,
+                    })
+                  }
+                  placeholder="No start date filter"
+                />
+              </FormField>
+
+              <FormField
+                label="End Date (Optional)"
+                htmlFor="vad-end"
+              >
+                <DateTimePicker
+                  value={vadFormData.end}
+                  onChange={(date) =>
+                    setVadFormData({
+                      ...vadFormData,
+                      end: date,
+                    })
+                  }
+                  placeholder="No end date filter"
+                />
+              </FormField>
+            </div>
+
+            <Button
+              type="submit"
+              disabled={launchVadMutation.isPending}
+              className="w-full"
+            >
+              {launchVadMutation.isPending ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Launching...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-2" />
+                  Launch VAD Job
+                </>
+              )}
+            </Button>
+
+            {launchVadMutation.isError && (
+              <div className="text-sm text-red-500">
+                Failed to launch job:{" "}
+                {launchVadMutation.error instanceof Error
+                  ? launchVadMutation.error.message
+                  : "Unknown error"}
+              </div>
+            )}
+
+            {launchVadMutation.isSuccess && (
+              <div className="text-sm text-green-500">
+                Job launched successfully! Job ID:{" "}
+                {launchVadMutation.data?.jobId}
+              </div>
+            )}
+          </form>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

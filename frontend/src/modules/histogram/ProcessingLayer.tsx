@@ -7,7 +7,7 @@ export const ProcessingLayer = (): Layer => {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { activeRanges } = useTimelineRecalc();
 
-      if (!activeRanges || activeRanges.size === 0) {
+      if (!activeRanges || activeRanges.length === 0) {
         return null;
       }
 
@@ -23,11 +23,11 @@ export const ProcessingLayer = (): Layer => {
 
       return (
         <svg className="w-full h-full pointer-events-none absolute top-0 left-0 z-50" width={width} height={40}>
-          {ranges.map((range) => {
+          {ranges.map((range, index) => {
             const transformedScale = transform.rescaleX(scale);
             const x = transformedScale(range.start);
             const x2 = transformedScale(range.end);
-            let width = x2 - x;
+            const width = x2 - x;
 
             if (isNaN(x) || isNaN(x2) || isNaN(width)) return null;
 

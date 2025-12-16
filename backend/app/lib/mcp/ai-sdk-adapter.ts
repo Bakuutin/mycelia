@@ -113,3 +113,19 @@ export function createAiSdkToolsFromResources(
   return aiSdkTools;
 }
 
+export function resourceToAiSdkTools<Input, Output>(
+  resource: Resource<Input, Output>,
+  auth: Auth
+): Record<string, Tool> {
+  const tools = resourceToTools(resource, auth);
+  const aiSdkTools: Record<string, Tool> = {};
+  for (const [name, params] of Object.entries(tools)) {
+    aiSdkTools[name] = tool({
+      description: params.description,
+      inputSchema: params.inputSchema,
+      execute: params.execute,
+    });
+  }
+  return aiSdkTools;
+}
+

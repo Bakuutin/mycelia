@@ -2,6 +2,10 @@ import { Job, Queue, Worker } from "bullmq";
 import { ObjectId } from "mongodb";
 import { redis } from "@/lib/redis.ts";
 import type { JobData, JobType, JobResult } from "./types.ts";
+import { JobDataSchema } from "./types.ts";
+import type { z } from "zod";
+
+type JobDataInput = z.input<typeof JobDataSchema>;
 
 const queues = new Map<JobType, Queue<JobData>>();
 
@@ -36,16 +40,17 @@ export function getQueue(type: JobType): Queue<JobData> {
 }
 
 export async function enqueueJob(
-  data: JobData,
+  data: JobDataInput,
   options?: {
     priority?: number;
     jobId?: string;
   },
 ): Promise<Job<JobData>> {
   const jobId = options?.jobId || new ObjectId().toString();
-  const queue = getQueue(data.type);
+  const parsedData = JobDataSchema.parse(data) as JobData;
+  const queue = getQueue(parsedData.type);
 
-  return queue.add(data.type, data, {
+  return queue.add(parsedData.type, parsedData, {
     priority: options?.priority,
     jobId,
   });

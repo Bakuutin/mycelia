@@ -1,7 +1,8 @@
 import time
 import torch
 from datetime import datetime, UTC
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
+from pydantic import BaseModel
 from lib.resources import call_resource
 from chunking import read_codec, sample_rate
 
@@ -17,6 +18,14 @@ model, utils = torch.hub.load(
  collect_chunks) = utils
 
 VAD_THRESHOLD = 0.5
+
+
+class VadJobData(BaseModel):
+    limit: int = 1000
+    batchSize: int = 100
+    originalId: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
 
 
 @torch.no_grad()
@@ -54,14 +63,14 @@ def apply_updates(updates):
     })
 
 
-def process_vad_job(job_id: str, data: Dict[str, Any], progress_callback: Callable) -> Dict[str, Any]:
+def process_vad_job(job_id: str, data: VadJobData, progress_callback: Callable) -> Dict[str, Any]:
     start_time = time.time()
 
-    limit = data.get("limit", 1000)
-    batch_size = data.get("batchSize", 100)
-    original_id = data.get("originalId")
-    start_date = data.get("start")
-    end_date = data.get("end")
+    limit = data.limit
+    batch_size = data.batchSize
+    original_id = data.originalId
+    start_date = data.start
+    end_date = data.end
 
     query = {
         "vad": None,

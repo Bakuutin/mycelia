@@ -10,6 +10,7 @@ import {
   ResourcePath,
 } from "./resources.ts";
 import { EJSON } from "bson";
+import { redis } from "@/lib/redis.ts";
 
 export interface APIKey {
   hashedKey: string;
@@ -32,12 +33,24 @@ class AccessLogger {
       actions: string[];
     }[],
   ) {
-    console.log({
-      principal: auth.principal,
-      resource: resource.code,
-      actions,
-    });
-    // TODO: access log
+    try {
+      const timestamp = new Date().toISOString();
+      const fields: string[] = [
+        "principal",
+        auth.principal,
+        "resource",
+        resource.code,
+        "actions",
+        JSON.stringify(actions),
+        "timestamp",
+        timestamp,
+      ];
+
+      await redis.xadd("access_logs", "*", ...fields);
+    } catch (error) {
+      console.error("[AccessLogger] Failed to write access log to Redis stream:", error);
+      throw error;
+    }
   }
 }
 

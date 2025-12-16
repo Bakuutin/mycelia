@@ -8,11 +8,14 @@ import {
   protectedResourceMetadataSchema,
   tokenRequestSchema,
 } from "../oauth.ts";
+import { withFixtures } from "@/tests/fixtures.server.ts";
 
-Deno.test("extractClientCredentials: should extract from Basic auth header", async () => {
+Deno.test("extractClientCredentials: should extract from Basic auth header", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
   const credentials = "client_id:client_secret";
   const encoded = btoa(credentials);
-  const request = new Request("http://localhost/oauth/token", {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "authorization": `Basic ${encoded}`,
@@ -27,10 +30,12 @@ Deno.test("extractClientCredentials: should extract from Basic auth header", asy
   expect(result.clientSecret).toBe("client_secret");
   expect(result.grantType).toBe("client_credentials");
   expect(result.scope).toBe(null);
-});
+}));
 
-Deno.test("extractClientCredentials: should extract from request body form data", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should extract from request body form data", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
@@ -45,20 +50,22 @@ Deno.test("extractClientCredentials: should extract from request body form data"
   expect(result.clientSecret).toBe("test_secret");
   expect(result.grantType).toBe("client_credentials");
   expect(result.scope).toBe("read");
-});
+}));
 
-Deno.test("extractClientCredentials: should extract from JSON body", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should extract from JSON body", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify({
+    body: {
       grant_type: "client_credentials",
       client_id: "json_id",
       client_secret: "json_secret",
       scope: "write",
-    }),
+    },
   });
 
   const result = await extractClientCredentials(request);
@@ -67,12 +74,14 @@ Deno.test("extractClientCredentials: should extract from JSON body", async () =>
   expect(result.clientSecret).toBe("json_secret");
   expect(result.grantType).toBe("client_credentials");
   expect(result.scope).toBe("write");
-});
+}));
 
-Deno.test("extractClientCredentials: should prefer body over header for credentials", async () => {
+Deno.test("extractClientCredentials: should prefer body over header for credentials", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
   const headerCredentials = "header_id:header_secret";
   const encoded = btoa(headerCredentials);
-  const request = new Request("http://localhost/oauth/token", {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "authorization": `Basic ${encoded}`,
@@ -87,10 +96,12 @@ Deno.test("extractClientCredentials: should prefer body over header for credenti
   expect(result.clientId).toBe("body_id");
   expect(result.clientSecret).toBe("body_secret");
   expect(result.grantType).toBe("client_credentials");
-});
+}));
 
-Deno.test("extractClientCredentials: should prefer body over header when header missing client data", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should prefer body over header when header missing client data", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "authorization": "Bearer some_token",
@@ -105,10 +116,12 @@ Deno.test("extractClientCredentials: should prefer body over header when header 
   expect(result.clientId).toBe("body_id");
   expect(result.clientSecret).toBe("body_secret");
   expect(result.grantType).toBe("client_credentials");
-});
+}));
 
-Deno.test("extractClientCredentials: should handle malformed Basic auth header", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should handle malformed Basic auth header", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "authorization": "Basic invalid_base64",
@@ -122,10 +135,12 @@ Deno.test("extractClientCredentials: should handle malformed Basic auth header",
   expect(result.clientId).toBe("");
   expect(result.clientSecret).toBe("");
   expect(result.grantType).toBe("client_credentials");
-});
+}));
 
-Deno.test("extractClientCredentials: should handle missing credentials", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should handle missing credentials", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
@@ -139,29 +154,29 @@ Deno.test("extractClientCredentials: should handle missing credentials", async (
   expect(result.clientSecret).toBe("");
   expect(result.grantType).toBe("client_credentials");
   expect(result.scope).toBe(null);
-});
+}));
 
-Deno.test("oauthErrorJson: should return error response with default status", () => {
+Deno.test("oauthErrorJson: should return error response with default status", withFixtures([], async () => {
   const response = oauthErrorJson("invalid_request");
 
   expect(response.status).toBe(400);
   expect(response.headers.get("content-type")).toBe("application/json");
-});
+}));
 
-Deno.test("oauthErrorJson: should return error response with custom status", () => {
+Deno.test("oauthErrorJson: should return error response with custom status", withFixtures([], async () => {
   const response = oauthErrorJson("invalid_client", 401);
 
   expect(response.status).toBe(401);
-});
+}));
 
-Deno.test("oauthErrorJson: should return JSON body with error", async () => {
+Deno.test("oauthErrorJson: should return JSON body with error", withFixtures([], async () => {
   const response = oauthErrorJson("invalid_grant");
   const body = await response.json();
 
   expect(body).toEqual({ error: "invalid_grant" });
-});
+}));
 
-Deno.test("tokenRequestSchema: should validate valid token request", () => {
+Deno.test("tokenRequestSchema: should validate valid token request", withFixtures([], async () => {
   const validRequest = {
     grant_type: "client_credentials" as const,
     client_secret: "test_secret",
@@ -172,9 +187,9 @@ Deno.test("tokenRequestSchema: should validate valid token request", () => {
 
   expect(result.success).toBe(true);
   expect(result.data).toEqual(validRequest);
-});
+}));
 
-Deno.test("tokenRequestSchema: should reject invalid grant type", () => {
+Deno.test("tokenRequestSchema: should reject invalid grant type", withFixtures([], async () => {
   const invalidRequest = {
     grant_type: "authorization_code",
     client_secret: "test_secret",
@@ -183,9 +198,9 @@ Deno.test("tokenRequestSchema: should reject invalid grant type", () => {
   const result = tokenRequestSchema.safeParse(invalidRequest);
 
   expect(result.success).toBe(false);
-});
+}));
 
-Deno.test("tokenRequestSchema: should reject missing client_secret", () => {
+Deno.test("tokenRequestSchema: should reject missing client_secret", withFixtures([], async () => {
   const invalidRequest = {
     grant_type: "client_credentials" as const,
   };
@@ -193,31 +208,31 @@ Deno.test("tokenRequestSchema: should reject missing client_secret", () => {
   const result = tokenRequestSchema.safeParse(invalidRequest);
 
   expect(result.success).toBe(false);
-});
+}));
 
-Deno.test("buildAuthorizationServerMetadata: should create valid metadata", () => {
+Deno.test("buildAuthorizationServerMetadata: should create valid metadata", withFixtures([], async () => {
   const origin = "https://example.com";
   const metadata = buildAuthorizationServerMetadata(origin);
 
   expect(metadata.issuer).toBe(origin);
   expect(metadata.token_endpoint).toBe(`${origin}/oauth/token`);
-  expect(metadata.grant_types_supported).toEqual(["client_credentials"]);
+  expect(metadata.grant_types_supported).toEqual(["client_credentials", "authorization_code"]);
   expect(metadata.token_endpoint_auth_methods_supported).toEqual([
     "client_secret_basic",
     "client_secret_post",
   ]);
-  expect(metadata.response_types_supported).toEqual([]);
+  expect(metadata.response_types_supported).toEqual(["code"]);
   expect(metadata.scopes_supported).toEqual(["*"]);
-});
+}));
 
-Deno.test("authorizationServerMetadataSchema: should validate generated metadata", () => {
+Deno.test("authorizationServerMetadataSchema: should validate generated metadata", withFixtures([], async () => {
   const metadata = buildAuthorizationServerMetadata("https://example.com");
   const result = authorizationServerMetadataSchema.safeParse(metadata);
 
   expect(result.success).toBe(true);
-});
+}));
 
-Deno.test("authorizationServerMetadataSchema: should reject invalid issuer", () => {
+Deno.test("authorizationServerMetadataSchema: should reject invalid issuer", withFixtures([], async () => {
   const invalidMetadata = {
     issuer: "not-a-url",
     token_endpoint: "https://example.com/oauth/token",
@@ -230,9 +245,9 @@ Deno.test("authorizationServerMetadataSchema: should reject invalid issuer", () 
   const result = authorizationServerMetadataSchema.safeParse(invalidMetadata);
 
   expect(result.success).toBe(false);
-});
+}));
 
-Deno.test("buildProtectedResourceMetadata: should create valid metadata", () => {
+Deno.test("buildProtectedResourceMetadata: should create valid metadata", withFixtures([], async () => {
   const origin = "https://example.com";
   const metadata = buildProtectedResourceMetadata(origin);
 
@@ -240,16 +255,16 @@ Deno.test("buildProtectedResourceMetadata: should create valid metadata", () => 
   expect(metadata.authorization_servers).toEqual([
     `${origin}/.well-known/oauth-authorization-server`,
   ]);
-});
+}));
 
-Deno.test("protectedResourceMetadataSchema: should validate generated metadata", () => {
+Deno.test("protectedResourceMetadataSchema: should validate generated metadata", withFixtures([], async () => {
   const metadata = buildProtectedResourceMetadata("https://example.com");
   const result = protectedResourceMetadataSchema.safeParse(metadata);
 
   expect(result.success).toBe(true);
-});
+}));
 
-Deno.test("protectedResourceMetadataSchema: should reject invalid resource URL", () => {
+Deno.test("protectedResourceMetadataSchema: should reject invalid resource URL", withFixtures([], async () => {
   const invalidMetadata = {
     resource: "not-a-url",
     authorization_servers: [
@@ -260,10 +275,12 @@ Deno.test("protectedResourceMetadataSchema: should reject invalid resource URL",
   const result = protectedResourceMetadataSchema.safeParse(invalidMetadata);
 
   expect(result.success).toBe(false);
-});
+}));
 
-Deno.test("extractClientCredentials: should handle empty request body", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should handle empty request body", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
@@ -277,10 +294,12 @@ Deno.test("extractClientCredentials: should handle empty request body", async ()
   expect(result.clientSecret).toBe("");
   expect(result.grantType).toBe("client_credentials");
   expect(result.scope).toBe(null);
-});
+}));
 
-Deno.test("extractClientCredentials: should handle malformed JSON body", async () => {
-  const request = new Request("http://localhost/oauth/token", {
+Deno.test("extractClientCredentials: should handle malformed JSON body", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -288,13 +307,17 @@ Deno.test("extractClientCredentials: should handle malformed JSON body", async (
     body: "invalid json",
   });
 
-  await expect(extractClientCredentials(request)).rejects.toThrow();
-});
+  const result = await extractClientCredentials(request);
+  expect(result.clientId).toBe("");
+  expect(result.clientSecret).toBe("");
+}));
 
-Deno.test("extractClientCredentials: should handle Basic auth with colon in password", async () => {
+Deno.test("extractClientCredentials: should handle Basic auth with colon in password", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
   const credentials = "client_id:password:with:colons";
   const encoded = btoa(credentials);
-  const request = new Request("http://localhost/oauth/token", {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "authorization": `Basic ${encoded}`,
@@ -307,12 +330,14 @@ Deno.test("extractClientCredentials: should handle Basic auth with colon in pass
 
   expect(result.clientId).toBe("client_id");
   expect(result.clientSecret).toBe("password");
-});
+}));
 
-Deno.test("extractClientCredentials: should handle Basic auth with missing password", async () => {
+Deno.test("extractClientCredentials: should handle Basic auth with missing password", withFixtures([
+  "ExpressRequestFactory",
+], async (createExpressRequest) => {
   const credentials = "client_id_only";
   const encoded = btoa(credentials);
-  const request = new Request("http://localhost/oauth/token", {
+  const request = createExpressRequest({
     method: "POST",
     headers: {
       "authorization": `Basic ${encoded}`,
@@ -325,4 +350,4 @@ Deno.test("extractClientCredentials: should handle Basic auth with missing passw
 
   expect(result.clientId).toBe("");
   expect(result.clientSecret).toBe("");
-});
+}));

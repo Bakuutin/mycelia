@@ -27,3 +27,4 @@ registerWorker("transcription", processPythonJob);
 registerWorker("diarization", processPythonJob);
 registerWorker("ingestion", processPythonJob);
 
+

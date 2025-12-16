@@ -33,13 +33,15 @@ export function useTimelineRecalc() {
 
       const end = new Date(start.getTime() + RESOLUTION_TO_MS[resolution]);
 
-      setActiveRanges((prev) => [...prev, {
-        resolution,
-        start,
-        end,
-        addedAt: Date.now(),
-        key: document._id.toString(),
-      }]);
+      setActiveRanges((prev) => {
+        return [...prev, {
+          resolution,
+          start,
+          end,
+          addedAt: Date.now(),
+          key: document._id.toString(),
+        }];
+      });
     },
     true,
   );

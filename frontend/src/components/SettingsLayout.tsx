@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText } from "lucide-react";
+import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch } from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
@@ -33,16 +33,25 @@ const SettingsLayout = () => {
       description: "Manage API keys and policies",
     },
     {
-      name: "Feature Flags",
-      path: "/settings/feature-flags",
-      icon: Flag,
-      description: "Enable or disable server features",
-    },
-    {
       name: "Prompts",
       path: "/settings/prompts",
       icon: FileText,
       description: "Manage system prompts",
+    },
+  ];
+
+  const administrationSettings = [
+    {
+      name: "Access Log",
+      path: "/settings/access-log",
+      icon: FileSearch,
+      description: "View and audit access logs",
+    },
+    {
+      name: "Feature Flags",
+      path: "/settings/feature-flags",
+      icon: Flag,
+      description: "Enable or disable server features",
     },
   ];
 
@@ -99,6 +108,40 @@ const SettingsLayout = () => {
             </div>
             <div className="space-y-1">
               {serverSettings.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = location.pathname === tab.path || location.pathname.startsWith(tab.path);
+
+                return (
+                  <Link
+                    key={tab.path}
+                    to={tab.path}
+                    className={`flex items-start gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-medium">{tab.name}</div>
+                      <div className="text-xs opacity-70 mt-0.5">
+                        {tab.description}
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Administration Section */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              <Shield className="w-3 h-3" />
+              Administration
+            </div>
+            <div className="space-y-1">
+              {administrationSettings.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = location.pathname === tab.path || location.pathname.startsWith(tab.path);
 

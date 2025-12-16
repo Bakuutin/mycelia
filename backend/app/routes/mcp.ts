@@ -21,6 +21,12 @@ export async function mcpGetHandler(req: Request, res: Response) {
       principal: auth.principal,
     });
   } catch (error) {
+    if (error instanceof globalThis.Response) {
+      const status = error.status;
+      const body = await error.json().catch(() => ({}));
+      res.status(status === 403 ? 401 : status).json(body);
+      return;
+    }
     if (error instanceof Error && error.message === "Unauthorized") {
       return; // Already sent 401 response
     }
@@ -100,6 +106,12 @@ export async function mcpPostHandler(req: Request, res: Response) {
         return;
     }
   } catch (error) {
+    if (error instanceof globalThis.Response) {
+      const status = error.status;
+      const body = await error.json().catch(() => ({}));
+      res.status(status === 403 ? 401 : status).json(body);
+      return;
+    }
     if (error instanceof Error && error.message === "Unauthorized") {
       return; // Already sent 401 response
     }

@@ -82,7 +82,6 @@ class UpdatesWebSocketSession {
 
   async handleMessage(rawMessage: string): Promise<void> {
     try {
-      console.log(`WebSocket received message: ${rawMessage}`);
       const message: ClientMessage = JSON.parse(rawMessage);
 
       switch (message.type) {

@@ -2,6 +2,7 @@ import {
   Auth,
   defaultResourceManager,
   Policy,
+  Resource,
   ResourceManager,
   signJWT,
 } from "@/lib/auth/index.ts";
@@ -17,6 +18,8 @@ import { accessLogger } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { MessengerResource } from "@/lib/messenger/resource.server.ts";
+import { z } from "zod";
+import type { Request } from "express";
 
 export type Fixture = {
   token: any;
@@ -240,6 +243,132 @@ defineFixture({
     accessLogger.log = (auth, resource, actions) =>
       stub(auth.principal, resource.code, actions);
     return stub;
+  },
+});
+
+defineFixture({
+  token: "MockRedisXadd",
+  factory: () => {
+    const originalXadd = redis.xadd;
+    const calls: Array<{ args: any[] }> = [];
+    const mockXadd = fn(async (...args: any[]) => {
+      calls.push({ args });
+      return "1234567890-0";
+    });
+    redis.xadd = mockXadd as any;
+    return {
+      mock: Object.assign(mockXadd, {
+        calls,
+      }),
+      original: originalXadd,
+      restore: () => {
+        redis.xadd = originalXadd;
+      },
+    };
+  },
+  teardown: ({ restore }) => {
+    restore();
+  },
+});
+
+defineFixture({
+  token: "MockRedisXaddError",
+  factory: () => {
+    const originalXadd = redis.xadd;
+    const mockXadd = fn(async () => {
+      throw new Error("Redis connection failed");
+    });
+    redis.xadd = mockXadd as any;
+    return {
+      mock: mockXadd,
+      original: originalXadd,
+      restore: () => {
+        redis.xadd = originalXadd;
+      },
+    };
+  },
+  teardown: ({ restore }) => {
+    restore();
+  },
+});
+
+defineFixture({
+  token: "TestAuth",
+  dependencies: ["AuthFactory"],
+  factory: (authFactory) => authFactory({ principal: "test-user" }),
+});
+
+defineFixture({
+  token: "TestResource",
+  factory: () => {
+    return {
+      mongo: {
+        code: "mongo",
+        schemas: {
+          request: z.any(),
+          response: z.any(),
+        },
+        use: async () => ({}),
+        extractActions: () => [{ path: ["db", "objects"], actions: ["read"] }],
+      } as Resource<any, any>,
+      redis: {
+        code: "redis",
+        schemas: {
+          request: z.any(),
+          response: z.any(),
+        },
+        use: async () => ({}),
+        extractActions: () => [{ path: ["key"], actions: ["get"] }],
+      } as Resource<any, any>,
+      mongoMultiple: {
+        code: "mongo",
+        schemas: {
+          request: z.any(),
+          response: z.any(),
+        },
+        use: async () => ({}),
+        extractActions: () => [
+          { path: ["db", "users"], actions: ["read"] },
+          { path: ["db", "posts"], actions: ["write"] },
+        ],
+      } as Resource<any, any>,
+    };
+  },
+});
+
+defineFixture({
+  token: "ExpressRequestFactory",
+  factory: () => {
+    return (options: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: any;
+      query?: Record<string, string>;
+    }) => {
+      const contentType = options.headers?.["content-type"] || "";
+      let body = options.body;
+      
+      if (typeof body === "string") {
+        if (contentType.includes("application/x-www-form-urlencoded")) {
+          const params = new URLSearchParams(body);
+          body = Object.fromEntries(params.entries());
+        } else if (contentType.includes("application/json")) {
+          try {
+            body = JSON.parse(body);
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+      
+      return {
+        method: options.method || "GET",
+        headers: options.headers || {},
+        body: body,
+        query: options.query || {},
+        get: (name: string) => options.headers?.[name.toLowerCase()] || undefined,
+      } as unknown as Request;
+    };
   },
 });
 

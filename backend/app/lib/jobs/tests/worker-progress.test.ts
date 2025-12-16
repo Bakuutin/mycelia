@@ -3,19 +3,22 @@ import { withFixtures } from "@/tests/fixtures.server.ts";
 import { WorkerProgressResource } from "@/lib/resources/worker.ts";
 import { enqueueJob, getJob } from "../queue.ts";
 import { redis } from "@/lib/redis.ts";
-import type { VadJobData } from "../types.ts";
+import { VadJobDataSchema } from "../types.ts";
+import type { z } from "zod";
 import { Auth } from "@/lib/auth/core.server.ts";
 import "./fixtures.ts";
+
+type VadJobDataInput = z.input<typeof VadJobDataSchema>;
 
 Deno.test(
   "WorkerProgressResource updates job progress",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     await resource.use({
       jobId: job.id!,
@@ -39,12 +42,12 @@ Deno.test(
 Deno.test(
   "WorkerProgressResource publishes to Redis Stream",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
     const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
@@ -77,12 +80,12 @@ Deno.test(
 Deno.test(
   "WorkerProgressResource sets TTL on stream",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
     const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
@@ -122,12 +125,12 @@ Deno.test(
 Deno.test(
   "WorkerProgressResource handles multiple updates",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
     const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
@@ -163,12 +166,12 @@ Deno.test(
 Deno.test(
   "WorkerProgressResource handles custom progress fields",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     await resource.use({
       jobId: job.id!,

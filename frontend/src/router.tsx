@@ -11,6 +11,7 @@ import CreateLLMPage from "./pages/settings/CreateLLMPage";
 import LLMDetailPage from "./pages/settings/LLMDetailPage";
 import APIKeysPage from "./pages/settings/APIKeysPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
+import AccessLogPage from "./pages/settings/AccessLogPage";
 import PromptsPage from "./pages/settings/PromptsPage";
 import PromptDetailPage from "./pages/settings/PromptDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
@@ -132,6 +133,10 @@ export const router = createBrowserRouter([
           {
             path: "api-keys",
             element: <APIKeysPage />,
+          },
+          {
+            path: "access-log",
+            element: <AccessLogPage />,
           },
           {
             path: "feature-flags",

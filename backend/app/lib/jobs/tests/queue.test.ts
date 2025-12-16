@@ -3,21 +3,28 @@ import { withFixtures } from "@/tests/fixtures.server.ts";
 import { enqueueJob, getQueue, getJob } from "../queue.ts";
 import { ObjectId } from "mongodb";
 import type { VadJobData } from "../types.ts";
+import { VadJobDataSchema } from "../types.ts";
+import type { z } from "zod";
 import "./fixtures.ts";
+
+type VadJobDataInput = z.input<typeof VadJobDataSchema>;
 
 Deno.test(
   "enqueueJob creates job with ObjectId",
   withFixtures(["JobQueue"], async () => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     expect(job.id).toBeDefined();
     expect(ObjectId.isValid(job.id!)).toBe(true);
-    expect(job.data).toEqual(jobData);
+    expect(job.data).toEqual({
+      ...jobData,
+      batchSize: 100, // Default value from schema
+    });
   }),
 );
 
@@ -25,7 +32,7 @@ Deno.test(
   "enqueueJob accepts custom jobId",
   withFixtures(["JobQueue"], async () => {
     const customId = new ObjectId().toString();
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
@@ -39,7 +46,7 @@ Deno.test(
 Deno.test(
   "enqueueJob sets priority",
   withFixtures(["JobQueue"], async () => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
@@ -73,7 +80,7 @@ Deno.test(
 Deno.test(
   "getJob retrieves enqueued job",
   withFixtures(["JobQueue"], async () => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
@@ -83,7 +90,10 @@ Deno.test(
 
     expect(retrievedJob).toBeDefined();
     expect(retrievedJob?.id).toBe(enqueuedJob.id);
-    expect(retrievedJob?.data).toEqual(jobData);
+    expect(retrievedJob?.data).toEqual({
+      ...jobData,
+      batchSize: 100, // Default value from schema
+    });
   }),
 );
 
@@ -100,12 +110,12 @@ Deno.test(
 Deno.test(
   "enqueued job has correct default options",
   withFixtures(["JobQueue"], async () => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     expect(job.opts.attempts).toBe(3);
     expect(job.opts.backoff).toEqual({
@@ -118,7 +128,7 @@ Deno.test(
 Deno.test(
   "multiple job types use separate queues",
   withFixtures(["JobQueue"], async () => {
-    const vadData: VadJobData = {
+    const vadData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };

@@ -32,6 +32,12 @@ export async function dataAudioItemsHandler(req: Request, res: Response) {
 
     res.json(result);
   } catch (error) {
+    if (error instanceof globalThis.Response) {
+      const status = error.status;
+      const body = await error.json().catch(() => ({}));
+      res.status(status === 403 ? 401 : status).json(body);
+      return;
+    }
     if (error instanceof Error && error.message === "Unauthorized") {
       return;
     }

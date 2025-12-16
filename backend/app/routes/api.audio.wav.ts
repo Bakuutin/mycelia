@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { authenticateOr401 } from "../lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { Buffer } from "node:buffer";
 
 const SAMPLE_RATE = 16000;
 const MAX_CHUNK_DURATION_MS = 10000;
@@ -75,6 +76,7 @@ async function decodeOpusToPcm(opusData: Uint8Array): Promise<Uint8Array> {
         Deno.remove(tempOutputPath),
       ]);
     } catch {
+      // Ignore cleanup errors
     }
   }
 }

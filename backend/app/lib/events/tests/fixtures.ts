@@ -1,17 +1,21 @@
 import { defineFixture } from "@/tests/fixtures.server.ts";
 import { createClient } from "npm:redis@^4.7.0";
+import { redis } from "@/lib/redis.ts";
 
 defineFixture({
   token: "EventPublisher",
   dependencies: [],
   factory: async () => {
-    const subscriber = createClient({
-      url: Deno.env.get("REDIS_URL") || "redis://localhost:6379",
-    });
+    const host = redis.options.host || "localhost";
+    const port = redis.options.port || 6379;
+    const password = redis.options.password;
+    const url = password 
+      ? `redis://:${password}@${host}:${port}`
+      : `redis://${host}:${port}`;
 
-    const subscriber2 = createClient({
-      url: Deno.env.get("REDIS_URL") || "redis://localhost:6379",
-    });
+    const subscriber = createClient({ url });
+
+    const subscriber2 = createClient({ url });
 
     await subscriber.connect();
     await subscriber2.connect();

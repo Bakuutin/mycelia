@@ -24,6 +24,7 @@ import { errorHandler } from "@/middleware/errorHandler.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
+import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -96,6 +97,7 @@ async function startServer(
   if (!noWorkers) {
     startWorkers();
     await startChangeStreamWorker();
+    await startAccessLogWorker();
   }
 
   const app = express();
@@ -165,6 +167,7 @@ async function startServer(
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await stopWorkers();
+      await stopAccessLogWorker();
       await stopChangeStreamWorker();
       await shutdownTelemetry();
       cleanupLogging();

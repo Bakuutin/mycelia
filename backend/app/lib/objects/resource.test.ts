@@ -136,8 +136,8 @@ Deno.test(
       object: {
         name: "Test",
         relationship: {
-          subject: subjectId,
-          object: objectId,
+          subject: subjectId.toString() as any,
+          object: objectId.toString() as any,
           symmetrical: false,
         },
       },
@@ -402,8 +402,8 @@ Deno.test(
         name: "Friends",
         isRelationship: true,
         relationship: {
-          subject: person1.insertedId,
-          object: person2.insertedId,
+          subject: person1.insertedId.toString(),
+          object: person2.insertedId.toString(),
           symmetrical: true,
         },
         timeRanges: [{ start: new Date() }],
@@ -551,8 +551,8 @@ Deno.test(
         name: "Relationship",
         isRelationship: true,
         relationship: {
-          subject: subject.insertedId,
-          object: object.insertedId,
+          subject: subject.insertedId.toString(),
+          object: object.insertedId.toString(),
           symmetrical: false,
         },
         timeRanges: [{ start: new Date() }],

@@ -3,17 +3,21 @@ import { withFixtures } from "@/tests/fixtures.server.ts";
 import { processJob } from "../processor.ts";
 import { enqueueJob } from "../queue.ts";
 import type { VadJobData } from "../types.ts";
+import { VadJobDataSchema } from "../types.ts";
+import type { z } from "zod";
 import "./fixtures.ts";
+
+type VadJobDataInput = z.input<typeof VadJobDataSchema>;
 
 Deno.test(
   "processJob calls Python worker with correct URL",
   withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockWorker.fetch;
@@ -26,7 +30,10 @@ Deno.test(
       expect(calls.length).toBe(1);
       expect(calls[0].type).toBe("vad");
       expect(calls[0].jobId).toBe(job.id);
-      expect(calls[0].data).toEqual(jobData);
+      expect(calls[0].data).toEqual({
+        ...jobData,
+        batchSize: 100, // Default value from schema
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -36,12 +43,12 @@ Deno.test(
 Deno.test(
   "processJob returns result from Python worker",
   withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     mockWorker.setResponse("vad", {
       processed: 100,
@@ -69,12 +76,12 @@ Deno.test(
 Deno.test(
   "processJob throws error on HTTP failure",
   withFixtures(["JobQueue"], async () => {
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => {
@@ -97,12 +104,12 @@ Deno.test(
     const customUrl = "http://custom-python:9000";
     Deno.env.set("PYTHON_WORKER_URL", customUrl);
 
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     const originalFetch = globalThis.fetch;
     let calledUrl = "";
@@ -126,12 +133,12 @@ Deno.test(
   withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
     Deno.env.delete("PYTHON_WORKER_URL");
 
-    const jobData: VadJobData = {
+    const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     const originalFetch = globalThis.fetch;
     let calledUrl = "";
@@ -160,7 +167,7 @@ Deno.test(
       batchSize: 50,
     };
 
-    const job = await enqueueJob(jobData);
+    const job = await enqueueJob(jobData as any);
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockWorker.fetch;

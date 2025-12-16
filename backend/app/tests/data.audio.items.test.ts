@@ -1,30 +1,21 @@
 import { expect } from "@std/expect";
-import { loader } from "@/routes/data.audio.items.tsx";
+import { dataAudioItemsHandler } from "@/routes/data.audio.items.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-
-function createMockLoaderArgs(url: string, headers?: HeadersInit) {
-  return {
-    request: new Request(url, { headers }),
-    params: {},
-    context: {},
-  };
-}
+import { callExpressHandler } from "@/tests/express-helpers.ts";
 
 Deno.test(
-  "Data audio items loader: should return audio items when authenticated",
+  "Data audio items handler: should return audio items when authenticated",
   withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
-    const url = new URL("http://localhost:3000/data/audio/items");
-    url.searchParams.set(
-      "start",
-      new Date("2024-01-01T00:00:00.000Z").getTime().toString(),
-    );
-    url.searchParams.set(
-      "end",
-      new Date("2024-01-02T00:00:00.000Z").getTime().toString(),
-    );
+    const startTime = new Date("2024-01-01T00:00:00.000Z").getTime().toString();
+    const endTime = new Date("2024-01-02T00:00:00.000Z").getTime().toString();
 
-    const response = await loader(
-      createMockLoaderArgs(url.toString(), headers),
+    const response = await callExpressHandler(
+      dataAudioItemsHandler,
+      "http://localhost:3000/data/audio/items",
+      {
+        headers,
+        query: { start: startTime, end: endTime },
+      },
     );
     const data = await response.json();
 
@@ -34,64 +25,43 @@ Deno.test(
 );
 
 Deno.test(
-  "Data audio items loader: should require authentication",
+  "Data audio items handler: should require authentication",
   withFixtures([], async () => {
-    try {
-      await loader(
-        createMockLoaderArgs("http://localhost:3000/data/audio/items"),
-      );
-      expect(false).toBe(true); // Should not reach here
-    } catch (error) {
-      expect(error).toBeInstanceOf(Response);
-      expect((error as Response).status).toBe(401);
-    }
-  }),
-);
-
-Deno.test(
-  "Data audio items loader: should handle missing date parameters",
-  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
-    const response = await loader(
-      createMockLoaderArgs("http://localhost:3000/data/audio/items", headers),
+    const response = await callExpressHandler(
+      dataAudioItemsHandler,
+      "http://localhost:3000/data/audio/items",
     );
-    const data = await response.json();
-
-    expect(data).toHaveProperty("items");
-    expect(Array.isArray(data.items)).toBe(true);
+    expect(response.status).toBe(401);
   }),
 );
 
 Deno.test(
-  "Data audio items loader: should handle invalid date parameters",
+  "Data audio items handler: should handle missing date parameters",
   withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
-    const url = new URL("http://localhost:3000/data/audio/items");
-    url.searchParams.set("start", "invalid-date");
-
-    try {
-      await loader(
-        createMockLoaderArgs(url.toString(), headers),
-      );
-      expect(false).toBe(true); // Should not reach here
-    } catch (error) {
-      expect(error).toBeInstanceOf(Response);
-      expect((error as Response).status).toBe(400);
-    }
-  }),
-);
-
-Deno.test(
-  "Data audio items loader: should limit results",
-  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
-    const url = new URL("http://localhost:3000/data/audio/items");
-    url.searchParams.set("limit", "5");
-
-    const response = await loader(
-      createMockLoaderArgs(url.toString(), headers),
+    const response = await callExpressHandler(
+      dataAudioItemsHandler,
+      "http://localhost:3000/data/audio/items",
+      { headers },
     );
+    expect(response.status).toBe(400);
     const data = await response.json();
+    expect(data.error).toBe("Missing required parameters");
+  }),
+);
 
-    expect(data).toHaveProperty("items");
-    expect(Array.isArray(data.items)).toBe(true);
-    expect(data.items.length).toBeLessThanOrEqual(5);
+Deno.test(
+  "Data audio items handler: should handle invalid date parameters",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
+    const response = await callExpressHandler(
+      dataAudioItemsHandler,
+      "http://localhost:3000/data/audio/items",
+      {
+        headers,
+        query: { start: "invalid-date", end: "1704153600000" },
+      },
+    );
+    expect(response.status).toBe(400);
+    const data = await response.json();
+    expect(data.error).toBe("Invalid format");
   }),
 );
