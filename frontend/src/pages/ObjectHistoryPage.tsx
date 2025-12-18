@@ -1,8 +1,8 @@
 import { useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { History, ChevronDown, ChevronUp } from "lucide-react";
+import { History, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 import { SmartBackButton } from "@/components/SmartBackButton";
-import { useObject, useObjectHistory } from "@/hooks/useObjectQueries";
+import { useObject, useObjectHistory, useRestoreObject } from "@/hooks/useObjectQueries";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from "date-fns";
@@ -14,6 +14,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { toast } from "sonner";
 
 import yaml from "yaml";
 
@@ -168,7 +169,15 @@ function CodeBlock({ value, variant = "before" }: { value: any; variant?: "befor
   );
 }
 
-function HistoryEntryCard({ entry }: { entry: HistoryEntry }) {
+function HistoryEntryCard({ 
+  entry, 
+  object, 
+  onRestore 
+}: { 
+  entry: HistoryEntry;
+  object: any;
+  onRestore: (field: string, value: any) => void;
+}) {
   return (
     <Card className="p-4">
       <div className="space-y-2">
@@ -224,6 +233,28 @@ function HistoryEntryCard({ entry }: { entry: HistoryEntry }) {
                   <CodeBlock value={{ [entry.field]: entry.newValue }} variant="after" />
                 </div>
               </div>
+              {object && (
+                <div className="flex gap-2 justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onRestore(entry.field!, entry.oldValue)}
+                    className="gap-2"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Restore to Before
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onRestore(entry.field!, entry.newValue)}
+                    className="gap-2"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Restore to After
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -249,9 +280,13 @@ function HistoryEntryCard({ entry }: { entry: HistoryEntry }) {
 }
 
 function GroupedHistoryCard({ 
-  group
+  group,
+  object,
+  onRestore
 }: { 
   group: HistoryEntry[];
+  object: any;
+  onRestore: (field: string, value: any) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { before, after, entries } = getGroupedState(group);
@@ -320,7 +355,12 @@ function GroupedHistoryCard({
                   Individual changes:
                 </p>
                 {entries.map((entry) => (
-                  <HistoryEntryCard key={entry._id} entry={entry} />
+                  <HistoryEntryCard 
+                    key={entry._id} 
+                    entry={entry} 
+                    object={object}
+                    onRestore={onRestore}
+                  />
                 ))}
               </div>
             </CollapsibleContent>
@@ -338,12 +378,47 @@ const ObjectHistoryPage = () => {
     isLoading: historyLoading,
     error: historyError,
   } = useObjectHistory(id);
+  const restoreObjectMutation = useRestoreObject();
   
   // Group history entries
   const groupedHistory = history ? groupHistoryEntries(history) : [];
   
   // Show history even if object is deleted, as long as history exists
   const hasHistory = history && history.length > 0;
+
+  const handleRestore = (field: string, value: any) => {
+    if (!object || !id) {
+      toast.error("Cannot restore: Object not found");
+      return;
+    }
+
+    const confirmed = globalThis.confirm
+      ? globalThis.confirm(`Restore ${field} to this value?\n\nThis will create a new version of the object.`)
+      : true;
+    
+    if (!confirmed) return;
+
+    restoreObjectMutation.mutate(
+      {
+        id: object._id.toString(),
+        version: object.version,
+        field,
+        value,
+      },
+      {
+        onSuccess: () => {
+          toast.success(`Successfully restored ${field}`);
+        },
+        onError: (error: any) => {
+          if (error.code === 409) {
+            toast.error("Object was modified by another user. Please refresh and try again.");
+          } else {
+            toast.error(`Failed to restore: ${error.message || "Unknown error"}`);
+          }
+        },
+      }
+    );
+  };
 
   if (objectLoading && !hasHistory) {
     return (
@@ -433,11 +508,20 @@ const ObjectHistoryPage = () => {
                     <GroupedHistoryCard
                       key={groupId}
                       group={item}
+                      object={object}
+                      onRestore={handleRestore}
                     />
                   );
                 } else {
                   // Single entry
-                  return <HistoryEntryCard key={item._id} entry={item} />;
+                  return (
+                    <HistoryEntryCard 
+                      key={item._id} 
+                      entry={item} 
+                      object={object}
+                      onRestore={handleRestore}
+                    />
+                  );
                 }
               })}
               {history.length >= 50 && (

@@ -148,6 +148,48 @@ export function useUpdateObject() {
   });
 }
 
+// Mutation for restoring an object field to a historical value
+export function useRestoreObject() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      version,
+      field,
+      value,
+    }: {
+      id: string;
+      version: number;
+      field: string;
+      value: any;
+    }) => {
+      return await callResource("objects", {
+        action: "restore",
+        id,
+        version,
+        field,
+        value,
+      });
+    },
+    onSuccess: (result, { id }) => {
+      // Update cached object with new version
+      queryClient.setQueryData(objectKeys.detail(id), result);
+      // Invalidate related queries
+      queryClient.invalidateQueries({ queryKey: objectKeys.related(id) });
+      queryClient.invalidateQueries({ queryKey: objectKeys.lists() });
+      // Invalidate history to show the new restore entry
+      queryClient.invalidateQueries({ queryKey: objectKeys.history(id) });
+    },
+    onError: (error: any, { id }) => {
+      if (error.code === 409) {
+        // Conflict - refresh object data
+        queryClient.invalidateQueries({ queryKey: objectKeys.detail(id) });
+      }
+    },
+  });
+}
+
 // Mutation for creating an object
 export function useCreateObject() {
   const queryClient = useQueryClient();

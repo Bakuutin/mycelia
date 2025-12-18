@@ -188,6 +188,20 @@ const exploreTimeRangeSchema = z.object({
   }).optional().describe("Query options for sorting and pagination"),
 });
 
+const restoreObjectSchema = z.object({
+  action: z.literal("restore").describe("Restore a field to a previous value from history"),
+  id: z.string().describe("MongoDB ObjectId string of the object to restore"),
+  version: z.number().describe(
+    "Current version number for optimistic locking. Get this from the object first. Update fails if version changed."
+  ),
+  field: z.string().describe(
+    "Dot-notation path to the field to restore (e.g., 'name', 'details', 'icon.text')"
+  ),
+  value: z.any().describe(
+    "Historical value to restore to. Retrieved from history entry."
+  ),
+});
+
 const objectsRequestSchema = z.discriminatedUnion("action", [
   createObjectSchema,
   updateObjectSchema,
@@ -197,6 +211,7 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   getRelationshipsSchema,
   getHistorySchema,
   exploreTimeRangeSchema,
+  restoreObjectSchema,
 ]);
 
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
@@ -218,7 +233,7 @@ export class ObjectsResource
   implements Resource<ObjectsRequest, ObjectsResponse> {
   code = "objects";
   description =
-    "Manage timeline objects (people, events, places, relationships, promises). Objects form a graph where relationships connect entities with temporal data. Supports optimistic locking for concurrent updates. Use 'list' to find objects, 'get' for details, 'getRelationships' to explore connections, 'exploreTimeRange' to find objects active during a time period, 'create' for new entities, 'update' for field changes, and 'getHistory' for version tracking.";
+    "Manage timeline objects (people, events, places, relationships, promises). Objects form a graph where relationships connect entities with temporal data. Supports optimistic locking for concurrent updates. Use 'list' to find objects, 'get' for details, 'getRelationships' to explore connections, 'exploreTimeRange' to find objects active during a time period, 'create' for new entities, 'update' for field changes, 'restore' to restore fields to historical values, and 'getHistory' for version tracking.";
   schemas = {
     request: objectsRequestSchema as z.ZodType<ObjectsRequest>,
     response: z.any(),
@@ -364,6 +379,81 @@ export class ObjectsResource
           throw error;
         }
 
+        await this.recordHistory(
+          objectId,
+          "update",
+          auth.principal,
+          result.version,
+          input.field,
+          oldValue,
+          input.value,
+        );
+
+        return result;
+      }
+
+      case "restore": {
+        const objectId = new ObjectId(input.id as string);
+
+        const current = await mongo({
+          action: "findOne",
+          collection: "objects",
+          query: { _id: objectId },
+        });
+        if (!current) {
+          throw new Error("Object not found");
+        }
+
+        const currentVersion = current.version ?? 0;
+
+        if (currentVersion !== input.version) {
+          const error: any = new Error("Object was modified by another user");
+          error.code = 409;
+          error.current = currentVersion;
+          error.expected = input.version;
+          error.latestObject = { ...current, version: currentVersion };
+          throw error;
+        }
+
+        const oldValue = getNestedValue(current, input.field);
+
+        // Restore uses the same update logic as update action
+        const updateDoc: any = {};
+
+        if (input.value === null || input.value === undefined) {
+          updateDoc.$unset = { [input.field]: "" };
+          updateDoc.$set = {
+            updatedAt: new Date(),
+            version: currentVersion + 1,
+          };
+        } else {
+          updateDoc.$set = {
+            [input.field]: input.value,
+            updatedAt: new Date(),
+            version: currentVersion + 1,
+          };
+        }
+
+        await mongo({
+          action: "updateOne",
+          collection: "objects",
+          query: { _id: objectId },
+          update: updateDoc,
+        });
+
+        const result = await mongo({
+          action: "findOne",
+          collection: "objects",
+          query: { _id: objectId },
+        });
+
+        if (!result) {
+          const error: any = new Error("Restore failed");
+          error.code = 500;
+          throw error;
+        }
+
+        // Record as update action with a note that it's a restore
         await this.recordHistory(
           objectId,
           "update",
@@ -755,6 +845,7 @@ export class ObjectsResource
       get: ["read"],
       list: ["read"],
       update: ["update"],
+      restore: ["update"],
       delete: ["delete"],
       getRelationships: ["read"],
       getHistory: ["read"],
