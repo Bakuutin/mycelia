@@ -605,3 +605,117 @@ Deno.test(
     expect(deleteEntry.field).toBeNull();
   }),
 );
+
+Deno.test(
+  "restore field to historical value",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    // Create object with initial value
+    const createResult = await objectsResource({
+      action: "create",
+      object: {
+        name: "Original Name",
+        details: "Original Details",
+      },
+    });
+
+    const id = createResult.insertedId.toString();
+
+    // Update the name field
+    await objectsResource({
+      action: "update",
+      id,
+      version: 1,
+      field: "name",
+      value: "Updated Name",
+    });
+
+    // Update it again
+    await objectsResource({
+      action: "update",
+      id,
+      version: 2,
+      field: "name",
+      value: "Second Update",
+    });
+
+    // Get the current object state
+    const beforeRestore = await objectsResource({
+      action: "get",
+      id,
+    });
+
+    expect(beforeRestore.name).toBe("Second Update");
+    expect(beforeRestore.version).toBe(3);
+
+    // Restore to the original name
+    const restored = await objectsResource({
+      action: "restore",
+      id,
+      version: 3,
+      field: "name",
+      value: "Original Name",
+    });
+
+    expect(restored.name).toBe("Original Name");
+    expect(restored.version).toBe(4);
+    expect(restored.details).toBe("Original Details");
+
+    // Verify history was recorded
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const history = await objectsResource({
+      action: "getHistory",
+      id,
+    });
+
+    // Should have 4 history entries: create, 2 updates, 1 restore
+    expect(history.length).toBeGreaterThanOrEqual(4);
+
+    const restoreEntry = history.find(
+      (h: any) => h.version === 4 && h.field === "name",
+    );
+    expect(restoreEntry).toBeDefined();
+    expect(restoreEntry.action).toBe("update");
+    expect(restoreEntry.oldValue).toBe("Second Update");
+    expect(restoreEntry.newValue).toBe("Original Name");
+  }),
+);
+
+Deno.test(
+  "restore fails with version conflict",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const createResult = await objectsResource({
+      action: "create",
+      object: { name: "Test" },
+    });
+
+    const id = createResult.insertedId.toString();
+
+    await objectsResource({
+      action: "update",
+      id,
+      version: 1,
+      field: "name",
+      value: "Updated",
+    });
+
+    // Try to restore with wrong version
+    try {
+      await objectsResource({
+        action: "restore",
+        id,
+        version: 1, // Should be 2
+        field: "name",
+        value: "Test",
+      });
+      throw new Error("Should have thrown version conflict error");
+    } catch (error: any) {
+      expect(error.code).toBe(409);
+      expect(error.message).toContain("modified by another user");
+    }
+  }),
+);
