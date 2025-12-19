@@ -13,6 +13,7 @@ const JOB_TYPES: JobType[] = [
   "ingestion",
   "histRecalculation",
   "summarization",
+  "testPythonIntegration",
 ];
 
 export function startWorkers() {

@@ -26,5 +26,6 @@ registerWorker("vad", processPythonJob);
 registerWorker("transcription", processPythonJob);
 registerWorker("diarization", processPythonJob);
 registerWorker("ingestion", processPythonJob);
+registerWorker("testPythonIntegration", processPythonJob);
 
 

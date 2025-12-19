@@ -8,6 +8,7 @@ export const JobTypeSchema = z.enum([
   "ingestion",
   "histRecalculation",
   "summarization",
+  "testPythonIntegration",
 ]);
 
 export type JobType = z.infer<typeof JobTypeSchema>;
@@ -46,10 +47,19 @@ export const SummarizationJobDataSchema = z.object({
 
 export type SummarizationJobData = z.infer<typeof SummarizationJobDataSchema>;
 
+export const TestPythonIntegrationJobDataSchema = z.object({
+  type: z.literal("testPythonIntegration"),
+});
+
+export type TestPythonIntegrationJobData = z.infer<
+  typeof TestPythonIntegrationJobDataSchema
+>;
+
 export const JobDataSchema = z.discriminatedUnion("type", [
   VadJobDataSchema,
   PipelineRecalculationJobDataSchema,
   SummarizationJobDataSchema,
+  TestPythonIntegrationJobDataSchema,
 ]);
 
 export type JobData = z.infer<typeof JobDataSchema>;

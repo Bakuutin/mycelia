@@ -3,7 +3,6 @@ import type { Auth } from "@/lib/auth/core.server.ts";
 import type { Resource } from "@/lib/auth/resources.ts";
 import { JobTypeSchema } from "@/lib/jobs/types.ts";
 import { getQueue } from "@/lib/jobs/queue.ts";
-import { redis } from "@/lib/redis.ts";
 import type { Job } from "bullmq";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 
@@ -95,19 +94,23 @@ export class WorkerProgressResource
         ["active", "waiting", "delayed", "failed", "completed"];
 
       const allJobs: JobInfo[] = [];
+      const totalLimit = input.limit || 100;
 
-      for (const type of types) {
-        const queue = getQueue(type);
-        const jobs = await queue.getJobs(queryStatuses, 0, input.limit ? input.limit - 1 : 99);
-        
-        // Parallelize state fetching
-        const jobsWithState = await Promise.all(jobs.map(async (job) => {
-             const state = await job.getState();
-             return { job, state };
-        }));
+      // Parallelize queue queries
+      const queueQueries = await Promise.all(
+        types.map(async (type) => {
+          const queue = getQueue(type);
+          // Get jobs per type, but we'll limit total later
+          const jobs = await queue.getJobs(queryStatuses, 0, totalLimit);
+          return { type, jobs };
+        })
+      );
 
-        for (const { job, state } of jobsWithState) {
-          allJobs.push({
+      // Process all jobs in parallel
+      const allJobPromises = queueQueries.flatMap(({ type, jobs }) =>
+        jobs.map(async (job) => {
+          const state = await job.getState();
+          return {
             id: job.id,
             type: type,
             data: job.data,
@@ -118,12 +121,16 @@ export class WorkerProgressResource
             finishedOn: job.finishedOn,
             processedOn: job.processedOn,
             failedReason: job.failedReason,
-          });
-        }
-      }
+          };
+        })
+      );
 
-      // Sort by timestamp descending
-      return allJobs.sort((a, b) => b.timestamp - a.timestamp);
+      const jobsWithState = await Promise.all(allJobPromises);
+
+      // Sort by timestamp descending and limit total results
+      return jobsWithState
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(0, totalLimit);
     }
 
     // Handle "update_progress" action (or legacy format)
@@ -136,25 +143,16 @@ export class WorkerProgressResource
     const job = await queue.getJob(jobId);
 
     if (!job) {
-      throw new Error(`Job ${jobId} not found`);
+      // Job may have completed or been removed - this is not an error
+      // Just log and return gracefully
+      console.log(`[worker_progress] Job ${jobId} not found (likely completed/removed), ignoring progress update`);
+      return;
     }
 
     await job.updateProgress(progress);
 
-    const streamKey = `progress:${jobType}:${jobId}`;
-    const fields: string[] = [];
-
-    for (const [key, value] of Object.entries(progress)) {
-      fields.push(key, String(value));
-    }
-
-    fields.push("timestamp", new Date().toISOString());
-
-    await redis.xadd(streamKey, "*", ...fields);
-    await redis.expire(streamKey, 3600);
-
     await publishJobUpdate(jobId, jobType, "job.progress", {
-      state: await job.getState(),
+      state: "active",
       progress,
     });
   }
