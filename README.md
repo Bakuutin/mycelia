@@ -93,8 +93,11 @@ cp .env.example .env
 
 # Start the backend server (credentials are auto-generated on first run)
 deno task dev
-# On first run, MYCELIA_TOKEN and MYCELIA_CLIENT_ID will be auto-generated
-# and written to your .env file
+# On first run, MYCELIA_TOKEN and MYCELIA_CLIENT_ID will be printed to console
+# Copy them to your .env file
+
+# For quieter logs (no HTTP request logging)
+deno task dev:quiet
 ```
 
 The backend dev server will be available at http://localhost:5173/.
@@ -161,6 +164,9 @@ cd backend
 # Start the server (credentials auto-generated on first run)
 deno task dev
 
+# Quieter mode (disables HTTP request logging)
+deno task dev:quiet
+
 # Manual token generation (optional, for additional API keys)
 deno run -A --env server.ts token-create
 ```
@@ -168,12 +174,11 @@ deno run -A --env server.ts token-create
 **First Run**: When you start the backend for the first time, it automatically:
 1. Detects no API keys exist in MongoDB
 2. Creates a default admin API key with full permissions
-3. Writes `MYCELIA_TOKEN` and `MYCELIA_CLIENT_ID` to your `.env` file
-4. Prints the credentials to the console
+3. Prints the credentials to the console
 
-Look for this output:
+Look for this output and copy the values to your `.env` file:
 ```
-[AutoInit] ✅ Credentials auto-configured:
+[AutoInit] ✅ Default API key created. Add to your .env file:
   MYCELIA_TOKEN=mycelia_xxxxx...
   MYCELIA_CLIENT_ID=xxxxxx...
 ```
@@ -318,10 +323,11 @@ If the frontend shows "API Credentials Required" or you see `403 Forbidden` erro
 1. **Backend not running**: Start the backend with `cd backend && deno task dev`
 2. **Missing credentials**: On first run, the backend auto-generates credentials. Check the console for:
    ```
-   [AutoInit] ✅ Credentials auto-configured:
+   [AutoInit] ✅ Default API key created. Add to your .env file:
      MYCELIA_TOKEN=mycelia_xxxxx...
      MYCELIA_CLIENT_ID=xxxxxx...
    ```
+   Copy these values to your `backend/.env` file.
 3. **Credentials not configured in frontend**: Go to Settings and enter:
    - **Client ID** → `MYCELIA_CLIENT_ID` value
    - **Client Secret** → `MYCELIA_TOKEN` value
