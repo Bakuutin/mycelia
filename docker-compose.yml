@@ -41,11 +41,12 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: ./frontend/Dockerfile
+      dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
     ports:
       - "8080:8080"
     volumes:
       - ./frontend:/app
+      - ./interfaces:/app/interfaces
 
   backend:
     build:
