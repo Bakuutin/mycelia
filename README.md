@@ -25,40 +25,32 @@ Install these before starting:
 ### Setup (5 minutes)
 
 ```bash
-# 1. Clone and enter the repo
-git clone https://github.com/mycelia-tech/mycelia.git
-cd mycelia
+# 1. Clone repo
+git clone https://github.com/mycelia-tech/mycelia.git && cd mycelia
 
-# 2. Create environment file
-cp .env.example .env
+# 2. Create config (defaults work out of the box, no edits needed)
+cp backend/.env.example backend/.env
 
-# 3. Start databases (Redis, MongoDB)
+# 3. Start databases
 docker compose up -d
 
-# 4. Setup and start backend
-cd backend
-cp .env.example .env
-deno task dev
+# 4. Start backend (first run auto-generates API credentials)
+cd backend && deno task dev
 ```
 
-**First run only**: The backend prints credentials to the console:
+**First run**: Copy the auto-generated credentials from console to `backend/.env`:
 ```
 [AutoInit] ✅ Default API key created. Add to your .env file:
   MYCELIA_TOKEN=mycelia_xxxxx...
   MYCELIA_CLIENT_ID=xxxxxx...
 ```
 
-Copy these values to **both**:
-- `backend/.env` (for backend)
-- Root `.env` (for Python services)
-
 ```bash
 # 5. Start frontend (new terminal)
-cd frontend
-deno task dev
+cd frontend && deno task dev
 ```
 
-**Open http://localhost:3001** and configure credentials in **Settings**:
+**Open http://localhost:3001** and enter credentials in **Settings**:
 - Client ID → `MYCELIA_CLIENT_ID` value
 - Client Secret → `MYCELIA_TOKEN` value
 

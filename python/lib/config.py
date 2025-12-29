@@ -4,16 +4,23 @@ from pathlib import Path
 import urllib.parse
 import os
 
-env_path = Path(__file__).parent.parent.parent / ".env"
-if not env_path.exists():
+# Try backend/.env first (single source of truth), fall back to root .env
+root_path = Path(__file__).parent.parent.parent
+backend_env = root_path / "backend" / ".env"
+root_env = root_path / ".env"
+
+if backend_env.exists():
+    dotenv.load_dotenv(backend_env, override=True)
+elif root_env.exists():
+    dotenv.load_dotenv(root_env, override=True)
+else:
     raise FileNotFoundError(
-        f"Root .env file not found at {env_path}\n\n"
+        f"No .env file found.\n\n"
         "To fix this:\n"
-        "  1. cp .env.example .env\n"
-        "  2. Start the backend: cd backend && deno task dev\n"
-        "  3. Copy MYCELIA_TOKEN and MYCELIA_CLIENT_ID from console to root .env\n"
+        "  1. cd backend && cp .env.example .env\n"
+        "  2. Start the backend: deno task dev\n"
+        "  3. Credentials are auto-generated on first run\n"
     )
-dotenv.load_dotenv(env_path, override=True)
 
 
 def env(name: str, default: str | None = None) -> str:

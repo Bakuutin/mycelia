@@ -1,6 +1,7 @@
 services:
   redis:
     image: bitnamilegacy/redis:8.0
+    env_file: ./backend/.env
     ports:
       - "6379:6379"
     volumes:
@@ -9,6 +10,7 @@ services:
       - REDIS_PASSWORD
   mongo:
     image: mongo:8.2
+    env_file: ./backend/.env
     entrypoint: ["/mongo-entrypoint.sh"]
     command: mongod --config /etc/mongod.conf
     ports:
@@ -24,6 +26,7 @@ services:
       - MONGO_INITDB_ROOT_PASSWORD
   mongo-search:
     image: mongodb/mongodb-community-search:latest
+    env_file: ./backend/.env
     entrypoint: ["/mongot-entrypoint.sh"]
     ports:
       - "27028:27028"
