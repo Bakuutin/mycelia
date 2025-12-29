@@ -88,6 +88,7 @@ async function startServer(
   port: number,
   skipChecks = false,
   noWorkers = false,
+  quiet = false,
 ) {
   await setupResources();
   if (!skipChecks) {
@@ -111,7 +112,9 @@ async function startServer(
   app.use(cors({
     exposedHeaders: ["X-Mycelia-Chat-Id"],
   }));
-  app.use(morgan("tiny"));
+  if (!quiet) {
+    app.use(morgan("tiny"));
+  }
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
@@ -148,11 +151,6 @@ async function startServer(
     } else {
       socket.destroy();
     }
-  });
-
-  app.use((req: Request, _res: Response, next: () => void) => {
-    console.log(`Incoming request: ${req.method} ${req.url}`);
-    next();
   });
 
   // Register all routes
@@ -209,6 +207,12 @@ async function configureCli() {
             type: "boolean",
             describe: "Start background workers.",
             default: true,
+          })
+          .option("quiet", {
+            alias: "q",
+            type: "boolean",
+            describe: "Disable HTTP request logging.",
+            default: false,
           }),
       async (
         args: ArgumentsCamelCase<{
@@ -216,6 +220,7 @@ async function configureCli() {
           port: number;
           skipChecks?: boolean;
           workers?: boolean;
+          quiet?: boolean;
         }>,
       ) => {
         try {
@@ -223,7 +228,8 @@ async function configureCli() {
           const port = Number(args.port);
           const skipChecks = Boolean(args.skipChecks);
           const noWorkers = !args.workers;
-          await startServer(host, port, skipChecks, noWorkers);
+          const quiet = Boolean(args.quiet);
+          await startServer(host, port, skipChecks, noWorkers, quiet);
           await new Promise((resolve) => {
             process.on("SIGINT", resolve);
             process.on("SIGTERM", resolve);

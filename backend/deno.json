@@ -1,6 +1,7 @@
 {
   "tasks": {
-    "dev": "deno run --watch --env -A server.ts serve"
+    "dev": "deno run --watch --env -A server.ts serve",
+    "dev:quiet": "deno run --watch --env -A server.ts serve --quiet"
   },
   "lint": {
     "rules": {

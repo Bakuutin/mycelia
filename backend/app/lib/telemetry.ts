@@ -17,6 +17,7 @@ import { metrics, trace } from "@opentelemetry/api";
 
 const otlpEndpoint = Deno.env.get("OTEL_EXPORTER_OTLP_ENDPOINT") ??
   "http://localhost:4318";
+const enableConsoleExport = Deno.env.get("OTEL_CONSOLE") === "true";
 
 const traceExporter = new OTLPTraceExporter({
   url: `${otlpEndpoint}/v1/traces`,
@@ -25,25 +26,30 @@ const metricExporter = new OTLPMetricExporter({
   url: `${otlpEndpoint}/v1/metrics`,
 });
 
-const consoleTraceExporter = new ConsoleSpanExporter();
-const consoleMetricExporter = new ConsoleMetricExporter();
-
 const otlpMetricReader = new PeriodicExportingMetricReader({
   exporter: metricExporter,
   exportIntervalMillis: 5000,
 });
 
-const consoleMetricReader = new PeriodicExportingMetricReader({
-  exporter: consoleMetricExporter,
-  exportIntervalMillis: 5000,
-});
+// Only add console exporters if OTEL_CONSOLE=true
+const spanProcessors = [new BatchSpanProcessor(traceExporter)];
+const metricReaders = [otlpMetricReader];
+
+if (enableConsoleExport) {
+  const consoleTraceExporter = new ConsoleSpanExporter();
+  const consoleMetricExporter = new ConsoleMetricExporter();
+  spanProcessors.push(new BatchSpanProcessor(consoleTraceExporter));
+  metricReaders.push(
+    new PeriodicExportingMetricReader({
+      exporter: consoleMetricExporter,
+      exportIntervalMillis: 5000,
+    }),
+  );
+}
 
 const sdk = new NodeSDK({
-  spanProcessors: [
-    new BatchSpanProcessor(traceExporter),
-    new BatchSpanProcessor(consoleTraceExporter),
-  ],
-  metricReaders: [otlpMetricReader, consoleMetricReader],
+  spanProcessors,
+  metricReaders,
   instrumentations: [
     new HttpInstrumentation(),
     new ExpressInstrumentation(),
