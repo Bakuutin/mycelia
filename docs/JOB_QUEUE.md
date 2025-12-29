@@ -29,11 +29,12 @@ Client → Deno Server (BullMQ) → TypeScript Worker ──┐
 ### 1. Start Deno Server
 
 ```bash
-deno run -A --env server.ts serve
+cd backend
+deno task dev
 ```
 
 This starts:
-- Express API server
+- Express API server on port 5173
 - BullMQ TypeScript workers
 - WebSocket handlers
 
@@ -42,7 +43,7 @@ Required only for AI/ML tasks (VAD, Transcription, etc.).
 
 ```bash
 cd python
-python3 worker_server.py
+uv run worker_server.py
 ```
 
 This starts:
@@ -52,8 +53,8 @@ This starts:
 ### 3. Enqueue a Job
 
 ```bash
-curl -X POST http://localhost:3000/api/jobs \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+curl -X POST http://localhost:5173/api/jobs \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "type": "vad",
@@ -73,7 +74,7 @@ Response:
 ### 4. Monitor Progress (SSE)
 
 ```bash
-curl -N "http://localhost:3000/api/jobs/67a1b2c3d4e5f6789abcdef0/progress?type=vad"
+curl -N "http://localhost:5173/api/jobs/67a1b2c3d4e5f6789abcdef0/progress?type=vad"
 ```
 
 Output:
@@ -86,7 +87,7 @@ data: {"processed":"20","total":"100","hasSpeech":"12","timestamp":"2024-01-15T1
 ### 5. Check Job Status
 
 ```bash
-curl "http://localhost:3000/api/jobs/67a1b2c3d4e5f6789abcdef0?type=vad"
+curl "http://localhost:5173/api/jobs/67a1b2c3d4e5f6789abcdef0?type=vad"
 ```
 
 Response:
@@ -130,7 +131,75 @@ All jobs are enqueued via `POST /api/jobs` with `type` field in the request body
 | `transcription` | Python | Speech-to-text | `{"type": "transcription", "audioChunkIds": [...]}` |
 | `diarization` | Python | Speaker identification | `{"type": "diarization", "start": "...", "end": "..."}` |
 | `ingestion` | Python | Audio file processing | `{"type": "ingestion", "sourceId": "..."}` |
-| `histRecalculation` | TypeScript | Recalculate timeline histograms | `{"type": "histRecalculation", "all": true}` |
+| `histRecalculation` | TypeScript | Recalculate timeline histograms | `{"type": "histRecalculation", "start": "...", "end": "..."}` |
+
+## Timeline Histogram Recalculation
+
+Timeline histograms aggregate audio data for visualization. They need recalculation when:
+- New audio is imported
+- Transcriptions are added
+- Data is modified or deleted
+
+### When Histograms Update
+
+**Automatic**: Histograms are NOT automatically recalculated. After importing audio or running STT, you must trigger recalculation.
+
+**Manual**: Use the timeline resource or frontend UI.
+
+### Recalculate via API
+
+Using the `timeline` resource (synchronous):
+
+```bash
+# Recalculate last 7 days
+curl -X POST http://localhost:5173/api/resource/timeline \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "recalculate", "start": "7d", "end": "0d"}'
+
+# Recalculate specific date range
+curl -X POST http://localhost:5173/api/resource/timeline \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "recalculate", "start": "2024-01-01", "end": "2024-01-31"}'
+
+# Recalculate all data
+curl -X POST http://localhost:5173/api/resource/timeline \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "recalculate", "all": true}'
+```
+
+### Recalculate via Job Queue (async)
+
+For large date ranges, use the job queue:
+
+```bash
+curl -X POST http://localhost:5173/api/jobs \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "histRecalculation",
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2024-12-31T23:59:59Z"
+  }'
+```
+
+### Recalculate via Frontend
+
+1. Select a time range on the timeline
+2. Click the **Recalculate** button (refresh icon)
+
+### Invalidate Stale Data
+
+Mark bins as stale (pink) without recalculating:
+
+```bash
+curl -X POST http://localhost:5173/api/resource/timeline \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "invalidate", "start": "7d", "resolution": "5min"}'
+```
 
 ## Configuration
 
@@ -146,7 +215,7 @@ REDIS_PASSWORD=
 
 **Python:**
 ```bash
-MYCELIA_URL=http://localhost:3000        # TypeScript API URL
+MYCELIA_URL=http://localhost:5173        # TypeScript API URL
 MYCELIA_API_KEY=your_api_key            # For progress callbacks
 PORT=8000
 ```
@@ -233,7 +302,7 @@ Jobs automatically retry on failure:
 Query failed jobs:
 
 ```bash
-curl "http://localhost:3000/api/jobs/{jobId}?type=vad"
+curl "http://localhost:5173/api/jobs/{jobId}?type=vad"
 ```
 
 Response for failed job:
@@ -301,7 +370,7 @@ createBullBoard({
 app.use('/admin/queues', serverAdapter.getRouter());
 ```
 
-Visit: `http://localhost:3000/admin/queues`
+Visit: `http://localhost:5173/admin/queues`
 
 ## Best Practices
 

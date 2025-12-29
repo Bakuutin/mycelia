@@ -5,7 +5,14 @@ import urllib.parse
 import os
 
 env_path = Path(__file__).parent.parent.parent / ".env"
-assert env_path.exists(), f"Environment file not found at {env_path}"
+if not env_path.exists():
+    raise FileNotFoundError(
+        f"Root .env file not found at {env_path}\n\n"
+        "To fix this:\n"
+        "  1. cp .env.example .env\n"
+        "  2. Start the backend: cd backend && deno task dev\n"
+        "  3. Copy MYCELIA_TOKEN and MYCELIA_CLIENT_ID from console to root .env\n"
+    )
 dotenv.load_dotenv(env_path, override=True)
 
 

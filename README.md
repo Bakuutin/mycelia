@@ -1,381 +1,201 @@
-# Mycelia [preview version]
+# Mycelia
 
-**Mycelia is your self-hosted AI memory and timeline.**
+**Your self-hosted AI memory and timeline.**
 
-Capture ideas, thoughts, and conversations in **voice, screenshots, or text**.
-Ask anything later — _“What did I say about X last May?” Mycelia tells you, in
-your own words.
+Capture ideas, thoughts, and conversations in voice, screenshots, or text.
+Ask anything later — _"What did I say about X last May?"_ Mycelia tells you, in your own words.
 
-📍 Local-first · 🔓 Open-source · 📦 Modular · 🛠 Hackable
+Local-first · Open-source · Modular · Hackable
 
-## Roadmap
+---
 
-**Ready now**
+## Quick Start
 
-- ✅ Continuous audio ingestion from Apple Voice Memos, Google Drive, and local libraries.
-- ✅ Smart chunking, diarization-friendly VAD, and waveform normalization for aligned segments.
-- ✅ Speech detection plus Whisper transcription via local or remote servers.
-- ✅ Timeline UI with transcript-synced playback, jump controls, and search overlays.
-- ✅ Modular resource-based backend for pluggable processors, storage, or prompts.
-- ✅ MCP + CLI automation for remote operations and scripting.
-- ✅ OAuth2 flows with `.well-known` metadata, JWT login, and token issuance.
-- ✅ LLM summarizations and conversation extraction across the stack.
-- ✅ MongoDB full-text search alongside GridFS-backed storage.
-- ✅ Structured logging and observability for ingestion, STT, and LLM jobs.
+### Prerequisites
 
-**In Progress**
+Install these before starting:
 
-- 🚧 Chat with your memory via the Friend-Lite companion app + advanced backend (`friend/`) that is wiring semantic memories and wearable capture back into Mycelia.
-- 🚧 Streaming ingestion & GPU diarization stack replacing the current batch-only flow (`python/diarization_worker.py`, `diarizator/` Helm charts + WebUI).
-- 🚧 Multi-device & multi-modal capture (health, geolocation, photos, sensors) prototyped across `friend/extras/` and `friend/Docs/features.md`.
-- 🚧 Semantic search + vector memory integration that connects the Qdrant-backed pipelines in `friend/backends/advanced/` and the OpenMemory MCP bridges into the main timeline.
+| Tool | macOS | Linux | Windows |
+|------|-------|-------|---------|
+| Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop) | [Docker Engine](https://docs.docker.com/engine/install/) | [Docker Desktop](https://www.docker.com/products/docker-desktop) |
+| Deno | `brew install deno` | `curl -fsSL https://deno.land/install.sh \| sh` | `irm https://deno.land/install.ps1 \| iex` |
+| FFmpeg | `brew install ffmpeg` | `sudo apt install ffmpeg` | [ffmpeg.org](https://ffmpeg.org/download.html) |
+| uv (Python) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | same | same |
 
-**Planned / Up Next**
-
-- 🧭 Unified dockerized stack with auto-initialization scripts so `docker compose up` brings up backend, frontend, and Python services (Phase 0 in `docs/DX_ROADMAP.md` & `docs/TASK_BREAKDOWN.md`).
-- 🧭 Guided setup wizard (CLI + web), invite flow, and sample data path outlined in `docs/ONBOARDING_FLOW.md` (Phase 1).
-- 🧭 Managed vs self-hosted inference configuration, remote GPU support, and connection testing UI (Phase 2 in `docs/DX_ROADMAP.md`/`docs/TASK_BREAKDOWN.md`).
-- 🧭 LLM provider + model management, aliasing, quotas, and a model selection wiki (Phase 3 plus `docs/PROCESSING_AND_ARTIFACTS.md` + `docs/DX_ROADMAP.md`).
-- 🧭 Privacy + usage dashboards, token metering, and formal privacy policy with export/acceptance flows (Phase 4 roadmap).
-- 🧭 Processing/artifact templates, batch operations, sharing, and backup/export automation (Phases 5–6; see `docs/PROCESSING_AND_ARTIFACTS.md`).
-
-
-## 🚀 Quick Start
-
-### 1. Prerequisites
-
-Install these system dependencies:
-
-**macOS:**
-```bash
-brew install portaudio deno ffmpeg
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop
-```
-
-**Linux:**
-```bash
-sudo apt install portaudio19-dev ffmpeg
-curl -fsSL https://deno.land/install.sh | sh
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install Docker: https://docs.docker.com/engine/install/
-```
-
-**Windows:**
-```powershell
-# Install Deno
-irm https://deno.land/install.ps1 | iex
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install FFmpeg: https://ffmpeg.org/download.html
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop
-```
-
-### 2. Setup & Run
+### Setup (5 minutes)
 
 ```bash
-# Clone the repo
-git clone https://github.com/your-org/mycelia.git
+# 1. Clone and enter the repo
+git clone https://github.com/mycelia-tech/mycelia.git
 cd mycelia
 
-# Option A: Bring up databases + frontend in one go
-docker compose up -d --build redis mongo mongo-search frontend
+# 2. Create environment file
+cp .env.example .env
 
-# Option B: Start stateful services only (run apps locally)
-docker compose up -d redis mongo mongo-search
+# 3. Start databases (Redis, MongoDB)
+docker compose up -d
 
-# Configure backend environment
+# 4. Setup and start backend
 cd backend
 cp .env.example .env
-# Edit .env with your preferred settings
-# Make sure Mongo uses the direct connection string from .env:
-# MONGO_URL=mongodb://localhost:27017?directConnection=true
-
-# Start the backend server (credentials are auto-generated on first run)
-deno task dev
-# On first run, MYCELIA_TOKEN and MYCELIA_CLIENT_ID will be printed to console
-# Copy them to your .env file
-
-# For quieter logs (no HTTP request logging)
-deno task dev:quiet
-```
-
-The backend dev server will be available at http://localhost:5173/.
-
-### 3. Frontend
-
-#### Option A: Run via Docker Compose (production build)
-
-```bash
-docker compose up -d --build frontend
-```
-
-Open http://localhost:8080.
-
-#### Option B: Run in dev mode (Deno + Vite)
-
-```bash
-cd frontend
 deno task dev
 ```
 
-Open http://localhost:3001.
-
-**First-time setup**: If you see an "API Credentials Required" error:
-1. Make sure the backend is running (`cd backend && deno task dev`)
-2. Copy the auto-generated credentials from the backend console output
-3. Go to **Settings** in the frontend and enter:
-   - **Client ID** → the `MYCELIA_CLIENT_ID` value
-   - **Client Secret** → the `MYCELIA_TOKEN` value
-4. Refresh the page
-
-### 4. Inference & Diarization Stack (optional)
-
-#### Whisper STT server
-```bash
-cd python/whisper_server
-uv sync
-uv run server.py  # auto-detects CPU/GPU
-```
-Serves on http://localhost:8081 by default. Point `STT_SERVER_URL` to the host running this process.
-
-**Auto-detection:**
-- macOS → CPU + `large-v3` model
-- Linux/Windows with CUDA → GPU + `large-v3` model
-- Linux/Windows without CUDA → CPU + `large-v3` model
-
-**Override with environment variables:**
-- `WHISPER_DEVICE` - `cuda` or `cpu`
-- `WHISPER_MODEL` - `tiny`, `base`, `small`, `medium`, `large-v3`
-
-#### Speaker recognition / diarization service
-
-**Prerequisites**: Get a Hugging Face token for pyannote models:
-1. Create account at https://huggingface.co/join
-2. Get token from https://huggingface.co/settings/tokens
-3. Accept model licenses (required):
-   - https://huggingface.co/pyannote/speaker-diarization-3.1
-   - https://huggingface.co/pyannote/segmentation-3.0
-   - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
-
-Use the dedicated compose file under `diarizator/`:
-```bash
-cd diarizator
-cp .env.template .env
-# Edit .env and set HF_TOKEN=your_huggingface_token
-
-# Default (CPU - works everywhere)
-docker compose up -d diarization-service
-
-# GPU (requires NVIDIA runtime)
-docker compose --profile gpu up -d diarization-service-gpu
-```
-The API exposes port `8085`. Configure `DIARIZATION_SERVER_URL` in your backend `.env` to consume the service.
-
-## LLM Setup
-
-Need to wire up local inference or OpenRouter-hosted models? Check `docs/LLM_DEVELOPER_GUIDE.md` for the short developer guide on hardware picks, setup steps, and how to register models with Mycelia.
-
-## Commands
-
-### Backend Server
-
-```bash
-cd backend
-
-# Start the server (credentials auto-generated on first run)
-deno task dev
-
-# Quieter mode (disables HTTP request logging)
-deno task dev:quiet
-
-# Manual token generation (optional, for additional API keys)
-deno run -A --env server.ts token-create
-```
-
-**First Run**: When you start the backend for the first time, it automatically:
-1. Detects no API keys exist in MongoDB
-2. Creates a default admin API key with full permissions
-3. Prints the credentials to the console
-
-Look for this output and copy the values to your `.env` file:
+**First run only**: The backend prints credentials to the console:
 ```
 [AutoInit] ✅ Default API key created. Add to your .env file:
   MYCELIA_TOKEN=mycelia_xxxxx...
   MYCELIA_CLIENT_ID=xxxxxx...
 ```
 
-### Frontend Development
+Copy these values to **both**:
+- `backend/.env` (for backend)
+- Root `.env` (for Python services)
 
 ```bash
+# 5. Start frontend (new terminal)
 cd frontend
-
-# Start development server
 deno task dev
-
-# Run tests
-deno task test
-
-# Type checking
-deno task type-check
-
-# Linting
-deno lint
 ```
 
-### Audio Import Setup
+**Open http://localhost:3001** and configure credentials in **Settings**:
+- Client ID → `MYCELIA_CLIENT_ID` value
+- Client Secret → `MYCELIA_TOKEN` value
 
-1. The `python/settings.py` works out-of-the-box and auto-detects:
-   - Apple Voice Memos (if `CloudRecordings.db` exists)
-   - Google Drive Easy Voice Recorder (scans `~/Library/CloudStorage/GoogleDrive-*`)
-   - Local audio folder (`~/Library/mycelia/audio`)
+### Verify It Works
 
-   Customize paths/timezones via environment variables in `.env`:
-   - `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
-   - `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive Easy Voice Recorder path
-   - `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder path
-   - `MYCELIA_GOOGLE_TZ` - Timezone for Google Drive timestamps (default: `UTC`)
-   - `MYCELIA_LOCAL_TZ` - Timezone for local file timestamps (default: `UTC`)
+- [ ] Backend running at http://localhost:5173
+- [ ] Frontend running at http://localhost:3001
+- [ ] Settings page accepts credentials
+- [ ] Timeline page loads without errors
 
-2. **macOS only**: Grant Full Disk Access to your terminal app (Terminal, iTerm, VS Code, etc.) via System Settings → Privacy & Security → Full Disk Access. Restart the terminal after granting access.
+---
 
-3. Start the daemon, which will automatically import new recordings from your sources in the background.
+## Optional Services
+
+### Speech-to-Text (Whisper)
+
+Transcribe audio recordings locally:
 
 ```bash
-# Run recordings import daemon
+cd python/whisper_server
+uv sync
+uv run server.py  # auto-detects CPU/GPU, uses large-v3 model
+```
+
+Serves at http://localhost:8081. Set `STT_SERVER_URL=http://localhost:8081` in `backend/.env`.
+
+### Speaker Diarization
+
+Identify who's speaking in recordings. Requires [HuggingFace token](https://huggingface.co/settings/tokens) with access to pyannote models.
+
+```bash
+cd diarizator
+cp .env.template .env
+# Edit .env: set HF_TOKEN=your_token
+
+docker compose up -d diarization-service  # CPU
+# OR for GPU: docker compose --profile gpu up -d diarization-service-gpu
+```
+
+Serves at http://localhost:8085. Set `DIARIZATION_SERVER_URL=http://localhost:8085` in `backend/.env`.
+
+### Audio Import Daemon
+
+Import recordings from Apple Voice Memos, Google Drive, or local folders:
+
+```bash
 cd python
+uv sync
 uv run daemon.py
 ```
 
-   **Progress tracking**: The import process shows:
-   - Discovery progress bars for each source (e.g., "Discovering apple_voicememos: 45/150 files")
-   - Ingestion progress: "Starting ingestion: 23 files pending"
-   - Per-file status: "Ingesting [5/23]: /path/to/file.m4a"
-   - Batch summary: "Ingestion batch complete: 20 processed, 2 skipped, 1 errors, 3 remaining"
+**macOS**: Grant Full Disk Access to your terminal app first (System Settings → Privacy & Security → Full Disk Access).
 
-   **Processing frequency**: The daemon runs continuously, processing up to 20 files per batch, then sleeps briefly before the next batch. Failed files are skipped for 2 hours before retry.
+**After importing**: Recalculate timeline histograms to see data in the UI:
+```bash
+curl -X POST http://localhost:5173/api/resource/timeline \
+  -H "Authorization: Bearer $MYCELIA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "recalculate", "all": true}'
+```
 
-   **Resumable**: The daemon tracks already-processed files in the database. If you cancel (Ctrl+C) and restart, it will skip files that were already discovered and continue from where it left off.
+See [docs/JOB_QUEUE.md](docs/JOB_QUEUE.md#timeline-histogram-recalculation) for more options.
 
-   **Logging**: All processing is logged to `~/Library/mycelia/logs/daemon.log` with detailed debug information including full ffmpeg errors. The console shows INFO level messages.
+---
 
-4. After the initial import completes, run the `Recalculate timeline histograms` command below.
+## Documentation
 
-#### Troubleshooting Import Issues
+| Topic | Document |
+|-------|----------|
+| LLM Setup | [docs/LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md) |
+| Job Queue & Histograms | [docs/JOB_QUEUE.md](docs/JOB_QUEUE.md) |
+| Timeline Features | [docs/TIMELINE_SUMMARY.md](docs/TIMELINE_SUMMARY.md) |
+| Histogram Visualization | [docs/HISTOGRAMS.md](docs/HISTOGRAMS.md) |
+| Data Model | [docs/objects.md](docs/objects.md) |
+| Processing Pipeline | [docs/PROCESSING_AND_ARTIFACTS.md](docs/PROCESSING_AND_ARTIFACTS.md) |
+| Development Roadmap | [docs/DX_ROADMAP.md](docs/DX_ROADMAP.md) |
+| All Documentation | [docs/README.md](docs/README.md) |
 
-**FFmpeg errors**: If you see "ffmpeg error (see stderr output for detail)":
-1. Check `~/Library/mycelia/logs/daemon.log` for the full error message
-2. Common causes:
-   - Corrupted audio file (try playing it in another app)
-   - Unsupported codec (ffmpeg may need additional codecs)
-   - File permission issues (verify Full Disk Access is granted)
-3. Files with errors are automatically retried after 2 hours
-4. To force immediate retry, remove the error from MongoDB or wait for the retry window
+---
 
+## Commands Reference
 
-### Speech-to-Text (STT)
+### Backend
 
-Quick start:
+```bash
+cd backend
+deno task dev          # Start server (credentials auto-generated on first run)
+deno task dev:quiet    # Start without HTTP request logging
+deno run -A --env server.ts token-create  # Create additional API keys
+```
 
-1. Start a Whisper server (local or remote) as documented in [backend/README.md#speech-to-text-stt](backend/README.md#speech-to-text-stt).
-2. Transcribe queued audio:
-   ```bash
-   cd python
-   uv run stt.py [--server https://your-stt-server.com/]
-   ```
-3. Inspect the backlog without processing: `uv run stt.py --count`.
+### Frontend
 
-Detailed setup, advanced flags, queue/index maintenance, and Mongo helper commands now live in `backend/README.md`.
+```bash
+cd frontend
+deno task dev          # Start development server
+deno task test         # Run tests
+deno task type-check   # Type checking
+```
 
-### Conversation Extraction (python/convos)
+### Python Services
 
-
-`python/convos` scans recent transcripts, groups them into time-bounded conversation chunks, uses an LLM to extract structured conversations, then writes conversation objects and "mentioned in" relationships to MongoDB.
-
-When to run:
-- After your audio has been imported and transcribed. In sequence: Import/daemon → STT → Conversation extraction → (optionally) timeline histogram recalculation.
-
-What it does:
-- Groups adjacent transcript segments into conversations based on silence gaps and total content length
-- Prompts an LLM to extract: title, summary, entities, start/end, emoji
-- Creates conversation objects in `objects` collection and links mentioned entities via relationships
-
-How to run:
 ```bash
 cd python
-uv run python -m convos.cli \
-  --limit 5 \
-  --model small
+uv run daemon.py       # Import audio files
+uv run stt.py          # Transcribe audio
+uv run python -m convos.cli --limit 5  # Extract conversations
 ```
 
-Flags:
-- `--limit <n>`: Maximum number of conversation chunks to process in this run
-- `--not-later-than <unix_ts>`: Only consider transcripts earlier than this UTC UNIX timestamp
-- `--model <small|medium|large>`: LLM size used for extraction (default: `small`)
-
-Model selection guidance:
-- `small`: Fastest and cheapest. Good for routine runs and iterative backfills
-- `medium`: Balanced quality vs. speed for mixed content
-- `large`: Highest quality summaries/titles/entity extraction; slower and more costly
-
-Notes:
-- Logs are written to `~/Library/mycelia/logs/convos.log` and INFO is printed to console
-- The script marks daily buckets as processed to avoid re-processing the same time windows
-
-
-### Remote Operations (cli.ts)
-
-For operations against a remote server (requires login & API key), from /backend directory:
-
-```bash
-# Login to remote server
-cd backend
-deno run --env -E='MYCELIA_*' --allow-net cli.ts login
-
-# Import audio file to remote server
-deno run --env -E='MYCELIA_*' --allow-net cli.ts audio import /path/to/file.wav
-```
+---
 
 ## Troubleshooting
 
 ### 403 Forbidden / API Credentials Required
 
-If the frontend shows "API Credentials Required" or you see `403 Forbidden` errors:
-
-1. **Backend not running**: Start the backend with `cd backend && deno task dev`
-2. **Missing credentials**: On first run, the backend auto-generates credentials. Check the console for:
-   ```
-   [AutoInit] ✅ Default API key created. Add to your .env file:
-     MYCELIA_TOKEN=mycelia_xxxxx...
-     MYCELIA_CLIENT_ID=xxxxxx...
-   ```
-   Copy these values to your `backend/.env` file.
-3. **Credentials not configured in frontend**: Go to Settings and enter:
-   - **Client ID** → `MYCELIA_CLIENT_ID` value
-   - **Client Secret** → `MYCELIA_TOKEN` value
+1. Make sure backend is running: `cd backend && deno task dev`
+2. Check console for auto-generated credentials
+3. Copy `MYCELIA_TOKEN` and `MYCELIA_CLIENT_ID` to `backend/.env`
+4. Enter credentials in frontend Settings
 
 ### WebSocket Connection Failed
 
-If you see "WebSocket closed" repeatedly in browser console:
-- This is usually caused by missing API credentials (see above)
-- Once credentials are configured, WebSocket connections will work
+Usually caused by missing API credentials. Configure them in Settings and refresh.
 
-### Manual Token Generation
+### Whisper CUDA Error on macOS
 
-If auto-initialization didn't work, you can manually create tokens:
+The server auto-detects macOS and uses CPU. If you see CUDA errors, set:
 ```bash
-cd backend
-deno run -A --env server.ts token-create
-# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID to .env
+WHISPER_DEVICE=cpu WHISPER_MODEL=large-v3 uv run server.py
 ```
+
+---
 
 ## Contributing
 
-You're welcome to fork, build plugins, suggest features, or break things
-(metaphorically, c'mon, it's open source).
-
-- Join the [Discord](https://discord.gg/hPfYbpp2am)
-- PRs are welcome
+- [Discord](https://discord.gg/hPfYbpp2am)
+- PRs welcome
 
 ## License
 
