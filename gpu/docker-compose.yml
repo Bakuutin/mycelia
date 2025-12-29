@@ -1,0 +1,44 @@
+services:
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu
+    environment:
+      - ASR_MODEL=large-v3-turbo
+      - ASR_DEVICE=cuda
+      - ASR_LANGUAGE=faster_whisper
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - MODEL_IDLE_TIMEOUT=300
+    volumes:
+      - ./docker/models:/app/models
+      - ./docker/whisper:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  ollama:
+    image: ollama/ollama:0.13.5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./docker/ollama:/root/.ollama
+    
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    ports:
+      - "${PROXY_PORT:-8000}:8000"
+    volumes:
+      - ./proxy:/app
+    environment:
+      - API_KEY=${PROXY_API_KEY}
+      - WHISPER_SERVICE_URL=http://whisper:9000
+      - OLLAMA_SERVICE_URL=http://ollama:11434

@@ -15,3 +15,5 @@ coverage
 .vscode
 debug.*
 **/logs/*
+.htpasswd
+misc/.htpasswd

@@ -87,9 +87,9 @@ Deno.test(
       expect(result.content.length).toBe(1);
       expect(result.content[0].type).toBe("text");
       
-      // The response is EJSON stringified
+      // The response is EJSON stringified (with type wrapper)
       const parsedContent = JSON.parse(result.content[0].text);
-      expect(parsedContent).toEqual({ result: "Processed: test-value" });
+      expect(parsedContent).toEqual({ type: "json", value: { result: "Processed: test-value" } });
     } else {
       throw new Error("Response should have result");
     }
@@ -193,10 +193,11 @@ Deno.test(
     if ("result" in findResponse) {
       const result = findResponse.result as { content: { type: string; text: string }[] };
       const parsedContent = JSON.parse(result.content[0].text);
-      expect(Array.isArray(parsedContent)).toBeTruthy();
-      expect(parsedContent.length).toBe(1);
-      expect(parsedContent[0].name).toBe("test_item");
-      expect(parsedContent[0].value).toBe(123);
+      expect(parsedContent.type).toBe("json");
+      expect(Array.isArray(parsedContent.value)).toBeTruthy();
+      expect(parsedContent.value.length).toBe(1);
+      expect(parsedContent.value[0].name).toBe("test_item");
+      expect(parsedContent.value[0].value).toBe(123);
     }
   })
 );

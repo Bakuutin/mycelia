@@ -10,6 +10,9 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 from logging.handlers import RotatingFileHandler
 from tqdm import tqdm
+import tempfile
+from pathlib import Path
+import ffmpeg
 from lib.resources import call_resource
 
 from lib.transcription import known_errors, remove_if_lonely
@@ -452,21 +455,80 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
     tqdm.write("=" * 80)
 
 
+def combine_chunks_with_ffmpeg(chunks: list[dict]) -> bytes:
+    sample_rate = 16000
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        input_files = []
+        
+        for i, chunk in enumerate(reversed(chunks)):
+            chunk_data = chunk['data']
+            if not chunk_data:
+                continue
+            
+            input_file = temp_path / f"chunk_{i}.opus"
+            input_file.write_bytes(chunk_data)
+            input_files.append(str(input_file))
+        
+        if not input_files:
+            raise ValueError("No valid audio chunks to combine")
+        
+        concat_file = temp_path / "concat.txt"
+        with open(concat_file, 'w') as f:
+            for input_file in input_files:
+                f.write(f"file '{input_file}'\n")
+        
+        output_file = temp_path / "combined.wav"
+        
+        process = (
+            ffmpeg
+            .input(str(concat_file), format='concat', safe=0)
+            .output(
+                str(output_file),
+                format='wav',
+                acodec='pcm_s16le',
+                ar=str(sample_rate),
+                ac=1
+            )
+            .overwrite_output()
+            .run_async(
+                pipe_stderr=True
+            )
+        )
+        
+        _, stderr = process.communicate()
+        
+        if process.returncode != 0:
+            error_msg = stderr.decode() if stderr else "Unknown ffmpeg error"
+            raise Exception(f"ffmpeg concat failed: {error_msg}")
+        
+        return output_file.read_bytes()
+
+
 def transcribe_sequence(sequence: SpeechSequence, server_url: str):
     headers = {}
     api_key = os.environ.get('STT_API_KEY')
     if api_key:
-        headers['X-Api-Key'] = api_key
+        headers['Authorization'] = f'Bearer {api_key}'
 
-    response = requests.post(f'{server_url}/transcribe',
-                            files=[
-                                ('files', (f'chunk_{i}.opus', io.BytesIO(chunk['data']), 'audio/opus'))
-                                for i, chunk in enumerate(reversed(sequence.chunks))
-                            ],
+    combined_audio = combine_chunks_with_ffmpeg(sequence.chunks)
+    
+    data = {
+        'model': 'whisper',
+        'response_format': 'json',
+        'temperature': '0',
+    }
+    
+    response = requests.post(f'{server_url}/v1/audio/transcriptions',
+                            files={
+                                'file': ('combined.wav', io.BytesIO(combined_audio), 'audio/wav')
+                            },
+                            data=data,
                             headers=headers,
                             timeout=300 + len(sequence.chunks) * 3
     )
-    response.raise_for_status()  # Raise an exception for bad status codes
+    response.raise_for_status()
 
     transcript = response.json()
 

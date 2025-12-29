@@ -33,6 +33,7 @@
     "gethostname",
     "getpid",
     "gigasecond",
+    "gridfs",
     "hdbscan",
     "iinfo",
     "indev",

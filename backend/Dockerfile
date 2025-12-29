@@ -6,5 +6,5 @@ COPY deno.lock /app/deno.lock
 COPY deno.json /app/deno.json
 RUN DENO_FUTURE=1 deno install --lock=deno.lock
 COPY . /app
-RUN deno run -A npm:@remix-run/dev vite:build
+RUN deno run -A npm:vite build
 CMD ["deno", "run", "-A", "server.ts", "serve", "--prod"]

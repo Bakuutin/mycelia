@@ -81,7 +81,6 @@ const PromptsPage = () => {
         update: {
           $set: {
             [`prompts.${taskKey}`]: { $oid: promptId },
-            updatedAt: new Date(),
           },
         },
       });

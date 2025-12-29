@@ -3,31 +3,50 @@ import { ObjectId } from "bson";
 
 export type ModelSize = "small" | "medium" | "large";
 
-export const zModel = z.object({
+export type ProviderType = "llm" | "transcription";
+
+export const zProvider = z.object({
   _id: z.instanceof(ObjectId),
-  alias: z.enum(["small", "medium", "large"]),
   name: z.string(),
-  provider: z.string(),
+  type: z.enum(["llm", "transcription"]),
   baseUrl: z.string().url(),
   apiKey: z.string(),
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 }).strict();
 
+export type Provider = z.infer<typeof zProvider>;
+
+export const zModel = z.object({
+  _id: z.instanceof(ObjectId),
+  alias: z.string(),
+  name: z.string(),
+  createdAt: z.date().optional(),
+  updatedAt: z.date().optional(),
+}).strict();
+
 export type Model = z.infer<typeof zModel>;
 
-export interface CreateModelData {
-  alias: ModelSize;
+export interface CreateProviderData {
   name: string;
-  provider: string;
+  type: ProviderType;
   baseUrl: string;
   apiKey: string;
 }
 
-export interface UpdateModelData {
-  alias?: ModelSize;
+export interface UpdateProviderData {
   name?: string;
-  provider?: string;
+  type?: ProviderType;
   baseUrl?: string;
   apiKey?: string;
+}
+
+export interface CreateModelData {
+  alias: string;
+  name: string;
+}
+
+export interface UpdateModelData {
+  alias?: string;
+  name?: string;
 }

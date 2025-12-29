@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -21,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
-import type { Model } from "@/types/llm";
 import type { Prompt } from "@/types/config";
 
 interface SummarizeDialogProps {
@@ -45,9 +45,8 @@ export function SummarizeDialog({
 }: SummarizeDialogProps) {
   const navigate = useNavigate();
   const [summarizePrompt, setSummarizePrompt] = useState("");
-  const [models, setModels] = useState<Model[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [selectedModel, setSelectedModel] = useState<string>("medium");
   const [selectedPromptId, setSelectedPromptId] = useState<string>("custom");
   const [jobStatus, setJobStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,33 +56,21 @@ export function SummarizeDialog({
     if (open) {
       const fetchData = async () => {
         try {
-          const [modelsData, promptsData] = await Promise.all([
-            callResource("mongo", {
-              action: "find",
-              collection: "llm_models",
-              query: {},
-              options: { sort: { alias: 1 } },
-            }),
-            callResource("mongo", {
-              action: "find",
-              collection: "prompts",
-              query: {},
-              options: { sort: { name: 1 } },
-            }),
-          ]);
+          const promptsData = await callResource("mongo", {
+            action: "find",
+            collection: "prompts",
+            query: {},
+            options: { sort: { name: 1 } },
+          });
 
-          setModels(modelsData);
           setPrompts(promptsData);
 
-          if (modelsData.length > 0 && !selectedModel) {
-            const defaultModel =
-              modelsData.find((m: any) => m.alias === "medium") ||
-              modelsData[0];
-            if (defaultModel) setSelectedModel(defaultModel.alias);
+          if (!selectedModel) {
+            setSelectedModel("medium");
           }
         } catch (e) {
-          console.error("Failed to fetch models or prompts", e);
-          setError("Failed to load models and prompts");
+          console.error("Failed to fetch prompts", e);
+          setError("Failed to load prompts");
         }
       };
       fetchData();
@@ -213,22 +200,16 @@ export function SummarizeDialog({
 
           <div className="grid gap-2">
             <Label htmlFor="model">Model</Label>
-            <Select 
-              value={selectedModel} 
-              onValueChange={setSelectedModel}
+            <Input
+              id="model"
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              placeholder="e.g., gpt-4, gpt-3.5-turbo, medium"
               disabled={isJobInProgress || isJobComplete}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select model" />
-              </SelectTrigger>
-              <SelectContent>
-                {models.map((model) => (
-                  <SelectItem key={model._id.toString()} value={model.alias}>
-                    {model.alias} ({model.name})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
+            <p className="text-xs text-muted-foreground">
+              Enter the model name to use for summarization
+            </p>
           </div>
 
           <div className="grid gap-2">

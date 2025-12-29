@@ -1,5 +1,4 @@
-import React, { useEffect } from "react";
-import { useFetcher } from "@remix-run/react";
+import React, { useEffect, useState } from "react";
 import { create } from "zustand";
 import _ from "lodash";
 
@@ -129,7 +128,8 @@ export const AudioPlayer: React.FC = () => {
     baselineStartDate,
     baselineStartCtxTime,
   } = useDateStore();
-  const fetcher = useFetcher();
+  const [isLoading, setIsLoading] = useState(false);
+  const [fetchData, setFetchData] = useState<{ segments: any[] } | null>(null);
   const preloadLimit = 20; // Number of segments to preload
 
   const ensureAudioContext = () => {
@@ -156,25 +156,34 @@ export const AudioPlayer: React.FC = () => {
   }
 
   const fetchAndDecodeBuffers = async () => {
-    if (fetcher.state !== "idle") return;
+    if (isLoading) return;
     const prev = chunks[chunks.length - 1];
     const start = prev ? prev.start : currentDate;
     if (!start) return;
 
     const lastId = prev ? prev._id : null;
-    fetcher.load(
-      `/data/audio?start=${start.getTime()}&limit=${preloadLimit}${
-        lastId ? `&lastId=${lastId}` : ""
-      }`,
-    );
+    setIsLoading(true);
+    try {
+      const response = await fetch(
+        `/data/audio?start=${start.getTime()}&limit=${preloadLimit}${
+          lastId ? `&lastId=${lastId}` : ""
+        }`,
+      );
+      const data = await response.json();
+      setFetchData(data);
+    } catch (error) {
+      console.error("Failed to fetch audio data:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
     if (
-      fetcher.data &&
-      Array.isArray((fetcher.data as { segments: any[] }).segments)
+      fetchData &&
+      Array.isArray(fetchData.segments)
     ) {
-      const segments: any[] = (fetcher.data as { segments: any[] }).segments;
+      const segments: any[] = fetchData.segments;
 
       for (const segment of segments) {
         audioContext!.decodeAudioData(base64ToArrayBuffer(segment.data)).then(
@@ -187,8 +196,9 @@ export const AudioPlayer: React.FC = () => {
           },
         );
       }
+      setFetchData(null);
     }
-  }, [fetcher.data]);
+  }, [fetchData, audioContext, appendChunks]);
 
   useEffect(() => {
     if (audioContext && !gainNode) {

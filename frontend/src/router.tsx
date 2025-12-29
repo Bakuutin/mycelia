@@ -6,9 +6,7 @@ import ChatPage from "./pages/ChatPage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
-import LLMSettingsPage from "./pages/settings/LLMSettingsPage";
-import CreateLLMPage from "./pages/settings/CreateLLMPage";
-import LLMDetailPage from "./pages/settings/LLMDetailPage";
+import InferenceSettingsPage from "./pages/settings/InferenceSettingsPage";
 import APIKeysPage from "./pages/settings/APIKeysPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
@@ -119,16 +117,8 @@ export const router = createBrowserRouter([
             element: <APISettingsPage />,
           },
           {
-            path: "llms",
-            element: <LLMSettingsPage />,
-          },
-          {
-            path: "llms/new",
-            element: <CreateLLMPage />,
-          },
-          {
-            path: "llms/:id",
-            element: <LLMDetailPage />,
+            path: "inference",
+            element: <InferenceSettingsPage />,
           },
           {
             path: "api-keys",

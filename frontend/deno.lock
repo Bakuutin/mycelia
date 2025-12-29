@@ -33,7 +33,6 @@
     "npm:@radix-ui/react-tooltip@^1.1.8": "1.2.8_@types+react@18.3.27_@types+react-dom@18.3.7__@types+react@18.3.27_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-tooltip@^1.2.8": "1.2.8_@types+react@18.3.27_@types+react-dom@18.3.7__@types+react@18.3.27_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:@radix-ui/react-use-controllable-state@^1.2.2": "1.2.2_@types+react@18.3.27_react@18.3.1",
-    "npm:@remix-run/react@^2.16.5": "2.17.2_react@18.3.1_react-dom@18.3.1__react@18.3.1_typescript@5.9.3",
     "npm:@rjsf/core@^6.1.1": "6.1.2_@rjsf+utils@6.1.2__react@18.3.1_react@18.3.1",
     "npm:@rjsf/shadcn@^6.1.1": "6.1.2_@rjsf+core@6.1.2__@rjsf+utils@6.1.2___react@18.3.1__react@18.3.1_@rjsf+utils@6.1.2__react@18.3.1_react@18.3.1_@types+react@18.3.27_@types+react-dom@18.3.7__@types+react@18.3.27_react-dom@18.3.1__react@18.3.1_tailwindcss@4.1.17",
     "npm:@rjsf/utils@^6.1.1": "6.1.2_react@18.3.1",
@@ -1595,41 +1594,6 @@
         "react-dom"
       ]
     },
-    "@remix-run/react@2.17.2_react@18.3.1_react-dom@18.3.1__react@18.3.1_typescript@5.9.3": {
-      "integrity": "sha512-/s/PYqDjTsQ/2bpsmY3sytdJYXuFHwPX3IRHKcM+UZXFRVGPKF5dgGuvCfb+KW/TmhVKNgpQv0ybCoGpCuF6aA==",
-      "dependencies": [
-        "@remix-run/router",
-        "@remix-run/server-runtime",
-        "react",
-        "react-dom",
-        "react-router@6.30.0_react@18.3.1",
-        "react-router-dom@6.30.0_react@18.3.1_react-dom@18.3.1__react@18.3.1",
-        "turbo-stream",
-        "typescript"
-      ],
-      "optionalPeers": [
-        "typescript"
-      ]
-    },
-    "@remix-run/router@1.23.0": {
-      "integrity": "sha512-O3rHJzAQKamUz1fvE0Qaw0xSFqsA/yafi2iqeE0pvdFtCO1viYx8QL6f3Ln/aCCTLxs68SLf0KPM9eSeM8yBnA=="
-    },
-    "@remix-run/server-runtime@2.17.2_typescript@5.9.3": {
-      "integrity": "sha512-dTrAG1SgOLgz1DFBDsLHN0V34YqLsHEReVHYOI4UV/p+ALbn/BRQMw1MaUuqGXmX21ZTuCzzPegtTLNEOc8ixA==",
-      "dependencies": [
-        "@remix-run/router",
-        "@types/cookie",
-        "@web3-storage/multipart-parser",
-        "cookie@0.7.2",
-        "set-cookie-parser",
-        "source-map",
-        "turbo-stream",
-        "typescript"
-      ],
-      "optionalPeers": [
-        "typescript"
-      ]
-    },
     "@rjsf/core@6.1.2_@rjsf+utils@6.1.2__react@18.3.1_react@18.3.1": {
       "integrity": "sha512-fcEO6kArMcVIzTBoBxNStqxzAL417NDw049nmNx11pIcMwUnU5sAkSW18c8kgZOT6v1xaZhQrY+X5cBzzHy9+g==",
       "dependencies": [
@@ -2070,9 +2034,6 @@
         "assertion-error"
       ]
     },
-    "@types/cookie@0.6.0": {
-      "integrity": "sha512-4Kh9a6B2bQciAhf7FSuMRRkUWecJgJu9nPnx3yzpsfXX/c50REIqpHY4C82bXP90qrLtXtkDxTZosYO3UpOwlA=="
-    },
     "@types/d3-array@3.2.2": {
       "integrity": "sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw=="
     },
@@ -2499,9 +2460,6 @@
         "tinyrainbow"
       ]
     },
-    "@web3-storage/multipart-parser@1.0.0": {
-      "integrity": "sha512-BEO6al7BYqcnfX15W2cnGR+Q566ACXAT9UQykORCWW80lmkpWsnEob6zJS1ZVBKsSJC8+7vJkHwlp+lXG1UCdw=="
-    },
     "@x0k/json-schema-merge@1.0.2": {
       "integrity": "sha512-1734qiJHNX3+cJGDMMw2yz7R+7kpbAtl5NdPs1c/0gO5kYT6s4dMbLXiIfpZNsOYhGZI3aH7FWrj4Zxz7epXNg==",
       "dependencies": [
@@ -2903,9 +2861,6 @@
     },
     "convert-source-map@2.0.0": {
       "integrity": "sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg=="
-    },
-    "cookie@0.7.2": {
-      "integrity": "sha512-yki5XnKuf750l50uGTllt6kKILY4nQ1eNIQatoXEByZ5dWgnKqbnqmTrBE5B4N7lrMJKQ2ytWMiTO2o0v6Ew/w=="
     },
     "cookie@1.1.1": {
       "integrity": "sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ=="
@@ -5557,34 +5512,18 @@
         "react-dom"
       ]
     },
-    "react-router-dom@6.30.0_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
-      "integrity": "sha512-x30B78HV5tFk8ex0ITwzC9TTZMua4jGyA9IUlH1JLQYQTFyxr/ZxwOJq7evg1JX1qGVUcvhsmQSKdPncQrjTgA==",
-      "dependencies": [
-        "@remix-run/router",
-        "react",
-        "react-dom",
-        "react-router@6.30.0_react@18.3.1"
-      ]
-    },
     "react-router-dom@7.10.0_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
       "integrity": "sha512-Q4haR150pN/5N75O30iIsRJcr3ef7p7opFaKpcaREy0GQit6uCRu1NEiIFIwnHJQy0bsziRFBweR/5EkmHgVUQ==",
       "dependencies": [
         "react",
         "react-dom",
-        "react-router@7.10.0_react@18.3.1_react-dom@18.3.1__react@18.3.1"
-      ]
-    },
-    "react-router@6.30.0_react@18.3.1": {
-      "integrity": "sha512-D3X8FyH9nBcTSHGdEKurK7r8OYE1kKFn3d/CF+CoxbSHkxU7o37+Uh7eAHRXr6k2tSExXYO++07PeXJtA/dEhQ==",
-      "dependencies": [
-        "@remix-run/router",
-        "react"
+        "react-router"
       ]
     },
     "react-router@7.10.0_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
       "integrity": "sha512-FVyCOH4IZ0eDDRycODfUqoN8ZSR2LbTvtx6RPsBgzvJ8xAXlMZNCrOFpu+jb8QbtZnpAd/cEki2pwE848pNGxw==",
       "dependencies": [
-        "cookie@1.1.1",
+        "cookie",
         "react",
         "react-dom",
         "set-cookie-parser"
@@ -5986,9 +5925,6 @@
     "source-map-js@1.2.1": {
       "integrity": "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA=="
     },
-    "source-map@0.7.6": {
-      "integrity": "sha512-i5uvt8C3ikiWeNZSVZNWcfZPItFQOsYTUAOkcUPGd8DqDy1uOUikjt5dG+uRlwyvR108Fb9DOd4GvXfT0N2/uQ=="
-    },
     "space-separated-tokens@2.0.2": {
       "integrity": "sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q=="
     },
@@ -6237,9 +6173,6 @@
     },
     "tslib@2.8.1": {
       "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="
-    },
-    "turbo-stream@2.4.1": {
-      "integrity": "sha512-v8kOJXpG3WoTN/+at8vK7erSzo6nW6CIaeOvNOkHQVDajfz1ZVeSxCbc6tOH4hrGZW7VUCV0TOXd8CPzYnYkrw=="
     },
     "type-check@0.4.0": {
       "integrity": "sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==",
@@ -6731,7 +6664,6 @@
       "npm:@radix-ui/react-slider@^1.2.3",
       "npm:@radix-ui/react-slot@^1.2.3",
       "npm:@radix-ui/react-tooltip@^1.1.8",
-      "npm:@remix-run/react@^2.16.5",
       "npm:@rjsf/core@^6.1.1",
       "npm:@rjsf/shadcn@^6.1.1",
       "npm:@rjsf/utils@^6.1.1",

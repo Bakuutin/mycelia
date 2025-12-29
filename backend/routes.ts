@@ -9,6 +9,7 @@ import { apiAudioStreamHandler } from "@/routes/api.audio.stream.ts";
 import { apiAudioWavHandler } from "@/routes/api.audio.wav.ts";
 import { mcpGetHandler, mcpPostHandler } from "@/routes/mcp.ts";
 import { llmChatCompletionsHandler } from "@/routes/llm.chat.completions.ts";
+import { transcriptionAudioHandler } from "@/routes/transcription.audio.ts";
 import { oauthTokenHandler } from "@/routes/oauth.token.ts";
 import { oauthRegisterHandler } from "@/routes/oauth.register.ts";
 import {
@@ -40,6 +41,7 @@ export function registerRoutes(app: Express): void {
   app.get("/mcp", mcpGetHandler);
   app.post("/mcp", mcpPostHandler);
   app.post("/llm/chat/completions", llmChatCompletionsHandler);
+  app.post("/v1/audio/transcriptions", transcriptionAudioHandler);
   app.get("/oauth/authorize", oauthAuthorizeHandler);
   app.get("/oauth/consent/details", oauthConsentDetailsHandler);
   app.post("/oauth/consent", oauthConsentHandler);

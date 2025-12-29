@@ -118,7 +118,7 @@ Deno.test(
         content: [
           {
             type: "text",
-            text: "[]",
+            text: '{"type":"json","value":[]}',
           },
         ],
       },

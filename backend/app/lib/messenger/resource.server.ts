@@ -153,7 +153,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
           externalId: chatExternalId,
           name: chatName,
           createdAt: now,
-          updatedAt: now,
         },
       });
       chatId = newChat.insertedId;
@@ -203,7 +202,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
       timestamp,
       senderId,
       text,
-      updatedAt: now,
       raw,
     };
 
@@ -256,7 +254,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
         update: {
           $set: {
             lastMessageDate: timestamp,
-            updatedAt: now,
           },
         },
       });
@@ -364,7 +361,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
             },
           },
           createdAt: now,
-          updatedAt: now,
           version: 1,
         });
         senderCreateOrder.push(key);
@@ -398,7 +394,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
           externalId: chat.externalId,
           name: chat.name,
           createdAt: now,
-          updatedAt: now,
         });
         chatCreateOrder.push(key);
       }
@@ -508,7 +503,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
           timestamp: msg.timestamp instanceof Date ? msg.timestamp : new Date(msg.timestamp),
           senderId: senderData._id,
           text: msg.text,
-          updatedAt: now,
           raw: msg.raw,
         };
 
@@ -602,7 +596,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
             filter: { _id: chatData._id },
             update: {
               $max: { lastMessageDate: maxTimestamp },
-              $set: { updatedAt: now },
             },
           },
         });
@@ -648,7 +641,6 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
       platform,
       externalId,
       name,
-      updatedAt: now,
       raw,
     };
 
@@ -734,9 +726,7 @@ export class MessengerResource implements Resource<MessengerRequest, MessengerRe
 
     if (icon || details || raw) {
       const mongo = await getMongoResource(auth);
-      const update: any = {
-        updatedAt: new Date(),
-      };
+      const update: any = {};
       if (icon) update.icon = icon;
       if (details) update.details = details;
       if (raw) update.raw = raw;
