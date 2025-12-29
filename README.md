@@ -22,6 +22,7 @@ your own words.
 - ✅ LLM summarizations and conversation extraction across the stack.
 - ✅ MongoDB full-text search alongside GridFS-backed storage.
 - ✅ Structured logging and observability for ingestion, STT, and LLM jobs.
+- ✅ First-run setup wizard with automatic API key creation and inference provider configuration.
 
 **In Progress**
 
@@ -33,8 +34,8 @@ your own words.
 **Planned / Up Next**
 
 - 🧭 Unified dockerized stack with auto-initialization scripts so `docker compose up` brings up backend, frontend, and Python services (Phase 0 in `docs/DX_ROADMAP.md` & `docs/TASK_BREAKDOWN.md`).
-- 🧭 Guided setup wizard (CLI + web), invite flow, and sample data path outlined in `docs/ONBOARDING_FLOW.md` (Phase 1).
-- 🧭 Managed vs self-hosted inference configuration, remote GPU support, and connection testing UI (Phase 2 in `docs/DX_ROADMAP.md`/`docs/TASK_BREAKDOWN.md`).
+- 🧭 Invite flow and sample data path outlined in `docs/ONBOARDING_FLOW.md` (Phase 1).
+- 🧭 Remote GPU support and connection testing UI (Phase 2 in `docs/DX_ROADMAP.md`/`docs/TASK_BREAKDOWN.md`).
 - 🧭 LLM provider + model management, aliasing, quotas, and a model selection wiki (Phase 3 plus `docs/PROCESSING_AND_ARTIFACTS.md` + `docs/DX_ROADMAP.md`).
 - 🧭 Privacy + usage dashboards, token metering, and formal privacy policy with export/acceptance flows (Phase 4 roadmap).
 - 🧭 Processing/artifact templates, batch operations, sharing, and backup/export automation (Phases 5–6; see `docs/PROCESSING_AND_ARTIFACTS.md`).
@@ -62,6 +63,18 @@ docker compose up -d --build
 The backend dev server will be available at http://localhost:5173/.
 The frontend will be available at http://localhost:8080.
 
+### 2. First-Run Setup
+
+When you first open the frontend, you'll be guided through a setup wizard:
+
+1. **Server Connection** (`/setup`) - Connects to the backend and automatically creates your first API key. No manual token generation required.
+
+2. **Inference Provider** (`/setup/inference`) - Configure your AI inference backend. You can use:
+   - The managed inference service at `https://inference.mycelia.tech`
+   - Your own local GPU stack (see [Inference Stack](#3-inference-stack) below)
+   - Any OpenAI-compatible API endpoint
+
+You can reconfigure these settings anytime in Settings.
 
 #### Option B: Run in dev mode (Deno + Vite)
 

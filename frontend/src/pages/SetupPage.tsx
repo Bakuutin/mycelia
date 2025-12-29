@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
+import { exchangeApiKeyForJWT } from "@/lib/auth";
+import { Loader2, CheckCircle2, XCircle, Sparkles, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type SetupStatus = "idle" | "connecting" | "creating" | "success" | "error" | "already_exists";
+type SetupStatus = "idle" | "connecting" | "creating" | "success" | "error" | "manual_entry" | "verifying";
 
 interface SetupResponse {
   created: boolean;
@@ -27,6 +28,8 @@ export default function SetupPage() {
   } = useSettingsStore();
 
   const [localEndpoint, setLocalEndpoint] = useState(apiEndpoint);
+  const [manualClientId, setManualClientId] = useState("");
+  const [manualClientSecret, setManualClientSecret] = useState("");
   const [status, setStatus] = useState<SetupStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -70,10 +73,8 @@ export default function SetupPage() {
           navigate("/setup/inference", { replace: true });
         }, 1500);
       } else if (!data.created) {
-        setStatus("already_exists");
-        setErrorMessage(
-          "API keys already exist on this server. Please enter your credentials manually in Settings."
-        );
+        // API keys already exist, show manual entry form
+        setStatus("manual_entry");
       }
     } catch (error) {
       setStatus("error");
@@ -83,8 +84,41 @@ export default function SetupPage() {
     }
   };
 
-  const goToSettings = () => {
-    navigate("/settings/api");
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const verifyAndSaveCredentials = async () => {
+    if (!manualClientId || !manualClientSecret) {
+      return;
+    }
+
+    setStatus("verifying");
+    setVerifyError(null);
+
+    try {
+      const result = await exchangeApiKeyForJWT(
+        localEndpoint,
+        manualClientId,
+        manualClientSecret
+      );
+
+      if (result.jwt) {
+        // Credentials are valid, save them
+        setClientId(manualClientId);
+        setClientSecret(manualClientSecret);
+        setStatus("success");
+
+        setTimeout(() => {
+          navigate("/setup/inference", { replace: true });
+        }, 1500);
+      } else {
+        // Invalid credentials
+        setVerifyError(result.error || "Invalid credentials");
+        setStatus("manual_entry");
+      }
+    } catch (error) {
+      setVerifyError(error instanceof Error ? error.message : "Verification failed");
+      setStatus("manual_entry");
+    }
   };
 
   return (
@@ -136,10 +170,6 @@ export default function SetupPage() {
               >
                 Start Setup
               </Button>
-
-              <p className="text-slate-400 text-sm text-center mt-4">
-                This will create your first API key automatically
-              </p>
             </>
           )}
 
@@ -167,38 +197,105 @@ export default function SetupPage() {
             </div>
           )}
 
-          {(status === "error" || status === "already_exists") && (
+          {status === "manual_entry" && (
+            <>
+              <div className="text-center mb-6">
+                <KeyRound className="w-10 h-10 text-amber-400 mx-auto mb-3" />
+                <p className="text-white text-lg font-medium">
+                  Enter Your Credentials
+                </p>
+                <p className="text-slate-400 text-sm mt-1">
+                  API keys already exist on this server
+                </p>
+              </div>
+
+              {verifyError && (
+                <div className="mb-4 p-3 rounded-lg bg-red-500/20 border border-red-500/30">
+                  <p className="text-red-300 text-sm text-center">{verifyError}</p>
+                </div>
+              )}
+
+              <div className="space-y-4 mb-6">
+                <div>
+                  <Label htmlFor="manualClientId" className="text-slate-200 mb-2 block">
+                    Client ID
+                  </Label>
+                  <Input
+                    id="manualClientId"
+                    type="text"
+                    value={manualClientId}
+                    onChange={(e) => setManualClientId(e.target.value)}
+                    placeholder="Enter your client ID"
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="manualClientSecret" className="text-slate-200 mb-2 block">
+                    Client Secret (API Key)
+                  </Label>
+                  <Input
+                    id="manualClientSecret"
+                    type="password"
+                    value={manualClientSecret}
+                    onChange={(e) => setManualClientSecret(e.target.value)}
+                    placeholder="mycelia_..."
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Button
+                  onClick={verifyAndSaveCredentials}
+                  disabled={!manualClientId || !manualClientSecret}
+                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50 disabled:opacity-50"
+                >
+                  Verify & Continue
+                </Button>
+                <Button
+                  onClick={() => setStatus("idle")}
+                  variant="ghost"
+                  className="w-full text-slate-400 hover:text-white hover:bg-white/10"
+                >
+                  Back
+                </Button>
+              </div>
+            </>
+          )}
+
+          {status === "verifying" && (
+            <div className="text-center py-8">
+              <Loader2 className="w-12 h-12 text-amber-400 animate-spin mx-auto mb-4" />
+              <p className="text-white text-lg font-medium">
+                Verifying credentials...
+              </p>
+              <p className="text-slate-400 text-sm mt-2">
+                Please wait a moment
+              </p>
+            </div>
+          )}
+
+          {status === "error" && (
             <div className="text-center py-4">
               <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
               <p className="text-white text-lg font-medium mb-2">
-                {status === "already_exists" ? "Server Already Configured" : "Setup Failed"}
+                Connection Failed
               </p>
               <p className="text-slate-400 text-sm mb-6">
                 {errorMessage}
               </p>
-              <div className="flex gap-3">
-                <Button
-                  onClick={() => setStatus("idle")}
-                  variant="outline"
-                  className="flex-1 border-white/20 text-white hover:bg-white/10"
-                >
-                  Try Again
-                </Button>
-                <Button
-                  onClick={goToSettings}
-                  className="flex-1 bg-purple-500 hover:bg-purple-600 text-white"
-                >
-                  Go to Settings
-                </Button>
-              </div>
+              <Button
+                onClick={() => setStatus("idle")}
+                variant="outline"
+                className="border-white/20 text-white hover:bg-white/10"
+              >
+                Try Again
+              </Button>
             </div>
           )}
         </div>
 
-        {/* Footer */}
-        <p className="text-slate-500 text-xs text-center mt-6">
-          Step 1 of 2 - Server Connection
-        </p>
+        
       </div>
     </div>
   );

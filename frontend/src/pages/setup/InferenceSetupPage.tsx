@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { callResource } from "@/lib/api";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type SetupStatus = "idle" | "saving" | "success" | "error";
+type SetupStatus = "checking" | "idle" | "saving" | "success" | "error";
 
 const SERVER_CONFIG_ID = "000000000000000000000000";
 
@@ -17,14 +17,49 @@ export default function InferenceSetupPage() {
 
   const [baseUrl, setBaseUrl] = useState("https://inference.mycelia.tech");
   const [apiKey, setApiKey] = useState("");
-  const [status, setStatus] = useState<SetupStatus>("idle");
+  const [status, setStatus] = useState<SetupStatus>("checking");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Redirect to main setup if no credentials
-  if (!clientId || !clientSecret) {
-    navigate("/setup", { replace: true });
-    return null;
-  }
+  // Check if inference is already configured
+  useEffect(() => {
+    // Redirect to main setup if no credentials
+    if (!clientId || !clientSecret) {
+      navigate("/setup", { replace: true });
+      return;
+    }
+
+    const checkExistingConfig = async () => {
+      try {
+        const config = await callResource("mongo", {
+          action: "findOne",
+          collection: "configs",
+          query: { _id: { $oid: SERVER_CONFIG_ID } },
+        });
+
+        // If inference is already configured with both baseUrl and apiKey, skip this step
+        if (config?.inference?.baseUrl && config?.inference?.apiKey) {
+          navigate("/", { replace: true });
+          return;
+        }
+
+        // Pre-fill with existing values if available
+        if (config?.inference?.baseUrl) {
+          setBaseUrl(config.inference.baseUrl);
+        }
+        if (config?.inference?.apiKey) {
+          setApiKey(config.inference.apiKey);
+        }
+
+        setStatus("idle");
+      } catch (error) {
+        // If check fails, just show the form
+        console.error("Failed to check existing config:", error);
+        setStatus("idle");
+      }
+    };
+
+    checkExistingConfig();
+  }, [clientId, clientSecret, navigate]);
 
   const saveInferenceConfig = async () => {
     setStatus("saving");
@@ -111,6 +146,15 @@ export default function InferenceSetupPage() {
 
         {/* Setup Card */}
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20 shadow-2xl">
+          {status === "checking" && (
+            <div className="text-center py-8">
+              <Loader2 className="w-12 h-12 text-cyan-400 animate-spin mx-auto mb-4" />
+              <p className="text-white text-lg font-medium">
+                Checking configuration...
+              </p>
+            </div>
+          )}
+
           {status === "idle" && (
             <>
               <div className="space-y-4 mb-6">
