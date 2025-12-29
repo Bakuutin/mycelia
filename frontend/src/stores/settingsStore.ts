@@ -44,12 +44,6 @@ interface SettingsState {
 }
 
 function getDefaultApiEndpoint(): string {
-  if (
-    typeof window !== "undefined" && window.location.hostname === "localhost" &&
-    window.location.port === "8080"
-  ) {
-    return "http://host.docker.internal:5173";
-  }
   return "http://localhost:5173";
 }
 

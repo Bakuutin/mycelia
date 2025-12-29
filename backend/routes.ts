@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { healthHandler, rootHandler } from "@/routes/health.ts";
+import { setupHandler } from "@/routes/setup.ts";
 import { dataAudioHandler } from "@/routes/data.audio.ts";
 import { dataAudioItemsHandler } from "@/routes/data.audio.items.ts";
 import { apiResourceHandler } from "@/routes/api.resource.$name.ts";
@@ -28,6 +29,7 @@ import { asyncHandler } from "@/middleware/asyncHandler.ts";
 export function registerRoutes(app: Express): void {
   app.get("/", rootHandler);
   app.get("/health", healthHandler);
+  app.post("/setup", asyncHandler(setupHandler));
   app.get("/data/audio", dataAudioHandler);
   app.get("/data/audio/items", dataAudioItemsHandler);
   app.post("/api/resource/:name", asyncHandler(apiResourceHandler));

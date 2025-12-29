@@ -42,74 +42,26 @@ your own words.
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites
+### 0. Prerequisites
 
-Install these system dependencies:
+Install docker compose
 
-**macOS:**
-```bash
-brew install portaudio deno ffmpeg
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop
-```
 
-**Linux:**
-```bash
-sudo apt install portaudio19-dev ffmpeg
-curl -fsSL https://deno.land/install.sh | sh
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install Docker: https://docs.docker.com/engine/install/
-```
-
-**Windows:**
-```powershell
-# Install Deno
-irm https://deno.land/install.ps1 | iex
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Install FFmpeg: https://ffmpeg.org/download.html
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop
-```
-
-### 2. Setup & Run
+### 1. Setup & Run
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/mycelia.git
+git clone https://github.com/mycelia-tech/mycelia.git
 cd mycelia
 
-# Option A: Bring up databases + frontend in one go
-docker compose up -d --build redis mongo mongo-search frontend
-
-# Option B: Start stateful services only (run apps locally)
-docker compose up -d redis mongo mongo-search
-
-# Configure backend environment
-cd backend
 cp .env.example .env
-# Edit .env with your preferred settings
-# Make sure Mongo uses the direct connection string from .env:
-# MONGO_URL=mongodb://localhost:27017?directConnection=true
+docker compose up -d --build
 
-# Generate auth credentials (requires services running)
-deno run -A --env server.ts token-create
-# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
-
-# Start the backend server
-deno task dev
 ```
 
 The backend dev server will be available at http://localhost:5173/.
+The frontend will be available at http://localhost:8080.
 
-### 3. Frontend
-
-#### Option A: Run via Docker Compose (production build)
-
-```bash
-docker compose up -d --build frontend
-```
-
-Open http://localhost:8080.
 
 #### Option B: Run in dev mode (Deno + Vite)
 
@@ -118,28 +70,24 @@ cd frontend
 deno task dev
 ```
 
-Open http://localhost:3001. Configure backend URL and credentials in the settings page.
+The frontend dev server will be available at http://localhost:3001/.
 
-### 4. Inference & Diarization Stack (optional)
-
-#### Whisper STT server
 ```bash
-cd python/whisper_server
-uv sync
-uv run server.py  # serves on http://localhost:8081 by default
+cd backend
+deno task dev
 ```
-Point `STT_SERVER_URL` to the host running this process (local or remote).
 
-#### Speaker recognition / diarization service
-Use the dedicated compose file under `diarizator/`:
+The backend dev server will be available at http://localhost:5173/.
+
+### 3. Inference Stack
+
+On your GPU machine, run the inference stack:
+
 ```bash
-cd diarizator
-# CPU build
-docker compose --profile cpu up -d speaker-service web-ui
-# GPU build (requires NVIDIA runtime)
-docker compose --profile gpu up -d speaker-service-gpu web-ui nginx
+git clone https://github.com/mycelia-tech/mycelia.git
+cd mycelia/gpu
+docker compose up -d --build
 ```
-The web UI lives at `http://localhost:5173` (per `REACT_UI_PORT`) and the API exposes port `8085`. Configure `SPEAKER_SERVICE_URL` in your backend or processors to consume the service.
 
 ## LLM Setup
 
@@ -152,10 +100,8 @@ Need to wire up local inference or OpenRouter-hosted models? Check `docs/LLM_DEV
 ```bash
 cd backend
 
-# Generate auth tokens (put in .env)
-deno run -A --env server.ts token-create
+deno run -A server.ts token-create
 
-# Start the server
 deno task dev
 ```
 
@@ -276,19 +222,6 @@ Notes:
 - Logs are written to `~/Library/mycelia/logs/convos.log` and INFO is printed to console
 - The script marks daily buckets as processed to avoid re-processing the same time windows
 
-
-### Remote Operations (cli.ts)
-
-For operations against a remote server (requires login & API key), from /backend directory:
-
-```bash
-# Login to remote server
-cd backend
-deno run --env -E='MYCELIA_*' --allow-net cli.ts login
-
-# Import audio file to remote server
-deno run --env -E='MYCELIA_*' --allow-net cli.ts audio import /path/to/file.wav
-```
 
 ## Contributing
 

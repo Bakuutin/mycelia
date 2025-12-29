@@ -1,6 +1,7 @@
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { Clock, Home, Package, Settings, MessageSquare, Activity } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player.tsx";
 import { AudioWaveform } from "@/components/AudioWaveform";
@@ -11,8 +12,14 @@ import { Badge } from "@/components/ui/badge";
 const Layout = () => {
   useTheme();
   const location = useLocation();
+  const { clientId, clientSecret } = useSettingsStore();
   const { isPlaying, setIsPlaying } = useAudioPlayer();
   const { runningCount } = useJobsListener();
+
+  // Redirect to setup if no credentials
+  if (!clientId || !clientSecret) {
+    return <Navigate to="/setup" replace />;
+  }
 
   return (
     <TooltipProvider>

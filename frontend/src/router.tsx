@@ -24,6 +24,8 @@ import AudioPlayerPage from "./pages/AudioPlayerPage";
 import AudioExportPage from "./pages/AudioExportPage";
 import MessengerPage from "./pages/MessengerPage";
 import OAuthConsentPage from "./pages/OAuthConsentPage";
+import SetupPage from "./pages/SetupPage";
+import InferenceSetupPage from "./pages/setup/InferenceSetupPage";
 import JobsPage from "./pages/JobsPage";
 import JobDetailPage from "./pages/JobDetailPage";
 
@@ -31,6 +33,14 @@ export const router = createBrowserRouter([
   {
     path: "/oauth/consent",
     element: <OAuthConsentPage />,
+  },
+  {
+    path: "/setup",
+    element: <SetupPage />,
+  },
+  {
+    path: "/setup/inference",
+    element: <InferenceSetupPage />,
   },
   {
     path: "/",

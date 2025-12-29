@@ -1,12 +1,9 @@
 {
-  "name": "ui",
+  "name": "mycelia-backend",
   "private": true,
   "sideEffects": false,
   "type": "module",
-  "scripts": {
-    "dev": "deno run --env-file -A server.ts serve",
-    "cli": "deno run --env-file -A server.ts"
-  },
+  "scripts": {},
   "bin": {
     "mycelia": "./bin/dev.js"
   },

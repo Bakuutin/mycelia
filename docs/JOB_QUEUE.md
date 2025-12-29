@@ -29,7 +29,7 @@ Client → Deno Server (BullMQ) → TypeScript Worker ──┐
 ### 1. Start Deno Server
 
 ```bash
-deno run -A --env server.ts serve
+deno run -A server.ts serve
 ```
 
 This starts:

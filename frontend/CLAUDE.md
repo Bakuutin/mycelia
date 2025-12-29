@@ -1,8 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
+# Project Overview
 
 This is the standalone React frontend for Mycelia, a self-hosted AI memory and timeline system. The frontend is a Single Page Application (SPA) built with Deno, React, TypeScript, Vite, and D3.js for interactive timeline visualization.
 
@@ -47,104 +43,73 @@ deno lint
 
 ```
 src/
-├── components/        # Reusable React components
-│   ├── ui/           # Radix UI-based primitive components
-│   ├── forms/        # Form components
-│   └── SettingsLayout.tsx  # Settings tab navigation layout
-├── core/             # Core type definitions (Layer, Tool, Config)
-├── hooks/            # Custom React hooks
-│   ├── useTimeline.ts    # Timeline zoom/pan with D3
-│   └── useTheme.ts       # Dark mode management
-├── lib/              # Utility functions
-│   ├── api.ts        # API client with OAuth2 integration
-│   ├── auth.ts       # JWT token exchange
-│   └── utils.ts      # Helper functions
-├── modules/          # Feature modules (Layer system)
-│   ├── audio/        # Audio playback and transcription display
-│   ├── events/       # Event timeline layer
-│   ├── time/         # Time formatting (SI units, Gregorian)
-│   ├── ranges/       # Range utilities
-│   ├── map/          # Map visualization layer
-│   └── log/        # Debug logging layer
-├── pages/            # Route page components
-│   └── settings/     # Settings sub-pages
-│       ├── GeneralSettingsPage.tsx    # Appearance & time settings
-│       ├── APISettingsPage.tsx       # API configuration
-│       ├── LLMSettingsPage.tsx        # LLM models management
-│       ├── CreateLLMPage.tsx          # Add new LLM model
-│       └── LLMDetailPage.tsx          # Edit LLM model
-├── stores/           # Zustand state stores
-│   ├── timelineRange.ts  # Timeline date range with URL sync
-│   └── settingsStore.ts  # App settings (API endpoint, credentials)
-└── types/            # TypeScript type definitions
-    └── llm.ts        # LLM model types and schemas
+├── components/           # Reusable React components
+│   ├── ui/              # Radix UI-based primitive components
+│   ├── ai-elements/     # AI chat interface components (messages, reasoning, artifacts)
+│   ├── audio/           # Audio recording UI (visualizer, controls, status)
+│   ├── dialogs/         # Modal dialogs (SummarizeDialog)
+│   ├── forms/           # Form components (FormField, EntityEditSheet)
+│   ├── timeline/        # Timeline visualization components
+│   ├── Layout.tsx       # Main app layout
+│   └── SettingsLayout.tsx  # Settings tab navigation
+├── core/                # Core type definitions (Layer, Tool, Config)
+├── hooks/               # Custom React hooks
+│   ├── useTimeline.ts   # Timeline zoom/pan with D3
+│   ├── useTheme.ts      # Dark mode management
+│   ├── useAudioRecording.ts  # Audio recording logic
+│   ├── useJobsListener.ts    # Real-time job updates
+│   ├── useObjectQueries.ts   # Object data fetching
+│   └── useWebSocket.ts       # WebSocket connection
+├── lib/                 # Utility functions
+│   ├── api.ts           # API client with OAuth2 integration
+│   ├── auth.ts          # JWT token exchange
+│   ├── formatTime.ts    # Time formatting utilities
+│   ├── jobs.ts          # Job queue utilities
+│   ├── llm.ts           # LLM API helpers
+│   ├── websocket.ts     # WebSocket client
+│   └── utils.ts         # General helper functions
+├── modules/             # Feature modules (Layer system)
+│   ├── audio/           # Audio playback and transcription display
+│   ├── histogram/       # Histogram visualization layer
+│   ├── map/             # Map visualization layer
+│   ├── messenger/       # Messenger integration (Telegram, etc.)
+│   ├── objects/         # Object management layer
+│   ├── ranges/          # Range utilities
+│   └── time/            # Time formatting (SI units, Gregorian)
+├── pages/               # Route page components
+│   ├── HomePage.tsx     # Main landing page
+│   ├── TimelinePage.tsx # Timeline visualization
+│   ├── ChatPage.tsx     # AI chat interface
+│   ├── ObjectsPage.tsx  # Objects list view
+│   ├── JobsPage.tsx     # Background jobs management
+│   ├── MessengerPage.tsx # Messenger integration
+│   └── settings/        # Settings sub-pages
+│       ├── GeneralSettingsPage.tsx     # Appearance & time settings
+│       ├── APISettingsPage.tsx         # API configuration
+│       ├── APIKeysPage.tsx             # API keys management
+│       ├── InferenceSettingsPage.tsx   # Inference settings
+│       ├── ProvidersSettingsPage.tsx   # LLM providers management
+│       ├── CreateLLMPage.tsx           # Add new LLM model
+│       ├── PromptsPage.tsx             # Prompts management
+│       ├── PromptDetailPage.tsx        # Edit prompt
+│       ├── FeatureFlagsPage.tsx        # Feature flags
+│       └── AccessLogPage.tsx           # Access log viewer
+├── stores/              # Zustand state stores
+│   ├── timelineRange.ts         # Timeline date range with URL sync
+│   ├── settingsStore.ts         # App settings (API endpoint, credentials)
+│   ├── messengerStore.ts        # Messenger state
+│   ├── objectSelectionStore.ts  # Object selection state
+│   ├── timelineSelectionStore.ts # Timeline selection state
+│   └── topicsStore.ts           # Topics state
+└── types/               # TypeScript type definitions
+    ├── llm.ts           # LLM model types and schemas
+    ├── objects.ts       # Object types
+    ├── timeline.ts      # Timeline types
+    ├── events.ts        # Event types
+    ├── people.ts        # People types
+    ├── config.ts        # Configuration types
+    └── icon.ts          # Icon types
 ```
-
-## Key Concepts
-
-### Modular Timeline System
-
-The timeline is built on a **Layer** and **Tool** architecture defined in `src/core/core.ts`:
-
-- **Layer**: A React component that renders on the timeline canvas (e.g., audio items, events, map data). Receives `scale` (D3 time scale), `transform` (zoom state), and `width` props.
-- **Tool**: A React component that provides UI controls for the timeline (e.g., audio player controls).
-- **Config**: Object containing arrays of layers and tools to enable.
-
-Layers are registered in individual modules (e.g., `src/modules/audio/index.tsx`, `src/modules/events/index.tsx`) and composed in the timeline page.
-
-### State Management
-
-**Zustand stores:**
-- `timelineRange.ts`: Manages timeline start/end dates, synchronized with URL query params (`?start=...&end=...`). Provides `setRange()`, `duration`, and `center` computed properties.
-- `settingsStore.ts`: Persists API endpoint, client ID, and client secret to localStorage.
-
-### Timeline Visualization
-
-`src/hooks/useTimeline.ts` implements D3-based zoom/pan:
-- Creates a `d3.scaleTime()` mapping dates to pixels
-- Handles zoom events and updates the timeline range store
-- Debounces range updates to avoid excessive re-renders
-- Supports synchronized zooming across multiple timeline layers
-
-### API Integration
-
-`src/lib/api.ts` provides `ApiClient` class:
-- Exchanges OAuth2 client credentials for JWT tokens
-- Caches JWT with 6-hour expiry
-- Provides `get()`, `post()`, `put()`, `delete()` methods
-- Special `callResource()` method for resource-based API calls using EJSON serialization
-
-**Backend connection:**
-- Vite dev server proxies `/api/*` and `/data/*` to backend (default: `http://localhost:8000`)
-- Configure proxy target in `vite.config.ts`
-
-### Settings Multi-Page Structure
-
-The Settings section uses a tabbed layout with nested routing:
-
-**Settings Layout** (`src/components/SettingsLayout.tsx`):
-- Tab-based navigation with sidebar
-- Three main sections: General, API, LLMs
-- Clean, organized layout with descriptions
-
-**Settings Pages:**
-- **General Settings** (`/settings`) - Appearance and time format
-- **API Settings** (`/settings/api`) - API configuration and authentication  
-- **LLMs Settings** (`/settings/llms`) - LLM models management
-
-**LLM Models Management:**
-- Full CRUD functionality for LLM models
-- Form validation with Zod schemas
-- API key visibility toggle
-- Provider and endpoint configuration
-
-### Audio Module
-
-`src/modules/audio/`:
-- **useAudioItems.ts**: Hook that fetches audio chunks for visible timeline range, manages loaded/in-flight ranges to avoid duplicate requests
-- **useTranscripts.ts**: Fetches transcriptions for audio items
-- **player.tsx**: Web Audio API-based player with chunked streaming
-- **TimelineItems.tsx**: Renders audio waveforms/items on timeline
 
 ### Import Conventions
 
@@ -205,33 +170,9 @@ import { DateTimePicker } from '@/components/ui/datetime-picker';
 
 **Import Maps:**
 - All dependencies defined in `deno.json` imports
-- Use `npm:` prefix for npm packages
-- Use `jsr:` prefix for JSR packages
+- Never use `npm:`/`jsr:` prefixes, it's resolved automatically by Deno
 - Local imports use `@/` alias
 
 **Development Workflow:**
-- Use `deno task` commands for development
-- Dependencies resolved automatically by Deno
-- No `node_modules` directory (Deno caches in global cache)
-- TypeScript support built-in
-
-### Router Structure
-
-**Nested Routes:**
-- Settings uses nested routing with `SettingsLayout` as parent
-- Routes: `/settings`, `/settings/api`, `/settings/llms`, `/settings/llms/new`, `/settings/llms/:id`
-- Each settings page is a separate component in `src/pages/settings/`
-
-**Navigation:**
-- Main navigation: Timeline, Objects, Settings
-- LLMs moved to Settings sub-page (not in main navigation)
-- Settings uses tab-based sidebar navigation
-
-## Code Style
-
-- **TypeScript**: Strict mode enabled, prefer explicit types
-- **Interfaces vs Types**: Use `interface` for object shapes, `type` for unions
-- **Zod**: Use Zod schemas for runtime validation (e.g., URL params, API responses)
-- **No Comments**: Code should be self-documenting with descriptive names
-- **Formatting**: Consistent with project conventions (2-space indent, single quotes)
-- **Deno**: Use Deno-specific patterns and import maps
+- Use `deno test -A --no-check' to run tests
+- Use `deno install --npm <package-name>` to install npm packages
