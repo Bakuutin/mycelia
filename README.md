@@ -63,48 +63,63 @@ cd frontend && deno task dev
 
 ---
 
-## Optional Services
+## Audio Processing Pipeline
 
-### Speech-to-Text (Whisper)
-
-Transcribe audio recordings locally:
-
-```bash
-cd python/whisper_server
-uv sync
-uv run server.py  # auto-detects CPU/GPU, uses large-v3 model
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  1. Import  │ → │ 2. Transcribe│ → │3. Conversations│ → │ 4. Timeline │
+│  daemon.py  │    │   stt.py    │    │  convos.cli  │    │  recalculate│
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+       ↑                  ↑                  ↑
+ Voice Memos        Whisper Server     LLM required
+ Google Drive       (must be running)  (local or cloud)
+ Local files
 ```
 
-Serves at http://localhost:8081. Set `STT_SERVER_URL=http://localhost:8081` in `backend/.env`.
+### Step 1: Import Audio
 
-### Speaker Diarization
-
-Identify who's speaking in recordings. Requires [HuggingFace token](https://huggingface.co/settings/tokens) with access to pyannote models.
+Import from Apple Voice Memos, Google Drive, or local folders:
 
 ```bash
-cd diarizator
-cp .env.template .env
-# Edit .env: set HF_TOKEN=your_token
-
-docker compose up -d diarization-service  # CPU
-# OR for GPU: docker compose --profile gpu up -d diarization-service-gpu
+cd python && uv sync && uv run daemon.py
 ```
 
-Serves at http://localhost:8085. Set `DIARIZATION_SERVER_URL=http://localhost:8085` in `backend/.env`.
+**macOS**: Grant Full Disk Access first (System Settings → Privacy & Security → Full Disk Access).
 
-### Audio Import Daemon
+The daemon runs continuously, importing new files as they appear. Press `Ctrl+C` to stop.
 
-Import recordings from Apple Voice Memos, Google Drive, or local folders:
+### Step 2: Transcribe (requires Whisper server)
+
+Start Whisper server (Terminal 1):
+```bash
+cd python/whisper_server && uv sync && uv run server.py
+```
+
+Run transcription (Terminal 2):
+```bash
+cd python && uv run stt.py
+```
+
+### Step 3: Extract Conversations (requires LLM)
+
+**Setup LLM first** (one-time): Configure an LLM in **Settings → LLMs → Add LLM Model**.
+- **Local GPU**: Use Ollama with Llama 3.3 70B (see [LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md#option-a--local-inference))
+- **Cloud API**: Use OpenRouter with Gemini/Claude (see [LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md#option-b--openrouter-hosted-models))
 
 ```bash
-cd python
-uv sync
-uv run daemon.py
+cd python && uv run python -m convos.cli --model medium --limit 50
 ```
 
-**macOS**: Grant Full Disk Access to your terminal app first (System Settings → Privacy & Security → Full Disk Access).
+### Step 4: Update Timeline
 
-**After importing**: Recalculate timeline histograms to see data in the UI:
+Recalculate histograms to see data in the UI. Two options:
+
+**Option A: Frontend UI**
+1. Go to Timeline page (http://localhost:3001/timeline)
+2. Select a time range by clicking and dragging
+3. Click the refresh button (🔄) to recalculate that range
+
+**Option B: API (full recalculation)**
 ```bash
 curl -X POST http://localhost:5173/api/resource/timeline \
   -H "Authorization: Bearer $MYCELIA_TOKEN" \
@@ -112,7 +127,21 @@ curl -X POST http://localhost:5173/api/resource/timeline \
   -d '{"action": "recalculate", "all": true}'
 ```
 
-See [docs/JOB_QUEUE.md](docs/JOB_QUEUE.md#timeline-histogram-recalculation) for more options.
+---
+
+## Optional: Speaker Diarization
+
+Identify who's speaking. Requires [HuggingFace token](https://huggingface.co/settings/tokens).
+
+```bash
+cd diarizator
+cp .env.template .env
+# Edit .env: set HF_TOKEN=your_token (see file for model license links)
+
+docker compose up -d diarization-service
+```
+
+Set `DIARIZATION_SERVER_URL=http://localhost:8085` in `backend/.env`.
 
 ---
 
@@ -151,13 +180,15 @@ deno task test         # Run tests
 deno task type-check   # Type checking
 ```
 
-### Python Services
+### Python (Audio Processing)
+
+See [Audio Processing Pipeline](#audio-processing-pipeline) for full workflow.
 
 ```bash
 cd python
-uv run daemon.py       # Import audio files
-uv run stt.py          # Transcribe audio
-uv run python -m convos.cli --limit 5  # Extract conversations
+uv run daemon.py                       # Step 1: Import audio
+uv run stt.py                          # Step 2: Transcribe (needs whisper server)
+uv run python -m convos.cli --limit 50 # Step 3: Extract conversations
 ```
 
 ---
