@@ -1,5 +1,5 @@
 # ---------- Builder (Deno) ----------
-FROM denoland/deno:2.5.6 AS builder
+FROM denoland/deno:2.6.3 AS builder
 
 ENV DENO_DIR=/deno-dir
 ENV NODE_ENV=production

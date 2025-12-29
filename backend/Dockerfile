@@ -1,4 +1,7 @@
-FROM denoland/deno:2.5.6
+FROM denoland/deno:2.6.3
+
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 EXPOSE 5173
 WORKDIR /app
 ENV NODE_ENV=production
