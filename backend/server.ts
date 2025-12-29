@@ -26,6 +26,18 @@ import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
 import { up, down, to, status } from "@/lib/mongo/migrator.ts";
+import { load as loadEnv } from "@std/dotenv";
+import { existsSync } from "@std/fs/exists";
+
+
+if (existsSync(".env")) {
+  await loadEnv({ envPath:  ".env", export: true });
+}
+
+if (existsSync("../.env")) {
+  await loadEnv({ envPath:  "../.env", export: true });
+}
+
 
 let logFile: Deno.FsFile | null = null;
 
@@ -178,7 +190,7 @@ async function startServer(
 
 async function configureCli() {
   await yargs(hideBin(process.argv))
-    .scriptName("deno run -A --env server.ts")
+    .scriptName("deno run -A server.ts")
     .usage("$0 <command> [options]")
     .command(
       "serve",
@@ -254,6 +266,7 @@ async function configureCli() {
         console.log(`Owner: ${owner}`);
         console.log(`Name: ${name}`);
         console.log("Generating token...");
+        await setupResources();
         const key = await generateApiKey(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);

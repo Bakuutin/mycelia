@@ -17,8 +17,8 @@ interface ApiKey {
   policiesYaml: string;
 }
 
-const defaultPolicyYaml = `- resource: "*"
-  action: "*"
+const defaultPolicyYaml = `- resource: "**"
+  action: "**"
   effect: allow`;
 
 const APIKeysPage = () => {

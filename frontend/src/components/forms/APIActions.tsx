@@ -96,7 +96,7 @@ export function APIActions({
         onClick={onClear}
         title="Clear all settings"
       >
-        <Trash2 className="w-4 h-4" />
+        Log Out
       </Button>
     </div>
   );

@@ -33,7 +33,7 @@ const APISettingsPage = () => {
   };
 
   const handleClear = () => {
-    if (confirm("Are you sure you want to clear all settings?")) {
+    if (confirm("Are you sure you want to reset your API credentials?")) {
       clearSettings();
       setLocalEndpoint(useSettingsStore.getState().apiEndpoint);
       setLocalClientId("");
