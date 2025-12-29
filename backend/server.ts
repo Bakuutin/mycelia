@@ -1,7 +1,7 @@
 import "@/lib/telemetry.ts";
 import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
-import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
+import { generateApiKeyWithId, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
 import { type Policy } from "@/lib/auth/resources.ts";
@@ -25,6 +25,7 @@ import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
+import { autoInitCredentials } from "@/lib/auth/autoInit.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -92,6 +93,9 @@ async function startServer(
   if (!skipChecks) {
     const db = await getRootDB();
     await ensureAllCollectionsExist(db);
+
+    // Auto-initialize API credentials on first run
+    await autoInitCredentials();
   }
 
   if (!noWorkers) {
@@ -248,15 +252,21 @@ async function configureCli() {
             default: `test_${Math.floor(Date.now() / 1000)}`,
           }),
       async (args: ArgumentsCamelCase<{ owner: string; name: string }>) => {
+        // Setup resources before generating token (required for mongo access)
+        await setupResources();
+
         const owner = String(args.owner);
         const name = String(args.name);
         console.log(`Owner: ${owner}`);
         console.log(`Name: ${name}`);
         console.log("Generating token...");
-        const key = await generateApiKey(owner, name, [
+        const { apiKey, clientId } = await generateApiKeyWithId(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
-        console.log(`MYCELIA_TOKEN=${key}`);
+        console.log(`\n✅ Token created successfully!\n`);
+        console.log(`MYCELIA_TOKEN=${apiKey}`);
+        console.log(`MYCELIA_CLIENT_ID=${clientId}`);
+        console.log(`\nAdd these to your .env file or frontend settings.`);
       },
     )
     .command(

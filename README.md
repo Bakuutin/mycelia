@@ -91,12 +91,10 @@ cp .env.example .env
 # Make sure Mongo uses the direct connection string from .env:
 # MONGO_URL=mongodb://localhost:27017?directConnection=true
 
-# Generate auth credentials (requires services running)
-deno run -A --env server.ts token-create
-# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID into your .env
-
-# Start the backend server
+# Start the backend server (credentials are auto-generated on first run)
 deno task dev
+# On first run, MYCELIA_TOKEN and MYCELIA_CLIENT_ID will be auto-generated
+# and written to your .env file
 ```
 
 The backend dev server will be available at http://localhost:5173/.
@@ -118,7 +116,15 @@ cd frontend
 deno task dev
 ```
 
-Open http://localhost:3001. Configure backend URL and credentials in the settings page.
+Open http://localhost:3001.
+
+**First-time setup**: If you see an "API Credentials Required" error:
+1. Make sure the backend is running (`cd backend && deno task dev`)
+2. Copy the auto-generated credentials from the backend console output
+3. Go to **Settings** in the frontend and enter:
+   - **Client ID** → the `MYCELIA_CLIENT_ID` value
+   - **Client Secret** → the `MYCELIA_TOKEN` value
+4. Refresh the page
 
 ### 4. Inference & Diarization Stack (optional)
 
@@ -152,11 +158,24 @@ Need to wire up local inference or OpenRouter-hosted models? Check `docs/LLM_DEV
 ```bash
 cd backend
 
-# Generate auth tokens (put in .env)
-deno run -A --env server.ts token-create
-
-# Start the server
+# Start the server (credentials auto-generated on first run)
 deno task dev
+
+# Manual token generation (optional, for additional API keys)
+deno run -A --env server.ts token-create
+```
+
+**First Run**: When you start the backend for the first time, it automatically:
+1. Detects no API keys exist in MongoDB
+2. Creates a default admin API key with full permissions
+3. Writes `MYCELIA_TOKEN` and `MYCELIA_CLIENT_ID` to your `.env` file
+4. Prints the credentials to the console
+
+Look for this output:
+```
+[AutoInit] ✅ Credentials auto-configured:
+  MYCELIA_TOKEN=mycelia_xxxxx...
+  MYCELIA_CLIENT_ID=xxxxxx...
 ```
 
 ### Frontend Development
@@ -290,9 +309,41 @@ deno run --env -E='MYCELIA_*' --allow-net cli.ts login
 deno run --env -E='MYCELIA_*' --allow-net cli.ts audio import /path/to/file.wav
 ```
 
+## Troubleshooting
+
+### 403 Forbidden / API Credentials Required
+
+If the frontend shows "API Credentials Required" or you see `403 Forbidden` errors:
+
+1. **Backend not running**: Start the backend with `cd backend && deno task dev`
+2. **Missing credentials**: On first run, the backend auto-generates credentials. Check the console for:
+   ```
+   [AutoInit] ✅ Credentials auto-configured:
+     MYCELIA_TOKEN=mycelia_xxxxx...
+     MYCELIA_CLIENT_ID=xxxxxx...
+   ```
+3. **Credentials not configured in frontend**: Go to Settings and enter:
+   - **Client ID** → `MYCELIA_CLIENT_ID` value
+   - **Client Secret** → `MYCELIA_TOKEN` value
+
+### WebSocket Connection Failed
+
+If you see "WebSocket closed" repeatedly in browser console:
+- This is usually caused by missing API credentials (see above)
+- Once credentials are configured, WebSocket connections will work
+
+### Manual Token Generation
+
+If auto-initialization didn't work, you can manually create tokens:
+```bash
+cd backend
+deno run -A --env server.ts token-create
+# Copy the printed MYCELIA_TOKEN and MYCELIA_CLIENT_ID to .env
+```
+
 ## Contributing
 
-You’re welcome to fork, build plugins, suggest features, or break things
+You're welcome to fork, build plugins, suggest features, or break things
 (metaphorically, c'mon, it's open source).
 
 - Join the [Discord](https://discord.gg/hPfYbpp2am)

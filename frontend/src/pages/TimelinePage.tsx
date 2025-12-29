@@ -29,6 +29,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+import { ApiCredentialsError, isCredentialsError } from "@/components/ApiCredentialsError";
 
 // Yes, it's module level
 // We wanted it that way :)
@@ -178,12 +179,16 @@ const TimelinePage = () => {
     return (
       <div className="space-y-6">
         <h1 className="text-3xl font-bold">Timeline</h1>
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500 mb-2">Error loading objects: {error}</p>
-          <p className="text-sm text-muted-foreground">
-            Check browser console for details
-          </p>
-        </div>
+        {isCredentialsError(error) ? (
+          <ApiCredentialsError error={error} />
+        ) : (
+          <div className="border rounded-lg p-8 text-center">
+            <p className="text-red-500 mb-2">Error loading objects: {error}</p>
+            <p className="text-sm text-muted-foreground">
+              Check browser console for details
+            </p>
+          </div>
+        )}
       </div>
     );
   }

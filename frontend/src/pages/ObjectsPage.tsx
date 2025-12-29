@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ArrowLeftRight, ArrowRight, Package, Plus } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { ApiCredentialsError, isCredentialsError } from "@/components/ApiCredentialsError";
 
 function escapeRegex(source: string) {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -273,9 +274,13 @@ const ObjectsPage = () => {
     return (
       <div className="space-y-6">
         <h1 className="text-3xl font-bold">Objects</h1>
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error}</p>
-        </div>
+        {isCredentialsError(error) ? (
+          <ApiCredentialsError error={error} />
+        ) : (
+          <div className="border rounded-lg p-8 text-center">
+            <p className="text-red-500">Error: {error}</p>
+          </div>
+        )}
       </div>
     );
   }
