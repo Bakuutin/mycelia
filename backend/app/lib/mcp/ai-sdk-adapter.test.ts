@@ -84,7 +84,7 @@ Deno.test("AI SDK Adapter - Simple resource creates valid tool schema", async ()
     { value: "test" },
     { toolCallId: "test-call-id", messages: [] }
   );
-  expect(result).toEqual({ result: "Processed: test" });
+  expect(result).toEqual({ type: "json", value: { result: "Processed: test" } });
 });
 
 Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with correct schemas", async () => {
@@ -113,7 +113,7 @@ Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with corr
     { id: "test-id" },
     { toolCallId: "test-call-id-get", messages: [] }
   );
-  expect(getResult).toEqual({ result: "Got test-id" });
+  expect(getResult).toEqual({ type: "json", value: { result: "Got test-id" } });
 
   // Test that set tool works correctly (action discriminator should be omitted from input)
   if (!setTool.execute) {
@@ -123,7 +123,7 @@ Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with corr
     { id: "test-id", value: "test-value" },
     { toolCallId: "test-call-id-set", messages: [] }
   );
-  expect(setResult).toEqual({ result: "Set test-id to test-value" });
+  expect(setResult).toEqual({ type: "json", value: { result: "Set test-id to test-value" } });
 });
 
 // Tests for createAiSdkToolsFromResources (passes Zod schema to AI SDK)
@@ -150,7 +150,7 @@ Deno.test("createAiSdkToolsFromResources - Simple resource creates valid tool wi
     { value: "test" },
     { toolCallId: "test-call-id", messages: [] }
   );
-  expect(result).toEqual({ result: "Processed: test" });
+  expect(result).toEqual({ type: "json", value: { result: "Processed: test" } });
 });
 
 Deno.test("createAiSdkToolsFromResources - Discriminated union creates multiple tools with Zod schemas", async () => {
@@ -182,7 +182,7 @@ Deno.test("createAiSdkToolsFromResources - Discriminated union creates multiple 
     { id: "test-id" },
     { toolCallId: "test-call-id-get", messages: [] }
   );
-  expect(getResult).toEqual({ result: "Got test-id" });
+  expect(getResult).toEqual({ type: "json", value: { result: "Got test-id" } });
 
   if (!setTool.execute) {
     throw new Error("setTool.execute is undefined");
@@ -191,7 +191,7 @@ Deno.test("createAiSdkToolsFromResources - Discriminated union creates multiple 
     { id: "test-id", value: "test-value" },
     { toolCallId: "test-call-id-set", messages: [] }
   );
-  expect(setResult).toEqual({ result: "Set test-id to test-value" });
+  expect(setResult).toEqual({ type: "json", value: { result: "Set test-id to test-value" } });
 });
 
 Deno.test("createAiSdkToolsFromResources - Multiple resources combined", async () => {
@@ -250,7 +250,7 @@ Deno.test("createAiSdkToolsFromResources - Resource with z.any() field creates v
     { data: { nested: "value" } },
     { toolCallId: "test-call-id", messages: [] }
   );
-  expect(result).toEqual({ result: { nested: "value" } });
+  expect(result).toEqual({ type: "json", value: { result: { nested: "value" } } });
 });
 
 // Test resource with optional fields
@@ -299,13 +299,13 @@ Deno.test("createAiSdkToolsFromResources - Resource with optional fields works c
     { required: "test" },
     { toolCallId: "test-call-id-1", messages: [] }
   );
-  expect(result1).toEqual({ result: "test-none" });
+  expect(result1).toEqual({ type: "json", value: { result: "test-none" } });
   
   const result2 = await tool.execute(
     { required: "test", optional: "value" },
     { toolCallId: "test-call-id-2", messages: [] }
   );
-  expect(result2).toEqual({ result: "test-value" });
+  expect(result2).toEqual({ type: "json", value: { result: "test-value" } });
 });
 
 // Smoke tests with real resources from the codebase

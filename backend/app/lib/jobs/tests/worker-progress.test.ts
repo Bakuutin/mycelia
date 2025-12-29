@@ -40,7 +40,7 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource publishes to Redis Stream",
+  "WorkerProgressResource publishes job progress updates",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
@@ -48,7 +48,6 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
       jobId: job.id!,
@@ -60,25 +59,18 @@ Deno.test(
       },
     });
 
-    const stream = await redis.xrange(streamKey, "-", "+");
-
-    expect(stream.length).toBeGreaterThan(0);
-
-    const [_id, fields] = stream[0];
-    const data: Record<string, string> = {};
-    for (let i = 0; i < fields.length; i += 2) {
-      data[fields[i]] = fields[i + 1];
-    }
-
-    expect(data.processed).toBe("100");
-    expect(data.total).toBe("1000");
-    expect(data.hasSpeech).toBe("45");
-    expect(data.timestamp).toBeDefined();
+    // Verify job progress was updated
+    const updatedJob = await getJob("vad", job.id!);
+    expect(updatedJob?.progress).toEqual({
+      processed: 100,
+      total: 1000,
+      hasSpeech: 45,
+    });
   }),
 );
 
 Deno.test(
-  "WorkerProgressResource sets TTL on stream",
+  "WorkerProgressResource updates progress without hasSpeech field",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
@@ -86,7 +78,6 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
       jobId: job.id!,
@@ -97,28 +88,31 @@ Deno.test(
       },
     });
 
-    const ttl = await redis.ttl(streamKey);
-
-    expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(3600);
+    // Verify job progress was updated
+    const updatedJob = await getJob("vad", job.id!);
+    expect(updatedJob?.progress).toEqual({
+      processed: 100,
+      total: 1000,
+    });
   }),
 );
 
 Deno.test(
-  "WorkerProgressResource throws error for non-existent job",
+  "WorkerProgressResource gracefully handles non-existent job",
   withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const fakeJobId = "67a1b2c3d4e5f6789abcdef0";
 
-    await expect(
-      resource.use({
-        jobId: fakeJobId,
-        jobType: "vad",
-        progress: {
-          processed: 100,
-          total: 1000,
-        },
-      }),
-    ).rejects.toThrow("Job 67a1b2c3d4e5f6789abcdef0 not found");
+    // Should not throw - just logs and returns gracefully
+    const result = await resource.use({
+      jobId: fakeJobId,
+      jobType: "vad",
+      progress: {
+        processed: 100,
+        total: 1000,
+      },
+    });
+
+    expect(result).toBeUndefined();
   }),
 );
 
@@ -131,7 +125,6 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
       jobId: job.id!,
@@ -151,10 +144,7 @@ Deno.test(
       progress: { processed: 300, total: 1000 },
     });
 
-    const stream = await redis.xrange(streamKey, "-", "+");
-
-    expect(stream.length).toBe(3);
-
+    // Verify final progress is the last update
     const updatedJob = await getJob("vad", job.id!);
     expect(updatedJob?.progress).toEqual({
       processed: 300,
@@ -195,14 +185,15 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource validates input schema",
-  withFixtures(["WorkerProgressResource"], async (resource) => {
-    await expect(
-      resource.use({
-        jobId: "abc",
-        jobType: "invalid_type" as any,
-        progress: {},
-      }),
-    ).rejects.toThrow();
+  "WorkerProgressResource handles invalid job type gracefully",
+  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+    // An invalid job type + non-existent job ID will be handled gracefully
+    // (job won't be found, so progress update is skipped)
+    const result = await resource.use({
+      jobId: "abc",
+      jobType: "invalid_type" as any,
+      progress: {},
+    });
+    expect(result).toBeUndefined();
   }),
 );

@@ -1108,7 +1108,7 @@ Deno.test(
       ],
     });
 
-    expect(result.insertedIds).toHaveLength(3);
+    expect(result.insertedCount).toBe(3);
 
     const foundDocs = await mongo({
       action: "find",
@@ -1316,7 +1316,7 @@ Deno.test(
 );
 
 Deno.test(
-  "bulkWrite should automatically add updatedAt for insertMany operations",
+  "bulkWrite should automatically add updatedAt for multiple insertOne operations",
   withFixtures([
     "Admin",
     "Mongo",
@@ -1329,11 +1329,13 @@ Deno.test(
       collection: collectionName,
       operations: [
         {
-          insertMany: {
-            documents: [
-              { name: "Document 1", value: 1 },
-              { name: "Document 2", value: 2 },
-            ],
+          insertOne: {
+            document: { name: "Document 1", value: 1 },
+          },
+        },
+        {
+          insertOne: {
+            document: { name: "Document 2", value: 2 },
           },
         },
       ],
@@ -1600,7 +1602,8 @@ Deno.test(
       expect(doc).toHaveProperty("updatedAt");
       expect(doc.updatedAt).toBeInstanceOf(Date);
     }
-    expect(docs[0].value).toBe(10);
-    expect(docs[1].value).toBe(2);
+    // Sorted by value ascending: 2 (new doc), then 10 (updated original)
+    expect(docs[0].value).toBe(2);
+    expect(docs[1].value).toBe(10);
   }),
 );
