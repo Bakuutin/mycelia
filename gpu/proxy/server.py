@@ -72,11 +72,8 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(sec
 async def transcribe_audio(
     request: Request,
     file: UploadFile = File(...),
-    model: str = Form("whisper-1"),
     language: Optional[str] = Form(None),
     prompt: Optional[str] = Form(None),
-    response_format: Optional[str] = Form("json"),
-    temperature: Optional[float] = Form(0),
     _: bool = Depends(verify_api_key)
 ):
     """
@@ -139,7 +136,7 @@ async def transcribe_audio(
                 error_detail = e.response.text
             elif hasattr(e.response, 'content'):
                 error_detail = str(e.response.content)
-        except:
+        except Exception as _:
             pass
         logger.error(f"Whisper service error: {e.response.status_code}")
         raise HTTPException(status_code=e.response.status_code, detail=error_detail)

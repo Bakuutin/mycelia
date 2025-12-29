@@ -6,6 +6,7 @@ import { RedisResource } from "@/lib/redis.ts";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import { ProcessorResource } from "../processors/core.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
+import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { ApiKeysResource } from "@/lib/auth/apikeys.resource.ts";
 import { WorkerProgressResource } from "@/lib/resources/worker.ts";
@@ -18,6 +19,7 @@ const resources = [
   TimelineResource,
   ProcessorResource,
   LLMResource,
+  TranscriptionResource,
   ObjectsResource,
   ApiKeysResource,
   WorkerProgressResource,

@@ -510,14 +510,21 @@ def transcribe_sequence(sequence: SpeechSequence, server_url: str):
     headers = {}
     api_key = os.environ.get('STT_API_KEY')
     if api_key:
-        headers['X-Api-Key'] = api_key
+        headers['Authorization'] = f'Bearer {api_key}'
 
     combined_audio = combine_chunks_with_ffmpeg(sequence.chunks)
     
-    response = requests.post(f'{server_url}/transcribe',
+    data = {
+        'model': 'whisper',
+        'response_format': 'json',
+        'temperature': '0',
+    }
+    
+    response = requests.post(f'{server_url}/v1/audio/transcriptions',
                             files={
                                 'file': ('combined.wav', io.BytesIO(combined_audio), 'audio/wav')
                             },
+                            data=data,
                             headers=headers,
                             timeout=300 + len(sequence.chunks) * 3
     )

@@ -65,23 +65,13 @@ export async function processSummarizationJob(
   promptText += getTimestampMessage(new Date(lastEnd));
 
   const llm = await getLLMResource(auth);
-  const modelAlias = userModel || "medium";
+  const modelName = userModel || "medium";
   const systemPrompt = userPrompt ||
     `You are a helpful assistant. Summarize the following conversation transcript.`;
 
-  const modelDoc = await mongo({
-    action: "findOne",
-    collection: "llm_models",
-    query: { alias: modelAlias },
-  });
-
-  if (!modelDoc) {
-    throw new Error(`Model with alias "${modelAlias}" not found`);
-  }
-
   const completion = await llm({
     action: "completions",
-    model: modelAlias,
+    model: modelName,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: promptText },

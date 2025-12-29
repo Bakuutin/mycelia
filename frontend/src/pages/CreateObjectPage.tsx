@@ -33,7 +33,6 @@ const CreateObjectPage = () => {
       ? [{ start: initialStart, end: initialEnd }]
       : [],
     createdAt: new Date(),
-    updatedAt: new Date(),
   });
 
   const handleUpdate = async (updates: Partial<ObjectFormData>) => {

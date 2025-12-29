@@ -52,7 +52,6 @@ export async function getOrCreatePersonByMessengerId(
         },
       },
       createdAt: new Date(),
-      updatedAt: new Date(),
       version: 1,
     },
   });
