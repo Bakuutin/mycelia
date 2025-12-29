@@ -5,7 +5,7 @@ import { Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
 import { zServerConfig } from "@interfaces/config.ts";
-import { ObjectId } from "bson";
+import { ObjectId, Binary } from "bson";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
@@ -80,6 +80,8 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
             fileBuffer = input.file;
           } else if (input.file instanceof Buffer) {
             fileBuffer = new Uint8Array(input.file);
+          } else if (input.file instanceof Binary) {
+            fileBuffer = new Uint8Array(input.file.buffer);
           } else if (input.file && typeof input.file === "object" && "$binary" in input.file) {
             const binary = (input.file as { $binary: { base64: string; subType?: string } }).$binary;
             const decoded = Buffer.from(binary.base64, "base64");
@@ -100,6 +102,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           if (input.prompt) {
             formData.append("prompt", input.prompt);
           }
+          formData.append("model", "whisper");
 
           const proxyResponse = await fetch(
             provider.baseUrl.replace(/\/$/, "") + "/v1/audio/transcriptions",

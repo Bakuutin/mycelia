@@ -1,10 +1,8 @@
-import io
 import time
 import os
 import sys
 import math
 import argparse
-import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -25,14 +23,11 @@ from bson import ObjectId
 from datetime import timedelta
 from typing import Any, Iterator
 from pytz import UTC
-from urllib.parse import urlparse
 
 import signal
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-
-STT_SERVER_URL = os.environ.get('STT_SERVER_URL', 'http://localhost:8081').rstrip('/')
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -54,25 +49,6 @@ logger = logging.getLogger(__name__)
 
 
 NO_SPEECH_DETECTED = object()
-
-
-def resolve_server_url(cli_server: str | None = None) -> str:
-    url = (cli_server or STT_SERVER_URL or '').strip()
-    if not url:
-        raise ValueError(
-            "No STT server URL configured. Set STT_SERVER_URL or pass --server."
-        )
-    return url.rstrip('/')
-
-
-def format_server_label(url: str) -> str:
-    parsed = urlparse(url)
-    host = parsed.netloc or parsed.path or url
-    if parsed.path not in ('', '/'):
-        host = f'{host}{parsed.path}'
-    if parsed.scheme:
-        return f'{parsed.scheme}://{host}'
-    return host
 
 
 def ensure_audio_chunk_indexes():
@@ -283,54 +259,42 @@ def release_sequence(seq: SpeechSequence, worker_id: str):
     chunk_ids = [chunk['_id'] for chunk in seq.chunks]
     release_chunks(chunk_ids, worker_id)
 
-def process_sequence(sequence: SpeechSequence, worker_id: str, server_url: str):
+def process_sequence(sequence: SpeechSequence, worker_id: str):
     start_time = time.time()
     timestamp = sequence.start.strftime("%Y-%m-%d %H:%M:%S")
     chunks_count = len(sequence.chunks)
     original_id = str(sequence.original_id)
-    server_label = format_server_label(server_url)
 
     try:
         if not claim_sequence(sequence, worker_id):
             tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  skipped (claimed)')
             return {"status": "skipped", "chunks": 0, "duration": 0}
 
-        result = transcribe_sequence(sequence, server_url)
+        result = transcribe_sequence(sequence)
         mark_as_transcribed(sequence)
 
         end_time = time.time()
         duration = end_time - start_time
         status = "empty" if result is NO_SPEECH_DETECTED else "transcribed"
-        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  {duration:5.2f}s  {status}  [{server_label}]')
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  {duration:5.2f}s  {status}')
         return {"status": status, "chunks": chunks_count, "duration": duration}
-
-    except requests.exceptions.ReadTimeout as e:
-        end_time = time.time()
-        release_sequence(sequence, worker_id)
-        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout [{server_label}]')
-        tqdm.write(f'  → Increase timeout or check STT server at {server_label}')
-        return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
     except Exception as e:
         end_time = time.time()
         release_sequence(sequence, worker_id)
-        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)} [{server_label}]')
+        tqdm.write(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)}')
         return {"status": "error", "chunks": 0, "duration": end_time - start_time}
 
 
 
-def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=None, server_url: str | None = None):
+def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=None):
     import socket
     if worker_id is None:
         worker_id = f"{socket.gethostname()}_{os.getpid()}"
 
-    if server_url is None:
-        server_url = resolve_server_url()
-
     ensure_audio_chunk_indexes()
     tqdm.write(f'Worker ID: {worker_id}')
     tqdm.write(f'Using {max_workers} parallel worker(s)')
-    tqdm.write(f'STT server: {format_server_label(server_url)}')
 
     estimated_sequences, pending_chunks = get_pending_work_stats(filters)
     if estimated_sequences is not None or pending_chunks is not None:
@@ -375,7 +339,7 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
             while True:
                 batch_processed = 0
                 for sequence in get_speech_sequences(limit=batch_size, filters=filters, worker_id=worker_id):
-                    result = process_sequence(sequence, worker_id, server_url)
+                    result = process_sequence(sequence, worker_id)
                     status = result["status"]
 
                     if status in stats:
@@ -416,7 +380,7 @@ def process_speech_sequences(limit=None, max_workers=1, worker_id=None, filters=
                         break
 
                     futures = {
-                        executor.submit(process_sequence, seq, worker_id, server_url): seq
+                        executor.submit(process_sequence, seq, worker_id): seq
                         for seq in sequences
                     }
 
@@ -506,31 +470,15 @@ def combine_chunks_with_ffmpeg(chunks: list[dict]) -> bytes:
         return output_file.read_bytes()
 
 
-def transcribe_sequence(sequence: SpeechSequence, server_url: str):
-    headers = {}
-    api_key = os.environ.get('STT_API_KEY')
-    if api_key:
-        headers['Authorization'] = f'Bearer {api_key}'
-
+def transcribe_sequence(sequence: SpeechSequence):
     combined_audio = combine_chunks_with_ffmpeg(sequence.chunks)
     
-    data = {
-        'model': 'whisper',
-        'response_format': 'json',
-        'temperature': '0',
-    }
-    
-    response = requests.post(f'{server_url}/v1/audio/transcriptions',
-                            files={
-                                'file': ('combined.wav', io.BytesIO(combined_audio), 'audio/wav')
-                            },
-                            data=data,
-                            headers=headers,
-                            timeout=300 + len(sequence.chunks) * 3
-    )
-    response.raise_for_status()
-
-    transcript = response.json()
+    transcript = call_resource('transcription', {
+        'action': 'transcribe',
+        'file': combined_audio,
+        'fileName': 'combined.wav',
+        'fileType': 'audio/wav',
+    })
 
     # Extract segments (could be empty, which is valid)
     segments = transcript.get('segments', [])
@@ -599,17 +547,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument(
-        '--server',
-        help='Override the STT server URL for this run (defaults to STT_SERVER_URL env).',
-    )
-    parser.add_argument(
         '--count',
         action='store_true',
         help='Count pending audio chunks (transcribed_at=null, processing_by=null) and exit.',
     )
     args = parser.parse_args()
 
-    # Handle --count flag
     if args.count:
         try:
             count = call_resource('mongo', {
@@ -626,13 +569,7 @@ if __name__ == '__main__':
             print(f"Error counting audio chunks: {e}", file=sys.stderr)
             sys.exit(1)
 
-    try:
-        server_url = resolve_server_url(args.server)
-    except ValueError as exc:
-        parser.error(str(exc))
-        raise
     process_speech_sequences(
         limit=args.limit,
         max_workers=1,
-        server_url=server_url,
     )

@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { Request, Response as ExpressResponse } from "express";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getTranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import multer from "npm:multer@^1.4.5-lts.1";
@@ -9,11 +9,11 @@ const upload = multer({ storage: multer.memoryStorage() });
 const uploadMiddleware = upload.single("file");
 
 export const transcriptionAudioHandler = asyncHandler(
-  async (req: Request, res: Response) => {
+  async (req: Request, res: ExpressResponse) => {
     const auth = await authenticateOr401(req, res);
 
     await new Promise<void>((resolve, reject) => {
-      uploadMiddleware(req, res, (err) => {
+      uploadMiddleware(req, res, (err: Error | null) => {
         if (err) {
           reject(err);
         } else {
