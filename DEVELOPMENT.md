@@ -1,0 +1,228 @@
+# Development Guide
+
+This guide is for developers who want to contribute to Mycelia or run it in development mode with hot reload.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [Deno](https://deno.land/) 2.x (for native development)
+- [uv](https://github.com/astral-sh/uv) (for Python tooling)
+- macOS: Full Disk Access for your terminal app (for audio import)
+
+## Development Setup
+
+### Option A: Docker with Hot Reload
+
+The fastest way to get a development environment with hot reload:
+
+```bash
+# Clone and setup
+git clone https://github.com/mycelia-tech/mycelia.git
+cd mycelia
+cp .env.example .env
+
+# Start in dev mode
+FRONTEND_MODE=dev docker compose up -d --build
+```
+
+Or set `FRONTEND_MODE=dev` in your `.env` file for persistent configuration.
+
+| Mode | Dockerfile | Description |
+|------|------------|-------------|
+| `prod` (default) | `Dockerfile.prod` | Production build with Nginx serving static assets |
+| `dev` | `Dockerfile.dev` | Vite dev server with hot reload, source files mounted as volume |
+
+**Services:**
+- Frontend: http://localhost:8080
+- Backend: http://localhost:5173
+- MongoDB: localhost:27017
+
+### Option B: Native Development (Deno + Vite)
+
+For full control and faster iteration:
+
+```bash
+# Terminal 1: Start MongoDB
+docker compose up -d mongodb
+
+# Terminal 2: Backend
+cd backend
+deno task dev
+# → http://localhost:5173
+
+# Terminal 3: Frontend
+cd frontend
+deno task dev
+# → http://localhost:3001
+```
+
+## Frontend Development
+
+```bash
+cd frontend
+
+# Start development server
+deno task dev
+
+# Run tests
+deno task test
+
+# Type checking
+deno task type-check
+
+# Linting
+deno lint
+
+# Build for production
+deno task build
+
+# Preview production build
+deno task preview
+```
+
+### Tech Stack
+- **Deno** runtime with npm compatibility
+- **React 18** + TypeScript
+- **Vite** for build tooling
+- **Zustand** for state management
+- **D3.js** for timeline visualization
+- **Tailwind CSS v4** for styling
+- **Radix UI** for accessible components
+
+### Import Conventions
+
+Use `@/` alias for all imports (configured in `deno.json`):
+
+```typescript
+import { Component } from '@/components/Component'
+import { useTimeline } from '@/hooks/useTimeline'
+import type { TimelineItem } from '@/types/timeline'
+```
+
+## Backend Development
+
+```bash
+cd backend
+
+# Start development server
+deno task dev
+
+# Create an API token
+deno run -A server.ts token-create
+```
+
+## Python Tooling
+
+The Python services handle audio import, STT, and conversation extraction.
+
+### Audio Import Daemon
+
+```bash
+cd python
+uv run daemon.py
+```
+
+The daemon auto-detects:
+- Apple Voice Memos (if `CloudRecordings.db` exists)
+- Google Drive Easy Voice Recorder
+- Local audio folder (`~/Library/mycelia/audio`)
+
+**Environment variables** (optional, set in `.env`):
+- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
+- `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
+- `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
+- `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
+
+**Logging:** `~/Library/mycelia/logs/daemon.log`
+
+### Speech-to-Text (STT)
+
+```bash
+cd python
+
+# Transcribe queued audio
+uv run stt.py [--server https://your-stt-server.com/]
+
+# Check backlog without processing
+uv run stt.py --count
+```
+
+See [backend/README.md](backend/README.md#speech-to-text-stt) for Whisper server setup.
+
+### Conversation Extraction
+
+```bash
+cd python
+uv run python -m convos.cli \
+  --limit 5 \
+  --model small
+```
+
+**Flags:**
+- `--limit <n>` - Max conversation chunks to process
+- `--not-later-than <unix_ts>` - Only process transcripts before this time
+- `--model <small|medium|large>` - LLM size (default: small)
+
+**Logging:** `~/Library/mycelia/logs/convos.log`
+
+## Inference Stack (GPU)
+
+For local GPU inference:
+
+```bash
+cd gpu
+docker compose up -d --build
+```
+
+See [docs/LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md) for hardware recommendations and model setup.
+
+## Troubleshooting
+
+### FFmpeg Import Errors
+
+1. Check `~/Library/mycelia/logs/daemon.log` for details
+2. Common causes:
+   - Corrupted audio file
+   - Unsupported codec
+   - File permission issues (grant Full Disk Access)
+3. Failed files auto-retry after 2 hours
+
+### macOS Full Disk Access
+
+Required for accessing Voice Memos:
+1. System Settings → Privacy & Security → Full Disk Access
+2. Add your terminal app (Terminal, iTerm, VS Code, etc.)
+3. Restart the terminal
+
+## Project Structure
+
+```
+mycelia/
+├── frontend/           # React SPA (Deno + Vite)
+│   ├── src/
+│   │   ├── components/ # Reusable UI components
+│   │   ├── pages/      # Route page components
+│   │   ├── hooks/      # Custom React hooks
+│   │   ├── stores/     # Zustand state stores
+│   │   ├── lib/        # Utilities (API client, auth)
+│   │   ├── modules/    # Feature modules
+│   │   └── types/      # TypeScript definitions
+│   ├── Dockerfile.dev  # Dev server with hot reload
+│   └── Dockerfile.prod # Production nginx build
+├── backend/            # Deno API server
+├── python/             # Audio import, STT, conversation extraction
+├── gpu/                # GPU inference stack
+├── interfaces/         # Shared TypeScript interfaces
+└── docs/               # Additional documentation
+```
+
+## Contributing
+
+1. Fork the repo
+2. Create a feature branch
+3. Make your changes with tests
+4. Run linting and type checks
+5. Submit a PR
+
+Join the [Discord](https://discord.gg/hPfYbpp2am) for discussions.
+
