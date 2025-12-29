@@ -1,5 +1,6 @@
 import subprocess
 import os
+import platform
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Header, Form
 from faster_whisper import WhisperModel
 import asyncio
@@ -11,8 +12,35 @@ import logging
 
 sample_rate = 16000
 
-device = "cuda"
-model_size = "large-v3"
+
+def detect_device_and_model() -> tuple[str, str]:
+    """Auto-detect optimal device and model based on platform and hardware."""
+    # Check for explicit environment overrides first
+    env_device = os.getenv("WHISPER_DEVICE")
+    env_model = os.getenv("WHISPER_MODEL")
+
+    if env_device and env_model:
+        return env_device, env_model
+
+    # Default model for all platforms
+    default_model = "large-v3"
+
+    # Auto-detect device
+    if platform.system() == "Darwin":  # macOS - no CUDA
+        device = "cpu"
+    else:
+        # Check for CUDA availability on Linux/Windows
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
+
+    # Allow partial overrides
+    return env_device or device, env_model or default_model
+
+
+device, model_size = detect_device_and_model()
 
 # Configure logging
 logging.basicConfig(

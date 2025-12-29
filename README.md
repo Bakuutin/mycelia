@@ -135,20 +135,42 @@ Open http://localhost:3001.
 ```bash
 cd python/whisper_server
 uv sync
-uv run server.py  # serves on http://localhost:8081 by default
+uv run server.py  # auto-detects CPU/GPU
 ```
-Point `STT_SERVER_URL` to the host running this process (local or remote).
+Serves on http://localhost:8081 by default. Point `STT_SERVER_URL` to the host running this process.
+
+**Auto-detection:**
+- macOS → CPU + `large-v3` model
+- Linux/Windows with CUDA → GPU + `large-v3` model
+- Linux/Windows without CUDA → CPU + `large-v3` model
+
+**Override with environment variables:**
+- `WHISPER_DEVICE` - `cuda` or `cpu`
+- `WHISPER_MODEL` - `tiny`, `base`, `small`, `medium`, `large-v3`
 
 #### Speaker recognition / diarization service
+
+**Prerequisites**: Get a Hugging Face token for pyannote models:
+1. Create account at https://huggingface.co/join
+2. Get token from https://huggingface.co/settings/tokens
+3. Accept model licenses (required):
+   - https://huggingface.co/pyannote/speaker-diarization-3.1
+   - https://huggingface.co/pyannote/segmentation-3.0
+   - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
+
 Use the dedicated compose file under `diarizator/`:
 ```bash
 cd diarizator
-# CPU build
-docker compose --profile cpu up -d speaker-service web-ui
-# GPU build (requires NVIDIA runtime)
-docker compose --profile gpu up -d speaker-service-gpu web-ui nginx
+cp .env.template .env
+# Edit .env and set HF_TOKEN=your_huggingface_token
+
+# Default (CPU - works everywhere)
+docker compose up -d diarization-service
+
+# GPU (requires NVIDIA runtime)
+docker compose --profile gpu up -d diarization-service-gpu
 ```
-The web UI lives at `http://localhost:5173` (per `REACT_UI_PORT`) and the API exposes port `8085`. Configure `SPEAKER_SERVICE_URL` in your backend or processors to consume the service.
+The API exposes port `8085`. Configure `DIARIZATION_SERVER_URL` in your backend `.env` to consume the service.
 
 ## LLM Setup
 
