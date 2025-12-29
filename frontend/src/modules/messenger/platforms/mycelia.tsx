@@ -5,33 +5,101 @@ import { useNavigate } from "react-router-dom";
 import { useFormattedTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { Response } from "@/components/ai-elements/response";
+import {
+  Tool,
+  ToolHeader,
+  ToolContent,
+  ToolInput,
+  ToolOutput,
+} from "@/components/ai-elements/tool";
 
 interface MyceliaMessageProps {
   message: import("@interfaces/messengers.ts").Message;
   children?: React.ReactNode;
 }
 
-function parseMessageContent(raw: any): { role: 'user' | 'assistant', content: string } {
+interface ToolCallPart {
+  type: 'tool-call';
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+interface ToolResultPart {
+  type: 'tool-result';
+  toolCallId: string;
+  toolName: string;
+  output?: { type: string; value: unknown };
+  error?: string;
+}
+
+interface ParsedMessageContent {
+  role: 'user' | 'assistant';
+  content: string;
+  toolCalls: Array<{
+    toolCallId: string;
+    toolName: string;
+    input: Record<string, unknown>;
+    output?: unknown;
+    error?: string;
+    state: 'input-available' | 'output-available' | 'output-error';
+  }>;
+}
+
+function parseMessageContent(raw: any): ParsedMessageContent {
   const role = raw?.role === 'user' ? 'user' : 'assistant';
   
   const content = raw?.content;
+  let textContent = '';
+  const toolCalls: ParsedMessageContent['toolCalls'] = [];
   
   if (typeof content === 'string') {
-    return { role, content };
-  }
-  
-  if (Array.isArray(content)) {
+    textContent = content;
+  } else if (Array.isArray(content)) {
     const textParts = content
       .filter((part: any) => part?.type === 'text' && part?.text)
       .map((part: any) => part.text)
       .join('\n\n');
     
-    if (textParts) {
-      return { role, content: textParts };
+    textContent = textParts;
+    
+    // Extract tool calls and results
+    const toolCallParts = content.filter((part: any) => part?.type === 'tool-call') as ToolCallPart[];
+    const toolResultParts = content.filter((part: any) => part?.type === 'tool-result') as ToolResultPart[];
+    
+    for (const call of toolCallParts) {
+      const result = toolResultParts.find(r => r.toolCallId === call.toolCallId);
+      toolCalls.push({
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        input: call.input || {},
+        output: result?.output?.value,
+        error: result?.error,
+        state: result?.error ? 'output-error' : result ? 'output-available' : 'input-available',
+      });
     }
   }
   
-  return { role, content: '' };
+  return { role, content: textContent, toolCalls };
+}
+
+function ToolCallDisplay({ toolCall }: { toolCall: ParsedMessageContent['toolCalls'][0] }) {
+  return (
+    <Tool className="group">
+      <ToolHeader
+        title={toolCall.toolName}
+        type="tool-call"
+        state={toolCall.state}
+      />
+      <ToolContent>
+        <ToolInput input={toolCall.input} />
+        <ToolOutput
+          output={toolCall.output}
+          errorText={toolCall.error}
+        />
+      </ToolContent>
+    </Tool>
+  );
 }
 
 function MyceliaMessageBubble({ message }: MyceliaMessageProps) {
@@ -39,8 +107,10 @@ function MyceliaMessageBubble({ message }: MyceliaMessageProps) {
   const formattedDate = useFormattedTime(new Date(message.timestamp));
   const raw = message.raw;
   
-  const { role, content } = parseMessageContent(raw);
+  const { role, content, toolCalls } = parseMessageContent(raw);
   const isUser = role === 'user';
+  const hasToolCalls = toolCalls.length > 0;
+  const hasContent = content.length > 0;
   
   const senderName = isUser 
     ? (raw?.from || raw?.sender_name || "You")
@@ -106,36 +176,53 @@ function MyceliaMessageBubble({ message }: MyceliaMessageProps) {
             </span>
           </div>
           
-          {/* Bubble */}
-          <div className={cn(
-            "relative rounded-2xl px-4 py-3",
-            isUser 
-              ? "bg-primary text-primary-foreground rounded-tr-sm" 
-              : "bg-gradient-to-br from-amber-50 via-orange-50 to-amber-50 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-amber-950/30 border border-amber-200/50 dark:border-amber-800/30 rounded-tl-sm"
-          )}>
-            {/* Mycelia glow effect for assistant */}
-            {!isUser && (
-              <div className="absolute inset-0 rounded-2xl rounded-tl-sm bg-gradient-to-br from-amber-500/5 to-orange-500/5 pointer-events-none" />
-            )}
-            
-            {/* Content */}
+          {/* Tool Calls */}
+          {hasToolCalls && (
+            <div className="space-y-2 w-full">
+              {toolCalls.map((tc) => (
+                <ToolCallDisplay key={tc.toolCallId} toolCall={tc} />
+              ))}
+            </div>
+          )}
+          
+          {/* Bubble - only show if there's text content */}
+          {hasContent && (
             <div className={cn(
-              "relative text-sm leading-relaxed",
-              isUser ? "" : "text-foreground"
+              "relative rounded-2xl px-4 py-3",
+              isUser 
+                ? "bg-primary text-primary-foreground rounded-tr-sm" 
+                : "bg-gradient-to-br from-amber-50 via-orange-50 to-amber-50 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-amber-950/30 border border-amber-200/50 dark:border-amber-800/30 rounded-tl-sm"
             )}>
-              {content ? (
-                isUser ? (
+              {/* Mycelia glow effect for assistant */}
+              {!isUser && (
+                <div className="absolute inset-0 rounded-2xl rounded-tl-sm bg-gradient-to-br from-amber-500/5 to-orange-500/5 pointer-events-none" />
+              )}
+              
+              {/* Content */}
+              <div className={cn(
+                "relative text-sm leading-relaxed",
+                isUser ? "" : "text-foreground"
+              )}>
+                {isUser ? (
                   <span className="whitespace-pre-wrap">{content}</span>
                 ) : (
                   <Response className="prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-li:my-0.5">
                     {content}
                   </Response>
-                )
-              ) : (
-                <span className="text-muted-foreground italic">Empty message</span>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          )}
+          
+          {/* Fallback for completely empty messages */}
+          {!hasContent && !hasToolCalls && (
+            <div className={cn(
+              "relative rounded-2xl px-4 py-3",
+              "bg-gradient-to-br from-amber-50 via-orange-50 to-amber-50 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-amber-950/30 border border-amber-200/50 dark:border-amber-800/30 rounded-tl-sm"
+            )}>
+              <span className="text-muted-foreground italic text-sm">Empty message</span>
+            </div>
+          )}
         </div>
       </div>
     </div>
