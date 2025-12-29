@@ -67,7 +67,7 @@ When you first open the frontend, you'll be guided through a setup wizard:
 
 2. **Inference Provider** (`/setup/inference`) - Configure your AI inference backend:
    - Managed service at `https://inference.mycelia.tech`
-   - Your own local GPU stack
+   - Your own local GPU stack (see [GPU README](gpu/README.md))
    - Any OpenAI-compatible API endpoint
 
 You can reconfigure these settings anytime in Settings.

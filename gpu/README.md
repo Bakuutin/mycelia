@@ -24,6 +24,13 @@ This directory contains Docker Compose configuration for GPU-accelerated AI serv
 
 ## Setup
 
+Tested with
+```
+NVIDIA GeForce RTX 4090
+CUDA 13.0
+Driver Version: 580.95.05
+```
+
 ```bash
 # on your GPU machine
 git clone https://github.com/mycelia-tech/mycelia.git
