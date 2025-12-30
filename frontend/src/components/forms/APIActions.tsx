@@ -92,7 +92,6 @@ export function APIActions({
 
       <Button
         variant="destructive"
-        size="icon"
         onClick={onClear}
         title="Clear all settings"
       >

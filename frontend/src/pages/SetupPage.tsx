@@ -16,6 +16,24 @@ interface SetupResponse {
   error?: string;
 }
 
+function getFriendlyAuthError(error: string | null): string {
+  if (!error) return "Something went wrong. Please try again.";
+  
+  switch (error) {
+    case "invalid_client":
+      return "The Client ID or API Key you entered is incorrect. Please double-check your credentials and try again.";
+    case "invalid_request":
+      return "Missing required fields. Please enter both Client ID and API Key.";
+    case "invalid_grant":
+      return "Your authorization has expired. Please request new credentials.";
+    default:
+      if (error.includes("Failed to fetch") || error.includes("NetworkError")) {
+        return "Could not reach the server. Make sure it's running and try again.";
+      }
+      return error;
+  }
+}
+
 export default function SetupPage() {
   const navigate = useNavigate();
   const {
@@ -42,7 +60,6 @@ export default function SetupPage() {
 
   const runSetup = async () => {
     setStatus("connecting");
-    setErrorMessage(null);
 
     try {
       // Save the endpoint first
@@ -66,6 +83,7 @@ export default function SetupPage() {
       if (data.created && data.clientId && data.clientSecret) {
         setClientId(data.clientId);
         setClientSecret(data.clientSecret);
+        setErrorMessage(null);
         setStatus("success");
 
         // Redirect to inference setup after a short delay
@@ -74,6 +92,7 @@ export default function SetupPage() {
         }, 1500);
       } else if (!data.created) {
         // API keys already exist, show manual entry form
+        setErrorMessage(null);
         setStatus("manual_entry");
       }
     } catch (error) {
@@ -92,7 +111,6 @@ export default function SetupPage() {
     }
 
     setStatus("verifying");
-    setVerifyError(null);
 
     try {
       const result = await exchangeApiKeyForJWT(
@@ -105,6 +123,7 @@ export default function SetupPage() {
         // Credentials are valid, save them
         setClientId(manualClientId);
         setClientSecret(manualClientSecret);
+        setVerifyError(null);
         setStatus("success");
 
         setTimeout(() => {
@@ -146,8 +165,23 @@ export default function SetupPage() {
 
         {/* Setup Card */}
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20 shadow-2xl">
-          {status === "idle" && (
-            <>
+          {(status === "idle" || status === "error" || status === "connecting" || status === "creating") && (
+            <form onSubmit={(e) => { e.preventDefault(); runSetup(); }}>
+              {status === "error" && (
+                <div className="mb-6 p-4 rounded-lg bg-red-500/20 border border-red-500/30">
+                  <div className="flex items-start gap-3">
+                    <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-red-300 font-medium">Connection Failed</p>
+                      <p className="text-red-300/80 text-sm mt-1">{errorMessage}</p>
+                      <p className="text-slate-400 text-sm mt-2">
+                        The server might still be starting up. Give it a moment and try again.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4 mb-6">
                 <div>
                   <Label htmlFor="endpoint" className="text-slate-200 mb-2 block">
@@ -159,30 +193,25 @@ export default function SetupPage() {
                     value={localEndpoint}
                     onChange={(e) => setLocalEndpoint(e.target.value)}
                     placeholder="http://localhost:5173"
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400"
+                    disabled={status === "connecting" || status === "creating"}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
                   />
                 </div>
               </div>
 
               <Button
-                onClick={runSetup}
-                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50"
+                type="submit"
+                disabled={status === "connecting" || status === "creating"}
+                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50 disabled:opacity-80"
               >
-                Start Setup
+                {(status === "connecting" || status === "creating") ? (
+                  <>
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Connecting...
+                  </>
+                ) : status === "error" ? "Try Again" : "Start Setup"}
               </Button>
-            </>
-          )}
-
-          {(status === "connecting" || status === "creating") && (
-            <div className="text-center py-8">
-              <Loader2 className="w-12 h-12 text-purple-400 animate-spin mx-auto mb-4" />
-              <p className="text-white text-lg font-medium">
-                {status === "connecting" ? "Connecting to server..." : "Creating your API key..."}
-              </p>
-              <p className="text-slate-400 text-sm mt-2">
-                Please wait a moment
-              </p>
-            </div>
+            </form>
           )}
 
           {status === "success" && (
@@ -197,8 +226,8 @@ export default function SetupPage() {
             </div>
           )}
 
-          {status === "manual_entry" && (
-            <>
+          {(status === "manual_entry" || status === "verifying") && (
+            <form onSubmit={(e) => { e.preventDefault(); verifyAndSaveCredentials(); }}>
               <div className="text-center mb-6">
                 <KeyRound className="w-10 h-10 text-amber-400 mx-auto mb-3" />
                 <p className="text-white text-lg font-medium">
@@ -210,8 +239,11 @@ export default function SetupPage() {
               </div>
 
               {verifyError && (
-                <div className="mb-4 p-3 rounded-lg bg-red-500/20 border border-red-500/30">
-                  <p className="text-red-300 text-sm text-center">{verifyError}</p>
+                <div className="mb-4 p-4 rounded-lg bg-red-500/20 border border-red-500/30">
+                  <div className="flex items-start gap-3">
+                    <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                    <p className="text-red-300 text-sm">{getFriendlyAuthError(verifyError)}</p>
+                  </div>
                 </div>
               )}
 
@@ -226,7 +258,8 @@ export default function SetupPage() {
                     value={manualClientId}
                     onChange={(e) => setManualClientId(e.target.value)}
                     placeholder="Enter your client ID"
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400"
+                    disabled={status === "verifying"}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
                   />
                 </div>
                 <div>
@@ -239,60 +272,38 @@ export default function SetupPage() {
                     value={manualClientSecret}
                     onChange={(e) => setManualClientSecret(e.target.value)}
                     placeholder="mycelia_..."
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400"
+                    disabled={status === "verifying"}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
                   />
                 </div>
               </div>
 
               <div className="space-y-3">
                 <Button
-                  onClick={verifyAndSaveCredentials}
-                  disabled={!manualClientId || !manualClientSecret}
-                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50 disabled:opacity-50"
+                  type="submit"
+                  disabled={!manualClientId || !manualClientSecret || status === "verifying"}
+                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50 disabled:opacity-80"
                 >
-                  Verify & Continue
+                  {status === "verifying" ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Verifying...
+                    </>
+                  ) : "Verify & Continue"}
                 </Button>
                 <Button
+                  type="button"
                   onClick={() => setStatus("idle")}
+                  disabled={status === "verifying"}
                   variant="ghost"
-                  className="w-full text-slate-400 hover:text-white hover:bg-white/10"
+                  className="w-full text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-50"
                 >
                   Back
                 </Button>
               </div>
-            </>
+            </form>
           )}
 
-          {status === "verifying" && (
-            <div className="text-center py-8">
-              <Loader2 className="w-12 h-12 text-amber-400 animate-spin mx-auto mb-4" />
-              <p className="text-white text-lg font-medium">
-                Verifying credentials...
-              </p>
-              <p className="text-slate-400 text-sm mt-2">
-                Please wait a moment
-              </p>
-            </div>
-          )}
-
-          {status === "error" && (
-            <div className="text-center py-4">
-              <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-              <p className="text-white text-lg font-medium mb-2">
-                Connection Failed
-              </p>
-              <p className="text-slate-400 text-sm mb-6">
-                {errorMessage}
-              </p>
-              <Button
-                onClick={() => setStatus("idle")}
-                variant="outline"
-                className="border-white/20 text-white hover:bg-white/10"
-              >
-                Try Again
-              </Button>
-            </div>
-          )}
         </div>
 
         

@@ -63,7 +63,6 @@ export default function InferenceSetupPage() {
 
   const saveInferenceConfig = async () => {
     setStatus("saving");
-    setErrorMessage(null);
 
     try {
       // First ensure the config document exists
@@ -103,6 +102,7 @@ export default function InferenceSetupPage() {
         });
       }
 
+      setErrorMessage(null);
       setStatus("success");
 
       // Redirect after a short delay
@@ -155,8 +155,20 @@ export default function InferenceSetupPage() {
             </div>
           )}
 
-          {status === "idle" && (
-            <>
+          {(status === "idle" || status === "saving" || status === "error") && (
+            <form onSubmit={(e) => { e.preventDefault(); saveInferenceConfig(); }}>
+              {status === "error" && (
+                <div className="mb-6 p-4 rounded-lg bg-red-500/20 border border-red-500/30">
+                  <div className="flex items-start gap-3">
+                    <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-red-300 font-medium">Configuration Failed</p>
+                      <p className="text-red-300/80 text-sm mt-1">{errorMessage}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4 mb-6">
                 <div>
                   <Label htmlFor="baseUrl" className="text-slate-200 mb-2 block">
@@ -168,7 +180,8 @@ export default function InferenceSetupPage() {
                     value={baseUrl}
                     onChange={(e) => setBaseUrl(e.target.value)}
                     placeholder="https://inference.mycelia.tech"
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-cyan-400"
+                    disabled={status === "saving"}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-cyan-400 disabled:opacity-50"
                   />
                   <p className="text-slate-400 text-xs mt-1">
                     OpenAI-compatible inference endpoint
@@ -185,25 +198,37 @@ export default function InferenceSetupPage() {
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     placeholder="Enter your API key"
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-cyan-400"
+                    disabled={status === "saving"}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-cyan-400 disabled:opacity-50"
                   />
                 </div>
               </div>
 
               <div className="space-y-3">
                 <Button
-                  onClick={saveInferenceConfig}
-                  disabled={!baseUrl}
-                  className="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-cyan-500/30 transition-all hover:shadow-cyan-500/50"
+                  type="submit"
+                  disabled={!baseUrl || status === "saving"}
+                  className="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-cyan-500/30 transition-all hover:shadow-cyan-500/50 disabled:opacity-80"
                 >
-                  Save & Continue
-                  <ArrowRight className="w-5 h-5 ml-2" />
+                  {status === "saving" ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      Save & Continue
+                      <ArrowRight className="w-5 h-5 ml-2" />
+                    </>
+                  )}
                 </Button>
 
                 <Button
+                  type="button"
                   onClick={skipSetup}
+                  disabled={status === "saving"}
                   variant="ghost"
-                  className="w-full text-slate-400 hover:text-white hover:bg-white/10"
+                  className="w-full text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-50"
                 >
                   Skip for now
                 </Button>
@@ -212,19 +237,7 @@ export default function InferenceSetupPage() {
               <p className="text-slate-400 text-sm text-center mt-4">
                 You can change this later in Settings
               </p>
-            </>
-          )}
-
-          {status === "saving" && (
-            <div className="text-center py-8">
-              <Loader2 className="w-12 h-12 text-cyan-400 animate-spin mx-auto mb-4" />
-              <p className="text-white text-lg font-medium">
-                Saving configuration...
-              </p>
-              <p className="text-slate-400 text-sm mt-2">
-                Please wait a moment
-              </p>
-            </div>
+            </form>
           )}
 
           {status === "success" && (
@@ -239,32 +252,6 @@ export default function InferenceSetupPage() {
             </div>
           )}
 
-          {status === "error" && (
-            <div className="text-center py-4">
-              <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-              <p className="text-white text-lg font-medium mb-2">
-                Configuration Failed
-              </p>
-              <p className="text-slate-400 text-sm mb-6">
-                {errorMessage}
-              </p>
-              <div className="flex gap-3">
-                <Button
-                  onClick={() => setStatus("idle")}
-                  variant="outline"
-                  className="flex-1 border-white/20 text-white hover:bg-white/10"
-                >
-                  Try Again
-                </Button>
-                <Button
-                  onClick={skipSetup}
-                  className="flex-1 bg-cyan-500 hover:bg-cyan-600 text-white"
-                >
-                  Skip for now
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}

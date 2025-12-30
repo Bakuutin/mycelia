@@ -1,6 +1,6 @@
 import type { Platform } from "../core/types.ts";
 import { defaultPlatform } from "./default.tsx";
-import { Sparkles, User } from "lucide-react";
+import { User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useFormattedTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
@@ -249,6 +249,8 @@ export const myceliaPlatform: Platform = {
   ...defaultPlatform,
   id: "mycelia",
   name: "Mycelia",
-  icon: Sparkles,
+  icon: () => (
+    <span>🍄</span>
+  ),
   MessageComponent: MyceliaMessageComponent,
 };

@@ -15,6 +15,17 @@ export default defineConfig({
       "@interfaces/": interfacesPath,
     },
   },
+  server: {
+    watch: {
+      // Use polling for Docker volumes (native fs events don't work reliably)
+      usePolling: true,
+      interval: 1000,
+    },
+    hmr: {
+      // Ensure HMR works through Docker port mapping
+      host: "localhost",
+    },
+  },
   build: {
     outDir: "dist",
     sourcemap: true,
