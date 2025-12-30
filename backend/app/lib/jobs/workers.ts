@@ -3,6 +3,7 @@ import { createWorker } from "./queue.ts";
 import { processJob } from "./processor.ts";
 import type { JobType } from "./types.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
+import { env } from "#/env.ts";
 
 const workers: Worker[] = [];
 
@@ -63,7 +64,7 @@ export function startWorkers() {
   }
 
   console.log(`Started ${workers.length} worker(s) for ${JOB_TYPES.length} job types`);
-  console.log(`Python worker expected at: ${Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000"}`);
+  console.log(`Python worker expected at: ${env.PYTHON_WORKER_URL}`);
 }
 
 export async function stopWorkers() {

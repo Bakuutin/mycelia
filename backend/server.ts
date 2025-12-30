@@ -1,3 +1,16 @@
+import { load as loadEnv } from "@std/dotenv";
+import { existsSync } from "@std/fs/exists";
+
+
+if (existsSync(".env")) {
+  await loadEnv({ envPath:  ".env", export: true });
+}
+
+if (existsSync("../.env")) {
+  await loadEnv({ envPath:  "../.env", export: true });
+}
+
+
 import "@/lib/telemetry.ts";
 import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
@@ -26,17 +39,6 @@ import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
 import { up, down, to, status } from "@/lib/mongo/migrator.ts";
-import { load as loadEnv } from "@std/dotenv";
-import { existsSync } from "@std/fs/exists";
-
-
-if (existsSync(".env")) {
-  await loadEnv({ envPath:  ".env", export: true });
-}
-
-if (existsSync("../.env")) {
-  await loadEnv({ envPath:  "../.env", export: true });
-}
 
 
 let logFile: Deno.FsFile | null = null;

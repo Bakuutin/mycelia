@@ -4,11 +4,12 @@ import { Auth } from "../auth/index.ts";
 import { Db, GridFSBucket, MongoClient, ObjectId } from "mongodb";
 import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
+import { env } from "#/env.ts";
 
 export const getRootDB = async (): Promise<Db> => {
-  const client = new MongoClient(Deno.env.get("MONGO_URL") as string);
+  const client = new MongoClient(env.MONGO_URL);
   await client.connect();
-  return client.db(Deno.env.get("DATABASE_NAME"));
+  return client.db(env.DATABASE_NAME);
 };
 
 const zObjectId = () =>

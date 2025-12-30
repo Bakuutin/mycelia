@@ -1,11 +1,11 @@
 import type { Job } from "bullmq";
 import type { JobData, JobResult } from "../types.ts";
+import { env } from "#/env.ts";
 
 export async function processPythonJob(
   job: Job<JobData>,
 ): Promise<JobResult> {
-  const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||
-    "http://localhost:8000";
+  const PYTHON_WORKER_URL = env.PYTHON_WORKER_URL;
 
   const jobType = job.data.type;
   const url = `${PYTHON_WORKER_URL}/jobs/${jobType}`;

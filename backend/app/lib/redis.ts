@@ -3,12 +3,13 @@ import Redlock from "redlock";
 import { z } from "zod";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
+import { env } from "#/env.ts";
 
 export const redis = new Redis({
   maxRetriesPerRequest: null,
-  password: Deno.env.get("REDIS_PASSWORD"),
-  host: Deno.env.get("REDIS_HOST") || "localhost",
-  port: parseInt(Deno.env.get("REDIS_PORT") || "6379"),
+  password: env.REDIS_PASSWORD,
+  host: env.REDIS_HOST,
+  port: env.REDIS_PORT,
   lazyConnect: true,
 });
 

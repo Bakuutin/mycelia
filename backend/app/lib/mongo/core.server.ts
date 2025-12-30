@@ -8,6 +8,7 @@ import createDefaultQueryTester from "sift";
 
 import { Filter } from "mongodb";
 import { Auth } from "../auth/index.ts";
+import { env } from "#/env.ts";
 
 let client: MongoClient | null = null;
 
@@ -38,10 +39,10 @@ function cleanupExpiredCursors(): void {
 
 export const getRootDB = async (): Promise<Db> => {
   if (!client) {
-    client = new MongoClient(Deno.env.get("MONGO_URL") as string);
+    client = new MongoClient(env.MONGO_URL);
   }
   await client.connect();
-  return client.db(Deno.env.get("DATABASE_NAME"));
+  return client.db(env.DATABASE_NAME);
 };
 
 export function sift(query: Filter<unknown>): (item: unknown) => boolean {

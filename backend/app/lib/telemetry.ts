@@ -14,9 +14,9 @@ import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
 import { MongoDBInstrumentation } from "@opentelemetry/instrumentation-mongodb";
 import { IORedisInstrumentation } from "@opentelemetry/instrumentation-ioredis";
 import { metrics, trace } from "@opentelemetry/api";
+import { env } from "#/env.ts";
 
-const otlpEndpoint = Deno.env.get("OTEL_EXPORTER_OTLP_ENDPOINT") ??
-  "http://localhost:4318";
+const otlpEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT;
 
 const traceExporter = new OTLPTraceExporter({
   url: `${otlpEndpoint}/v1/traces`,
