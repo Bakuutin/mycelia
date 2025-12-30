@@ -51,13 +51,18 @@ This starts:
 
 ### 3. Enqueue a Job
 
+Jobs are enqueued via the `jobs` resource API.
+
 ```bash
-curl -X POST http://localhost:3000/api/jobs \
+curl -X POST http://localhost:3000/api/resource/jobs \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "type": "vad",
-    "limit": 100
+    "action": "enqueue",
+    "data": {
+      "type": "vad",
+      "limit": 100
+    }
   }'
 ```
 
@@ -122,15 +127,15 @@ Response:
 
 ## Job Types
 
-All jobs are enqueued via `POST /api/jobs` with `type` field in the request body.
+All jobs are enqueued via the `jobs` resource.
 
 | Type | Backend | Description | Example Body |
 |------|---------|-------------|--------------|
-| `vad` | Python | Voice Activity Detection | `{"type": "vad", "limit": 1000}` |
-| `transcription` | Python | Speech-to-text | `{"type": "transcription", "audioChunkIds": [...]}` |
-| `diarization` | Python | Speaker identification | `{"type": "diarization", "start": "...", "end": "..."}` |
-| `ingestion` | Python | Audio file processing | `{"type": "ingestion", "sourceId": "..."}` |
-| `histRecalculation` | TypeScript | Recalculate timeline histograms | `{"type": "histRecalculation", "all": true}` |
+| `vad` | Python | Voice Activity Detection | `{"action": "enqueue", "data": {"type": "vad", "limit": 1000}}` |
+| `transcription` | Python | Speech-to-text | `{"action": "enqueue", "data": {"type": "transcription", "audioChunkIds": [...]}}` |
+| `diarization` | Python | Speaker identification | `{"action": "enqueue", "data": {"type": "diarization", "start": {"$date": "..."}, "end": {"$date": "..."}}}` |
+| `ingestion` | Python | Audio file processing | `{"action": "enqueue", "data": {"type": "ingestion", "sourceId": "..."}}` |
+| `histRecalculation` | TypeScript | Recalculate timeline histograms | `{"action": "enqueue", "data": {"type": "histRecalculation", "all": true}}` |
 
 ## Configuration
 
@@ -215,7 +220,7 @@ progress_callback({
 ```
 
 This triggers:
-1. `POST /api/resource/worker_progress` (authenticated)
+1. `POST /api/resource/jobs` (authenticated)
 2. Updates BullMQ job progress
 3. Publishes to Redis Stream: `progress:{type}:{jobId}`
 4. Clients receive via SSE

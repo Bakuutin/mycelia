@@ -3,14 +3,16 @@ from __future__ import annotations
 import os
 import logging
 import threading
-from fastapi import FastAPI, HTTPException
+import contextvars
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import dotenv
 
 dotenv.load_dotenv('../.env', override=True)
 
 from lib.resources import call_resource
+from lib.api import job_token_var
 from jobs.vad import VadJobData
 from jobs.test_python_integration import TestPythonIntegrationJobData
 
@@ -21,6 +23,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Mycelia Worker Server")
+
+
+def get_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.split(" ")[1]
+    return None
 
 
 class VadJobRequest(BaseModel):
@@ -35,24 +43,26 @@ class TestPythonIntegrationJobRequest(BaseModel):
 
 
 
-def _update_progress_sync(job_id: str, job_type: str, progress: Dict[str, Any]):
-    """Internal synchronous function to send progress update"""
-    try:
-        call_resource("worker_progress", {
-            "jobId": job_id,
-            "jobType": job_type,
-            "progress": progress,
-        })
-    except Exception as e:
-        logger.error(f"Failed to update progress: {e}")
-
-
 def update_progress(job_id: str, job_type: str, progress: Dict[str, Any]):
     """Send progress update back to TypeScript server (non-blocking)"""
+    # Capture current context to propagate to the thread
+    ctx = contextvars.copy_context()
+    
+    # Define the worker function for the thread
+    def _threaded_update():
+        try:
+            call_resource("jobs", {
+                "action": "progressUpdate",
+                "jobId": job_id,
+                "progress": progress,
+            })
+        except Exception as e:
+            logger.error(f"Failed to update progress: {e}")
+
     # Fire and forget - don't block job processing
     thread = threading.Thread(
-        target=_update_progress_sync,
-        args=(job_id, job_type, progress),
+        target=ctx.run,
+        args=(_threaded_update,),
         daemon=True
     )
     thread.start()
@@ -78,11 +88,18 @@ async def root():
 
 
 @app.post("/jobs/testPythonIntegration")
-async def process_test_python_integration(request: TestPythonIntegrationJobRequest):
+async def process_test_python_integration(
+    request: TestPythonIntegrationJobRequest,
+    token: Optional[str] = Depends(get_token)
+):
     """Process test Python integration job and return result"""
     from jobs.test_python_integration import process_test_python_integration_job
     
     logger.info(f"Processing test Python integration job {request.jobId}")
+
+    token_token = None
+    if token:
+        token_token = job_token_var.set(token)
 
     try:
         def progress_callback(progress: Dict[str, Any]):
@@ -100,14 +117,24 @@ async def process_test_python_integration(request: TestPythonIntegrationJobReque
     except Exception as e:
         logger.exception(f"Test Python integration job {request.jobId} failed")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if token_token:
+            job_token_var.reset(token_token)
 
 
 @app.post("/jobs/vad")
-async def process_vad(request: VadJobRequest):
+async def process_vad(
+    request: VadJobRequest,
+    token: Optional[str] = Depends(get_token)
+):
     """Process VAD job and return result"""
     from jobs.vad import process_vad_job
 
     logger.info(f"Processing VAD job {request.jobId}")
+
+    token_token = None
+    if token:
+        token_token = job_token_var.set(token)
 
     try:
         def progress_callback(progress: Dict[str, Any]):
@@ -125,6 +152,9 @@ async def process_vad(request: VadJobRequest):
     except Exception as e:
         logger.exception(f"VAD job {request.jobId} failed")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if token_token:
+            job_token_var.reset(token_token)
 
 
 if __name__ == "__main__":

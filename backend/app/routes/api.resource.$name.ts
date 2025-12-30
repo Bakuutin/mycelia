@@ -25,6 +25,7 @@ export async function apiResourceHandler(req: Request, res: ExpressResponse) {
       });
 
       requestCounter.add(1, { tool: toolName, method: "POST" });
+      console.log(`[apiResourceHandler] ${toolName} request body:`, JSON.stringify(req.body, null, 2));
 
       const auth = await authenticateOr401(req, res);
       span.setAttributes({

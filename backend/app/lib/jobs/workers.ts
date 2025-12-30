@@ -3,6 +3,7 @@ import { createWorker } from "./queue.ts";
 import { processJob } from "./processor.ts";
 import type { JobType } from "./types.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
+import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { env } from "#/env.ts";
 
 const workers: Worker[] = [];
@@ -25,6 +26,20 @@ export function startWorkers() {
 
     worker.on("active", async (job) => {
       console.log(`[${jobType}] Job ${job.id} started`);
+      
+      const db = await getRootDB();
+      await db.collection("jobs").updateOne(
+        { _id: job.id },
+        { 
+          $set: { 
+            state: "active", 
+            startedAt: new Date(),
+            updatedAt: new Date() 
+          },
+          $inc: { attempts: 1 }
+        }
+      );
+
       await publishJobUpdate(job.id!, jobType, "job.started", {
         state: "active",
         progress: job.progress,
@@ -33,6 +48,20 @@ export function startWorkers() {
 
     worker.on("completed", async (job) => {
       console.log(`[${jobType}] Job ${job.id} completed`);
+
+      const db = await getRootDB();
+      await db.collection("jobs").updateOne(
+        { _id: job.id },
+        { 
+          $set: { 
+            state: "completed", 
+            finishedAt: new Date(),
+            result: job.returnvalue,
+            updatedAt: new Date() 
+          } 
+        }
+      );
+
       await publishJobUpdate(job.id!, jobType, "job.completed", {
         state: "completed",
         result: job.returnvalue,
@@ -42,6 +71,19 @@ export function startWorkers() {
     worker.on("failed", async (job, err) => {
       console.error(`[${jobType}] Job ${job?.id} failed:`, err.message);
       if (job?.id) {
+        const db = await getRootDB();
+        await db.collection("jobs").updateOne(
+          { _id: job.id },
+          { 
+            $set: { 
+              state: "failed", 
+              finishedAt: new Date(),
+              failedReason: err.message,
+              updatedAt: new Date() 
+            } 
+          }
+        );
+
         await publishJobUpdate(job.id, jobType, "job.failed", {
           state: "failed",
           failedReason: err.message,
@@ -50,6 +92,17 @@ export function startWorkers() {
     });
 
     worker.on("progress", async (job, progress) => {
+      const db = await getRootDB();
+      await db.collection("jobs").updateOne(
+        { _id: job.id },
+        { 
+          $set: { 
+            progress,
+            updatedAt: new Date() 
+          } 
+        }
+      );
+
       await publishJobUpdate(job.id!, jobType, "job.progress", {
         state: "active",
         progress,

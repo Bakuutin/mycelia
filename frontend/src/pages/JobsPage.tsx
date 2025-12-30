@@ -59,7 +59,7 @@ export default function JobsPage() {
   const { data: jobs, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["jobs", filterType, limit],
     queryFn: async () => {
-      const response = await api.callResource("worker_progress", {
+      const response = await api.callResource("jobs", {
         action: "list",
         limit,
         types: filterType === "all" ? undefined : [filterType],
@@ -77,10 +77,10 @@ export default function JobsPage() {
 
   const createTestJobMutation = useMutation({
     mutationFn: async () => {
-      return await api.post<{ success: boolean; jobId: string; jobType: string }>(
-        "/api/jobs",
-        { type: "testPythonIntegration" }
-      );
+      return await api.callResource("jobs", {
+        action: "enqueue",
+        data: { type: "testPythonIntegration" },
+      });
     },
     onSuccess: () => {
       refetch();
@@ -150,7 +150,7 @@ export default function JobsPage() {
     }
 
     try {
-      await api.callResource("worker_progress", {
+      await api.callResource("jobs", {
         action: "cancel_all",
       });
       refetch();

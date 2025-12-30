@@ -1,0 +1,10 @@
+---
+description: Rules for database migrations
+globs: backend/migrations/*.ts
+---
+
+# Migration Rules
+
+- NEVER EDIT HISTORICAL MIGRATIONS.
+- If you need to make changes to the schema or data, ALWAYS create a new migration file with a sequential prefix.
+- Historical migrations (like `0001_init.ts`) are considered immutable once they have been applied to any environment.

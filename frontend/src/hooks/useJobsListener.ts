@@ -26,7 +26,7 @@ export function useJobsListener() {
   const { data: jobs } = useQuery({
     queryKey: ["jobs", "running"],
     queryFn: async () => {
-      const response = await api.callResource("worker_progress", {
+      const response = await api.callResource("jobs", {
         action: "list",
         limit: 1000,
         statuses: ["active", "waiting", "delayed"],

@@ -1,6 +1,7 @@
 import { Job, Queue, Worker } from "bullmq";
 import { ObjectId } from "mongodb";
 import { redis } from "@/lib/redis.ts";
+import { getRootDB } from "@/lib/mongo/core.server.ts";
 import type { JobData, JobType, JobResult } from "./types.ts";
 import { JobDataSchema } from "./types.ts";
 import type { z } from "zod";
@@ -49,6 +50,18 @@ export async function enqueueJob(
   const jobId = options?.jobId || new ObjectId().toString();
   const parsedData = JobDataSchema.parse(data) as JobData;
   const queue = getQueue(parsedData.type);
+
+  // Store in MongoDB
+  const db = await getRootDB();
+  await db.collection("jobs").insertOne({
+    _id: jobId,
+    type: parsedData.type,
+    data: parsedData,
+    state: "waiting",
+    attempts: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
 
   return queue.add(parsedData.type, parsedData, {
     priority: options?.priority,

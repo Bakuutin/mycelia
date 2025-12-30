@@ -172,7 +172,15 @@ export class ResourceManager {
     }
 
     return async (input: Input): Promise<Output | Response> => {
-      input = resource.schemas.request.parse(input);
+      try {
+        input = resource.schemas.request.parse(input);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          console.error(`[ResourceManager] Validation failed for resource ${code}:`, JSON.stringify(error.errors, null, 2));
+          console.error(`[ResourceManager] Input was:`, JSON.stringify(input, null, 2));
+        }
+        throw error;
+      }
 
       const actions: ResourceAction[] = resource.extractActions(input);
 

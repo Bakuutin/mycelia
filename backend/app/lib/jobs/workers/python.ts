@@ -1,6 +1,7 @@
 import type { Job } from "bullmq";
 import type { JobData, JobResult } from "../types.ts";
 import { env } from "#/env.ts";
+import { signJWT } from "@/lib/auth/tokens.ts";
 
 export async function processPythonJob(
   job: Job<JobData>,
@@ -10,10 +11,19 @@ export async function processPythonJob(
   const jobType = job.data.type;
   const url = `${PYTHON_WORKER_URL}/jobs/${jobType}`;
 
+  // Issue a single-use JWT for this job
+  const token = await signJWT(
+    "job-worker",
+    `job:${job.id}`,
+    [{ resource: "**", action: "*", effect: "allow" }],
+    "1 hour",
+  );
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
     },
     body: JSON.stringify({
       jobId: job.id,

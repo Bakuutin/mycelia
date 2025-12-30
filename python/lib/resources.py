@@ -1,4 +1,4 @@
-from .api import session, ensure_authorized
+from .api import get_session, ensure_authorized
 from .config import get_url
 from typing import Any
 import json
@@ -66,6 +66,7 @@ def _should_retry(exception: Exception) -> bool:
 )
 def call_resource(resource_name: str, body: dict) -> Any:
     ensure_authorized()
+    session = get_session()
     response = session.post(
         get_url("api", "resource", resource_name),
         data=json.dumps(body, cls=EJsonEncoder),

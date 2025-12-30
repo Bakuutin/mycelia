@@ -60,6 +60,7 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      PYTHON_WORKER_URL: http://python-worker:8000
     volumes:
       - ./backend:/app
 

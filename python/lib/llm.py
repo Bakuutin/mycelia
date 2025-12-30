@@ -2,14 +2,15 @@
 from langchain_openai import ChatOpenAI
 
 from .config import get_url
-from .api import session, ensure_authorized
+from .api import job_token_var, ensure_authorized
 import httpx
 
 
 #%%
 def auth_callback(request: httpx.Request) -> httpx.Request:
     ensure_authorized()
-    request.headers.update({"Authorization": f"Bearer {session.access_token}"})
+    token = job_token_var.get()
+    request.headers.update({"Authorization": f"Bearer {token}"})
     return request
 
 http_client = httpx.Client(auth=auth_callback)

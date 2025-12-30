@@ -107,13 +107,16 @@ export function SummarizeDialog({
     setError(null);
 
     try {
-      const response = await api.post("/api/jobs", {
-        type: "summarization",
-        start: startDate.toISOString(),
-        end: endDate.toISOString(),
-        prompt: summarizePrompt || undefined,
-        model: selectedModel || undefined,
-        objectId: objectId || undefined,
+      const response = await callResource("jobs", {
+        action: "enqueue",
+        data: {
+          type: "summarization",
+          start: startDate,
+          end: endDate,
+          prompt: summarizePrompt || undefined,
+          model: selectedModel || undefined,
+          objectId: objectId || undefined,
+        },
       }) as { jobId?: string; jobType?: string };
 
       const jobId = response.jobId;
