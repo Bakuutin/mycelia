@@ -72,6 +72,14 @@ When you first open the frontend, you'll be guided through a setup wizard:
 
 You can reconfigure these settings anytime in Settings.
 
+#### Managing API Keys
+
+- **Via Settings UI**: Go to Settings → API Keys to create, view, and revoke keys
+- **Via Terminal** (for initial setup or automation):
+  ```bash
+  docker compose run --rm backend deno run -A server.ts token-create
+  ```
+
 ## For Developers
 
 See **[DEVELOPMENT.md](DEVELOPMENT.md)** for:

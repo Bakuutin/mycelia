@@ -43,7 +43,7 @@ services:
       context: .
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
     ports:
-      - "8080:8080"
+      - "${FRONTEND_PORT:-8080}:8080"
     volumes:
       - ./frontend:/app
       - ./interfaces:/app/interfaces
@@ -53,7 +53,7 @@ services:
       context: .
       dockerfile: ./backend/Dockerfile
     ports:
-      - "5173:5173"
+      - "${BACKEND_PORT:-5173}:5173"
     command: deno task dev
     env_file:
       - .env
@@ -63,6 +63,16 @@ services:
     volumes:
       - ./backend:/app
 
+  python-worker:
+    build:
+      context: .
+      dockerfile: ./python/Dockerfile
+    environment:
+      MYCELIA_URL: http://backend:5173
+    depends_on:
+      - backend
+    volumes:
+      - ./python:/app
 
 volumes:
   mongo_data:

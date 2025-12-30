@@ -21,5 +21,6 @@ COPY ./interfaces ./interfaces
 EXPOSE 8080
 
 # Run dev server on port 8080 with host binding for Docker
-CMD ["deno", "run", "--watch", "-A", "npm:vite", "--host", "0.0.0.0", "--port", "8080"]
+# Vite handles HMR internally - no need for deno --watch
+CMD ["deno", "run", "-A", "npm:vite", "--host", "0.0.0.0", "--port", "8080"]
 

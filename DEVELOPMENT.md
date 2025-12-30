@@ -17,33 +17,29 @@ The fastest way to get a development environment with hot reload:
 
 ```bash
 # Clone and setup
-git clone https://github.com/mycelia-tech/mycelia.git
-cd mycelia
-cp .env.example .env
-
-# Start in dev mode
-FRONTEND_MODE=dev docker compose up -d --build
+echo "FRONTEND_MODE=dev" >> .env
+docker compose up -d --build
 ```
 
-Or set `FRONTEND_MODE=dev` in your `.env` file for persistent configuration.
+Ports can be customized via environment variables (in `.env` or inline):
 
-| Mode | Dockerfile | Description |
-|------|------------|-------------|
-| `prod` (default) | `Dockerfile.prod` | Production build with Nginx serving static assets |
-| `dev` | `Dockerfile.dev` | Vite dev server with hot reload, source files mounted as volume |
+| Service  | Variable         | Default |
+|----------|------------------|---------|
+| Frontend | `FRONTEND_PORT`  | 8080    |
+| Backend  | `BACKEND_PORT`   | 5173    |
 
-**Services:**
-- Frontend: http://localhost:8080
-- Backend: http://localhost:5173
-- MongoDB: localhost:27017
+Example:
+```bash
+FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
+```
 
-### Option B: Native Development (Deno + Vite)
+### Option B: Native Development
 
 For full control and faster iteration:
 
 ```bash
 # Terminal 1: Start MongoDB
-docker compose up -d mongodb
+docker compose up -d mongodb redis mongo-search
 
 # Terminal 2: Backend
 cd backend
