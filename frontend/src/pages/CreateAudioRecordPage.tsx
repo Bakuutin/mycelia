@@ -73,6 +73,22 @@ export default function CreateAudioRecordPage() {
             </SelectContent>
           </Select>
 
+          {recording.availableDevices.length === 0 && (
+            <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+              <span className="text-sm text-muted-foreground">
+                Microphone permission may be needed
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => recording.requestPermission()}
+                disabled={recording.isRecording}
+              >
+                Request Permission
+              </Button>
+            </div>
+          )}
+
           <div>
             <Label htmlFor="sample-rate-select">Sample Rate</Label>
             <Select
