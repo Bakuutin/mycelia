@@ -27,7 +27,6 @@ export async function getOrCreatePersonByMessengerId(
     action: "findOne",
     collection: "objects",
     query: {
-      isPerson: true,
       [messengerIdKey]: messengerIdValue,
     },
   });

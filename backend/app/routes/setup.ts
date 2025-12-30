@@ -14,6 +14,11 @@ async function createPostInstallObjects(auth: Auth) {
         name: "Me",
         isPerson: true,
         icon: { text: "👤" },
+        messenger: {
+          mycelia: {
+            id: auth.principal,
+          },
+        },
       },
     });
 
@@ -22,6 +27,11 @@ async function createPostInstallObjects(auth: Auth) {
       object: {
         name: "Mycelia",
         icon: { text: "🍄" },
+        messenger: {
+          mycelia: {
+            id: "system_assistant",
+          },
+        },
       },
     });
 

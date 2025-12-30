@@ -130,8 +130,8 @@ export async function decodeAccessToken(
   }
 
   return signJWT(
-    keyDoc.owner,
     keyDoc._id!.toString(),
+    keyDoc.owner,
     keyDoc.policies,
     duration,
   );
