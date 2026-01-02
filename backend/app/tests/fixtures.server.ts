@@ -21,6 +21,9 @@ import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 import { z } from "zod";
 import type { Request } from "express";
 
+import { discoverJobWorkers, jobRegistry } from "@/lib/jobs/job-registry.ts";
+await discoverJobWorkers();
+
 export type Fixture = {
   token: any;
   dependencies?: any[];
@@ -67,7 +70,7 @@ const mongoContainer = await new GenericContainer("mongo:8.0")
   .withReuse()
   .start();
 
-const sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
+const sampleAudioFile = await  Deno.readFile("app/tests/sample_audio.wav");
 
 addEventListener("unload", async () => {
   await redisContainer.stop();

@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { ObjectId } from "mongodb";
 import type { Auth } from "@/lib/auth/core.server.ts";
+import { getServerAuth } from "@/lib/auth/core.server.ts";
 import type { Resource, ResourcePath } from "@/lib/auth/resources.ts";
-import { JobDataSchema, JobTypeSchema } from "@/lib/jobs/types.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 import { enqueueJob, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -14,7 +16,7 @@ const UpdateProgressSchema = z.object({
 
 const ListJobsSchema = z.object({
   action: z.literal("list"),
-  types: z.array(JobTypeSchema).nullable().optional(),
+  types: z.array(z.string()).nullable().optional(),
   statuses: z
     .array(
       z.enum([
@@ -37,7 +39,7 @@ const CancelAllJobsSchema = z.object({
 
 const EnqueueJobSchema = z.object({
   action: z.literal("enqueue"),
-  data: JobDataSchema,
+  data: z.object({ type: z.string() }).passthrough(),
   priority: z.number().optional(),
 });
 
@@ -87,45 +89,55 @@ export class WorkerProgressResource
   }
 
   private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>) {
-    const db = await getRootDB();
-    const types = JobTypeSchema.options;
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    
+    const types = jobRegistry.getJobTypes();
     for (const type of types) {
       const queue = getQueue(type);
       await queue.obliterate({ force: true });
     }
 
-    await db.collection("jobs").updateMany(
-      { state: { $in: ["waiting", "active", "delayed"] } },
-      {
+    await mongo({
+      action: "updateMany",
+      collection: "jobs",
+      query: { state: { $in: ["waiting", "active", "delayed"] } },
+      update: {
         $set: {
           state: "cancelled",
           finishedAt: new Date(),
           updatedAt: new Date(),
         },
       },
-    );
+    });
 
     return { success: true };
   }
 
   private async list(input: z.infer<typeof ListJobsSchema>) {
-    const db = await getRootDB();
-    const types = input.types || JobTypeSchema.options;
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    
+    const types = input.types || jobRegistry.getJobTypes();
     const queryStatuses = input.statuses ||
       ["active", "waiting", "delayed", "failed", "completed"];
 
     const totalLimit = input.limit || 100;
 
-    const jobs = await db.collection("jobs")
-      .find({
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
         type: { $in: types },
         state: { $in: queryStatuses },
-      })
-      .sort({ createdAt: -1 })
-      .limit(totalLimit)
-      .toArray();
+      },
+      options: { 
+        sort: { createdAt: -1 },
+        limit: totalLimit,
+      },
+    });
 
-    return jobs.map((job) => ({
+    return jobs.map((job: any) => ({
       id: job._id.toString(),
       type: job.type,
       data: job.data,
@@ -140,10 +152,18 @@ export class WorkerProgressResource
   }
 
   private async progressUpdate(input: z.infer<typeof UpdateProgressSchema>) {
-    const db = await getRootDB();
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
     const { jobId, progress } = input;
 
-    const jobDoc = await db.collection("jobs").findOne({ _id: jobId as any });
+    const jobDocs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(jobId) },
+      options: { limit: 1 },
+    });
+    
+    const jobDoc = jobDocs[0];
     if (!jobDoc) {
       console.log(
         `[jobs] Job ${jobId} not found in MongoDB, cannot update progress`,
@@ -173,17 +193,19 @@ export class WorkerProgressResource
       }
     }
 
-    await db.collection("jobs").updateOne(
-      { _id: jobId as any },
-      {
+    await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: new ObjectId(jobId) },
+      update: {
         $set: {
           progress,
           updatedAt: new Date(),
         },
       },
-    );
+    });
 
-    const queue = getQueue(jobType as any);
+    const queue = getQueue(jobType);
     const job = await queue.getJob(jobId);
 
     if (job) {

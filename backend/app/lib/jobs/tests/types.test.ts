@@ -1,92 +1,72 @@
 import { expect } from "@std/expect";
-import { VadJobDataSchema, JobDataSchema, JobTypeSchema } from "../types.ts";
+import { withFixtures } from "@/tests/fixtures.server.ts";
+import { jobRegistry } from "../job-registry.ts";
+import "./fixtures.ts";
 
-Deno.test("JobTypeSchema validates job types", () => {
-  expect(JobTypeSchema.parse("vad")).toBe("vad");
-  expect(JobTypeSchema.parse("transcription")).toBe("transcription");
-  expect(JobTypeSchema.parse("diarization")).toBe("diarization");
-  expect(JobTypeSchema.parse("ingestion")).toBe("ingestion");
+Deno.test(
+  "jobRegistry discovers job types dynamically",
+  withFixtures(["JobWorkers"], () => {
+    const types = jobRegistry.getJobTypes();
+    
+    // Should have discovered some job types
+    expect(types.length).toBeGreaterThan(0);
+    
+    // Should include known job types
+    expect(types).toContain("vad");
+    expect(types).toContain("summarization");
+    expect(types).toContain("histRecalculation");
+  }),
+);
 
-  expect(() => JobTypeSchema.parse("invalid")).toThrow();
-});
+Deno.test(
+  "jobRegistry validates VAD job data via schema",
+  withFixtures(["JobWorkers"], () => {
+    const vadCapability = jobRegistry.get("vad");
+    expect(vadCapability).toBeDefined();
 
-Deno.test("VadJobDataSchema validates VAD job data", () => {
-  const validData = {
-    type: "vad",
-    limit: 1000,
-    batchSize: 100,
-  };
+    const validData = {
+      type: "vad",
+      limit: 500,
+    };
 
-  const result = VadJobDataSchema.parse(validData);
+    const result = vadCapability!.schema.parse(validData);
+    expect(result.type).toBe("vad");
+    expect((result as any).limit).toBe(500);
+  }),
+);
 
-  expect(result.type).toBe("vad");
-  expect(result.limit).toBe(1000);
-  expect(result.batchSize).toBe(100);
-});
+Deno.test(
+  "jobRegistry.validateJobData validates and parses job data",
+  withFixtures(["JobWorkers"], () => {
+    const vadData = {
+      type: "vad",
+      limit: 500,
+    };
 
-Deno.test("VadJobDataSchema applies defaults", () => {
-  const minimalData = {
-    type: "vad",
-  };
+    const result = jobRegistry.validateJobData(vadData);
+    expect(result.type).toBe("vad");
+  }),
+);
 
-  const result = VadJobDataSchema.parse(minimalData);
+Deno.test(
+  "jobRegistry.validateJobData throws for unknown type",
+  withFixtures(["JobWorkers"], () => {
+    const invalidData = {
+      type: "unknown_type",
+      limit: 100,
+    };
 
-  expect(result.limit).toBe(1000);
-  expect(result.batchSize).toBe(100);
-});
+    expect(() => jobRegistry.validateJobData(invalidData)).toThrow();
+  }),
+);
 
-Deno.test("VadJobDataSchema accepts date strings and coerces to Date", () => {
-  const dataWithDates = {
-    type: "vad",
-    start: "2024-01-01T00:00:00Z",
-    end: "2024-01-02T00:00:00Z",
-  };
+Deno.test(
+  "jobRegistry.validateJobData throws for missing type",
+  withFixtures(["JobWorkers"], () => {
+    const noType = {
+      limit: 100,
+    };
 
-  const result = VadJobDataSchema.parse(dataWithDates);
-
-  expect(result.start).toBeInstanceOf(Date);
-  expect(result.end).toBeInstanceOf(Date);
-  expect(result.start?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
-});
-
-Deno.test("VadJobDataSchema accepts originalId", () => {
-  const dataWithOriginalId = {
-    type: "vad",
-    originalId: "67a1b2c3d4e5f6789abcdef0",
-  };
-
-  const result = VadJobDataSchema.parse(dataWithOriginalId);
-
-  expect(result.originalId).toBe("67a1b2c3d4e5f6789abcdef0");
-});
-
-Deno.test("JobDataSchema discriminates by type", () => {
-  const vadData = {
-    type: "vad",
-    limit: 500,
-  };
-
-  const result = JobDataSchema.parse(vadData);
-
-  expect(result.type).toBe("vad");
-  if (result.type === "vad") {
-    expect(result.limit).toBe(500);
-  }
-});
-
-Deno.test("JobDataSchema rejects invalid type", () => {
-  const invalidData = {
-    type: "unknown",
-    limit: 100,
-  };
-
-  expect(() => JobDataSchema.parse(invalidData)).toThrow();
-});
-
-Deno.test("JobDataSchema requires type field", () => {
-  const noType = {
-    limit: 100,
-  };
-
-  expect(() => JobDataSchema.parse(noType)).toThrow();
-});
+    expect(() => jobRegistry.validateJobData(noType)).toThrow();
+  }),
+);

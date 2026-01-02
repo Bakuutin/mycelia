@@ -5,9 +5,20 @@ import { fn } from "@std/expect";
 import { WorkerProgressResource } from "@/lib/resources/worker.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 
+
+defineFixture({
+  token: "JobWorkers",
+  dependencies: [],
+  factory: async () => {
+  },
+  teardown: async () => {
+
+  },
+});
+
 defineFixture({
   token: "JobQueue",
-  dependencies: [],
+  dependencies: ["JobWorkers"],
   factory: async () => {
     await redis.flushdb();
     return {

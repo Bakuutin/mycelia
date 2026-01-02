@@ -1,10 +1,26 @@
 import type { Job } from "bullmq";
+import { z } from "zod";
 import { ObjectId } from "bson";
 import type { JobData, JobResult } from "../types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getLLMResource } from "@/lib/llm/resource.server.ts";
 import { getObjectsResource } from "@/lib/objects/resource.server.ts";
+
+/** Job type name */
+export const name = "summarization";
+
+/** Schema for summarization job data */
+export const schema = z.object({
+  type: z.literal("summarization"),
+  start: z.coerce.date(),
+  end: z.coerce.date(),
+  prompt: z.string().optional(),
+  model: z.string().optional(),
+  objectId: z.string().optional(),
+});
+
+export type SummarizationJobData = z.infer<typeof schema>;
 
 function getTimestampMessage(date: Date): string {
   return `[${date.toISOString()}]`;
@@ -15,11 +31,9 @@ function getSilenceMessage(gapMs: number): string {
   return `[Silence ${duration}m]`;
 }
 
-export async function processSummarizationJob(
-  job: Job<JobData>,
-): Promise<JobResult> {
-  const jobData = job.data;
-  if (jobData.type !== "summarization") throw new Error("Invalid job type");
+/** Process the summarization job */
+export async function use(job: Job<JobData>): Promise<JobResult> {
+  const jobData = job.data as SummarizationJobData;
 
   const { start: startStr, end: endStr, prompt: userPrompt, model: userModel, objectId: existingObjectId } = jobData;
   const start = new Date(startStr);
@@ -65,13 +79,13 @@ export async function processSummarizationJob(
   promptText += getTimestampMessage(new Date(lastEnd));
 
   const llm = await getLLMResource(auth);
-  const modelName = userModel || "medium";
+  const modelAlias = userModel || "medium";
   const systemPrompt = userPrompt ||
     `You are a helpful assistant. Summarize the following conversation transcript.`;
 
   const completion = await llm({
     action: "completions",
-    model: modelName,
+    model: modelAlias,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: promptText },
@@ -83,7 +97,6 @@ export async function processSummarizationJob(
   const summaryEntry = {
     text: summary,
     model: modelAlias,
-    modelName: modelDoc.name,
     date: new Date(),
     prompt: systemPrompt,
     usage: completion.usage ? {
@@ -154,4 +167,3 @@ export async function processSummarizationJob(
     description: summary,
   };
 }
-

@@ -2,16 +2,16 @@ import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { processJob } from "../processor.ts";
 import { enqueueJob } from "../queue.ts";
-import type { VadJobData } from "../types.ts";
-import { VadJobDataSchema } from "../types.ts";
+import { schema as VadJobDataSchema } from "../workers/vad.ts";
 import type { z } from "zod";
 import "./fixtures.ts";
 
 type VadJobDataInput = z.input<typeof VadJobDataSchema>;
+type VadJobData = z.infer<typeof VadJobDataSchema>;
 
 Deno.test(
   "processJob calls Python worker with correct URL",
-  withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
+  withFixtures(["JobQueue", "Mongo", "MockPythonWorker"], async (_fixtures, _mongo, mockWorker) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
@@ -42,7 +42,7 @@ Deno.test(
 
 Deno.test(
   "processJob returns result from Python worker",
-  withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
+  withFixtures(["JobQueue", "Mongo", "MockPythonWorker"], async (_fixtures, _mongo, mockWorker) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
@@ -75,7 +75,7 @@ Deno.test(
 
 Deno.test(
   "processJob throws error on HTTP failure",
-  withFixtures(["JobQueue"], async () => {
+  withFixtures(["JobQueue", "Mongo"], async () => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 100,
@@ -100,7 +100,7 @@ Deno.test(
 
 Deno.test(
   "processJob uses PYTHON_WORKER_URL env variable",
-  withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
+  withFixtures(["JobQueue", "Mongo", "MockPythonWorker"], async (_fixtures, _mongo, mockWorker) => {
     const customUrl = "http://custom-python:9000";
     Deno.env.set("PYTHON_WORKER_URL", customUrl);
 
@@ -130,7 +130,7 @@ Deno.test(
 
 Deno.test(
   "processJob defaults to localhost:8000",
-  withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
+  withFixtures(["JobQueue", "Mongo", "MockPythonWorker"], async (_fixtures, _mongo, mockWorker) => {
     Deno.env.delete("PYTHON_WORKER_URL");
 
     const jobData: VadJobDataInput = {
@@ -158,7 +158,7 @@ Deno.test(
 
 Deno.test(
   "processJob sends job data in request body",
-  withFixtures(["JobQueue", "MockPythonWorker"], async ({ redis }, mockWorker) => {
+  withFixtures(["JobQueue", "Mongo", "MockPythonWorker"], async (_fixtures, _mongo, mockWorker) => {
     const jobData: VadJobData = {
       type: "vad",
       start: new Date("2024-01-01T00:00:00Z"),

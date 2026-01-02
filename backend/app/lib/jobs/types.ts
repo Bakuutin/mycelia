@@ -1,75 +1,19 @@
-import { z } from "zod";
-import type { Resolution } from "@/types/resolution.ts";
-
-export const JobTypeSchema = z.enum([
-  "vad",
-  "transcription",
-  "diarization",
-  "ingestion",
-  "histRecalculation",
-  "summarization",
-  "testPythonIntegration",
-]);
-
-export type JobType = z.infer<typeof JobTypeSchema>;
-
-export const VadJobDataSchema = z.object({
-  type: z.literal("vad"),
-  start: z.coerce.date().optional(),
-  end: z.coerce.date().optional(),
-  originalId: z.string().optional(),
-  limit: z.number().default(1000),
-  batchSize: z.number().default(100),
-});
-
-export type VadJobData = z.infer<typeof VadJobDataSchema>;
-
-export const PipelineRecalculationJobDataSchema = z.object({
-  type: z.literal("histRecalculation"),
-  start: z.coerce.date().optional(),
-  end: z.coerce.date().optional(),
-  all: z.boolean().default(false),
-});
-
-export type PipelineRecalculationJobData = z.infer<
-  typeof PipelineRecalculationJobDataSchema
->;
-
-
-export const SummarizationJobDataSchema = z.object({
-  type: z.literal("summarization"),
-  start: z.coerce.date(),
-  end: z.coerce.date(),
-  prompt: z.string().optional(),
-  model: z.string().optional(),
-  objectId: z.string().optional(),
-});
-
-export type SummarizationJobData = z.infer<typeof SummarizationJobDataSchema>;
-
-export const TestPythonIntegrationJobDataSchema = z.object({
-  type: z.literal("testPythonIntegration"),
-});
-
-export type TestPythonIntegrationJobData = z.infer<
-  typeof TestPythonIntegrationJobDataSchema
->;
-
-export const JobDataSchema = z.discriminatedUnion("type", [
-  VadJobDataSchema,
-  PipelineRecalculationJobDataSchema,
-  SummarizationJobDataSchema,
-  TestPythonIntegrationJobDataSchema,
-]);
-
-export type JobData = z.infer<typeof JobDataSchema>;
+/**
+ * Generic job data - type string plus any additional fields.
+ * Each job capability defines its own schema for validation.
+ */
+export interface JobData {
+  type: string;
+  [key: string]: unknown;
+}
 
 export interface JobProgress {
   processed: number;
   total: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface JobResult {
-  [key: string]: any;
+  success?: boolean;
+  [key: string]: unknown;
 }

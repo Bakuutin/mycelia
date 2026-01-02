@@ -110,7 +110,7 @@ async function startServer(
   }
 
   if (!noWorkers) {
-    startWorkers();
+    await startWorkers();
     await startChangeStreamWorker();
     await startAccessLogWorker();
   }
