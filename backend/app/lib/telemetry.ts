@@ -8,6 +8,7 @@ import {
 import {
   BatchSpanProcessor,
   ConsoleSpanExporter,
+  SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
 import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
@@ -38,11 +39,23 @@ const consoleMetricReader = new PeriodicExportingMetricReader({
   exportIntervalMillis: 5000,
 });
 
+// Use SimpleSpanProcessor in test environment to avoid timer leaks
+// BatchSpanProcessor creates timers that can outlive test scope
+const isTest = Deno.env.get("DENO_TESTING") === "true" || 
+               typeof Deno !== "undefined" && Deno.test !== undefined;
+
+const spanProcessors = isTest
+  ? [
+      new SimpleSpanProcessor(traceExporter),
+      new SimpleSpanProcessor(consoleTraceExporter),
+    ]
+  : [
+      new BatchSpanProcessor(traceExporter),
+      new BatchSpanProcessor(consoleTraceExporter),
+    ];
+
 const sdk = new NodeSDK({
-  spanProcessors: [
-    new BatchSpanProcessor(traceExporter),
-    new BatchSpanProcessor(consoleTraceExporter),
-  ],
+  spanProcessors,
   metricReaders: [otlpMetricReader, consoleMetricReader],
   instrumentations: [
     new HttpInstrumentation(),
