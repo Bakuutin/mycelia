@@ -194,6 +194,7 @@ Deno.test(
       jobId: "abc",
       progress: {},
     });
-    // expect(result.success).toBe(false);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Invalid job ID format");
   }),
 );

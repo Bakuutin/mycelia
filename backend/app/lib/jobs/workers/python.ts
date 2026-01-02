@@ -1,7 +1,6 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
 import type { JobData, JobResult } from "../types.ts";
-import { env } from "#/env.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
 
 /**
@@ -13,7 +12,8 @@ export function createPythonJobCapability(jobType: string, jobSchema: z.ZodType<
     name: jobType,
     schema: jobSchema,
     use: async (job: Job<JobData>): Promise<JobResult> => {
-      const PYTHON_WORKER_URL = env.PYTHON_WORKER_URL;
+      // Read PYTHON_WORKER_URL at runtime to support dynamic configuration (e.g., in tests)
+      const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
       const url = `${PYTHON_WORKER_URL}/jobs/${jobType}`;
 
       // Issue a single-use JWT for this job

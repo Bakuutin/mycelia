@@ -156,6 +156,14 @@ export class WorkerProgressResource
     const mongo = await getMongoResource(auth);
     const { jobId, progress } = input;
 
+    // Validate that jobId is a valid ObjectId
+    if (!ObjectId.isValid(jobId)) {
+      console.log(
+        `[jobs] Invalid jobId format: ${jobId}`,
+      );
+      return { success: false, error: "Invalid job ID format" };
+    }
+
     const jobDocs = await mongo({
       action: "find",
       collection: "jobs",
