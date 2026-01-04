@@ -17,3 +17,4 @@ debug.*
 **/logs/*
 .htpasswd
 misc/.htpasswd
+.playwright-mcp/*
