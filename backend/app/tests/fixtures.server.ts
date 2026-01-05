@@ -12,7 +12,6 @@ import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
-import { ProcessorResource } from "../lib/processors/core.server.ts";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
 import { accessLogger } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
@@ -156,17 +155,14 @@ defineFixture({
     const isolatedDB = client.db(databaseName);
     const fs = new FsResource();
     const timeline = new TimelineResource();
-    const processor = new ProcessorResource();
     const objects = new ObjectsResource();
     const messenger = new MessengerResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
-    processor.getRootDB = async () => isolatedDB;
     objects.getRootDB = async () => isolatedDB;
     defaultResourceManager.registerResource(resource);
     defaultResourceManager.registerResource(fs);
     defaultResourceManager.registerResource(timeline);
-    defaultResourceManager.registerResource(processor);
     defaultResourceManager.registerResource(objects);
     defaultResourceManager.registerResource(messenger);
 
@@ -379,7 +375,7 @@ console.log("All fixtures defined");
 
 export function withFixtures(
   dependencies: any[],
-  testFn: (...args: any[]) => Promise<void>,
+  testFn: (...args: any[]) => Promise<void> | void,
 ) {
   return async () => {
     const resolved = new Map<any, any>();

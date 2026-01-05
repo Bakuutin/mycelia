@@ -1,6 +1,6 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
-import type { JobData, JobResult } from "../types.ts";
+import type { JobData, JobResult } from "@/lib/jobs/types.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
 
 /**

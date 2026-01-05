@@ -1,7 +1,6 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
-import { ObjectId } from "bson";
-import type { JobData, JobResult } from "../types.ts";
+import type { JobData, JobResult } from "@/lib/jobs/types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getLLMResource } from "@/lib/llm/resource.server.ts";

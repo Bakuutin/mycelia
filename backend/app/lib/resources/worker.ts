@@ -63,7 +63,7 @@ const RequestSchema = z.union([
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
 
-export class WorkerProgressResource
+export class JobsResource
   implements Resource<WorkerProgressRequest, any> {
   code = "jobs";
   description = "Update job progress, list jobs, or enqueue a new job";

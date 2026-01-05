@@ -1,6 +1,6 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
-import type { JobData, JobResult } from "../types.ts";
+import type { JobData, JobResult } from "@/lib/jobs/types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
 import { zDateOrString } from "@/lib/zod-json-schema.ts";

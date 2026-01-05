@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { processJob } from "../processor.ts";
-import { enqueueJob } from "../queue.ts";
-import { schema as VadJobDataSchema } from "../workers/vad.ts";
+import { processJob } from "@/lib/jobs/processor.ts";
+import { enqueueJob } from "@/lib/jobs/queue.ts";
+import { schema as VadJobDataSchema } from "@/workers/vad.ts";
 import type { z } from "zod";
 import "./fixtures.ts";
 

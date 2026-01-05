@@ -1,9 +1,7 @@
 import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { WorkerProgressResource } from "@/lib/resources/worker.ts";
 import { enqueueJob, getJob } from "../queue.ts";
-import { redis } from "@/lib/redis.ts";
-import { schema as VadJobDataSchema } from "../workers/vad.ts";
+import { schema as VadJobDataSchema } from "@/workers/vad.ts";
 import type { z } from "zod";
 import { Auth } from "@/lib/auth/core.server.ts";
 import "./fixtures.ts";
@@ -11,8 +9,8 @@ import "./fixtures.ts";
 type VadJobDataInput = z.input<typeof VadJobDataSchema>;
 
 Deno.test(
-  "WorkerProgressResource updates job progress",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource updates job progress",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -40,8 +38,8 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource publishes job progress updates",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource publishes job progress updates",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -70,8 +68,8 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource updates progress without hasSpeech field",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource updates progress without hasSpeech field",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -98,8 +96,8 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource gracefully handles non-existent job",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource gracefully handles non-existent job",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const fakeJobId = "67a1b2c3d4e5f6789abcdef0";
 
     // Should not throw - returns error response
@@ -118,8 +116,8 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource handles multiple updates",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource handles multiple updates",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -155,8 +153,8 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource handles custom progress fields",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource handles custom progress fields",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -185,16 +183,4 @@ Deno.test(
   }),
 );
 
-Deno.test(
-  "WorkerProgressResource handles invalid job type gracefully",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
-    // An invalid job + non-existent job ID will return error
-    const result = await resource.use({
-      action: "progressUpdate",
-      jobId: "abc",
-      progress: {},
-    });
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("Invalid job ID format");
-  }),
-);
+

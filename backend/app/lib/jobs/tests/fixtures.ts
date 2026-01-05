@@ -2,7 +2,7 @@ import { defineFixture } from "@/tests/fixtures.server.ts";
 import { redis } from "@/lib/redis.ts";
 import { ObjectId } from "mongodb";
 import { fn } from "@std/expect";
-import { WorkerProgressResource } from "@/lib/resources/worker.ts";
+import { JobsResource } from "@/lib/resources/worker.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 
 
@@ -75,10 +75,10 @@ defineFixture({
 });
 
 defineFixture({
-  token: "WorkerProgressResource",
+  token: "JobsResource",
   dependencies: ["Mongo"],
   factory: () => {
-    const resource = new WorkerProgressResource();
+    const resource = new JobsResource();
     defaultResourceManager.registerResource(resource);
     return resource;
   },
