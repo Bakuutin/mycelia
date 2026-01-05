@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc-dev \
     portaudio19-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install uv

@@ -4,45 +4,30 @@ import { useWebSocketSubscription } from "./useWebSocket";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
-
-type JobInfo = {
-  id: string;
-  type: string;
-  data: any;
-  state: string;
-  progress: any;
-  result?: any;
-  timestamp: number;
-  finishedOn?: number;
-  processedOn?: number;
-  failedReason?: string;
-};
+import type { JobInfo } from "@/types/jobs";
 
 export function useJobsListener() {
-  const [runningCount, setRunningCount] = useState(0);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const { data: jobs } = useQuery({
-    queryKey: ["jobs", "running"],
+  const { data: jobs = [], isLoading } = useQuery({
+    queryKey: ["jobs", "all"],
     queryFn: async () => {
       const response = await api.callResource("jobs", {
         action: "list",
         limit: 1000,
-        statuses: ["active", "waiting", "delayed"],
+        statuses: ["active", "waiting", "delayed", "completed", "failed"],
       });
       return response as JobInfo[];
     },
+    staleTime: 30000,
   });
 
-  useEffect(() => {
-    if (jobs) {
-      const running = jobs.filter(
-        (job) => job.state === "active" || job.state === "waiting" || job.state === "delayed"
-      ).length;
-      setRunningCount(running);
-    }
-  }, [jobs]);
+  const runningCount = jobs.filter(
+    (job) => job.state === "active" || job.state === "waiting" || job.state === "delayed"
+  ).length;
+
+  const getJobById = (id: string) => jobs.find((job) => job.id === id);
 
   useWebSocketSubscription("jobs:*", (event) => {
     if (event.event && event.event.startsWith("job.")) {
@@ -53,48 +38,42 @@ export function useJobsListener() {
         progress?: any;
         result?: any;
         failedReason?: string;
+        timestamp?: number;
       };
 
       if (!jobData?.jobId) return;
 
-      queryClient.setQueryData<JobInfo[]>(["jobs", "running"], (oldJobs = []) => {
-        const runningStatuses = ["active", "waiting", "delayed"];
+      queryClient.setQueryData<JobInfo[]>(["jobs", "all"], (oldJobs = []) => {
         const newState = jobData.state || event.event.replace("job.", "");
-        const isRunning = runningStatuses.includes(newState);
-
         const existingIndex = oldJobs.findIndex((job) => job.id === jobData.jobId);
 
         if (existingIndex >= 0) {
-          if (isRunning) {
-            const updated = [...oldJobs];
-            updated[existingIndex] = {
-              ...updated[existingIndex],
-              state: newState,
-              progress: jobData.progress ?? updated[existingIndex].progress,
-              result: jobData.result ?? updated[existingIndex].result,
-              failedReason: jobData.failedReason ?? updated[existingIndex].failedReason,
-            };
-            return updated;
-          } else {
-            return oldJobs.filter((job) => job.id !== jobData.jobId);
-          }
-        } else if (isRunning) {
-          return [
-            ...oldJobs,
-            {
-              id: jobData.jobId,
-              type: jobData.jobType,
-              data: {},
-              state: newState,
-              progress: jobData.progress,
-              result: jobData.result,
-              timestamp: Date.now(),
-              failedReason: jobData.failedReason,
-            },
-          ];
+          const updated = [...oldJobs];
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            state: newState,
+            progress: jobData.progress ?? updated[existingIndex].progress,
+            result: jobData.result ?? updated[existingIndex].result,
+            failedReason: jobData.failedReason ?? updated[existingIndex].failedReason,
+            finishedOn: event.event === "job.completed" ? Date.now() : updated[existingIndex].finishedOn,
+            processedOn: event.event === "job.active" ? Date.now() : updated[existingIndex].processedOn,
+          };
+          return updated;
+        } else {
+          const newJob: JobInfo = {
+            id: jobData.jobId,
+            type: jobData.jobType,
+            data: {},
+            state: newState,
+            progress: jobData.progress,
+            result: jobData.result,
+            timestamp: jobData.timestamp ?? Date.now(),
+            failedReason: jobData.failedReason,
+          };
+          // Keep it sorted by timestamp desc
+          const newJobs = [newJob, ...oldJobs];
+          return newJobs.sort((a, b) => b.timestamp - a.timestamp).slice(0, 1500); // Allow some buffer over 1000
         }
-
-        return oldJobs;
       });
 
       if (event.event === "job.completed" && event.data) {
@@ -130,6 +109,6 @@ export function useJobsListener() {
     }
   });
 
-  return { runningCount };
+  return { jobs, runningCount, getJobById, isLoading };
 }
 

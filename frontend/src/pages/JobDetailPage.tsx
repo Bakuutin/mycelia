@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
-import { useWebSocketSubscription } from "@/hooks/useWebSocket";
+import { useJobsListener } from "@/hooks/useJobsListener";
 import {
     Card,
     CardContent,
@@ -11,8 +11,9 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { JobInfo } from "@/types/jobs";
 
 const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
     const result: Array<[string, any]> = [];
@@ -81,29 +82,16 @@ function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
     );
 }
 
-type JobInfo = {
-    id: string;
-    name?: string;
-    type: string;
-    data: any;
-    state: string;
-    progress: any;
-    result?: any;
-    timestamp: number;
-    processedOn?: number;
-    finishedOn?: number;
-    failedReason?: string;
-    attemptsMade?: number;
-};
-
 export default function JobDetailPage() {
     const { id } = useParams<{ id: string }>();
-    const jobType = new URLSearchParams(window.location.search).get("type");
+    const { getJobById, isLoading: isListenerLoading } = useJobsListener();
+    
+    const cachedJob = id ? getJobById(id) : null;
 
-    const { data: job, isLoading, refetch, isRefetching } = useQuery({
-        queryKey: ["job", id, jobType],
+    const { data: fetchedJob, isLoading: isFetching, refetch } = useQuery({
+        queryKey: ["job", id],
         queryFn: async () => {
-            if (!id || !jobType) {
+            if (!id) {
                 throw new Error("Job ID and type are required");
             }
             const response = await api.callResource("jobs", {
@@ -112,14 +100,11 @@ export default function JobDetailPage() {
             });
             return response as JobInfo;
         },
-        enabled: !!id && !!jobType,
+        enabled: !!id && !cachedJob,
     });
 
-    useWebSocketSubscription(`jobs:${id}`, (event) => {
-        if (event.event && event.event.startsWith("job.")) {
-            refetch();
-        }
-    });
+    const job = cachedJob || fetchedJob;
+    const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const getStatusColor = (status: string) => {
         switch (status) {

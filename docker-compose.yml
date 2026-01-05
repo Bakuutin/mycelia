@@ -72,10 +72,14 @@ services:
       MYCELIA_URL: http://backend:5173
     depends_on:
       - backend
+    ports:
+      - "${PYTHON_WORKER_PORT:-8000}:8000"
     volumes:
       - ./python:/app
+      - worker_data:/root/.cache
 
 volumes:
   mongo_data:
   mongo_search_data:
   redis_data:
+  worker_data:

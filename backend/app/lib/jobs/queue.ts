@@ -47,6 +47,11 @@ export async function enqueueJob(
 ): Promise<Job<JobData>> {
   const jobId = options?.jobId || new ObjectId().toString();
   const parsedData = jobRegistry.validateJobData(data);
+
+  if (!parsedData.type) {
+    throw new Error(`Job data is missing 'type' field after validation for job ID: ${jobId}. Check if the schema for this job type includes the 'type' field.`);
+  }
+
   const queue = getQueue(parsedData.type);
 
   // Store in MongoDB

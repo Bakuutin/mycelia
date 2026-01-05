@@ -40,6 +40,22 @@ export class JobRegistry extends Registry<Job<JobData>, JobResult, JobCapability
   }
 
   /**
+   * Get JSON schemas for all registered jobs.
+   */
+  getJobSchemas(): Record<string, any> {
+    const schemas: Record<string, any> = {};
+    for (const capability of this.list()) {
+      try {
+        schemas[capability.name] = (z as any).toJSONSchema(capability.schema);
+      } catch (err: any) {
+        console.error(`Failed to convert schema for job type ${capability.name}:`, err.message);
+        throw err;
+      }
+    }
+    return schemas;
+  }
+
+  /**
    * Validate job data against the schema for its type.
    * Returns the parsed data or throws if invalid.
    */

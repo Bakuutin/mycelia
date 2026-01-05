@@ -6,6 +6,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getLLMResource } from "@/lib/llm/resource.server.ts";
 import { getObjectsResource } from "@/lib/objects/resource.server.ts";
+import { zDateOrString } from "../../zod-json-schema.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -13,8 +14,8 @@ export const name = "summarization";
 /** Schema for summarization job data */
 export const schema = z.object({
   type: z.literal("summarization"),
-  start: z.coerce.date(),
-  end: z.coerce.date(),
+  start: zDateOrString(),
+  end: zDateOrString(),
   prompt: z.string().optional(),
   model: z.string().optional(),
   objectId: z.string().optional(),

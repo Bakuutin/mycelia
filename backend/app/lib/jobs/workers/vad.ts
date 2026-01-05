@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { createPythonJobCapability } from "./python.ts";
+import { zDateOrString } from "../../zod-json-schema.ts";
 
 /** Schema for VAD job data */
 export const schema = z.object({
   type: z.literal("vad"),
-  start: z.coerce.date().optional(),
-  end: z.coerce.date().optional(),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
   originalId: z.string().optional(),
   limit: z.number().default(1000),
   batchSize: z.number().default(100),

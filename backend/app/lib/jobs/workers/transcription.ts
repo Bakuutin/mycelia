@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { createPythonJobCapability } from "./python.ts";
+import { zDateOrString } from "../../zod-json-schema.ts";
 
 /** Schema for transcription job data */
 export const schema = z.object({
   type: z.literal("transcription"),
-  start: z.coerce.date().optional(),
-  end: z.coerce.date().optional(),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
 });
 
 const capability = createPythonJobCapability("transcription", schema);

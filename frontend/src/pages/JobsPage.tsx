@@ -1,9 +1,9 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
-import { useWebSocketSubscription } from "@/hooks/useWebSocket";
+import { useJobsListener } from "@/hooks/useJobsListener";
 import {
   Table,
   TableBody,
@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -24,22 +23,8 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, Trash2, Play } from "lucide-react";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
-import { FormField } from "@/components/forms/FormField";
 import { Progress } from "@/components/ui/progress";
-
-type JobInfo = {
-  id: string;
-  type: string;
-  data: any;
-  state: string;
-  progress: any;
-  result?: any;
-  timestamp: number;
-  finishedOn?: number;
-  processedOn?: number;
-  failedReason?: string;
-};
+import type { JobInfo } from "@/types/jobs";
 
 type VadJobFormData = {
   limit: number;
@@ -52,28 +37,21 @@ type VadJobFormData = {
 export default function JobsPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [limit, setLimit] = useState<number>(50);
+  const queryClient = useQueryClient();
 
+  const { jobs, isLoading } = useJobsListener();
 
+  const filteredJobs = useMemo(() => {
+    let result = jobs;
+    if (filterType !== "all") {
+      result = result.filter(j => j.type === filterType);
+    }
+    return result.slice(0, limit);
+  }, [jobs, filterType, limit]);
 
-
-  const { data: jobs, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ["jobs", filterType, limit],
-    queryFn: async () => {
-      const response = await api.callResource("jobs", {
-        action: "list",
-        limit,
-        types: filterType === "all" ? undefined : [filterType],
-        statuses: ["active", "waiting", "delayed", "completed", "failed"],
-      });
-      return response as JobInfo[];
-    },
-    refetchInterval: (query) => {
-      // Refetch every 2 seconds if there are active jobs
-      const jobs = query.state.data as JobInfo[] | undefined;
-      const hasActiveJobs = jobs?.some((job) => job.state === "active");
-      return hasActiveJobs ? 2000 : false;
-    },
-  });
+  const refetch = () => {
+    queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+  };
 
   const createTestJobMutation = useMutation({
     mutationFn: async () => {
@@ -81,15 +59,6 @@ export default function JobsPage() {
         action: "enqueue",
         data: { type: "testPythonIntegration" },
       });
-    },
-    onSuccess: () => {
-      refetch();
-    },
-  });
-
-  useWebSocketSubscription("jobs:*", (event) => {
-    if (event.event && event.event.startsWith("job.")) {
-      refetch();
     }
   });
 
@@ -168,6 +137,16 @@ export default function JobsPage() {
           <Button
             variant="default"
             size="sm"
+            asChild
+          >
+            <Link to="/jobs/new">
+              <Play className="h-4 w-4 mr-2" />
+              Launch Job
+            </Link>
+          </Button>
+          <Button
+            variant="default"
+            size="sm"
             onClick={() => createTestJobMutation.mutate()}
             disabled={createTestJobMutation.isPending}
           >
@@ -186,10 +165,9 @@ export default function JobsPage() {
             variant="outline"
             size="sm"
             onClick={() => refetch()}
-            disabled={isRefetching}
           >
             <RefreshCw
-              className={`h-4 w-4 mr-2 ${isRefetching ? "animate-spin" : ""}`}
+              className="h-4 w-4 mr-2"
             />
             Refresh
           </Button>
@@ -259,18 +237,18 @@ export default function JobsPage() {
                     Loading jobs...
                   </TableCell>
                 </TableRow>
-              ) : jobs?.length === 0 ? (
+              ) : filteredJobs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center py-8">
                     No jobs found
                   </TableCell>
                 </TableRow>
               ) : (
-                jobs?.map((job) => (
+                filteredJobs.map((job) => (
                   <TableRow key={job.id}>
                     <TableCell>
                       <Link
-                        to={`/jobs/${job.id}?type=${job.type}`}
+                        to={`/jobs/${job.id}`}
                       >
                         <Badge
                           variant="secondary"
@@ -283,7 +261,7 @@ export default function JobsPage() {
                     <TableCell className="font-medium">{job.type}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       <Link
-                        to={`/jobs/${job.id}?type=${job.type}`}
+                        to={`/jobs/${job.id}`}
                       >
                         {job.id}
                       </Link>

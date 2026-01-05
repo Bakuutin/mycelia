@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { JobData, JobResult } from "../types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
+import { zDateOrString } from "../../zod-json-schema.ts";
 
 /** Job type name */
 export const name = "histRecalculation";
@@ -10,8 +11,8 @@ export const name = "histRecalculation";
 /** Schema for histogram recalculation job data */
 export const schema = z.object({
   type: z.literal("histRecalculation"),
-  start: z.coerce.date().optional(),
-  end: z.coerce.date().optional(),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
   all: z.boolean().default(false),
 });
 

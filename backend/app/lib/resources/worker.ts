@@ -48,12 +48,17 @@ const EnqueueJobSchema = z.object({
   priority: z.number().optional(),
 });
 
+const SchemasSchema = z.object({
+  action: z.literal("schemas"),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
   CancelAllJobsSchema,
   GetJobSchema,
   EnqueueJobSchema,
+  SchemasSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -80,9 +85,15 @@ export class WorkerProgressResource
         return this.list(input);
       case "progressUpdate":
         return this.progressUpdate(input);
+      case "schemas":
+        return this.schemasAction();
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
+  }
+
+  private schemasAction() {
+    return jobRegistry.getJobSchemas();
   }
 
   private async get(input: z.infer<typeof GetJobSchema>) {
@@ -272,6 +283,8 @@ export class WorkerProgressResource
   }[] {
     switch (input.action) {
       case "list":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "schemas":
         return [{ path: ["jobs"], actions: ["read"] }];
       case "cancel_all":
         return [{ path: ["jobs"], actions: ["write"] }];
