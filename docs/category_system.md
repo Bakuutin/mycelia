@@ -55,7 +55,7 @@
 ## Operations
 ### Category CRUD
 - **Create/Update**: validate global uniqueness of `slug` and sibling-level uniqueness of `name`.
-- **Delete**: forbid removal when children or assigned objects exist (require reassignment/rename/archive first).
+- **Delete**: delete operation should be forbidden when the category has children or is assigned to objects (require reassignment/rename/archive first).
 - **Move**: change `parentId` and recompute `path` for all descendants.
 
 ### Assigning categories to objects
