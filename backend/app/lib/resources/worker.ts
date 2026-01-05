@@ -37,6 +37,11 @@ const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
 });
 
+const GetJobSchema = z.object({
+  action: z.literal("get"),
+  id: z.string(),
+});
+
 const EnqueueJobSchema = z.object({
   action: z.literal("enqueue"),
   data: z.object({ type: z.string() }).passthrough(),
@@ -47,6 +52,7 @@ const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
   CancelAllJobsSchema,
+  GetJobSchema,
   EnqueueJobSchema,
 ]);
 
@@ -64,6 +70,8 @@ export class WorkerProgressResource
 
   async use(input: WorkerProgressRequest): Promise<any> {
     switch (input.action) {
+      case "get":
+        return this.get(input);
       case "enqueue":
         return this.enqueue(input);
       case "cancel_all":
@@ -75,6 +83,36 @@ export class WorkerProgressResource
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
+  }
+
+  private async get(input: z.infer<typeof GetJobSchema>) {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(input.id) },
+      options: { limit: 1 },
+    });
+
+    const job = jobs[0];
+    if (!job) {
+      throw new Error(`Job ${input.id} not found`);
+    }
+
+    return {
+      id: job._id.toString(),
+      type: job.type,
+      data: job.data,
+      state: job.state,
+      progress: job.progress,
+      result: job.result,
+      timestamp: job.createdAt.getTime(),
+      finishedOn: job.finishedAt?.getTime(),
+      processedOn: job.startedAt?.getTime(),
+      failedReason: job.failedReason,
+    };
   }
 
   private async enqueue(input: z.infer<typeof EnqueueJobSchema>) {
@@ -155,14 +193,6 @@ export class WorkerProgressResource
     const auth = await getServerAuth();
     const mongo = await getMongoResource(auth);
     const { jobId, progress } = input;
-
-    // Validate that jobId is a valid ObjectId
-    if (!ObjectId.isValid(jobId)) {
-      console.log(
-        `[jobs] Invalid jobId format: ${jobId}`,
-      );
-      return { success: false, error: "Invalid job ID format" };
-    }
 
     const jobDocs = await mongo({
       action: "find",

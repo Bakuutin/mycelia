@@ -106,10 +106,11 @@ export default function JobDetailPage() {
             if (!id || !jobType) {
                 throw new Error("Job ID and type are required");
             }
-            const response = await api.get<JobInfo>(
-                `/api/jobs/${id}?type=${jobType}`
-            );
-            return response;
+            const response = await api.callResource("jobs", {
+                action: "get",
+                id: id,
+            });
+            return response as JobInfo;
         },
         enabled: !!id && !!jobType,
     });

@@ -33,11 +33,10 @@ export async function waitForJobCompletion(
 ): Promise<any> {
   const fetchCurrentState = async () => {
     try {
-      const job = await api.get<{
-        state: string;
-        result?: any;
-        failedReason?: string;
-      }>(`/api/jobs/${jobId}?type=${jobType}`);
+      const job = await api.callResource("jobs", {
+        action: "get",
+        id: jobId,
+      });
       return job;
     } catch (error) {
       console.warn("Failed to fetch current job state:", error);
