@@ -65,7 +65,7 @@
 
 ### Preset categories
 - Base set (example): `work`, `relationships`, `health`, `finance`, `learning`, `personal`.
-- Nested examples: `work/pip`, `work/freelance`, `work/full-time`; `relationships/friends`, `relationships/family`, `relationships/romantic`.
+- Nested examples: `work/performance-improvement-plan`, `work/freelance`, `work/full-time`; `relationships/friends`, `relationships/family`, `relationships/romantic`.
 - Migration creates root and nested categories with default `priority`, `order`, and `display`.
 
 ## Timeline Rendering
