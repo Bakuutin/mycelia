@@ -132,7 +132,7 @@
   - `learning`: priority 50
   - `personal`: priority 40
 - Within `work` (order and optional priority offset):
-  - `pip`: priority 85, order 10
+  - `pip` (Performance Improvement Plan): priority 85, order 10
   - `full-time`: priority 82, order 20
   - `freelance`: priority 81, order 30
 - Child priority may slightly decrease relative to parent, but explicit values always override inheritance.
