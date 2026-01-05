@@ -75,7 +75,6 @@ const PromptDetailPage = () => {
           doc: {
             ...data,
             createdAt: new Date(),
-            updatedAt: new Date(),
           },
         });
         if (result.insertedId) {
@@ -89,7 +88,6 @@ const PromptDetailPage = () => {
           update: {
             $set: {
               ...data,
-              updatedAt: new Date(),
             },
           },
         });

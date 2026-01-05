@@ -8,15 +8,16 @@ import {
 import {
   BatchSpanProcessor,
   ConsoleSpanExporter,
+  SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
 import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
 import { MongoDBInstrumentation } from "@opentelemetry/instrumentation-mongodb";
 import { IORedisInstrumentation } from "@opentelemetry/instrumentation-ioredis";
 import { metrics, trace } from "@opentelemetry/api";
+import { env } from "#/env.ts";
 
-const otlpEndpoint = Deno.env.get("OTEL_EXPORTER_OTLP_ENDPOINT") ??
-  "http://localhost:4318";
+const otlpEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT;
 
 const traceExporter = new OTLPTraceExporter({
   url: `${otlpEndpoint}/v1/traces`,
@@ -38,11 +39,23 @@ const consoleMetricReader = new PeriodicExportingMetricReader({
   exportIntervalMillis: 5000,
 });
 
+// Use SimpleSpanProcessor in test environment to avoid timer leaks
+// BatchSpanProcessor creates timers that can outlive test scope
+const isTest = Deno.env.get("DENO_TESTING") === "true" || 
+               typeof Deno !== "undefined" && Deno.test !== undefined;
+
+const spanProcessors = isTest
+  ? [
+      new SimpleSpanProcessor(traceExporter),
+      new SimpleSpanProcessor(consoleTraceExporter),
+    ]
+  : [
+      new BatchSpanProcessor(traceExporter),
+      new BatchSpanProcessor(consoleTraceExporter),
+    ];
+
 const sdk = new NodeSDK({
-  spanProcessors: [
-    new BatchSpanProcessor(traceExporter),
-    new BatchSpanProcessor(consoleTraceExporter),
-  ],
+  spanProcessors,
   metricReaders: [otlpMetricReader, consoleMetricReader],
   instrumentations: [
     new HttpInstrumentation(),

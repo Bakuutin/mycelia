@@ -27,8 +27,10 @@ export async function publishJobUpdate(
     ...data,
   };
 
-  await publishEvent(`jobs:${jobId}`, event, jobData);
-  await publishEvent("jobs:*", event, jobData);
+  await Promise.all([
+    publishEvent(`jobs:${jobId}`, event, jobData),
+    publishEvent("jobs:*", event, jobData),
+  ]);
 }
 
 export async function publishObjectEvent(

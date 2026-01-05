@@ -1,22 +1,22 @@
 import { z } from "zod";
+import { ObjectId } from "mongodb";
 import type { Auth } from "@/lib/auth/core.server.ts";
-import type { Resource } from "@/lib/auth/resources.ts";
-import { JobTypeSchema } from "@/lib/jobs/types.ts";
-import { getQueue } from "@/lib/jobs/queue.ts";
-import { redis } from "@/lib/redis.ts";
-import type { Job } from "bullmq";
+import { getServerAuth } from "@/lib/auth/core.server.ts";
+import type { Resource, ResourcePath } from "@/lib/auth/resources.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { jobRegistry } from "@/lib/jobs/job-registry.ts";
+import { enqueueJob, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 
 const UpdateProgressSchema = z.object({
-  action: z.literal("update_progress").optional(),
+  action: z.literal("progressUpdate"),
   jobId: z.string(),
-  jobType: JobTypeSchema,
   progress: z.record(z.string(), z.any()),
 });
 
 const ListJobsSchema = z.object({
   action: z.literal("list"),
-  types: z.array(JobTypeSchema).nullable().optional(),
+  types: z.array(z.string()).nullable().optional(),
   statuses: z
     .array(
       z.enum([
@@ -37,143 +37,268 @@ const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
 });
 
+const GetJobSchema = z.object({
+  action: z.literal("get"),
+  id: z.string(),
+});
 
-const RequestSchema = z.union([UpdateProgressSchema, ListJobsSchema, CancelAllJobsSchema]);
+const EnqueueJobSchema = z.object({
+  action: z.literal("enqueue"),
+  data: z.object({ type: z.string() }).passthrough(),
+  priority: z.number().optional(),
+});
+
+const SchemasSchema = z.object({
+  action: z.literal("schemas"),
+});
+
+const RequestSchema = z.union([
+  UpdateProgressSchema,
+  ListJobsSchema,
+  CancelAllJobsSchema,
+  GetJobSchema,
+  EnqueueJobSchema,
+  SchemasSchema,
+]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
 
-type JobInfo = {
-  id: string | undefined;
-  type: string;
-  data: any;
-  state: string;
-  progress: any;
-  result?: any;
-  timestamp: number;
-  finishedOn?: number;
-  processedOn?: number;
-  failedReason?: string;
-};
-
-export class WorkerProgressResource
-  implements Resource<WorkerProgressRequest, void | JobInfo[]> {
-  code = "worker_progress";
-  description = "Update job progress or list jobs";
+export class JobsResource
+  implements Resource<WorkerProgressRequest, any> {
+  code = "jobs";
+  description = "Update job progress, list jobs, or enqueue a new job";
 
   schemas = {
     request: RequestSchema,
-    response: z.any(), // Returning JobInfo[] or void
+    response: z.any(),
   };
 
-  async use(input: WorkerProgressRequest): Promise<void | JobInfo[]> {
-    // Handle "cancel_all" action
-    if ("action" in input && input.action === "cancel_all") {
-      const types = JobTypeSchema.options;
-      for (const type of types) {
-        const queue = getQueue(type);
-        // We use obliterate to clear the queue completely.
-        // force: true is required if there are active jobs.
-        await queue.obliterate({ force: true });
-      }
-      return;
+  async use(input: WorkerProgressRequest): Promise<any> {
+    switch (input.action) {
+      case "get":
+        return this.get(input);
+      case "enqueue":
+        return this.enqueue(input);
+      case "cancel_all":
+        return this.cancelAll(input);
+      case "list":
+        return this.list(input);
+      case "progressUpdate":
+        return this.progressUpdate(input);
+      case "schemas":
+        return this.schemasAction();
+      default:
+        throw new Error(`Unknown action: ${(input as any).action}`);
+    }
+  }
+
+  private schemasAction() {
+    return jobRegistry.getJobSchemas();
+  }
+
+  private async get(input: z.infer<typeof GetJobSchema>) {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(input.id) },
+      options: { limit: 1 },
+    });
+
+    const job = jobs[0];
+    if (!job) {
+      throw new Error(`Job ${input.id} not found`);
     }
 
-    // Handle "list" action
-    if ("action" in input && input.action === "list") {
-      const types = input.types || JobTypeSchema.options;
-      const statuses = input.statuses || [
-        "active",
-        "waiting",
-        "delayed",
-        "paused",
-        "failed",
-        "completed",
-      ];
-      // Default statuses if not provided: active, waiting, delayed, failed.
-      // If user asks for 'list', they likely want to see what's happening.
-      const queryStatuses = input.statuses ||
-        ["active", "waiting", "delayed", "failed", "completed"];
+    return {
+      id: job._id.toString(),
+      type: job.type,
+      data: job.data,
+      state: job.state,
+      progress: job.progress,
+      result: job.result,
+      timestamp: job.createdAt.getTime(),
+      finishedOn: job.finishedAt?.getTime(),
+      processedOn: job.startedAt?.getTime(),
+      failedReason: job.failedReason,
+    };
+  }
 
-      const allJobs: JobInfo[] = [];
+  private async enqueue(input: z.infer<typeof EnqueueJobSchema>) {
+    const job = await enqueueJob(input.data, {
+      priority: input.priority,
+    });
 
-      for (const type of types) {
-        const queue = getQueue(type);
-        const jobs = await queue.getJobs(queryStatuses, 0, input.limit ? input.limit - 1 : 99);
-        
-        // Parallelize state fetching
-        const jobsWithState = await Promise.all(jobs.map(async (job) => {
-             const state = await job.getState();
-             return { job, state };
-        }));
+    return {
+      success: true,
+      jobId: job.id,
+    };
+  }
 
-        for (const { job, state } of jobsWithState) {
-          allJobs.push({
-            id: job.id,
-            type: type,
-            data: job.data,
-            state,
-            progress: job.progress,
-            result: job.returnvalue,
-            timestamp: job.timestamp,
-            finishedOn: job.finishedOn,
-            processedOn: job.processedOn,
-            failedReason: job.failedReason,
-          });
-        }
-      }
-
-      // Sort by timestamp descending
-      return allJobs.sort((a, b) => b.timestamp - a.timestamp);
+  private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>) {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    
+    const types = jobRegistry.getJobTypes();
+    for (const type of types) {
+      const queue = getQueue(type);
+      await queue.obliterate({ force: true });
     }
 
-    // Handle "update_progress" action (or legacy format)
-    // Legacy format doesn't have 'action', but matches UpdateProgressSchema structure
-    const { jobId, jobType, progress } = input as z.infer<
-      typeof UpdateProgressSchema
-    >;
+    await mongo({
+      action: "updateMany",
+      collection: "jobs",
+      query: { state: { $in: ["waiting", "active", "delayed"] } },
+      update: {
+        $set: {
+          state: "cancelled",
+          finishedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
+    });
+
+    return { success: true };
+  }
+
+  private async list(input: z.infer<typeof ListJobsSchema>) {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    
+    const types = input.types || jobRegistry.getJobTypes();
+    const queryStatuses = input.statuses ||
+      ["active", "waiting", "delayed", "failed", "completed"];
+
+    const totalLimit = input.limit || 100;
+
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        type: { $in: types },
+        state: { $in: queryStatuses },
+      },
+      options: { 
+        sort: { createdAt: -1 },
+        limit: totalLimit,
+      },
+    });
+
+    return jobs.map((job: any) => ({
+      id: job._id.toString(),
+      type: job.type,
+      data: job.data,
+      state: job.state,
+      progress: job.progress,
+      result: job.result,
+      timestamp: job.createdAt.getTime(),
+      finishedOn: job.finishedAt?.getTime(),
+      processedOn: job.startedAt?.getTime(),
+      failedReason: job.failedReason,
+    }));
+  }
+
+  private async progressUpdate(input: z.infer<typeof UpdateProgressSchema>) {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    const { jobId, progress } = input;
+
+    const jobDocs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(jobId) },
+      options: { limit: 1 },
+    });
+    
+    const jobDoc = jobDocs[0];
+    if (!jobDoc) {
+      console.log(
+        `[jobs] Job ${jobId} not found in MongoDB, cannot update progress`,
+      );
+      return { success: false, error: "Job not found" };
+    }
+
+    const jobType = jobDoc.type as string;
+
+    // Check if this progress update is "newer" than what we have
+    const currentProgress = jobDoc.progress;
+    if (
+      currentProgress && typeof currentProgress === "object" &&
+      typeof progress === "object"
+    ) {
+      const currentVal = currentProgress.progress ?? currentProgress.iteration;
+      const newVal = progress.progress ?? progress.iteration;
+
+      if (
+        typeof currentVal === "number" && typeof newVal === "number" &&
+        newVal < currentVal
+      ) {
+        console.log(
+          `[jobs] Ignoring stale progress update for ${jobId} (${newVal} < ${currentVal})`,
+        );
+        return { success: true, status: "stale" };
+      }
+    }
+
+    await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: new ObjectId(jobId) },
+      update: {
+        $set: {
+          progress,
+          updatedAt: new Date(),
+        },
+      },
+    });
 
     const queue = getQueue(jobType);
     const job = await queue.getJob(jobId);
 
-    if (!job) {
-      throw new Error(`Job ${jobId} not found`);
+    if (job) {
+      try {
+        await job.updateProgress(progress);
+      } catch (err) {
+        console.log(
+          `[jobs] Could not update BullMQ progress for job ${jobId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
-
-    await job.updateProgress(progress);
-
-    const streamKey = `progress:${jobType}:${jobId}`;
-    const fields: string[] = [];
-
-    for (const [key, value] of Object.entries(progress)) {
-      fields.push(key, String(value));
-    }
-
-    fields.push("timestamp", new Date().toISOString());
-
-    await redis.xadd(streamKey, "*", ...fields);
-    await redis.expire(streamKey, 3600);
 
     await publishJobUpdate(jobId, jobType, "job.progress", {
-      state: await job.getState(),
+      state: "active",
       progress,
     });
+
+    return { success: true };
   }
 
-  extractActions(input: WorkerProgressRequest): { path: string[]; actions: string[] }[] {
+  extractActions(input: WorkerProgressRequest): {
+    path: ResourcePath;
+    actions: string[];
+  }[] {
     switch (input.action) {
       case "list":
         return [{ path: ["jobs"], actions: ["read"] }];
+      case "schemas":
+        return [{ path: ["jobs"], actions: ["read"] }];
       case "cancel_all":
         return [{ path: ["jobs"], actions: ["write"] }];
-      case "update_progress":
+      case "enqueue":
+        return [{ path: ["jobs"], actions: ["write"] }];
+      case "progressUpdate":
         return [{ path: [], actions: ["write"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }
 }
 
-export async function getWorkerProgressResource(
+export async function getJobsResource(
   auth: Auth,
-): Promise<(input: WorkerProgressRequest) => Promise<void | JobInfo[]>> {
-  return auth.getResource("worker_progress");
+): Promise<(input: WorkerProgressRequest) => Promise<any>> {
+  return auth.getResource("jobs");
 }

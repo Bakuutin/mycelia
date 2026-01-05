@@ -6,6 +6,7 @@ import { Policy } from "./resources.ts";
 import { z } from "zod";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { ObjectId } from "mongodb";
+import { env } from "#/env.ts";
 
 const OPEN_PREFIX_LENGTH = 16;
 
@@ -114,7 +115,7 @@ export async function signJWT(
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime(duration)
     .sign(createSecretKey(
-      Buffer.from(Deno.env.get("SECRET_KEY") as string, "utf-8"),
+      Buffer.from(env.SECRET_KEY, "utf-8"),
     ));
 }
 
@@ -129,8 +130,8 @@ export async function decodeAccessToken(
   }
 
   return signJWT(
-    keyDoc.owner,
     keyDoc._id!.toString(),
+    keyDoc.owner,
     keyDoc.policies,
     duration,
   );

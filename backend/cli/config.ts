@@ -1,3 +1,5 @@
+import { env } from "#/env.ts";
+
 export interface CliConfig {
   url: string;
   token: string;
@@ -5,22 +7,23 @@ export interface CliConfig {
 }
 
 export function getConfig(): CliConfig {
-  const url = Deno.env.get("MYCELIA_URL");
-  if (!url) {
+  if (!env.MYCELIA_URL) {
     throw new Error("MYCELIA_URL is not set");
   }
 
-  const token = Deno.env.get("MYCELIA_TOKEN");
-  if (!token) {
+  if (!env.MYCELIA_TOKEN) {
     throw new Error("MYCELIA_TOKEN is not set");
   }
 
-  const clientId = Deno.env.get("MYCELIA_CLIENT_ID");
-  if (!clientId) {
+  if (!env.MYCELIA_CLIENT_ID) {
     throw new Error("MYCELIA_CLIENT_ID is not set");
   }
 
-  return { url, token, clientId };
+  return {
+    url: env.MYCELIA_URL,
+    token: env.MYCELIA_TOKEN,
+    clientId: env.MYCELIA_CLIENT_ID,
+  };
 }
 
 export function getUrl(path: string): string {

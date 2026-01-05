@@ -1,28 +1,45 @@
 import type { Worker } from "bullmq";
+import { ObjectId } from "mongodb";
 import { createWorker } from "./queue.ts";
 import { processJob } from "./processor.ts";
-import type { JobType } from "./types.ts";
+import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
+import { getServerAuth } from "@/lib/auth/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { env } from "#/env.ts";
 
 const workers: Worker[] = [];
 
-const JOB_TYPES: JobType[] = [
-  "vad",
-  "transcription",
-  "diarization",
-  "ingestion",
-  "histRecalculation",
-  "summarization",
-];
-
-export function startWorkers() {
+export async function startWorkers() {
   console.log("Starting job workers...");
 
-  for (const jobType of JOB_TYPES) {
+  // Discover and register all job workers
+  await discoverJobWorkers();
+
+  const jobTypes = jobRegistry.getJobTypes();
+
+  for (const jobType of jobTypes) {
     const worker = createWorker(jobType, processJob);
 
     worker.on("active", async (job) => {
       console.log(`[${jobType}] Job ${job.id} started`);
+      
+      const auth = await getServerAuth();
+      const mongo = await getMongoResource(auth);
+      await mongo({
+        action: "updateOne",
+        collection: "jobs",
+        query: { _id: new ObjectId(job.id) },
+        update: { 
+          $set: { 
+            state: "active", 
+            startedAt: new Date(),
+            updatedAt: new Date() 
+          },
+          $inc: { attempts: 1 }
+        },
+      });
+
       await publishJobUpdate(job.id!, jobType, "job.started", {
         state: "active",
         progress: job.progress,
@@ -31,6 +48,23 @@ export function startWorkers() {
 
     worker.on("completed", async (job) => {
       console.log(`[${jobType}] Job ${job.id} completed`);
+
+      const auth = await getServerAuth();
+      const mongo = await getMongoResource(auth);
+      await mongo({
+        action: "updateOne",
+        collection: "jobs",
+        query: { _id: new ObjectId(job.id) },
+        update: { 
+          $set: { 
+            state: "completed", 
+            finishedAt: new Date(),
+            result: job.returnvalue,
+            updatedAt: new Date() 
+          } 
+        },
+      });
+
       await publishJobUpdate(job.id!, jobType, "job.completed", {
         state: "completed",
         result: job.returnvalue,
@@ -40,6 +74,22 @@ export function startWorkers() {
     worker.on("failed", async (job, err) => {
       console.error(`[${jobType}] Job ${job?.id} failed:`, err.message);
       if (job?.id) {
+        const auth = await getServerAuth();
+        const mongo = await getMongoResource(auth);
+        await mongo({
+          action: "updateOne",
+          collection: "jobs",
+          query: { _id: new ObjectId(job.id) },
+          update: { 
+            $set: { 
+              state: "failed", 
+              finishedAt: new Date(),
+              failedReason: err.message,
+              updatedAt: new Date() 
+            } 
+          },
+        });
+
         await publishJobUpdate(job.id, jobType, "job.failed", {
           state: "failed",
           failedReason: err.message,
@@ -48,6 +98,20 @@ export function startWorkers() {
     });
 
     worker.on("progress", async (job, progress) => {
+      const auth = await getServerAuth();
+      const mongo = await getMongoResource(auth);
+      await mongo({
+        action: "updateOne",
+        collection: "jobs",
+        query: { _id: new ObjectId(job.id) },
+        update: { 
+          $set: { 
+            progress,
+            updatedAt: new Date() 
+          } 
+        },
+      });
+
       await publishJobUpdate(job.id!, jobType, "job.progress", {
         state: "active",
         progress,
@@ -61,8 +125,8 @@ export function startWorkers() {
     workers.push(worker);
   }
 
-  console.log(`Started ${workers.length} worker(s) for ${JOB_TYPES.length} job types`);
-  console.log(`Python worker expected at: ${Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000"}`);
+  console.log(`Started ${workers.length} worker(s) for ${jobTypes.length} job types`);
+  console.log(`Python worker expected at: ${env.PYTHON_WORKER_URL}`);
 }
 
 export async function stopWorkers() {

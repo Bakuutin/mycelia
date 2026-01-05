@@ -1,9 +1,7 @@
 import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { WorkerProgressResource } from "@/lib/resources/worker.ts";
 import { enqueueJob, getJob } from "../queue.ts";
-import { redis } from "@/lib/redis.ts";
-import { VadJobDataSchema } from "../types.ts";
+import { schema as VadJobDataSchema } from "@/workers/vad.ts";
 import type { z } from "zod";
 import { Auth } from "@/lib/auth/core.server.ts";
 import "./fixtures.ts";
@@ -11,8 +9,8 @@ import "./fixtures.ts";
 type VadJobDataInput = z.input<typeof VadJobDataSchema>;
 
 Deno.test(
-  "WorkerProgressResource updates job progress",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource updates job progress",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -21,8 +19,8 @@ Deno.test(
     const job = await enqueueJob(jobData as any);
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: {
         processed: 100,
         total: 1000,
@@ -40,19 +38,18 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource publishes to Redis Stream",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource publishes job progress updates",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
     const job = await enqueueJob(jobData as any);
-    const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: {
         processed: 100,
         total: 1000,
@@ -60,101 +57,93 @@ Deno.test(
       },
     });
 
-    const stream = await redis.xrange(streamKey, "-", "+");
-
-    expect(stream.length).toBeGreaterThan(0);
-
-    const [_id, fields] = stream[0];
-    const data: Record<string, string> = {};
-    for (let i = 0; i < fields.length; i += 2) {
-      data[fields[i]] = fields[i + 1];
-    }
-
-    expect(data.processed).toBe("100");
-    expect(data.total).toBe("1000");
-    expect(data.hasSpeech).toBe("45");
-    expect(data.timestamp).toBeDefined();
+    // Verify job progress was updated
+    const updatedJob = await getJob("vad", job.id!);
+    expect(updatedJob?.progress).toEqual({
+      processed: 100,
+      total: 1000,
+      hasSpeech: 45,
+    });
   }),
 );
 
 Deno.test(
-  "WorkerProgressResource sets TTL on stream",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource updates progress without hasSpeech field",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
     const job = await enqueueJob(jobData as any);
-    const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: {
         processed: 100,
         total: 1000,
       },
     });
 
-    const ttl = await redis.ttl(streamKey);
-
-    expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(3600);
+    // Verify job progress was updated
+    const updatedJob = await getJob("vad", job.id!);
+    expect(updatedJob?.progress).toEqual({
+      processed: 100,
+      total: 1000,
+    });
   }),
 );
 
 Deno.test(
-  "WorkerProgressResource throws error for non-existent job",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource gracefully handles non-existent job",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const fakeJobId = "67a1b2c3d4e5f6789abcdef0";
 
-    await expect(
-      resource.use({
-        jobId: fakeJobId,
-        jobType: "vad",
-        progress: {
-          processed: 100,
-          total: 1000,
-        },
-      }),
-    ).rejects.toThrow("Job 67a1b2c3d4e5f6789abcdef0 not found");
+    // Should not throw - returns error response
+    const result = await resource.use({
+      action: "progressUpdate",
+      jobId: fakeJobId,
+      progress: {
+        processed: 100,
+        total: 1000,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Job not found");
   }),
 );
 
 Deno.test(
-  "WorkerProgressResource handles multiple updates",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource handles multiple updates",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
     };
 
     const job = await enqueueJob(jobData as any);
-    const streamKey = `progress:vad:${job.id}`;
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: { processed: 100, total: 1000 },
     });
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: { processed: 200, total: 1000 },
     });
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: { processed: 300, total: 1000 },
     });
 
-    const stream = await redis.xrange(streamKey, "-", "+");
-
-    expect(stream.length).toBe(3);
-
+    // Verify final progress is the last update
     const updatedJob = await getJob("vad", job.id!);
     expect(updatedJob?.progress).toEqual({
       processed: 300,
@@ -164,8 +153,8 @@ Deno.test(
 );
 
 Deno.test(
-  "WorkerProgressResource handles custom progress fields",
-  withFixtures(["JobQueue", "WorkerProgressResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
+  "JobsResource handles custom progress fields",
+  withFixtures(["JobQueue", "JobsResource", "Admin"], async ({ redis }, resource, auth: Auth) => {
     const jobData: VadJobDataInput = {
       type: "vad",
       limit: 1000,
@@ -174,8 +163,8 @@ Deno.test(
     const job = await enqueueJob(jobData as any);
 
     await resource.use({
+      action: "progressUpdate",
       jobId: job.id!,
-      jobType: "vad",
       progress: {
         processed: 100,
         total: 1000,
@@ -194,15 +183,4 @@ Deno.test(
   }),
 );
 
-Deno.test(
-  "WorkerProgressResource validates input schema",
-  withFixtures(["WorkerProgressResource"], async (resource) => {
-    await expect(
-      resource.use({
-        jobId: "abc",
-        jobType: "invalid_type" as any,
-        progress: {},
-      }),
-    ).rejects.toThrow();
-  }),
-);
+

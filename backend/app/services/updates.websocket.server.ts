@@ -4,7 +4,7 @@ import { redis } from "@/lib/redis.ts";
 import { authenticate } from "@/lib/auth/core.server.ts";
 import type { Redis } from "ioredis";
 import { getQueue } from "@/lib/jobs/queue.ts";
-import { JobTypeSchema } from "@/lib/jobs/types.ts";
+import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 
 async function createRequestFromUpgrade(
   upgrade: IncomingMessage,
@@ -139,8 +139,8 @@ class UpdatesWebSocketSession {
 
   async sendCurrentJobState(jobId: string): Promise<void> {
     try {
-      // Try each job type to find the job
-      for (const jobType of JobTypeSchema.options) {
+      // Try each registered job type to find the job
+      for (const jobType of jobRegistry.getJobTypes()) {
         const queue = getQueue(jobType);
         const job = await queue.getJob(jobId);
 

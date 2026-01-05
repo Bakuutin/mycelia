@@ -26,7 +26,7 @@ export function ClientCredentialsFields({
           onChange={(e) => onClientIdChange(e.target.value)}
         />
         <p className="text-xs text-muted-foreground">
-          The ObjectId of your API key (logged when token is created)
+          The ObjectId of your API key
         </p>
       </div>
 

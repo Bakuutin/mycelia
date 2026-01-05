@@ -73,9 +73,6 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[AccessLog] Failed to parse message ${messageId}:`, error);
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:72',message:'message parse failed',data:{messageId,error:errorMessage},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
       failedMessages.push({
         messageId,
         rawData: messageData,
@@ -102,9 +99,6 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[AccessLog] Failed to insert batch to MongoDB:`, error);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:95',message:'MongoDB insert failed',data:{documentCount:documents.length,error:errorMessage},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-    // #endregion
     
     for (let i = 0; i < documents.length; i++) {
       failedMessages.push({
@@ -136,23 +130,14 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
 
       await failedCollection.insertMany(failedDocs);
       console.log(`[AccessLog] Saved ${failedMessages.length} failed messages to access_logs_failed`);
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:120',message:'failed messages saved',data:{failedCount:failedMessages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
     } catch (error) {
       console.error(`[AccessLog] Failed to save failed messages:`, error);
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:125',message:'failed to save failed messages',data:{error:error instanceof Error ? error.message : String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
     }
   }
 
   if (messageIds.length > 0) {
     await redis.xack(STREAM_NAME, CONSUMER_GROUP, ...messageIds);
     console.log(`[AccessLog] Acknowledged ${messageIds.length} messages (${documents.length} successful, ${failedMessages.length} failed)`);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:135',message:'messages acknowledged',data:{totalAcked:messageIds.length,successful:documents.length,failed:failedMessages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-    // #endregion
   }
 
   const duration = Date.now() - startTime;
@@ -164,17 +149,11 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
 async function workerLoop(): Promise<void> {
   let iterationCount = 0;
   let lastIterationTime = Date.now();
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:111',message:'workerLoop started',data:{workerRunning},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
   while (workerRunning) {
     try {
       iterationCount++;
       const iterationStartTime = Date.now();
       const timeSinceLastIteration = iterationStartTime - lastIterationTime;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:115',message:'loop iteration start',data:{iterationCount,workerRunning,timeSinceLastIteration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       if (!workerRunning) {
         break;
       }
@@ -194,18 +173,12 @@ async function workerLoop(): Promise<void> {
         ">",
       ) as any;
       const xreadDuration = Date.now() - xreadStartTime;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:130',message:'XREADGROUP completed',data:{iterationCount,result:result?result.length:null,isEmpty:!result||result.length===0,xreadDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
 
       if (!workerRunning) {
         break;
       }
 
       if (!result || result.length === 0) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:137',message:'empty result, yielding to event loop',data:{iterationCount,timeSinceLastIteration},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         await new Promise((resolve) => setTimeout(resolve, 0));
         lastIterationTime = Date.now();
         continue;
@@ -227,9 +200,6 @@ async function workerLoop(): Promise<void> {
       }
       lastIterationTime = Date.now();
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:154',message:'workerLoop error',data:{iterationCount,errorMessage:error?.message,isNOGROUP:error?.message?.includes('NOGROUP')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       if (error.message && error.message.includes("NOGROUP")) {
         console.log(`[AccessLog] Consumer group ${CONSUMER_GROUP} not found, recreating...`);
         await ensureConsumerGroup();
@@ -240,15 +210,9 @@ async function workerLoop(): Promise<void> {
       lastIterationTime = Date.now();
     }
   }
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:163',message:'workerLoop exited',data:{iterationCount,workerRunning},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
 }
 
 export async function startAccessLogWorker(): Promise<void> {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:166',message:'startAccessLogWorker called',data:{hasExistingWorker:!!accessLogWorker,workerRunning},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-  // #endregion
   if (accessLogWorker) {
     console.log("[AccessLog] Worker already started");
     return;
@@ -260,9 +224,6 @@ export async function startAccessLogWorker(): Promise<void> {
     await ensureConsumerGroup();
 
     workerRunning = true;
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:177',message:'starting workerLoop promise',data:{workerRunning},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
 
     workerLoopPromise = workerLoop().catch((error) => {
       console.error("[AccessLog] Worker loop error:", error);
@@ -273,22 +234,13 @@ export async function startAccessLogWorker(): Promise<void> {
 
     accessLogWorker = {
       stop: async () => {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:187',message:'stop called',data:{workerRunning,hasPromise:!!workerLoopPromise},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
         console.log("[AccessLog] Stopping access log worker...");
         workerRunning = false;
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:190',message:'workerRunning set to false, awaiting promise',data:{workerRunning},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
         if (workerLoopPromise) {
           await workerLoopPromise;
           workerLoopPromise = null;
         }
         accessLogWorker = null;
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'accessLog.worker.ts:195',message:'stop completed',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
         console.log("[AccessLog] Access log worker stopped");
       },
     };

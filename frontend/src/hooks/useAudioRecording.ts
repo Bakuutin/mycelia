@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { toast } from "sonner";
 
 export type RecordingStep =
   | "idle"
@@ -26,8 +27,6 @@ export interface AudioDevice {
   kind: MediaDeviceKind;
 }
 
-const SINE_WAVE_GENERATOR_ID = "__sine_wave_generator__";
-
 export interface AudioRecordingReturn {
   currentStep: RecordingStep;
   isRecording: boolean;
@@ -43,6 +42,7 @@ export interface AudioRecordingReturn {
   selectedDeviceId: string | null;
   setSelectedDeviceId: (deviceId: string | null) => void;
   refreshDevices: () => Promise<void>;
+  requestPermission: () => Promise<void>;
   sampleRate: number;
   setSampleRate: (rate: number) => void;
 }
@@ -74,8 +74,6 @@ export const useAudioRecording = (): AudioRecordingReturn => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const oscillatorRef = useRef<OscillatorNode | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
   const durationIntervalRef = useRef<number>();
   const keepAliveIntervalRef = useRef<number>();
   const chunkCountRef = useRef(0);
@@ -120,17 +118,6 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       workletNodeRef.current = null;
     }
 
-    if (oscillatorRef.current) {
-      oscillatorRef.current.stop();
-      oscillatorRef.current.disconnect();
-      oscillatorRef.current = null;
-    }
-
-    if (gainNodeRef.current) {
-      gainNodeRef.current.disconnect();
-      gainNodeRef.current = null;
-    }
-
     if (audioContextRef.current?.state !== "closed") {
       audioContextRef.current?.close();
     }
@@ -158,14 +145,6 @@ export const useAudioRecording = (): AudioRecordingReturn => {
   }, []);
 
   const refreshDevices = useCallback(async () => {
-    const syntheticDevices: AudioDevice[] = [
-      {
-        deviceId: SINE_WAVE_GENERATOR_ID,
-        label: "🔧 Debug: 1Hz Sine Wave Generator",
-        kind: "audioinput" as MediaDeviceKind,
-      },
-    ];
-
     let realDevices: AudioDevice[] = [];
 
     if (
@@ -173,10 +152,9 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       navigator.mediaDevices.enumerateDevices
     ) {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
         const devices = await navigator.mediaDevices.enumerateDevices();
         realDevices = devices
-          .filter((device) => device.kind === "audioinput")
+          .filter((device) => device.kind === "audioinput" && device.deviceId !== "")
           .map((device) => ({
             deviceId: device.deviceId,
             label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
@@ -187,7 +165,7 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       }
     }
 
-    const allDevices = [...syntheticDevices, ...realDevices];
+    const allDevices = realDevices;
     setAvailableDevices(allDevices);
 
     setSelectedDeviceIdState((prev) => {
@@ -207,43 +185,23 @@ export const useAudioRecording = (): AudioRecordingReturn => {
     });
   }, [canAccessMicrophone, preferredAudioDeviceId]);
 
+  const requestPermission = useCallback(async () => {
+    if (canAccessMicrophone && navigator.mediaDevices) {
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        await refreshDevices();
+      } catch (err) {
+        console.error("Failed to get microphone permission:", err);
+        alert("Microphone permission denied. Please enable it in your browser settings.");
+      }
+    }
+  }, [canAccessMicrophone, refreshDevices]);
+
   useEffect(() => {
     refreshDevices();
   }, [refreshDevices]);
 
-  const createSineWaveStream = useCallback(async (): Promise<MediaStream> => {
-    const context =
-      new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: sampleRate,
-      });
-    audioContextRef.current = context;
-
-    const oscillator = context.createOscillator();
-    const gainNode = context.createGain();
-    const destination = context.createMediaStreamDestination();
-
-    oscillator.type = "sine";
-    oscillator.frequency.value = 1;
-    gainNode.gain.value = 0.5;
-
-    oscillator.connect(gainNode);
-    gainNode.connect(destination);
-    gainNode.connect(context.destination);
-    oscillator.start();
-
-    oscillatorRef.current = oscillator;
-    gainNodeRef.current = gainNode;
-
-    const stream = destination.stream;
-    mediaStreamRef.current = stream;
-    return stream;
-  }, [sampleRate]);
-
   const getMicrophoneAccess = useCallback(async (): Promise<MediaStream> => {
-    if (selectedDeviceId === SINE_WAVE_GENERATOR_ID) {
-      return createSineWaveStream();
-    }
-
     if (!canAccessMicrophone) {
       throw new Error("Microphone access requires HTTPS or localhost");
     }
@@ -270,7 +228,6 @@ export const useAudioRecording = (): AudioRecordingReturn => {
     canAccessMicrophone,
     selectedDeviceId,
     sampleRate,
-    createSineWaveStream,
     echoCancellation,
     noiseSuppression,
     autoGainControl,
@@ -619,6 +576,7 @@ export const useAudioRecording = (): AudioRecordingReturn => {
     selectedDeviceId,
     setSelectedDeviceId,
     refreshDevices,
+    requestPermission,
     sampleRate,
     setSampleRate,
   };

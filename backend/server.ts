@@ -1,3 +1,16 @@
+import { load as loadEnv } from "@std/dotenv";
+import { existsSync } from "@std/fs/exists";
+
+
+if (existsSync(".env")) {
+  await loadEnv({ envPath:  ".env", export: true });
+}
+
+if (existsSync("../.env")) {
+  await loadEnv({ envPath:  "../.env", export: true });
+}
+
+
 import "@/lib/telemetry.ts";
 import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
@@ -25,6 +38,8 @@ import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
+import { up, down, to, status } from "@/lib/mongo/migrator.ts";
+
 
 let logFile: Deno.FsFile | null = null;
 
@@ -95,7 +110,7 @@ async function startServer(
   }
 
   if (!noWorkers) {
-    startWorkers();
+    await startWorkers();
     await startChangeStreamWorker();
     await startAccessLogWorker();
   }
@@ -177,7 +192,7 @@ async function startServer(
 
 async function configureCli() {
   await yargs(hideBin(process.argv))
-    .scriptName("deno run -A --env server.ts")
+    .scriptName("deno run -A server.ts")
     .usage("$0 <command> [options]")
     .command(
       "serve",
@@ -253,6 +268,7 @@ async function configureCli() {
         console.log(`Owner: ${owner}`);
         console.log(`Name: ${name}`);
         console.log("Generating token...");
+        await setupResources();
         const key = await generateApiKey(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
@@ -300,6 +316,112 @@ async function configureCli() {
           }
           console.log("Token is valid");
           console.log(JSON.stringify(doc, null, 2));
+        }
+      },
+    )
+    .command(
+      "migrate-up",
+      "Apply all pending migrations",
+      () => {},
+      async () => {
+        try {
+          const db = await getRootDB();
+          const client = db.client as any;
+          const migrated = await up(db, client);
+          if (migrated.length === 0) {
+            console.log("No pending migrations");
+          } else {
+            console.log(`Applied ${migrated.length} migration(s)`);
+          }
+        } catch (err) {
+          console.error("Migration failed:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "migrate-down",
+      "Rollback the last migration(s)",
+      (y: Argv) =>
+        y.option("count", {
+          alias: "n",
+          type: "number",
+          describe: "Number of migrations to rollback",
+          default: 1,
+        }),
+      async (args: ArgumentsCamelCase<{ count?: number }>) => {
+        try {
+          const db = await getRootDB();
+          const client = db.client as any;
+          const count = Number(args.count) || 1;
+          const rolledBack = await down(db, client, count);
+          if (rolledBack.length === 0) {
+            console.log("No migrations to rollback");
+          } else {
+            console.log(`Rolled back ${rolledBack.length} migration(s)`);
+          }
+        } catch (err) {
+          console.error("Rollback failed:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "migrate-to",
+      "Migrate to a specific migration",
+      (y: Argv) =>
+        y.option("migration", {
+          alias: "m",
+          type: "string",
+          describe: "Migration file name (e.g., 0002_messengers_setup.ts)",
+          demandOption: true,
+        }),
+      async (args: ArgumentsCamelCase<{ migration: string }>) => {
+        try {
+          const db = await getRootDB();
+          const client = db.client as any;
+          const migrationFile = String(args.migration);
+          const migrated = await to(db, client, migrationFile);
+          if (migrated.length === 0) {
+            console.log(`Already at migration ${migrationFile}`);
+          } else {
+            console.log(`Migrated ${migrated.length} migration(s) to ${migrationFile}`);
+          }
+        } catch (err) {
+          console.error("Migration failed:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "migrate-status",
+      "Show migration status",
+      () => {},
+      async () => {
+        try {
+          const db = await getRootDB();
+          const migrationStatus = await status(db);
+          console.log("\nMigration Status:");
+          console.log(`Total migrations: ${migrationStatus.all.length}`);
+          console.log(`Applied: ${migrationStatus.applied.length}`);
+          console.log(`Pending: ${migrationStatus.pending.length}`);
+          
+          if (migrationStatus.applied.length > 0) {
+            console.log("\nApplied migrations:");
+            migrationStatus.applied.forEach((file) => {
+              console.log(`  ✓ ${file}`);
+            });
+          }
+          
+          if (migrationStatus.pending.length > 0) {
+            console.log("\nPending migrations:");
+            migrationStatus.pending.forEach((file) => {
+              console.log(`  ○ ${file}`);
+            });
+          }
+        } catch (err) {
+          console.error("Failed to get migration status:", err);
+          exit(1);
         }
       },
     )

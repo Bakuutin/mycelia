@@ -8,6 +8,7 @@ import {
   type Resolution,
   updateAllHistogram,
 } from "@/services/timeline.server.ts";
+import { zDateOrRelativeTime } from "@/lib/zod-json-schema.ts";
 
 function parseDateOrRelativeTime(expr: string | Date): Date {
   if (expr instanceof Date) {
@@ -27,9 +28,7 @@ function parseDateOrRelativeTime(expr: string | Date): Date {
   }
 }
 
-const dateOrRelativeTimeSchema = z
-  .union([z.date(), z.string()])
-  .transform((val) => parseDateOrRelativeTime(val));
+const dateOrRelativeTimeSchema = zDateOrRelativeTime();
 
 const recalculateSchema = z.object({
   action: z.literal("recalculate"),

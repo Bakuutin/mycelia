@@ -9,6 +9,7 @@ import YAML from "npm:yaml@2.6.1";
 import { z } from "zod";
 import type { Policy } from "@/lib/auth/resources.ts";
 import { withRateLimit, type RateLimitOptions } from "@/utils/rateLimit.ts";
+import { env } from "#/env.ts";
 
 const policySchema = z.object({
   resource: z.string(),
@@ -214,8 +215,7 @@ export const oauthAuthorizeHandler = withRateLimit(
       ttlSeconds: CONSENT_REQUEST_TTL,
     });
 
-    const frontendHost = Deno.env.get("MYCELIA_FRONTEND_HOST") || "http://localhost:3001";
-    const consentUrl = new URL(`${frontendHost}/oauth/consent`);
+    const consentUrl = new URL(`${env.MYCELIA_FRONTEND_HOST}/oauth/consent`);
     consentUrl.searchParams.set("request_id", consentRequestId);
 
     res.redirect(consentUrl.toString());

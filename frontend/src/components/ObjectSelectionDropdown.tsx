@@ -124,7 +124,6 @@ export function ObjectSelectionDropdown({
         name: objectName.trim(),
         icon: { text: "📦" }, // Default icon for new objects
         createdAt: new Date(),
-        updatedAt: new Date(),
       });
 
       // Update the form with the new object ID

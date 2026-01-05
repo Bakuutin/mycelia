@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
-import { ObjectId } from "bson";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
@@ -80,15 +79,6 @@ const llmRequestSchema = z.discriminatedUnion("action", [
 type LLMRequest = z.infer<typeof llmRequestSchema>;
 type LLMResponse = any | Response;
 
-type Model = {
-  _id: ObjectId;
-  alias: string;
-  name: string;
-  provider: string;
-  baseUrl: string;
-  apiKey: string;
-};
-
 export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   code = "llm";
   description = "LLM chat completions";
@@ -100,11 +90,18 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     response: z.any() as z.ZodType<LLMResponse>,
   };
 
-  async getModel(model: string): Promise<Model | null> {
-    const rootDb = await getRootDB();
-    const modelsCollection = rootDb.collection("llm_models");
-    return await modelsCollection.findOne({ alias: model }) as unknown as Model | null;
+  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
+    const config = await getServerConfig();
+    const inference = config.inference;
+    if (!inference?.baseUrl || !inference?.apiKey) {
+      return null;
+    }
+    return {
+      baseUrl: inference.baseUrl,
+      apiKey: inference.apiKey,
+    };
   }
+
 
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {
     const startTime = performance.now();
@@ -122,43 +119,38 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         case "completions": {
           const { action, ...body } = input;
 
-          const model = await this.getModel(input.model);
-          if (!model) {
+          const provider = await this.getInferenceProvider();
+          if (!provider) {
             llmErrorsCounter.add(1, {
-              error_type: "model_not_found",
+              error_type: "provider_not_configured",
               model: input.model,
             });
             span.setStatus({
               code: 2,
-              message: `Model ${input.model} not found`,
+              message: "Inference provider not configured",
             });
-            throw new Error(`Model ${input.model} not found`);
+            throw new Error("Inference provider not configured. Please configure it in server settings.");
           }
 
           span.setAttributes({
-            "llm.model_alias": model.alias,
-            "llm.model_name": model.name,
-            "llm.provider": model.provider,
-            "llm.has_api_key": !!model.apiKey,
+            "llm.model": input.model,
+            "llm.has_api_key": !!provider.apiKey,
           });
 
           const requestBody = {
             ...body,
-            model: model.name,
+            model: input.model,
           };
 
           const proxyResponse = await fetch(
-            model.baseUrl.replace(/\/$/, "") + "/chat/completions",
+            provider.baseUrl.replace(/\/$/, "") + "/v1/chat/completions",
             {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${model.apiKey}`,
+                "Authorization": `Bearer ${provider.apiKey}`,
               },
-              body: JSON.stringify({
-                ...requestBody,
-                model: model.name,
-              }),
+              body: JSON.stringify(requestBody),
             },
           );
 
@@ -241,9 +233,6 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   extractActions(input: LLMRequest) {
     return [{
       path: ["llm", "chat"],
-      actions: [input.action],
-    }, {
-      path: ["llm", "models", input.model],
       actions: [input.action],
     }];
   }

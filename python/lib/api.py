@@ -1,25 +1,33 @@
-from requests_oauthlib import OAuth2Session
-from oauthlib.oauth2 import BackendApplicationClient
-from typing import Any
+import requests
+from typing import Any, Optional
 from datetime import datetime, timezone
 from bson import ObjectId
+from contextvars import ContextVar
 
-from .config import client_id, client_secret, get_url
+from .config import get_url
 
-token_url = get_url("oauth", "token")
+# ContextVars to store per-request job state
+job_token_var: ContextVar[Optional[str]] = ContextVar("job_token", default=None)
+job_session_var: ContextVar[Optional[requests.Session]] = ContextVar("job_session", default=None)
 
-oauth_client = BackendApplicationClient(client_id=client_id)
 
-
-session = OAuth2Session(
-    client_id=client_id, client=oauth_client, auto_refresh_url=token_url, auto_refresh_kwargs={"client_secret": client_secret},
-    token_updater=lambda token: print(token) or session.headers.update({"Authorization": f"Bearer {token['access_token']}"})
-)
+def get_session() -> requests.Session:
+    """Get or create a requests Session for the current job context."""
+    session = job_session_var.get()
+    if session is None:
+        session = requests.Session()
+        token = job_token_var.get()
+        if token:
+            session.headers.update({"Authorization": f"Bearer {token}"})
+        job_session_var.set(session)
+    return session
 
 
 def ensure_authorized() -> None:
-    if not session.authorized:
-        session.fetch_token(token_url, client_id=client_id, client_secret=client_secret)
+    """Ensure the current session has a token. Raises if no token is available."""
+    token = job_token_var.get()
+    if not token:
+        raise RuntimeError("No job token available in current context. Fallback authentication is disabled.")
 
 
 def encode_typed(obj: Any) -> Any:

@@ -11,6 +11,7 @@ import {
 } from "./resources.ts";
 import { EJSON } from "bson";
 import { redis } from "@/lib/redis.ts";
+import { env } from "#/env.ts";
 
 export interface APIKey {
   hashedKey: string;
@@ -78,7 +79,7 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
   try {
     const { payload } = await jwtVerify(
       token,
-      new TextEncoder().encode(Deno.env.get("SECRET_KEY")),
+      new TextEncoder().encode(env.SECRET_KEY),
     );
     if (typeof payload === "string") {
       permissionDenied();

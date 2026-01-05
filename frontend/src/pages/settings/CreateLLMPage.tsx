@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { callResource } from "@/lib/api";
+import type { Provider } from "@/types/llm";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,10 +17,7 @@ const createModelSchema = z.object({
     50,
     "Alias must be less than 50 characters",
   ),
-  name: z.string(),
-  provider: z.string().optional(),
-  baseUrl: z.string().url("Must be a valid URL"),
-  apiKey: z.string().optional(),
+  name: z.string().min(1, "Model name is required"),
 });
 
 type CreateModelData = z.infer<typeof createModelSchema>;
@@ -35,27 +33,17 @@ const CreateLLMPage = () => {
     defaultValues: {
       alias: "",
       name: "",
-      provider: "",
-      baseUrl: "",
-      apiKey: "",
     },
   });
 
-  // Handle pre-filling form from URL parameters (for duplication)
   useEffect(() => {
     const alias = searchParams.get("alias");
     const name = searchParams.get("name");
-    const provider = searchParams.get("provider");
-    const baseUrl = searchParams.get("baseUrl");
-    const apiKey = searchParams.get("apiKey");
 
-    if (alias || name || provider || baseUrl || apiKey) {
+    if (alias || name) {
       form.reset({
         alias: alias || "",
         name: name || "",
-        provider: provider || "",
-        baseUrl: baseUrl || "",
-        apiKey: apiKey || "",
       });
     }
   }, [searchParams, form]);
@@ -71,14 +59,11 @@ const CreateLLMPage = () => {
         doc: {
           alias: data.alias,
           name: data.name,
-          provider: data.provider,
-          baseUrl: data.baseUrl,
-          apiKey: data.apiKey,
         },
       });
 
       if (result.insertedId) {
-        navigate("/settings/llms");
+        navigate("/settings/inference");
       } else {
         setError("Failed to create model");
       }
@@ -92,7 +77,7 @@ const CreateLLMPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <SmartBackButton defaultPath="/settings/llms" variant="outline" />
+        <SmartBackButton defaultPath="/settings/inference" variant="outline" />
         <h2 className="text-2xl font-semibold">Add LLM Model</h2>
       </div>
 
@@ -139,59 +124,21 @@ const CreateLLMPage = () => {
               )}
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="provider">Provider *</Label>
-              <Input
-                id="provider"
-                {...form.register("provider")}
-                placeholder="e.g., OpenAI, Anthropic, etc."
-                className={form.formState.errors.provider
-                  ? "border-red-500"
-                  : ""}
-              />
-              {form.formState.errors.provider && (
-                <p className="text-sm text-red-500">
-                  {form.formState.errors.provider.message}
+            <div className="space-y-2 md:col-span-2">
+              <div className="p-3 bg-muted rounded-md">
+                <p className="text-sm text-muted-foreground">
+                  Models use the inference provider configured in{" "}
+                  <Link to="/settings/inference" className="text-primary underline">
+                    Inference settings
+                  </Link>
+                  .
                 </p>
-              )}
+              </div>
             </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="baseUrl">Base URL *</Label>
-              <Input
-                id="baseUrl"
-                {...form.register("baseUrl")}
-                placeholder="https://api.openai.com/v1"
-                className={form.formState.errors.baseUrl
-                  ? "border-red-500"
-                  : ""}
-              />
-              {form.formState.errors.baseUrl && (
-                <p className="text-sm text-red-500">
-                  {form.formState.errors.baseUrl.message}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="apiKey">API Key *</Label>
-            <Input
-              id="apiKey"
-              type="password"
-              {...form.register("apiKey")}
-              placeholder="Enter your API key"
-              className={form.formState.errors.apiKey ? "border-red-500" : ""}
-            />
-            {form.formState.errors.apiKey && (
-              <p className="text-sm text-red-500">
-                {form.formState.errors.apiKey.message}
-              </p>
-            )}
           </div>
 
           <div className="flex justify-end gap-4">
-            <Link to="/settings/llms">
+            <Link to="/settings/inference">
               <Button type="button" variant="outline">
                 Cancel
               </Button>

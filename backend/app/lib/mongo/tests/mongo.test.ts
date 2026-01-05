@@ -1030,3 +1030,580 @@ Deno.test(
     expect(thirdBatch.data).toHaveLength(2);
   }),
 );
+
+Deno.test(
+  "insertOne should automatically add updatedAt",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_insertone_test_${Date.now()}`;
+
+    const result = await mongo({
+      action: "insertOne",
+      collection: collectionName,
+      doc: { name: "Test Document", value: 123 },
+    });
+
+    expect(result.insertedId).toBeInstanceOf(ObjectId);
+
+    const foundDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: result.insertedId },
+    });
+
+    expect(foundDoc).toHaveProperty("updatedAt");
+    expect(foundDoc.updatedAt).toBeInstanceOf(Date);
+    expect(foundDoc.name).toBe("Test Document");
+    expect(foundDoc.value).toBe(123);
+  }),
+);
+
+Deno.test(
+  "insertOne should not override explicitly provided updatedAt",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_override_test_${Date.now()}`;
+
+    const customDate = new Date("2020-01-01T00:00:00Z");
+    const result = await mongo({
+      action: "insertOne",
+      collection: collectionName,
+      doc: { name: "Test Document", updatedAt: customDate },
+    });
+
+    const foundDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: result.insertedId },
+    });
+
+    expect(foundDoc).toHaveProperty("updatedAt");
+    expect(foundDoc.updatedAt).toBeInstanceOf(Date);
+    expect(foundDoc.updatedAt.getTime()).toBeGreaterThan(customDate.getTime());
+  }),
+);
+
+Deno.test(
+  "insertMany should automatically add updatedAt to all documents",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_insertmany_test_${Date.now()}`;
+
+    const result = await mongo({
+      action: "insertMany",
+      collection: collectionName,
+      docs: [
+        { name: "Document 1", value: 1 },
+        { name: "Document 2", value: 2 },
+        { name: "Document 3", value: 3 },
+      ],
+    });
+
+    expect(result.insertedCount).toBe(3);
+
+    const foundDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: {},
+      options: { sort: { value: 1 } },
+    });
+
+    expect(foundDocs).toHaveLength(3);
+    for (const doc of foundDocs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+    }
+    expect(foundDocs[0].name).toBe("Document 1");
+    expect(foundDocs[1].name).toBe("Document 2");
+    expect(foundDocs[2].name).toBe("Document 3");
+  }),
+);
+
+Deno.test(
+  "updateOne should automatically add updatedAt to $set",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_updateone_test_${Date.now()}`;
+
+    const insertResult = await mongo({
+      action: "insertOne",
+      collection: collectionName,
+      doc: { name: "Original Name", value: 100 },
+    });
+
+    const originalDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+    });
+
+    const originalUpdatedAt = originalDoc.updatedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await mongo({
+      action: "updateOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+      update: {
+        $set: {
+          name: "Updated Name",
+          value: 200,
+        },
+      },
+    });
+
+    const updatedDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+    });
+
+    expect(updatedDoc.name).toBe("Updated Name");
+    expect(updatedDoc.value).toBe(200);
+    expect(updatedDoc).toHaveProperty("updatedAt");
+    expect(updatedDoc.updatedAt).toBeInstanceOf(Date);
+    expect(updatedDoc.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+  }),
+);
+
+Deno.test(
+  "updateOne should create $set if it doesn't exist",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_updateone_noset_test_${Date.now()}`;
+
+    const insertResult = await mongo({
+      action: "insertOne",
+      collection: collectionName,
+      doc: { name: "Original Name" },
+    });
+
+    await mongo({
+      action: "updateOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+      update: {
+        $inc: { counter: 1 },
+      },
+    });
+
+    const updatedDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+    });
+
+    expect(updatedDoc).toHaveProperty("updatedAt");
+    expect(updatedDoc.updatedAt).toBeInstanceOf(Date);
+    expect(updatedDoc.counter).toBe(1);
+  }),
+);
+
+Deno.test(
+  "updateMany should automatically add updatedAt to $set",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_updatemany_test_${Date.now()}`;
+
+    const insertResult = await mongo({
+      action: "insertMany",
+      collection: collectionName,
+      docs: [
+        { name: "Document 1", status: "active" },
+        { name: "Document 2", status: "active" },
+        { name: "Document 3", status: "inactive" },
+      ],
+    });
+
+    const originalDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: { status: "active" },
+      options: { sort: { name: 1 } },
+    });
+
+    const originalUpdatedAt = originalDocs[0].updatedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await mongo({
+      action: "updateMany",
+      collection: collectionName,
+      query: { status: "active" },
+      update: {
+        $set: {
+          status: "updated",
+        },
+      },
+    });
+
+    const updatedDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: { status: "updated" },
+      options: { sort: { name: 1 } },
+    });
+
+    expect(updatedDocs).toHaveLength(2);
+    for (const doc of updatedDocs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+      expect(doc.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+    }
+  }),
+);
+
+Deno.test(
+  "bulkWrite should automatically add updatedAt for insertOne operations",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_bulkwrite_insert_test_${Date.now()}`;
+
+    const result = await mongo({
+      action: "bulkWrite",
+      collection: collectionName,
+      operations: [
+        {
+          insertOne: {
+            document: { name: "Document 1", value: 1 },
+          },
+        },
+        {
+          insertOne: {
+            document: { name: "Document 2", value: 2 },
+          },
+        },
+      ],
+    });
+
+    expect(result.insertedCount).toBe(2);
+
+    const foundDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: {},
+      options: { sort: { value: 1 } },
+    });
+
+    expect(foundDocs).toHaveLength(2);
+    for (const doc of foundDocs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+    }
+  }),
+);
+
+Deno.test(
+  "bulkWrite should automatically add updatedAt for multiple insertOne operations",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_bulkwrite_insertmany_test_${Date.now()}`;
+
+    const result = await mongo({
+      action: "bulkWrite",
+      collection: collectionName,
+      operations: [
+        {
+          insertOne: {
+            document: { name: "Document 1", value: 1 },
+          },
+        },
+        {
+          insertOne: {
+            document: { name: "Document 2", value: 2 },
+          },
+        },
+      ],
+    });
+
+    expect(result.insertedCount).toBe(2);
+
+    const foundDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: {},
+      options: { sort: { value: 1 } },
+    });
+
+    expect(foundDocs).toHaveLength(2);
+    for (const doc of foundDocs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+    }
+  }),
+);
+
+Deno.test(
+  "bulkWrite should automatically add updatedAt for updateOne operations",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_bulkwrite_update_test_${Date.now()}`;
+
+    const insertResult = await mongo({
+      action: "insertMany",
+      collection: collectionName,
+      docs: [
+        { name: "Document 1", value: 1 },
+        { name: "Document 2", value: 2 },
+      ],
+    });
+
+    const originalDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: {},
+      options: { sort: { value: 1 } },
+    });
+
+    const originalUpdatedAt = originalDocs[0].updatedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await mongo({
+      action: "bulkWrite",
+      collection: collectionName,
+      operations: [
+        {
+          updateOne: {
+            filter: { _id: insertResult.insertedIds[0] },
+            update: {
+              $set: {
+                value: 10,
+              },
+            },
+          },
+        },
+        {
+          updateOne: {
+            filter: { _id: insertResult.insertedIds[1] },
+            update: {
+              $set: {
+                value: 20,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const updatedDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: {},
+      options: { sort: { value: 1 } },
+    });
+
+    expect(updatedDocs).toHaveLength(2);
+    for (const doc of updatedDocs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+      expect(doc.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+    }
+    expect(updatedDocs[0].value).toBe(10);
+    expect(updatedDocs[1].value).toBe(20);
+  }),
+);
+
+Deno.test(
+  "bulkWrite should automatically add updatedAt for updateMany operations",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_bulkwrite_updatemany_test_${Date.now()}`;
+
+    await mongo({
+      action: "insertMany",
+      collection: collectionName,
+      docs: [
+        { name: "Document 1", status: "active" },
+        { name: "Document 2", status: "active" },
+        { name: "Document 3", status: "inactive" },
+      ],
+    });
+
+    const originalDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: { status: "active" },
+    });
+
+    const originalUpdatedAt = originalDocs[0].updatedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await mongo({
+      action: "bulkWrite",
+      collection: collectionName,
+      operations: [
+        {
+          updateMany: {
+            filter: { status: "active" },
+            update: {
+              $set: {
+                status: "updated",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const updatedDocs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: { status: "updated" },
+    });
+
+    expect(updatedDocs).toHaveLength(2);
+    for (const doc of updatedDocs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+      expect(doc.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+    }
+  }),
+);
+
+Deno.test(
+  "bulkWrite should automatically add updatedAt for replaceOne operations",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_bulkwrite_replace_test_${Date.now()}`;
+
+    const insertResult = await mongo({
+      action: "insertOne",
+      collection: collectionName,
+      doc: { name: "Original Name", value: 100 },
+    });
+
+    const originalDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+    });
+
+    const originalUpdatedAt = originalDoc.updatedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await mongo({
+      action: "bulkWrite",
+      collection: collectionName,
+      operations: [
+        {
+          replaceOne: {
+            filter: { _id: insertResult.insertedId },
+            replacement: {
+              name: "Replaced Name",
+              value: 200,
+            },
+          },
+        },
+      ],
+    });
+
+    const replacedDoc = await mongo({
+      action: "findOne",
+      collection: collectionName,
+      query: { _id: insertResult.insertedId },
+    });
+
+    expect(replacedDoc.name).toBe("Replaced Name");
+    expect(replacedDoc.value).toBe(200);
+    expect(replacedDoc).toHaveProperty("updatedAt");
+    expect(replacedDoc.updatedAt).toBeInstanceOf(Date);
+    expect(replacedDoc.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+  }),
+);
+
+Deno.test(
+  "bulkWrite should handle mixed operations with updatedAt",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `updatedat_bulkwrite_mixed_test_${Date.now()}`;
+
+    const insertResult = await mongo({
+      action: "insertOne",
+      collection: collectionName,
+      doc: { name: "Original", value: 1 },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const result = await mongo({
+      action: "bulkWrite",
+      collection: collectionName,
+      operations: [
+        {
+          insertOne: {
+            document: { name: "New Document", value: 2 },
+          },
+        },
+        {
+          updateOne: {
+            filter: { _id: insertResult.insertedId },
+            update: {
+              $set: {
+                value: 10,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result.insertedCount).toBe(1);
+    expect(result.modifiedCount).toBe(1);
+
+    const docs = await mongo({
+      action: "find",
+      collection: collectionName,
+      query: {},
+      options: { sort: { value: 1 } },
+    });
+
+    expect(docs).toHaveLength(2);
+    for (const doc of docs) {
+      expect(doc).toHaveProperty("updatedAt");
+      expect(doc.updatedAt).toBeInstanceOf(Date);
+    }
+    // Sorted by value ascending: 2 (new doc), then 10 (updated original)
+    expect(docs[0].value).toBe(2);
+    expect(docs[1].value).toBe(10);
+  }),
+);

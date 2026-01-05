@@ -1,16 +1,14 @@
 import type { Request, Response } from "express";
-import { ToolLoopAgent } from "ai";
+import { streamText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
-import { zServerConfig } from "@interfaces/config.ts";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { ObjectId } from "mongodb";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 const RESOURCES_FOR_AI = ["mongo", "timeline", "objects"];
 
@@ -19,32 +17,83 @@ export async function apiChatHandler(req: Request, res: Response) {
 
   // 2. Load or Create Chat Session (Persistence)
   const db = await getRootDB();
-
+  
   let { messages, chatId } = req.body;
-
-  // Normalize messages: map 'parts' to 'content' if needed (AI SDK Core format compatibility)
+  
+  // Normalize messages for AI SDK v6 compatibility
   if (Array.isArray(messages)) {
-    messages = messages.map((msg: any) => {
-      if (msg.parts && !msg.content) {
-        return { ...msg, content: msg.parts };
+    const normalizedMessages: any[] = [];
+    
+    for (const msg of messages) {
+      // Map 'parts' to 'content' if needed
+      const content = msg.content ?? msg.parts;
+      
+      if (msg.role === "assistant" && Array.isArray(content)) {
+        // Extract tool-result parts and create separate tool messages
+        const toolResults: any[] = [];
+        const cleanedContent: any[] = [];
+        
+        for (const part of content) {
+          if (part.type === "tool-result") {
+            // Create a separate tool message for each tool-result
+            toolResults.push({
+              type: "tool-result",
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              output: part.output,
+            });
+          } else if (part.type === "tool-call") {
+            // Clean null values from tool-call parts
+            cleanedContent.push({
+              type: "tool-call",
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              input: part.input,
+            });
+          } else if (part.type === "text") {
+            cleanedContent.push({ type: "text", text: part.text });
+          }
+          // Skip internal SDK markers like "step-start" - they shouldn't be sent back
+        }
+        
+        // Add assistant message with cleaned content
+        if (cleanedContent.length > 0) {
+          normalizedMessages.push({
+            role: "assistant",
+            content: cleanedContent,
+          });
+        }
+        
+        // Add tool message with all tool results
+        if (toolResults.length > 0) {
+          normalizedMessages.push({
+            role: "tool",
+            content: toolResults,
+          });
+        }
+      } else if (msg.role === "user" && Array.isArray(content)) {
+        // Clean user message content parts
+        const cleanedContent = content.map((part: any) => {
+          if (part.type === "text") {
+            return { type: "text", text: part.text };
+          }
+          return part;
+        });
+        normalizedMessages.push({ role: "user", content: cleanedContent });
+      } else {
+        // Pass through other messages
+        normalizedMessages.push({ role: msg.role, content });
       }
-      return msg;
-    });
+    }
+    
+    messages = normalizedMessages;
   }
 
   let activeChatId: string | undefined = chatId;
   let chatModel = "medium";
 
+
   if (!activeChatId) {
-    // Use medium model by default if creating new chat
-    const llmResource = new LLMResource();
-    const modelConfig = await llmResource.getModel("medium");
-
-    if (!modelConfig) {
-      res.status(500).json({ error: "Default model 'medium' not configured" });
-      return;
-    }
-
     const newChatId = new ObjectId();
     const chatResult = await db.collection("chats").insertOne({
       _id: newChatId,
@@ -56,14 +105,14 @@ export async function apiChatHandler(req: Request, res: Response) {
       externalId: newChatId.toString(),
       type: "private",
       createdAt: new Date(),
-      updatedAt: new Date(),
       lastMessageDate: new Date(),
     });
     activeChatId = chatResult.insertedId.toString();
   } else {
+    console.log(55, "activeChatId", activeChatId);
     // 3. Get Chat Model Config & Verify Ownership
     const chat = await db.collection("chats").findOne({ 
-      _id: new ObjectId(activeChatId),
+      _id: new ObjectId(activeChatId.toString()),
       userId: auth.principal 
     });
     
@@ -74,13 +123,6 @@ export async function apiChatHandler(req: Request, res: Response) {
     chatModel = chat.model || "medium";
   }
 
-  const llmResource = new LLMResource();
-  const modelConfig = await llmResource.getModel(chatModel);
-
-  if (!modelConfig) {
-    res.status(500).json({ error: `Model '${chatModel}' not configured` });
-    return;
-  }
 
   // Save user message
   const lastMessage = messages[messages.length - 1];
@@ -105,7 +147,6 @@ export async function apiChatHandler(req: Request, res: Response) {
     externalId: userMessageId.toString(),
     timestamp: new Date(),
     createdAt: new Date(),
-    updatedAt: new Date(),
     raw: { role: "user", content: lastMessage.content }
   });
 
@@ -117,31 +158,39 @@ export async function apiChatHandler(req: Request, res: Response) {
   // Fetch System Prompt
   let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
 
+  // throw new Error("Not implemented 112");
+  const config = await getServerConfig();
   try {
-      const configDoc = await db.collection("configs").findOne({ _id: SERVER_CONFIG_ID });
-      if (configDoc) {
-          const config = zServerConfig.parse(configDoc);
-          if (config.prompts.chat_system) {
-              const promptDoc = await db.collection("prompts").findOne({ _id: config.prompts.chat_system });
-              if (promptDoc && promptDoc.text) {
-                  systemPrompt = promptDoc.text;
-              }
-          }
-      }
+
+    if (config.prompts.chat_system) {
+        const promptDoc = await db.collection("prompts").findOne({ _id: config.prompts.chat_system });
+        if (promptDoc && promptDoc.text) {
+            systemPrompt = promptDoc.text;
+        }
+    }
   } catch (e) {
       console.warn("Failed to load system prompt from config, using default.", e);
   }
 
+  const inference = config.inference;
+  if (!inference?.baseUrl || !inference?.apiKey) {
+    res.status(500).json({ error: "Inference provider not configured. Please configure it in server settings." });
+    return;
+  }
+
   try {
-    const agent = new ToolLoopAgent({
+    const stream = streamText({
       model: createOpenAI({
-        baseURL: modelConfig.baseUrl,
-        apiKey: modelConfig.apiKey,
-      }).chat(modelConfig.name), 
+        baseURL: inference.baseUrl,
+        apiKey: inference.apiKey,
+      }).chat(chatModel),
       tools,
-      instructions: systemPrompt,
-      async onFinish(result) {
-        console.log(result);
+      stopWhen: stepCountIs(5),
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...messages,
+      ] as any,
+      async onStepFinish(result) {
         const { content, usage: totalUsage } = result as any;
         
         const assistantMessageId = new ObjectId();
@@ -164,7 +213,6 @@ export async function apiChatHandler(req: Request, res: Response) {
           externalId: assistantMessageId.toString(),
           timestamp: new Date(),
           createdAt: new Date(),
-          updatedAt: new Date(),
           raw: { 
             role: "assistant",
             usage: totalUsage,
@@ -177,7 +225,6 @@ export async function apiChatHandler(req: Request, res: Response) {
             { _id: new ObjectId(activeChatId) },
             { 
               $set: { 
-                updatedAt: new Date(),
                 lastMessageDate: new Date()
               } 
             }
@@ -185,18 +232,15 @@ export async function apiChatHandler(req: Request, res: Response) {
       },
     });
 
-    const result = await agent.stream({
-      messages,
-    });
-
     // Pipe the stream to the Express response with Chat ID header
     res.setHeader("X-Mycelia-Chat-Id", activeChatId!);
-    result.pipeUIMessageStreamToResponse(res);
+    stream.pipeUIMessageStreamToResponse(res);
   } catch (error) {
     console.error("Chat error:", error);
     // If headers sent, we can't send json
     if (!res.headersSent) {
         res.status(500).json({ error: "Failed to process chat request" });
     }
+    
   }
 }

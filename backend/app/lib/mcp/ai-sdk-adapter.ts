@@ -2,6 +2,7 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { z } from "zod";
 import { tool, Tool } from "ai";
+import { EJSON } from "bson";
 
 function extractActionDescription(schema: any, actionValue: string): string | undefined {
   const def = schema._def || schema.def;
@@ -63,7 +64,9 @@ export function resourceToTools<Input, Output>(
                 ...args,
                 [discriminator]: actionValue,
               };
-              return resource.use(input as any, auth);
+              const result = await resource.use(input as any, auth);
+              // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
+              return { type: "json", value: JSON.parse(EJSON.stringify(result)) };
             },
           };
         }
@@ -79,7 +82,9 @@ export function resourceToTools<Input, Output>(
     description: resource.description,
     inputSchema: schema,
     execute: async (args: any) => {
-      return resource.use(args, auth);
+      const result = await resource.use(args, auth);
+      // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
+      return { type: "json", value: JSON.parse(EJSON.stringify(result)) };
     },
   };
   return tools;
@@ -104,6 +109,7 @@ export function createAiSdkToolsFromResources(
   const tools = createMCPToolsFromResources(resources, auth);
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
+    // Pass Zod schema directly - AI SDK handles conversion internally
     aiSdkTools[name] = tool({
       description: params.description,
       inputSchema: params.inputSchema,

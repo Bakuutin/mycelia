@@ -15,9 +15,9 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-      - ./mongod.conf:/etc/mongod.conf:ro
-      - ./init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
-      - ./mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
+      - ./misc/mongod.conf:/etc/mongod.conf:ro
+      - ./misc/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
+      - ./misc/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
     restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME
@@ -30,8 +30,8 @@ services:
       - "9946:9946"
     volumes:
       - mongo_search_data:/data/mongot
-      - ./mongot.conf:/mongot-community/config.default.yml:ro
-      - ./mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
+      - ./misc/mongot.conf:/mongot-community/config.default.yml:ro
+      - ./misc/mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
     environment:
       - MONGO_INITDB_ROOT_USERNAME
       - MONGO_INITDB_ROOT_PASSWORD
@@ -41,31 +41,45 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: ./frontend/Dockerfile
+      dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
     ports:
-      - "8080:8080"
+      - "${FRONTEND_PORT:-8080}:8080"
     volumes:
       - ./frontend:/app
+      - ./interfaces:/app/interfaces
 
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "5173:5173"
-  #   command: deno task dev
-  #   environment:
-  #     MONGO_URL: ${MONGO_URL}
-  #     SECRET_KEY: ${SECRET_KEY}
-  #     DATABASE_NAME: ${DATABASE_NAME}
-  #     REDIS_HOST: redis
-  #     REDIS_PORT: 6379
-  #     REDIS_PASSWORD: ${REDIS_PASSWORD}
-  #   volumes:
-  #     - ./backend:/app
+  backend:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    ports:
+      - "${BACKEND_PORT:-5173}:5173"
+    command: deno task dev
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PYTHON_WORKER_URL: http://python-worker:8000
+    volumes:
+      - ./backend:/app
 
+  python-worker:
+    build:
+      context: .
+      dockerfile: ./python/Dockerfile
+    environment:
+      MYCELIA_URL: http://backend:5173
+    depends_on:
+      - backend
+    ports:
+      - "${PYTHON_WORKER_PORT:-8000}:8000"
+    volumes:
+      - ./python:/app
+      - worker_data:/root/.cache
 
 volumes:
   mongo_data:
   mongo_search_data:
   redis_data:
+  worker_data:

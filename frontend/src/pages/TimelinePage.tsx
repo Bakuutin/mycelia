@@ -97,11 +97,14 @@ const TimelinePage = () => {
     if (!timeSelection.start || !timeSelection.end) return;
     setRecalculating(true);
     try {
-      await api.post("/api/jobs", {
-        type: "histRecalculation",
-        start: timeSelection.start.toISOString(),
-        end: timeSelection.end.toISOString(),
-        all: false,
+      await callResource("jobs", {
+        action: "enqueue",
+        data: {
+          type: "histRecalculation",
+          start: timeSelection.start,
+          end: timeSelection.end,
+          all: false,
+        },
       });
       console.log("Recalculation job queued");
     } catch (e) {

@@ -550,6 +550,7 @@ Deno.test(
       object: {
         name: "Relationship",
         isRelationship: true,
+        isEvent: true,
         relationship: {
           subject: subject.insertedId.toString(),
           object: object.insertedId.toString(),

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 from lib.resources import call_resource
-from lib.api import session, ensure_authorized
+from lib.api import get_session, ensure_authorized
 from lib.config import get_url
 import base64
 from tqdm import tqdm
@@ -45,6 +45,7 @@ def upload_file_to_gridfs(file_path: Path):
     
     upload_url = get_url("api", "files", "upload")
     try:
+        session = get_session()
         response = session.post(upload_url, json=payload)
         response.raise_for_status()
         return response.json().get("file_id")

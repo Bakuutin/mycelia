@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { DefaultChatTransport } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { useSearchParams, useParams, useNavigate } from "react-router-dom";
@@ -14,13 +14,12 @@ import {
   PromptInputActionMenuItem,
   PromptInputSpeechButton,
 } from "@/components/ai-elements/prompt-input";
-import { Message, MessageContent, MessageAvatar } from "@/components/ai-elements/message";
-import { Response } from "@/components/ai-elements/response";
-import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Loader } from "@/components/ai-elements/loader";
-import { Paperclip, UserIcon, BotIcon } from "lucide-react";
+import { Paperclip } from "lucide-react";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
+import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
+import type { Message as MessengerMessage } from "@interfaces/messengers";
 
 async function fetchMessages(chatId: string) {
   const messages = await callResource("mongo", {
@@ -36,8 +35,8 @@ async function fetchMessages(chatId: string) {
 
   return messages.map((msg: any) => ({
     id: msg._id.toString(),
-    role: msg.role,
-    content: msg.content,
+    role: msg.raw?.role || msg.role,
+    content: msg.raw?.content || msg.content,
     createdAt: new Date(msg.createdAt),
     toolInvocations: msg.toolCalls?.map((call: any) => {
       const result = msg.toolResults?.find(
@@ -62,54 +61,68 @@ async function fetchMessages(chatId: string) {
   }));
 }
 
-function ChatMessageContent({ message }: { message: any }) {
+function isValidObjectId(id: string): boolean {
+  return /^[a-fA-F0-9]{24}$/.test(id);
+}
+
+function toMessengerMessage(message: any): MessengerMessage {
   const content = message.content;
   const parts = message.parts;
-
+  
+  let normalizedContent: string | Array<{ type: string; text: string }>;
+  
   if (typeof content === 'string') {
-    return <Response>{content}</Response>;
+    normalizedContent = content;
+  } else if (Array.isArray(content)) {
+    normalizedContent = content;
+  } else if (Array.isArray(parts)) {
+    normalizedContent = parts
+      .filter((p: any) => typeof p === 'string' || (p?.type === 'text' && p?.text))
+      .map((p: any) => typeof p === 'string' ? { type: 'text', text: p } : p);
+  } else {
+    normalizedContent = '';
   }
+  
+  const messageId = isValidObjectId(message.id) ? new ObjectId(message.id) : new ObjectId();
+  
+  return {
+    _id: messageId,
+    chatId: new ObjectId(),
+    senderId: new ObjectId(),
+    platform: "mycelia",
+    externalId: message.id,
+    timestamp: message.createdAt || new Date(),
+    createdAt: message.createdAt || new Date(),
+    updatedAt: message.createdAt || new Date(),
+    raw: {
+      role: message.role,
+      content: normalizedContent,
+    },
+  };
+}
 
-  const items = Array.isArray(content) ? content : (Array.isArray(parts) ? parts : []);
-
-  if (items.length > 0) {
+function ChatMessage({ message }: { message: any }) {
+  const messengerMessage = useMemo(() => toMessengerMessage(message), [message]);
+  const MessageComponent = myceliaPlatform.MessageComponent;
+  
+  const isStreaming = message.parts?.some((p: any) => p?.type === 'start-step');
+  
+  if (isStreaming) {
     return (
-      <>
-        {items.map((part: any, index: number) => {
-          
-          if (typeof part === 'string' || (typeof part === 'object' && part.type === 'text')) {
-            return <Response key={index}>{typeof part === 'string' ? part : part.text}</Response>;
-          }
-
-          if (typeof part === 'object' && part.type === 'start-step') {
-            return (
-              <div key={index} className="w-full my-2 first:mt-0 last:mb-0">
-                <Loader />
-              </div>
-            );
-          }
-
-          return (
-            <div key={index} className="w-full my-2 first:mt-0 last:mb-0">
-              <CodeBlock
-                code={JSON.stringify(part, null, 2)}
-                language="json"
-              />
-            </div>
-          );
-        })}
-      </>
+      <div className="flex w-full py-2">
+        <div className="flex gap-3">
+          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
+            <span className="text-base" role="img" aria-label="Mycelia">🍄</span>
+          </div>
+          <div className="flex items-center">
+            <Loader />
+          </div>
+        </div>
+      </div>
     );
   }
-
-  return (
-    <div className="w-full">
-      <CodeBlock
-        code={JSON.stringify(content || parts || message, null, 2)}
-        language="json"
-      />
-    </div>
-  );
+  
+  return <MessageComponent message={messengerMessage} />;
 }
 
 export default function ChatPage() {
@@ -124,16 +137,15 @@ export default function ChatPage() {
   const chat = useChat({
     id: chatId,
     onFinish: () => {
-      console.log("onFinish", newChatIdRef.current, chatId);
-      if (newChatIdRef.current && newChatIdRef.current !== chatId) {
-         navigate(`/chat/${newChatIdRef.current}`, { replace: true });
+      if (!chatId && newChatIdRef.current) {
+        const newId = newChatIdRef.current;
+        newChatIdRef.current = null;
+        navigate(`/chat/${newId}`, { replace: true });
       }
-    },
-    onData: (data) => {
-      console.log("data", data);
     },
     transport: new DefaultChatTransport<any>({
       api: "/api/chat",
+      body: { chatId },
       fetch: async (input, init) => {
         const path = input.toString();
 
@@ -141,7 +153,6 @@ export default function ChatPage() {
 
         const serverChatId = response.headers.get("X-Mycelia-Chat-Id");
         if (serverChatId) {
-          console.log("serverChatId", serverChatId);
           newChatIdRef.current = serverChatId;
         }
         return response;
@@ -150,6 +161,7 @@ export default function ChatPage() {
   });
 
   useEffect(() => {
+    console.log("chatId changed", chatId);
     if (chatId) {
        fetchMessages(chatId).then(msgs => chat.setMessages(msgs));
     }
@@ -168,13 +180,9 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto">
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {chat.messages.map((message) => (
-          <Message key={message.id} from={message.role}>
-            <MessageContent variant={message.role === 'user' ? 'contained' : 'flat'}>
-              <ChatMessageContent message={message} />
-            </MessageContent>
-          </Message>
+          <ChatMessage key={message.id} message={message} />
         ))}
       </div>
 

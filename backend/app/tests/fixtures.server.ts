@@ -12,7 +12,6 @@ import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
 import { MongoClient, UUID } from "mongodb";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
-import { ProcessorResource } from "../lib/processors/core.server.ts";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
 import { accessLogger } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
@@ -20,6 +19,9 @@ import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 import { z } from "zod";
 import type { Request } from "express";
+
+import { discoverJobWorkers, jobRegistry } from "@/lib/jobs/job-registry.ts";
+await discoverJobWorkers();
 
 export type Fixture = {
   token: any;
@@ -67,7 +69,7 @@ const mongoContainer = await new GenericContainer("mongo:8.0")
   .withReuse()
   .start();
 
-const sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
+const sampleAudioFile = await  Deno.readFile("app/tests/sample_audio.wav");
 
 addEventListener("unload", async () => {
   await redisContainer.stop();
@@ -153,17 +155,14 @@ defineFixture({
     const isolatedDB = client.db(databaseName);
     const fs = new FsResource();
     const timeline = new TimelineResource();
-    const processor = new ProcessorResource();
     const objects = new ObjectsResource();
     const messenger = new MessengerResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
-    processor.getRootDB = async () => isolatedDB;
     objects.getRootDB = async () => isolatedDB;
     defaultResourceManager.registerResource(resource);
     defaultResourceManager.registerResource(fs);
     defaultResourceManager.registerResource(timeline);
-    defaultResourceManager.registerResource(processor);
     defaultResourceManager.registerResource(objects);
     defaultResourceManager.registerResource(messenger);
 
@@ -376,7 +375,7 @@ console.log("All fixtures defined");
 
 export function withFixtures(
   dependencies: any[],
-  testFn: (...args: any[]) => Promise<void>,
+  testFn: (...args: any[]) => Promise<void> | void,
 ) {
   return async () => {
     const resolved = new Map<any, any>();

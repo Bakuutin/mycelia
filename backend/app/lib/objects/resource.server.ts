@@ -3,16 +3,7 @@ import { ObjectId } from "bson";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
-
-const zObjectId = z.union([
-  z.instanceof(ObjectId),
-  z.string().transform((val) => new ObjectId(val)),
-]);
-
-const zDate = z.union([
-  z.date(),
-  z.string().transform((val) => new Date(val)),
-]);
+import { zObjectId, zDateOrString } from "@/lib/zod-json-schema.ts";
 
 const zIcon = z.union([
   z.object({
@@ -52,8 +43,8 @@ const zObjectInput = z.object({
     "True if this object represents a promise or commitment"
   ),
   relationship: z.object({
-    object: zObjectId.describe("The object/target of the relationship (the 'to' entity)"),
-    subject: zObjectId.describe("The subject/source of the relationship (the 'from' entity)"),
+    object: zObjectId().describe("The object/target of the relationship (the 'to' entity)"),
+    subject: zObjectId().describe("The subject/source of the relationship (the 'from' entity)"),
     symmetrical: z.boolean().describe(
       "True if relationship goes both ways (e.g., 'partner' relationship), false for directional (e.g., 'lives in')"
     ),
@@ -67,8 +58,8 @@ const zObjectInput = z.object({
     "Geographic coordinates for places or events with physical location"
   ),
   timeRanges: z.array(z.object({
-    start: zDate.describe("Start date/time of this time period"),
-    end: zDate.optional().describe("End date/time. Omit for ongoing/current periods"),
+    start: zDateOrString().describe("Start date/time of this time period"),
+    end: zDateOrString().optional().describe("End date/time. Omit for ongoing/current periods"),
     name: z.string().optional().describe("Optional label for this time period"),
   })).optional().describe(
     "Time periods when this object/relationship was active. Multiple ranges supported for non-continuous periods."
@@ -163,10 +154,10 @@ const exploreTimeRangeSchema = z.object({
   action: z.literal("exploreTimeRange").describe(
     "Find objects that refer to a specific time range"
   ),
-  start: zDate.describe(
+  start: zDateOrString().describe(
     "(ISO 8601 date string or Date object)"
   ),
-  end: zDate.describe(
+  end: zDateOrString().describe(
     "(ISO 8601 date string or Date object)"
   ),
   filters: z.record(z.string(), z.any()).optional().describe(
@@ -278,7 +269,6 @@ export class ObjectsResource
           ...input.object,
           version: 1,
           createdAt: new Date(),
-          updatedAt: new Date(),
         };
 
         const result = await mongo({
@@ -345,17 +335,15 @@ export class ObjectsResource
         const updateDoc: any = {};
 
         if (input.value === null || input.value === undefined) {
-          // Remove the field using $unset, but still update timestamp and version
+          // Remove the field using $unset, but still update version
           updateDoc.$unset = { [input.field]: "" };
           updateDoc.$set = {
-            updatedAt: new Date(),
             version: currentVersion + 1,
           };
         } else {
           // Set the field value using $set
           updateDoc.$set = {
             [input.field]: input.value,
-            updatedAt: new Date(),
             version: currentVersion + 1,
           };
         }

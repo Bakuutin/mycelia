@@ -9,7 +9,7 @@
   ],
   "compilerOptions": {
     "lib": ["DOM", "deno.window", "deno.ns"],
-    "types": ["@remix-run/node", "vite/client"],
+    "types": ["vite/client"],
     "isolatedModules": true,
     "esModuleInterop": true,
     "jsx": "react",

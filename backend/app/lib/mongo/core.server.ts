@@ -8,6 +8,7 @@ import createDefaultQueryTester from "sift";
 
 import { Filter } from "mongodb";
 import { Auth } from "../auth/index.ts";
+import { env } from "#/env.ts";
 
 let client: MongoClient | null = null;
 
@@ -38,10 +39,10 @@ function cleanupExpiredCursors(): void {
 
 export const getRootDB = async (): Promise<Db> => {
   if (!client) {
-    client = new MongoClient(Deno.env.get("MONGO_URL") as string);
+    client = new MongoClient(env.MONGO_URL);
   }
   await client.connect();
-  return client.db(Deno.env.get("DATABASE_NAME"));
+  return client.db(env.DATABASE_NAME);
 };
 
 export function sift(query: Filter<unknown>): (item: unknown) => boolean {
@@ -386,18 +387,36 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
             auth.principal,
           );
         }
-        case "insertOne":
-          return collection.insertOne(input.doc);
-        case "insertMany":
-          return collection.insertMany(input.docs);
-        case "updateOne":
-          return collection.updateOne(input.query, input.update, input.options);
-        case "updateMany":
+        case "insertOne": {
+          const doc = { ...input.doc, updatedAt: new Date() };
+          return collection.insertOne(doc);
+        }
+        case "insertMany": {
+          const docs = input.docs.map(doc => ({ ...doc, updatedAt: new Date() }));
+          return collection.insertMany(docs);
+        }
+        case "updateOne": {
+          const update = { ...input.update };
+          if (update.$set) {
+            update.$set = { ...update.$set, updatedAt: new Date() };
+          } else {
+            update.$set = { updatedAt: new Date() };
+          }
+          return collection.updateOne(input.query, update, input.options);
+        }
+        case "updateMany": {
+          const update = { ...input.update };
+          if (update.$set) {
+            update.$set = { ...update.$set, updatedAt: new Date() };
+          } else {
+            update.$set = { updatedAt: new Date() };
+          }
           return collection.updateMany(
             input.query,
-            input.update,
+            update,
             input.options,
           );
+        }
         case "deleteOne":
           return collection.deleteOne(input.query);
         case "deleteMany":
@@ -406,8 +425,63 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
           return collection.countDocuments(input.query);
         case "aggregate":
           return collection.aggregate(input.pipeline, input.options).toArray();
-        case "bulkWrite":
-          return collection.bulkWrite(input.operations as any, input.options);
+        case "bulkWrite": {
+          const operations = input.operations.map((op: any) => {
+            if (op.insertOne) {
+              return {
+                ...op,
+                insertOne: {
+                  ...op.insertOne,
+                  document: { ...op.insertOne.document, updatedAt: new Date() },
+                },
+              };
+            }
+            if (op.insertMany) {
+              return {
+                ...op,
+                insertMany: {
+                  ...op.insertMany,
+                  documents: op.insertMany.documents.map((doc: any) => ({
+                    ...doc,
+                    updatedAt: new Date(),
+                  })),
+                },
+              };
+            }
+            if (op.updateOne) {
+              const updateOp = op.updateOne;
+              const update = { ...updateOp.update };
+              if (update.$set) {
+                update.$set = { ...update.$set, updatedAt: new Date() };
+              } else {
+                update.$set = { updatedAt: new Date() };
+              }
+              return { ...op, updateOne: { ...updateOp, update } };
+            }
+            if (op.updateMany) {
+              const updateOp = op.updateMany;
+              const update = { ...updateOp.update };
+              if (update.$set) {
+                update.$set = { ...update.$set, updatedAt: new Date() };
+              } else {
+                update.$set = { updatedAt: new Date() };
+              }
+              return { ...op, updateMany: { ...updateOp, update } };
+            }
+            if (op.replaceOne) {
+              const replaceOp = op.replaceOne;
+              return {
+                ...op,
+                replaceOne: {
+                  ...replaceOp,
+                  replacement: { ...replaceOp.replacement, updatedAt: new Date() },
+                },
+              };
+            }
+            return op;
+          });
+          return collection.bulkWrite(operations as any, input.options);
+        }
         case "createIndex":
           return collection.createIndex(input.index, input.options);
         case "listIndexes":

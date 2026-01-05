@@ -21,7 +21,7 @@ const APISettingsPage = () => {
   const [isSaved, setIsSaved] = useState(false);
   const [isExchanging, setIsExchanging] = useState(false);
   const [exchangeResult, setExchangeResult] = useState<
-    "success" | "error" | null
+    "success" | string | null
   >(null);
 
   const handleSave = () => {
@@ -33,7 +33,7 @@ const APISettingsPage = () => {
   };
 
   const handleClear = () => {
-    if (confirm("Are you sure you want to clear all settings?")) {
+    if (confirm("Are you sure you want to reset your API credentials?")) {
       clearSettings();
       setLocalEndpoint(useSettingsStore.getState().apiEndpoint);
       setLocalClientId("");
@@ -55,10 +55,10 @@ const APISettingsPage = () => {
       if (result.jwt) {
         setExchangeResult("success");
       } else {
-        setExchangeResult("error");
+        setExchangeResult(result.error || "Token invalid");
       }
-    } catch {
-      setExchangeResult("error");
+    } catch (err) {
+      setExchangeResult(err instanceof Error ? err.message : "Connection failed");
     } finally {
       setIsExchanging(false);
     }

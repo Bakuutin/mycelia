@@ -6,9 +6,7 @@ import ChatPage from "./pages/ChatPage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
-import LLMSettingsPage from "./pages/settings/LLMSettingsPage";
-import CreateLLMPage from "./pages/settings/CreateLLMPage";
-import LLMDetailPage from "./pages/settings/LLMDetailPage";
+import InferenceSettingsPage from "./pages/settings/InferenceSettingsPage";
 import APIKeysPage from "./pages/settings/APIKeysPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
@@ -26,13 +24,24 @@ import AudioPlayerPage from "./pages/AudioPlayerPage";
 import AudioExportPage from "./pages/AudioExportPage";
 import MessengerPage from "./pages/MessengerPage";
 import OAuthConsentPage from "./pages/OAuthConsentPage";
+import SetupPage from "./pages/SetupPage";
+import InferenceSetupPage from "./pages/setup/InferenceSetupPage";
 import JobsPage from "./pages/JobsPage";
 import JobDetailPage from "./pages/JobDetailPage";
+import CreateJobPage from "./pages/CreateJobPage";
 
 export const router = createBrowserRouter([
   {
     path: "/oauth/consent",
     element: <OAuthConsentPage />,
+  },
+  {
+    path: "/setup",
+    element: <SetupPage />,
+  },
+  {
+    path: "/setup/inference",
+    element: <InferenceSetupPage />,
   },
   {
     path: "/",
@@ -49,6 +58,10 @@ export const router = createBrowserRouter([
       {
         path: "jobs",
         element: <JobsPage />,
+      },
+      {
+        path: "jobs/new",
+        element: <CreateJobPage />,
       },
       {
         path: "jobs/:id",
@@ -119,16 +132,8 @@ export const router = createBrowserRouter([
             element: <APISettingsPage />,
           },
           {
-            path: "llms",
-            element: <LLMSettingsPage />,
-          },
-          {
-            path: "llms/new",
-            element: <CreateLLMPage />,
-          },
-          {
-            path: "llms/:id",
-            element: <LLMDetailPage />,
+            path: "inference",
+            element: <InferenceSettingsPage />,
           },
           {
             path: "api-keys",
