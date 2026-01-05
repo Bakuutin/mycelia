@@ -6,7 +6,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getLLMResource } from "@/lib/llm/resource.server.ts";
 import { getObjectsResource } from "@/lib/objects/resource.server.ts";
-import { zDateOrString } from "../../zod-json-schema.ts";
+import { zDateOrString } from "@/lib/zod-json-schema.ts";
 
 /** Job type name */
 export const name = "summarization";

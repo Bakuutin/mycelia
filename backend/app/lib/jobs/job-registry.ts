@@ -92,7 +92,7 @@ export const jobRegistry = new JobRegistry();
  * Workers should export `name`, `use` (processor function), and `schema`.
  */
 export async function discoverJobWorkers(): Promise<void> {
-  const workersDir = dirname(fromFileUrl(import.meta.url)) + "/workers";
+  const workersDir = dirname(fromFileUrl(Deno.cwd())) + "/app/workers";
 
   const capabilities = await discoverCapabilities<Job<JobData>, JobResult>(
     "*.ts",

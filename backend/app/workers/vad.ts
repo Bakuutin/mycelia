@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createPythonJobCapability } from "./python.ts";
-import { zDateOrString } from "../../zod-json-schema.ts";
+import { zDateOrString } from "@/lib/zod-json-schema.ts";
 
 /** Schema for VAD job data */
 export const schema = z.object({
