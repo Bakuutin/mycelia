@@ -87,14 +87,17 @@ export function useJobsListener() {
             duration: 10000,
           });
         } else {
-          toast.success("Job completed", {
-            description: `${jobData.jobType} job finished successfully.`,
-            action: {
-              label: "View job",
-              onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
-            },
-            duration: 5000,
-          });
+          const job = jobs.find((j) => j.id === jobData.jobId);
+          if (job?.trigger?.type === "manual") {
+            toast.success("Job completed", {
+              description: `${jobData.jobType} job finished successfully.`,
+              action: {
+                label: "View job",
+                onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
+              },
+              duration: 5000,
+            });
+          }
         }
       } else if (event.event === "job.failed" && event.data) {
         toast.error("Job failed", {
