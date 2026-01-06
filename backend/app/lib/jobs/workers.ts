@@ -26,6 +26,7 @@ export async function startWorkers() {
       
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
+      const startedAt = new Date();
       await mongo({
         action: "updateOne",
         collection: "jobs",
@@ -33,7 +34,7 @@ export async function startWorkers() {
         update: { 
           $set: { 
             state: "active", 
-            startedAt: new Date(),
+            startedAt,
             updatedAt: new Date() 
           },
           $inc: { attempts: 1 }
@@ -42,6 +43,7 @@ export async function startWorkers() {
 
       await publishJobUpdate(job.id!, jobType, "job.started", {
         state: "active",
+        processedOn: startedAt.getTime(),
         progress: job.progress,
       });
     });
@@ -51,6 +53,7 @@ export async function startWorkers() {
 
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
+      const finishedAt = new Date();
       await mongo({
         action: "updateOne",
         collection: "jobs",
@@ -58,7 +61,7 @@ export async function startWorkers() {
         update: { 
           $set: { 
             state: "completed", 
-            finishedAt: new Date(),
+            finishedAt,
             result: job.returnvalue,
             updatedAt: new Date() 
           } 
@@ -67,6 +70,8 @@ export async function startWorkers() {
 
       await publishJobUpdate(job.id!, jobType, "job.completed", {
         state: "completed",
+        finishedOn: finishedAt.getTime(),
+        processedOn: job.processedOn,
         result: job.returnvalue,
       });
     });
@@ -76,6 +81,7 @@ export async function startWorkers() {
       if (job?.id) {
         const auth = await getServerAuth();
         const mongo = await getMongoResource(auth);
+        const finishedAt = new Date();
         await mongo({
           action: "updateOne",
           collection: "jobs",
@@ -83,7 +89,7 @@ export async function startWorkers() {
           update: { 
             $set: { 
               state: "failed", 
-              finishedAt: new Date(),
+              finishedAt,
               failedReason: err.message,
               updatedAt: new Date() 
             } 
@@ -92,6 +98,8 @@ export async function startWorkers() {
 
         await publishJobUpdate(job.id, jobType, "job.failed", {
           state: "failed",
+          finishedOn: finishedAt.getTime(),
+          processedOn: job.processedOn,
           failedReason: err.message,
         });
       }
@@ -115,6 +123,7 @@ export async function startWorkers() {
       await publishJobUpdate(job.id!, jobType, "job.progress", {
         state: "active",
         progress,
+        processedOn: job.processedOn,
       });
     });
 

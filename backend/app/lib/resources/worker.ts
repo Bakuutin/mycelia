@@ -276,6 +276,7 @@ export class JobsResource
     await publishJobUpdate(jobId, jobType, "job.progress", {
       state: "active",
       progress,
+      processedOn: jobDoc.startedAt?.getTime(),
     });
 
     return { success: true };

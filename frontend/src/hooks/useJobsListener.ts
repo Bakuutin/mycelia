@@ -39,6 +39,8 @@ export function useJobsListener() {
         result?: any;
         failedReason?: string;
         timestamp?: number;
+        processedOn?: number;
+        finishedOn?: number;
       };
 
       if (!jobData?.jobId) return;
@@ -49,17 +51,33 @@ export function useJobsListener() {
 
         if (existingIndex >= 0) {
           const updated = [...oldJobs];
+          const existing = updated[existingIndex];
+          
+          // Determine processedOn and finishedOn with fallbacks
+          let processedOn = jobData.processedOn ?? existing.processedOn;
+          if (!processedOn && (event.event === "job.started" || event.event === "job.active" || event.event === "job.progress" || newState === "active")) {
+            processedOn = Date.now();
+          }
+
+          let finishedOn = jobData.finishedOn ?? existing.finishedOn;
+          if (!finishedOn && (event.event === "job.completed" || event.event === "job.failed" || newState === "completed" || newState === "failed")) {
+            finishedOn = Date.now();
+          }
+
           updated[existingIndex] = {
-            ...updated[existingIndex],
+            ...existing,
             state: newState,
-            progress: jobData.progress ?? updated[existingIndex].progress,
-            result: jobData.result ?? updated[existingIndex].result,
-            failedReason: jobData.failedReason ?? updated[existingIndex].failedReason,
-            finishedOn: event.event === "job.completed" ? Date.now() : updated[existingIndex].finishedOn,
-            processedOn: event.event === "job.active" ? Date.now() : updated[existingIndex].processedOn,
+            progress: jobData.progress ?? existing.progress,
+            result: jobData.result ?? existing.result,
+            failedReason: jobData.failedReason ?? existing.failedReason,
+            finishedOn,
+            processedOn,
           };
           return updated;
         } else {
+          const processedOn = jobData.processedOn || (event.event === "job.started" || event.event === "job.active" || event.event === "job.progress" || newState === "active" ? Date.now() : undefined);
+          const finishedOn = jobData.finishedOn || (event.event === "job.completed" || event.event === "job.failed" || newState === "completed" || newState === "failed" ? Date.now() : undefined);
+
           const newJob: JobInfo = {
             id: jobData.jobId,
             type: jobData.jobType,
@@ -69,6 +87,8 @@ export function useJobsListener() {
             result: jobData.result,
             timestamp: jobData.timestamp ?? Date.now(),
             failedReason: jobData.failedReason,
+            processedOn,
+            finishedOn,
           };
           // Keep it sorted by timestamp desc
           const newJobs = [newJob, ...oldJobs];
