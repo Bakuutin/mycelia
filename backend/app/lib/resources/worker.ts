@@ -5,7 +5,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import type { Resource, ResourcePath } from "@/lib/auth/resources.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { jobRegistry } from "@/lib/jobs/job-registry.ts";
-import { enqueueJob, getQueue } from "@/lib/jobs/queue.ts";
+import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 
 const UpdateProgressSchema = z.object({
@@ -46,6 +46,10 @@ const EnqueueJobSchema = z.object({
   action: z.literal("enqueue"),
   data: z.object({ type: z.string() }).passthrough(),
   priority: z.number().optional(),
+  trigger: z.object({
+    type: z.enum(["manual", "auto"]),
+    reason: z.string().optional(),
+  }).optional(),
 });
 
 const SchemasSchema = z.object({
@@ -73,18 +77,18 @@ export class JobsResource
     response: z.any(),
   };
 
-  async use(input: WorkerProgressRequest): Promise<any> {
+  async use(input: WorkerProgressRequest, auth: Auth): Promise<any> {
     switch (input.action) {
       case "get":
-        return this.get(input);
+        return this.get(input, auth);
       case "enqueue":
-        return this.enqueue(input);
+        return this.enqueue(input, auth);
       case "cancel_all":
-        return this.cancelAll(input);
+        return this.cancelAll(input, auth);
       case "list":
-        return this.list(input);
+        return this.list(input, auth);
       case "progressUpdate":
-        return this.progressUpdate(input);
+        return this.progressUpdate(input, auth);
       case "schemas":
         return this.schemasAction();
       default:
@@ -96,8 +100,7 @@ export class JobsResource
     return jobRegistry.getJobSchemas();
   }
 
-  private async get(input: z.infer<typeof GetJobSchema>) {
-    const auth = await getServerAuth();
+  private async get(input: z.infer<typeof GetJobSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
 
     const jobs = await mongo({
@@ -119,6 +122,7 @@ export class JobsResource
       state: job.state,
       progress: job.progress,
       result: job.result,
+      trigger: job.trigger,
       timestamp: job.createdAt.getTime(),
       finishedOn: job.finishedAt?.getTime(),
       processedOn: job.startedAt?.getTime(),
@@ -126,10 +130,12 @@ export class JobsResource
     };
   }
 
-  private async enqueue(input: z.infer<typeof EnqueueJobSchema>) {
-    const job = await enqueueJob(input.data, {
+  private async enqueue(input: z.infer<typeof EnqueueJobSchema>, auth: Auth) {
+    const options: EnqueueJobOptions = {
       priority: input.priority,
-    });
+      trigger: input.trigger,
+    };
+    const job = await enqueueJob(input.data, options, auth);
 
     return {
       success: true,
@@ -137,8 +143,7 @@ export class JobsResource
     };
   }
 
-  private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>) {
-    const auth = await getServerAuth();
+  private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
     
     const types = jobRegistry.getJobTypes();
@@ -163,8 +168,7 @@ export class JobsResource
     return { success: true };
   }
 
-  private async list(input: z.infer<typeof ListJobsSchema>) {
-    const auth = await getServerAuth();
+  private async list(input: z.infer<typeof ListJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
     
     const types = input.types || jobRegistry.getJobTypes();
@@ -193,6 +197,7 @@ export class JobsResource
       state: job.state,
       progress: job.progress,
       result: job.result,
+      trigger: job.trigger,
       timestamp: job.createdAt.getTime(),
       finishedOn: job.finishedAt?.getTime(),
       processedOn: job.startedAt?.getTime(),
@@ -200,8 +205,7 @@ export class JobsResource
     }));
   }
 
-  private async progressUpdate(input: z.infer<typeof UpdateProgressSchema>) {
-    const auth = await getServerAuth();
+  private async progressUpdate(input: z.infer<typeof UpdateProgressSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
     const { jobId, progress } = input;
 

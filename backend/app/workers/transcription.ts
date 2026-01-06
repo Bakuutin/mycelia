@@ -11,8 +11,7 @@ export const schema = z.object({
 
 const capability = createPythonJobCapability("transcription", schema);
 
-export const name = capability.name;
-export const use = capability.use;
+export default capability;
 
 
 

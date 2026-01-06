@@ -9,8 +9,7 @@ export const schema = z.object({
 
 const capability = createPythonJobCapability("ingestion", schema);
 
-export const name = capability.name;
-export const use = capability.use;
+export default capability;
 
 
 

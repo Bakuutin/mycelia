@@ -38,7 +38,7 @@ import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
-import { startVadTriggerWorker, stopVadTriggerWorker } from "@/workers/vad.trigger.ts";
+import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
 import { up, down, to, status } from "@/lib/mongo/migrator.ts";
 
 
@@ -114,7 +114,7 @@ async function startServer(
     await startWorkers();
     await startChangeStreamWorker();
     await startAccessLogWorker();
-    await startVadTriggerWorker();
+    await triggerManager.start();
   }
 
   const app = express();
@@ -186,7 +186,7 @@ async function startServer(
       await stopWorkers();
       await stopAccessLogWorker();
       await stopChangeStreamWorker();
-      await stopVadTriggerWorker();
+      await triggerManager.stop();
       await shutdownTelemetry();
       cleanupLogging();
     });

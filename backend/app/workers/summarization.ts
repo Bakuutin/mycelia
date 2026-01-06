@@ -5,7 +5,8 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getLLMResource } from "@/lib/llm/resource.server.ts";
 import { getObjectsResource } from "@/lib/objects/resource.server.ts";
-import { zDateOrString } from "@/lib/zod-json-schema.ts";
+import { zDateOrString, zObjectId } from "@/lib/zod-json-schema.ts";
+import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -17,7 +18,7 @@ export const schema = z.object({
   end: zDateOrString(),
   prompt: z.string().optional(),
   model: z.string().optional(),
-  objectId: z.string().optional(),
+  objectId: zObjectId().nullish(),
 });
 
 export type SummarizationJobData = z.infer<typeof schema>;
@@ -114,7 +115,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   if (existingObjectId) {
     const currentObject = await objects({
       action: "get",
-      id: existingObjectId,
+      id: existingObjectId.toString(),
     });
 
     if (!currentObject) {
@@ -126,7 +127,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
     await objects({
       action: "update",
-      id: existingObjectId,
+      id: existingObjectId.toString(),
       version: currentObject.version ?? 0,
       field: "summaries",
       value: newSummaries,
@@ -167,3 +168,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     description: summary,
   };
 }
+
+const capability: JobCapability = {
+  name,
+  schema,
+  use,
+};
+
+export default capability;

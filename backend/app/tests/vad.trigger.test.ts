@@ -3,7 +3,7 @@ Deno.env.set("DENO_ENV", "test");
 
 import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { startVadTriggerWorker, stopVadTriggerWorker } from "@/workers/vad.trigger.ts";
+import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { delay } from "@std/async/delay";
 import { redis } from "@/lib/redis.ts";
@@ -21,7 +21,7 @@ Deno.test(
     await db.createCollection("jobs");
 
     // Start only the VAD trigger worker (mocking the change stream via Redis)
-    await startVadTriggerWorker();
+    await triggerManager.start();
 
     try {
       const mongoResource = await getMongoResource(admin);
@@ -65,7 +65,9 @@ Deno.test(
       expect(job).not.toBeNull();
       if (job) {
         expect(job.type).toBe("vad");
-        expect(job.data.trigger).toBe("auto_new_chunks");
+        expect(job.trigger.reason).toBe("auto_new_chunks");
+        expect(job.trigger.type).toBe("auto");
+        expect(job.trigger.principal).toBe("server");
         expect(job.state).toBe("waiting");
         console.log("[Test] VAD job successfully triggered and found in DB:", job._id);
       }
@@ -82,7 +84,7 @@ Deno.test(
     } finally {
       // Cleanup worker
       console.log("[Test] Stopping worker...");
-      await stopVadTriggerWorker();
+      await triggerManager.stop();
     }
   }),
 );

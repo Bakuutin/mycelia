@@ -58,6 +58,10 @@ export default function JobsPage() {
       return await api.callResource("jobs", {
         action: "enqueue",
         data: { type: "testPythonIntegration" },
+        trigger: {
+          type: "manual",
+          reason: "Manual test from System Jobs page",
+        },
       });
     }
   });

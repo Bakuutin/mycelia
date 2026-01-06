@@ -17,3 +17,13 @@ export interface JobResult {
   success?: boolean;
   [key: string]: unknown;
 }
+
+export interface EnqueueJobOptions {
+  priority?: number;
+  jobId?: string;
+  trigger?: {
+    type: "manual" | "auto";
+    reason?: string;
+    principal?: string;
+  };
+}

@@ -6,6 +6,11 @@ export type JobInfo = {
   state: string;
   progress: any;
   result?: any;
+  trigger?: {
+    type: "manual" | "auto";
+    reason?: string;
+    principal?: string;
+  };
   timestamp: number;
   finishedOn?: number;
   processedOn?: number;

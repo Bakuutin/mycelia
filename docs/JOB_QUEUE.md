@@ -443,13 +443,13 @@ const result = await processJob(job);
 
 ## VAD Auto-Triggering
 
-The VAD job type has **automatic triggering** enabled. See [VAD_TRIGGERING.md](./VAD_TRIGGERING.md) for details.
+The VAD job type has **automatic triggering** enabled via the unified `TriggerManager`. See [VAD_TRIGGERING.md](./VAD_TRIGGERING.md) for details.
 
 Key features:
-- **Auto-triggered on new chunks**: When audio chunks arrive, VAD jobs are automatically enqueued after a 5-second debounce
-- **Sequential processing**: When a VAD job completes, the system checks for remaining chunks and triggers the next job
-- **Duplicate prevention**: Only one VAD job can be waiting or active at a time
-- **Trigger tracking**: Each job tracks how it was triggered (`manual`, `auto_new_chunks`, `auto_sequential`)
+- **Auto-triggered on new chunks**: When audio chunks arrive, VAD jobs are automatically enqueued after a configurable debounce (default 5s)
+- **Principal injection**: Every job automatically captures the `principal` (user ID or `server`) that initiated it
+- **Duplicate prevention**: Max concurrency is enforced by checking active jobs in MongoDB before enqueuing
+- **Trigger tracking**: Each job tracks its trigger state: `{ type: "manual" | "auto", reason: string, principal: string }`
 
 To manually enqueue a VAD job:
 ```bash
@@ -460,8 +460,11 @@ curl -X POST http://localhost:3000/api/resource/jobs \
     "action": "enqueue",
     "data": {
       "type": "vad",
-      "trigger": "manual",
       "limit": 1000
+    },
+    "trigger": {
+      "type": "manual",
+      "reason": "user_request"
     }
   }'
 ```

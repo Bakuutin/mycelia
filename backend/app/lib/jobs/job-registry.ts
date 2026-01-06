@@ -5,6 +5,15 @@ import type { JobData, JobResult } from "./types.ts";
 import { Capability, Registry, discoverCapabilities } from "@/utils/registries.ts";
 
 /**
+ * Trigger source for jobs based on Redis events.
+ */
+export interface JobTriggerSource {
+  channel: string;
+  name: string; // Used for trigger.reason
+  filter?: (payload: any) => boolean;
+}
+
+/**
  * A job capability represents a worker that can process a specific job type.
  * Each capability defines its own name, processor, and data schema.
  */
@@ -15,6 +24,13 @@ export interface JobCapability extends Capability<Job<JobData>, JobResult> {
   use: (job: Job<JobData>) => Promise<JobResult>;
   /** Zod schema to validate job data for this type */
   schema: z.ZodType<JobData>;
+  /** Optional trigger configuration */
+  trigger?: {
+    sources: JobTriggerSource[];
+    debounceMs?: number;
+  };
+  /** Optional maximum concurrency (e.g. 1 for singleton workers) */
+  maxConcurrency?: number;
 }
 
 /**

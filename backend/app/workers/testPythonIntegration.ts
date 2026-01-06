@@ -8,8 +8,7 @@ export const schema = z.object({
 
 const capability = createPythonJobCapability("testPythonIntegration", schema);
 
-export const name = capability.name;
-export const use = capability.use;
+export default capability;
 
 
 

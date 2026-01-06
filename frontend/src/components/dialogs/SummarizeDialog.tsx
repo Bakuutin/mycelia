@@ -117,6 +117,10 @@ export function SummarizeDialog({
           model: selectedModel || undefined,
           objectId: objectId || undefined,
         },
+        trigger: {
+          type: "manual",
+          reason: `Manual summarization from ${objectId ? "conversation" : "timeline"}`,
+        },
       }) as { jobId?: string; jobType?: string };
 
       const jobId = response.jobId;

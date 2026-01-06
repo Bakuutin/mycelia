@@ -105,6 +105,10 @@ const TimelinePage = () => {
           end: timeSelection.end,
           all: false,
         },
+        trigger: {
+          type: "manual",
+          reason: `Manual recalculation from timeline range selection`,
+        },
       });
       console.log("Recalculation job queued");
     } catch (e) {

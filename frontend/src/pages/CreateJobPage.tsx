@@ -34,6 +34,10 @@ export default function CreateJobPage() {
           ...data,
           type: selectedType,
         },
+        trigger: {
+          type: "manual",
+          reason: `Manual launch of ${selectedType} via Launch Job page`,
+        },
       });
     },
     onSuccess: (response) => {

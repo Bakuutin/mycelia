@@ -5,6 +5,8 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { updateAllHistogram } from "@/services/timeline.server.ts";
 import { zDateOrString } from "@/lib/zod-json-schema.ts";
 
+import type { JobCapability } from "@/lib/jobs/job-registry.ts";
+
 /** Job type name */
 export const name = "histRecalculation";
 
@@ -34,3 +36,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
   return { success: true };
 }
+
+const capability: JobCapability = {
+  name,
+  schema,
+  use,
+};
+
+export default capability;

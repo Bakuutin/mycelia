@@ -190,6 +190,21 @@ export default function JobDetailPage() {
                             <div className="text-sm text-muted-foreground mb-1">Type</div>
                             <div className="font-medium">{job.type}</div>
                         </div>
+                        {job.trigger && (
+                            <div>
+                                <div className="text-sm text-muted-foreground mb-1">Trigger</div>
+                                <div className="flex flex-col gap-1">
+                                    <Badge variant="outline" className="w-fit">
+                                        {job.trigger.type}
+                                    </Badge>
+                                    {job.trigger.reason && (
+                                        <div className="text-sm text-muted-foreground italic">
+                                            {job.trigger.reason}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                         {
                             job.result && (
                                 <>

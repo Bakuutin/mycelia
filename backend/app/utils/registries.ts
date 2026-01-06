@@ -4,6 +4,10 @@ import { toFileUrl } from "@std/path";
 export interface Capability<Input, Output> {
   name: string;
   use: (input: Input) => Promise<Output>;
+  /** Optional trigger configuration */
+  trigger?: any;
+  /** Optional maximum concurrency (e.g. for singleton workers) */
+  maxConcurrency?: number;
 }
 
 export class Registry<Input, Output, C extends Capability<Input, Output>> {
@@ -22,7 +26,7 @@ export class Registry<Input, Output, C extends Capability<Input, Output>> {
   }
 
   register(capability: C): void {
-    if (capability.name in this.entries) {
+    if (this.entries.has(capability.name)) {
       throw new Error(`Duplicate registry entry: ${capability.name}`);
     }
     this.entries.set(capability.name, capability);
@@ -43,15 +47,17 @@ export async function discoverCapabilities<Input, Output>(
     const file of expandGlob(globPattern, { root, includeDirs: false, exclude })
   ) {
     const mod = await import(toFileUrl(file.path).href);
+    const cap = mod.default || mod;
+
     if (
-        mod && 
-        typeof mod === "object" &&
-        "name" in mod &&
-        "use" in mod &&
-        typeof mod.name === "string" &&
-        typeof mod.use === "function"
+        cap && 
+        typeof cap === "object" &&
+        "name" in cap &&
+        "use" in cap &&
+        typeof cap.name === "string" &&
+        typeof cap.use === "function"
     ) {
-      discovered.push(mod);
+      discovered.push(cap as Capability<Input, Output>);
     } else {
       console.warn(`Invalid capability module: ${file.path}`);
     }

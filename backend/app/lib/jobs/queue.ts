@@ -1,9 +1,10 @@
 import { Job, Queue, Worker } from "bullmq";
 import { ObjectId } from "mongodb";
 import { redis } from "@/lib/redis.ts";
-import { getServerAuth } from "@/lib/auth/core.server.ts";
+import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import type { JobData, JobResult } from "./types.ts";
+import type { JobData, JobResult, EnqueueJobOptions } from "./types.ts";
+export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
 
 const queues = new Map<string, Queue<JobData>>();
@@ -40,10 +41,8 @@ export function getQueue(type: string): Queue<JobData> {
 
 export async function enqueueJob(
   data: JobData,
-  options?: {
-    priority?: number;
-    jobId?: string;
-  },
+  options?: EnqueueJobOptions,
+  authOverride?: Auth,
 ): Promise<Job<JobData>> {
   const jobId = options?.jobId || new ObjectId().toString();
   const parsedData = jobRegistry.validateJobData(data);
@@ -55,8 +54,15 @@ export async function enqueueJob(
   const queue = getQueue(parsedData.type);
 
   // Store in MongoDB
-  const auth = await getServerAuth();
+  const auth = authOverride || await getServerAuth();
   const mongo = await getMongoResource(auth);
+  
+  const trigger = options?.trigger || { type: "manual" };
+  const triggerWithPrincipal = {
+    ...trigger,
+    principal: auth.principal,
+  };
+
   await mongo({
     action: "insertOne",
     collection: "jobs",
@@ -66,6 +72,7 @@ export async function enqueueJob(
       data: parsedData,
       state: "waiting",
       attempts: 0,
+      trigger: triggerWithPrincipal,
       createdAt: new Date(),
       updatedAt: new Date(),
     },
