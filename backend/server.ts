@@ -38,6 +38,7 @@ import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
+import { startVadTriggerWorker, stopVadTriggerWorker } from "@/workers/vad.trigger.ts";
 import { up, down, to, status } from "@/lib/mongo/migrator.ts";
 
 
@@ -113,6 +114,7 @@ async function startServer(
     await startWorkers();
     await startChangeStreamWorker();
     await startAccessLogWorker();
+    await startVadTriggerWorker();
   }
 
   const app = express();
@@ -178,12 +180,13 @@ async function startServer(
   });
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
-    process.once(signal, async () => {
+      process.once(signal, async () => {
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await stopWorkers();
       await stopAccessLogWorker();
       await stopChangeStreamWorker();
+      await stopVadTriggerWorker();
       await shutdownTelemetry();
       cleanupLogging();
     });

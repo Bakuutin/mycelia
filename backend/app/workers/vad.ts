@@ -10,6 +10,7 @@ export const schema = z.object({
   originalId: z.string().optional(),
   limit: z.number().default(1000),
   batchSize: z.number().default(100),
+  trigger: z.enum(["manual", "auto_new_chunks", "auto_sequential"]).default("manual"),
 });
 
 const capability = createPythonJobCapability("vad", schema);

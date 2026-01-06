@@ -10,6 +10,7 @@ import { FsResource, getFsResource } from "@/lib/mongo/fs.server.ts";
 import { redis } from "@/lib/redis.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { GenericContainer } from "testcontainers";
+import { MongoDBContainer } from "@testcontainers/mongodb";
 import { MongoClient, UUID } from "mongodb";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
@@ -64,8 +65,7 @@ redis.options.port = redisContainer.getMappedPort(6379);
 await redis.connect();
 
 console.log("Starting mongo container");
-const mongoContainer = await new GenericContainer("mongo:8.0")
-  .withExposedPorts(27017)
+const mongoContainer = await new MongoDBContainer("mongo:8.0")
   .withReuse()
   .start();
 
@@ -138,9 +138,7 @@ defineFixture({
 defineFixture({
   token: "Mongo",
   factory: async () => {
-    const mongoUri = `mongodb://${mongoContainer.getHost()}:${
-      mongoContainer.getMappedPort(27017)
-    }`;
+    const mongoUri = mongoContainer.getConnectionString();
     const databaseName = new UUID().toString();
     Deno.env.set("MONGO_URL", mongoUri);
     Deno.env.set("DATABASE_NAME", databaseName);
@@ -149,6 +147,7 @@ defineFixture({
       mongoUri,
       {
         timeoutMS: 1000,
+        directConnection: true,
       },
     );
     await client.connect();

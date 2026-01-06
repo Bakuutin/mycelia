@@ -131,7 +131,7 @@ All jobs are enqueued via the `jobs` resource.
 
 | Type | Backend | Description | Example Body |
 |------|---------|-------------|--------------|
-| `vad` | Python | Voice Activity Detection | `{"action": "enqueue", "data": {"type": "vad", "limit": 1000}}` |
+| `vad` | Python | Voice Activity Detection (auto-triggered or manual) | `{"action": "enqueue", "data": {"type": "vad", "limit": 1000, "trigger": "manual"}}` |
 | `transcription` | Python | Speech-to-text | `{"action": "enqueue", "data": {"type": "transcription", "audioChunkIds": [...]}}` |
 | `diarization` | Python | Speaker identification | `{"action": "enqueue", "data": {"type": "diarization", "start": {"$date": "..."}, "end": {"$date": "..."}}}` |
 | `ingestion` | Python | Audio file processing | `{"action": "enqueue", "data": {"type": "ingestion", "sourceId": "..."}}` |
@@ -441,8 +441,34 @@ const result = await processJob(job);
 // Mock Python response
 ```
 
+## VAD Auto-Triggering
+
+The VAD job type has **automatic triggering** enabled. See [VAD_TRIGGERING.md](./VAD_TRIGGERING.md) for details.
+
+Key features:
+- **Auto-triggered on new chunks**: When audio chunks arrive, VAD jobs are automatically enqueued after a 5-second debounce
+- **Sequential processing**: When a VAD job completes, the system checks for remaining chunks and triggers the next job
+- **Duplicate prevention**: Only one VAD job can be waiting or active at a time
+- **Trigger tracking**: Each job tracks how it was triggered (`manual`, `auto_new_chunks`, `auto_sequential`)
+
+To manually enqueue a VAD job:
+```bash
+curl -X POST http://localhost:3000/api/resource/jobs \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "enqueue",
+    "data": {
+      "type": "vad",
+      "trigger": "manual",
+      "limit": 1000
+    }
+  }'
+```
+
 ## See Also
 
+- [VAD_TRIGGERING.md](./VAD_TRIGGERING.md) - VAD auto-triggering system
 - [WORKER_SERVER.md](../python/WORKER_SERVER.md) - Python FastAPI details
 - [BullMQ Docs](https://docs.bullmq.io/) - Queue documentation
 - [FastAPI Docs](https://fastapi.tiangolo.com/) - Python framework
