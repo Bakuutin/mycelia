@@ -1,0 +1,254 @@
+import { z } from "zod";
+import { ObjectId } from "mongodb";
+import type { JobCapability } from "@/lib/jobs/job-registry.ts";
+import { getServerAuth } from "@/lib/auth/core.server.ts";
+
+import { MAX_SEQUENCE_LENGTH, MAX_GAP_MS } from "@/lib/transcription-constants.ts";
+import { mongoCursor } from "@/lib/mongo/cursor.ts";
+
+export const schema = z.object({
+  type: z.literal("transcription_sequence_creator"),
+  chunkId: z.string().optional(),
+});
+
+
+interface SpeechSequence {
+  originalId: ObjectId;
+  chunks: any[]; // Chunks in reverse chronological order (as added)
+  isPartial: boolean; // True if sequence was split due to reaching MAX_LENGTH
+  isContinuation: boolean; // True if this is a continuation of a previous sequence
+}
+
+function getLastChunk(seq: SpeechSequence) {
+  return seq.chunks[seq.chunks.length - 1];
+}
+
+function getSequenceStart(seq: SpeechSequence): Date {
+  return new Date(getLastChunk(seq).start);
+}
+
+function getMinIndex(seq: SpeechSequence): number {
+  return getLastChunk(seq).index;
+}
+
+
+async function* getSpeechSequences(
+  mongo: any,
+  limit: number | null = null
+): AsyncIterableIterator<SpeechSequence> {
+  const sequencesById = new Map<string, SpeechSequence>();
+  let yielded = 0;
+
+  const cursor = mongoCursor(
+    mongo,
+    "audio_chunks",
+    {
+      "vad.has_speech": true,
+      transcribed_at: { $eq: null },
+      transcription_sequence_id: { $exists: false },
+    },
+    {
+      sort: { start: -1 }, // DESCENDING - newest first
+    },
+    200 // batch size
+  );
+
+  for await (const chunk of cursor) {
+    if (limit !== null && yielded >= limit) {
+      break;
+    }
+
+    if (!chunk || !chunk.vad?.has_speech) {
+      continue;
+    }
+
+    const originalId = chunk.original_id;
+    if (!originalId) {
+      continue;
+    }
+
+    const originalIdStr = originalId.toString();
+    const chunkStart = new Date(chunk.start);
+
+    // Check for stale sequences (time gap > MAX_GAP_MS from current processing position)
+    for (const [key, seq] of Array.from(sequencesById.entries())) {
+      const seqStart = getSequenceStart(seq);
+      const gapMs = seqStart.getTime() - chunkStart.getTime();
+
+      if (gapMs > MAX_GAP_MS) {
+        // Yield stale sequence unless it's a single-chunk continuation
+        if (!seq.isContinuation || seq.chunks.length > 1) {
+          yield seq;
+          yielded++;
+        }
+        sequencesById.delete(key);
+      }
+    }
+
+    const existingSeq = sequencesById.get(originalIdStr);
+
+    // Check index continuity
+    if (existingSeq) {
+      const minIndex = getMinIndex(existingSeq);
+      const expectedIndex = minIndex - 1; // Going backwards in time
+
+      if (chunk.index !== expectedIndex) {
+        // Index gap detected - yield the existing sequence and start fresh
+        yield existingSeq;
+        sequencesById.delete(originalIdStr);
+        yielded++;
+      }
+    }
+
+    // Get or create sequence for this original_id
+    let seq = sequencesById.get(originalIdStr);
+    if (!seq) {
+      seq = {
+        originalId: originalId,
+        chunks: [],
+        isPartial: false,
+        isContinuation: false,
+      };
+      sequencesById.set(originalIdStr, seq);
+    }
+
+    // Add chunk to sequence (appending as we go backwards in time)
+    seq.chunks.push(chunk);
+
+    // Check if sequence exceeded maximum length
+    if (seq.chunks.length > MAX_SEQUENCE_LENGTH) {
+      // We have 31 chunks. The 31st chunk is the 'chunk' we just added.
+      // The 30th chunk is the overlap chunk.
+      const newChunk = seq.chunks.pop()!;
+      const overlapChunk = seq.chunks[seq.chunks.length - 1];
+
+      seq.isPartial = true;
+      yield seq;
+      yielded++;
+
+      // Create continuation sequence with overlap chunk + the chunk we popped
+      const continuationSeq: SpeechSequence = {
+        originalId: originalId,
+        chunks: [overlapChunk, newChunk],
+        isPartial: false,
+        isContinuation: true,
+      };
+      sequencesById.set(originalIdStr, continuationSeq);
+    }
+  }
+
+  // Yield all remaining sequences
+  for (const seq of sequencesById.values()) {
+    yield seq;
+  }
+}
+
+/**
+ * Create database records for a sequence and update chunks.
+ *
+ * For partial sequences (isPartial=true):
+ * - Mark all chunks EXCEPT the overlap chunk (last added)
+ */
+async function persistSequence(
+  mongo: any,
+  seq: SpeechSequence
+): Promise<number> {
+  // Chunks are in reverse chronological order, reverse to get chronological
+  const chunksInOrder = [...seq.chunks].reverse();
+  const fromIndex = chunksInOrder[0].index;
+  const toIndex = chunksInOrder[chunksInOrder.length - 1].index;
+  const chunkCount = chunksInOrder.length;
+
+  const sequenceId = new ObjectId();
+
+  // Create sequence record
+  await mongo({
+    action: "insertOne",
+    collection: "transcription_sequences",
+    doc: {
+      _id: sequenceId,
+      original_id: seq.originalId,
+      fromIndex,
+      toIndex,
+      chunk_count: chunkCount,
+      start: chunksInOrder[0].start,
+      end: chunksInOrder[chunksInOrder.length - 1].start,
+      state: "ready",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      is_continuation: seq.isContinuation,
+    },
+  });
+
+  // Update chunks with sequence ID
+  // For partial sequences: exclude the overlap chunk (last added)
+  const chunksToUpdate = seq.isPartial
+    ? seq.chunks.slice(0, -1) // All but the last added (the overlap)
+    : seq.chunks;
+
+  if (chunksToUpdate.length > 0) {
+    await mongo({
+      action: "updateMany",
+      collection: "audio_chunks",
+      query: {
+        _id: { $in: chunksToUpdate.map(c => c._id) },
+      },
+      update: {
+        $set: { transcription_sequence_id: sequenceId },
+      },
+    });
+    return chunksToUpdate.length;
+  }
+
+  return 0;
+}
+
+const capability: JobCapability = {
+  name: "transcription_sequence_creator",
+  schema,
+  maxConcurrency: 1, // Only one creator at a time to avoid race conditions
+  use: async (job) => {
+    const { chunkId } = job.data as z.infer<typeof schema>;
+    const auth = await getServerAuth();
+    const mongo = await auth.getResource("mongo");
+
+    // Single chunk mode not supported - batch processing required for proper sequencing
+    if (chunkId) {
+      throw new Error(
+        "Single chunk processing not supported. Use batch mode (no chunkId) instead."
+      );
+    }
+
+    // Build and persist sequences using Option A algorithm
+    let processedCount = 0;
+    let sequencesCreated = 0;
+
+    for await (const seq of getSpeechSequences(mongo)) {
+      processedCount += await persistSequence(mongo, seq);
+      sequencesCreated++;
+
+      await job.updateProgress({
+        processed: processedCount,
+        sequencesCreated,
+      });
+    }
+
+    return { status: "success", processed: processedCount };
+  },
+  trigger: {
+    sources: [
+      {
+        channel: "mycelia:mongo:audio_chunks",
+        name: "new_speech_chunk",
+        filter: (payload: any) =>
+          payload.event === "mongo.change" &&
+          (payload.data.operationType === "insert" || payload.data.operationType === "update") &&
+          payload.data.document?.vad?.has_speech === true &&
+          payload.data.document?.transcription_sequence_id === undefined,
+      },
+    ],
+    debounceMs: 1000,
+  },
+};
+
+export default capability;
