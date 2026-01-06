@@ -60,6 +60,7 @@ const redisContainer = await new GenericContainer("redis")
   .withReuse()
   .start();
 
+redis.options.host = "localhost";
 redis.options.password = undefined;
 redis.options.port = redisContainer.getMappedPort(6379);
 await redis.connect();
