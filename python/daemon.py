@@ -14,9 +14,13 @@ from pydub import AudioSegment
 from datetime import timedelta
 
 from lib.resources import call_resource
-
+from lib.api import job_token_var, exchange_api_key_for_jwt
 
 import settings
+
+# Exchange API key for JWT and set it for daemon API calls
+jwt_token = exchange_api_key_for_jwt()
+job_token_var.set(jwt_token)
 
 #%%
 

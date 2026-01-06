@@ -4,11 +4,29 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from contextvars import ContextVar
 
-from .config import get_url
+from .config import get_url, client_id, client_secret
 
 # ContextVars to store per-request job state
 job_token_var: ContextVar[Optional[str]] = ContextVar("job_token", default=None)
 job_session_var: ContextVar[Optional[requests.Session]] = ContextVar("job_session", default=None)
+
+
+def exchange_api_key_for_jwt() -> str:
+    """Exchange the API key for a JWT access token using OAuth client_credentials flow."""
+    if not client_id or not client_secret:
+        raise RuntimeError("MYCELIA_CLIENT_ID and MYCELIA_TOKEN must be set in environment")
+
+    response = requests.post(
+        get_url("oauth", "token"),
+        data={
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["access_token"]
 
 
 def get_session() -> requests.Session:
