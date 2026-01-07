@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Key, Plus, Trash2, Copy, Check, Edit2, Save, X } from "lucide-react";
+import { Key, Plus, Copy, Check, Edit2, Save, X } from "lucide-react";
 import { ObjectId } from "bson";
 
 interface ApiKey {
@@ -282,113 +282,144 @@ const APIKeysPage = () => {
             </p>
           </Card>
         ) : (
-          <div className="grid gap-4">
+          <div className="space-y-2">
             {apiKeys.map((key) => (
-              <Card key={key._id.toString()} className="p-4">
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold">{key.name}</h3>
+              <Card key={key._id.toString()} className="p-3">
+                <details className="group" open={editingKeyId === key._id.toString()}>
+                  <summary className="list-none cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      {/* Name column - fixed width */}
+                      <div className="w-[160px] shrink-0 truncate">
+                        <h3 className="font-semibold text-sm truncate">{key.name}</h3>
+                      </div>
+
+                      {/* ID column - fixed width */}
+                      <div className="w-[120px] shrink-0 flex items-center gap-1 text-xs">
+                        <span className="text-muted-foreground">ID:</span>
+                        <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">
+                          {key._id.toString().slice(0, 8)}...
+                        </code>
+                      </div>
+
+                      {/* Secret column - fixed width */}
+                      <div className="w-[160px] shrink-0 flex items-center gap-1 text-xs">
+                        <span className="text-muted-foreground">Secret:</span>
+                        <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">
+                          {key.openPrefix}...
+                        </code>
+                      </div>
+
+                      {/* Owner column - fixed width */}
+                      <div className="w-[80px] shrink-0 flex items-center gap-1 text-xs">
+                        <span className="text-muted-foreground">Owner:</span>
+                        <span className="truncate">{key.owner}</span>
+                      </div>
+
+                      {/* Date column - fixed width */}
+                      <div className="w-[90px] shrink-0 text-xs text-muted-foreground">
+                        {new Date(key.createdAt).toLocaleDateString()}
+                      </div>
+
+                      {/* Spacer */}
+                      <div className="flex-1" />
+
+                      {/* Details toggle - fixed width */}
+                      <div className="w-[60px] shrink-0">
+                        <span className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                          <span className="group-open:hidden">▶</span>
+                          <span className="hidden group-open:inline">▼</span>
+                          Details
+                        </span>
+                      </div>
+
+                      {/* Action column - fixed width */}
+                      <div className="w-[70px] shrink-0 flex justify-end">
                         {key.isActive ? (
-                          <span className="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
-                            Active
-                          </span>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRevoke(key._id.toString(), key.owner);
+                            }}
+                            title="Revoke this API key"
+                          >
+                            Revoke
+                          </Button>
                         ) : (
-                          <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                          <span className="inline-flex items-center justify-center h-7 px-2 text-[11px] rounded-md bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
                             Revoked
                           </span>
                         )}
                       </div>
-                      <div className="text-sm space-y-2">
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground">Client ID</p>
-                          <p className="font-mono text-xs break-all">
-                            {key._id.toString()}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground">Client Secret (prefix)</p>
-                          <p className="font-mono text-xs">
-                            {key.openPrefix}...
-                          </p>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          <p>Owner: {key.owner}</p>
-                          <p>
-                            Created: {key.createdAt.toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
                     </div>
-                    {key.isActive && (
-                      <Button
-                        variant="destructive"
-                        size="icon"
-                        onClick={() => handleRevoke(key._id.toString(), key.owner)}
-                        title="Revoke API key"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
+                  </summary>
 
-                  <div className="space-y-2">
-                    <details open={editingKeyId === key._id.toString()}>
-                      <div className="flex items-center justify-between">
-                        <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
-                          {editingKeyId === key._id.toString() ? "Edit Policies" : "View Policies"}
-                        </summary>
-                        {key.isActive && editingKeyId !== key._id.toString() && (
+                  {/* Expandable policies section */}
+                  <div className="pt-2 mt-2 border-t">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-muted-foreground">Policies</span>
+                      {key.isActive && editingKeyId !== key._id.toString() && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleStartEdit(key);
+                          }}
+                          title="Edit policies"
+                        >
+                          <Edit2 className="w-3 h-3 mr-1" />
+                          Edit
+                        </Button>
+                      )}
+                    </div>
+                    {editingKeyId === key._id.toString() ? (
+                      <div className="space-y-2">
+                        <textarea
+                          value={editedPolicies}
+                          onChange={(e) => setEditedPolicies(e.target.value)}
+                          className="flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-2 py-1.5 text-xs shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          placeholder={defaultPolicyYaml}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleUpdate(key._id.toString(), key.owner);
+                            }}
+                            disabled={updating}
+                          >
+                            <Save className="w-3 h-3 mr-1" />
+                            {updating ? "Saving..." : "Save"}
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleStartEdit(key)}
-                            title="Edit policies"
+                            className="h-7 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancelEdit();
+                            }}
+                            disabled={updating}
                           >
-                            <Edit2 className="w-4 h-4" />
+                            <X className="w-3 h-3 mr-1" />
+                            Cancel
                           </Button>
-                        )}
-                      </div>
-                      {editingKeyId === key._id.toString() ? (
-                        <div className="mt-2 space-y-2">
-                          <textarea
-                            value={editedPolicies}
-                            onChange={(e) => setEditedPolicies(e.target.value)}
-                            className="flex min-h-[200px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                            placeholder={defaultPolicyYaml}
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Edit access policies in YAML format.
-                          </p>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              onClick={() => handleUpdate(key._id.toString(), key.owner)}
-                              disabled={updating}
-                            >
-                              <Save className="w-4 h-4 mr-2" />
-                              {updating ? "Saving..." : "Save"}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleCancelEdit}
-                              disabled={updating}
-                            >
-                              <X className="w-4 h-4 mr-2" />
-                              Cancel
-                            </Button>
-                          </div>
                         </div>
-                      ) : (
-                        <pre className="mt-2 p-3 bg-muted rounded-md text-xs font-mono overflow-x-auto">
-                          {key.policiesYaml}
-                        </pre>
-                      )}
-                    </details>
+                      </div>
+                    ) : (
+                      <pre className="p-2 bg-muted rounded text-[11px] font-mono overflow-x-auto">
+                        {key.policiesYaml}
+                      </pre>
+                    )}
                   </div>
-                </div>
+                </details>
               </Card>
             ))}
           </div>
