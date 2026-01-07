@@ -13,6 +13,7 @@ your own words.
 **Ready now**
 
 - ✅ Continuous audio ingestion from Apple Voice Memos, Google Drive, and local libraries.
+- ✅ Automated pipeline: Speech detection (VAD) and Transcription trigger automatically.
 - ✅ Smart chunking, diarization-friendly VAD, and waveform normalization for aligned segments.
 - ✅ Speech detection plus Whisper transcription via local or remote servers.
 - ✅ Timeline UI with transcript-synced playback, jump controls, and search overlays.
@@ -54,7 +55,8 @@ git clone https://github.com/mycelia-tech/mycelia.git
 cd mycelia
 
 cp .env.example .env
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Open [http://localhost:8080](http://localhost:8080) in your browser

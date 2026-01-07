@@ -18,8 +18,11 @@ The fastest way to get a development environment with hot reload:
 ```bash
 # Clone and setup
 echo "FRONTEND_MODE=dev" >> .env
-docker compose up -d --build
+docker compose build frontend
+docker compose up -d
 ```
+
+Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` dependencies, you might still need to run `docker compose build` again
 
 Ports can be customized via environment variables (in `.env` or inline):
 
