@@ -52,7 +52,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64,linux/arm64
-          cache-from: type=registry,ref=${{ env.DOCKERHUB_USERNAME }}/mycelia-${{ matrix.service }}:dev
-          cache-to: type=inline
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
