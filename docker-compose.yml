@@ -39,6 +39,7 @@ services:
       - mongo
 
   frontend:
+    image: bakuutin/mycelia-frontend:dev
     build:
       context: .
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
@@ -49,6 +50,7 @@ services:
       - ./interfaces:/app/interfaces
 
   backend:
+    image: bakuutin/mycelia-backend:dev
     build:
       context: .
       dockerfile: ./backend/Dockerfile
@@ -65,6 +67,7 @@ services:
       - ./backend:/app
 
   python-worker:
+    image: bakuutin/mycelia-python:dev
     build:
       context: .
       dockerfile: ./python/Dockerfile
