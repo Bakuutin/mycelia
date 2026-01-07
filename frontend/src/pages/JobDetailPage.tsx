@@ -312,6 +312,67 @@ export default function JobDetailPage() {
                     </Card>
                 )}
 
+                {job.progress && (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Progress</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            {job.progress.stage && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Stage</div>
+                                    <div className="font-medium capitalize">{job.progress.stage.replace(/_/g, " ")}</div>
+                                </div>
+                            )}
+                            {job.progress.sequence && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Sequence</div>
+                                    <div className="font-medium">
+                                        {job.progress.sequence.current} of {job.progress.sequence.total}
+                                    </div>
+                                </div>
+                            )}
+                            {typeof job.progress.processed === "number" && typeof job.progress.total === "number" && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Processed</div>
+                                    <div className="font-medium">
+                                        {job.progress.processed} / {job.progress.total} ({Math.round((job.progress.processed / job.progress.total) * 100)}%)
+                                    </div>
+                                </div>
+                            )}
+                            {job.progress.timeRange && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Time Range</div>
+                                    <div className="font-medium">
+                                        {format(new Date(job.progress.timeRange.start), "PPpp")}
+                                        <span className="text-muted-foreground mx-2">→</span>
+                                        {format(new Date(job.progress.timeRange.end), "PPpp")}
+                                    </div>
+                                </div>
+                            )}
+                            {job.progress.duration && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Audio Duration</div>
+                                    <div className="font-medium">
+                                        {Math.floor(job.progress.duration / 60)}m {Math.round(job.progress.duration % 60)}s
+                                    </div>
+                                </div>
+                            )}
+                            {job.progress.chunkCount && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Chunks</div>
+                                    <div className="font-medium">{job.progress.chunkCount}</div>
+                                </div>
+                            )}
+                            {job.progress.audioSize && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-1">Audio Size</div>
+                                    <div className="font-medium">{(job.progress.audioSize / 1024 / 1024).toFixed(1)} MB</div>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
 
             </div>
         </div>

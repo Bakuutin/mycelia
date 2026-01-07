@@ -199,6 +199,14 @@ export default function JobsPage() {
     return `${minutes}m ${seconds}s`;
   };
 
+  const formatETASeconds = (seconds: number): string => {
+    if (seconds < 60) return "< 1m";
+    if (seconds < 3600) return `~${Math.round(seconds / 60)}m`;
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.round((seconds % 3600) / 60);
+    return `~${hours}h ${mins}m`;
+  };
+
   const getProgressPercentage = (progress: any): number | null => {
     if (!progress || typeof progress !== "object") return null;
     if (typeof progress.progress === "number") return progress.progress;
@@ -209,6 +217,48 @@ export default function JobsPage() {
       return progress.total > 0 ? (progress.iteration / progress.total) * 100 : 0;
     }
     return null;
+  };
+
+  const calculateETA = (job: JobInfo): string | null => {
+    if (job.state !== "active") return null;
+    const progress = job.progress;
+    if (!progress?.processed || !progress?.total || !job.processedOn) return null;
+
+    const elapsed = (currentTime - job.processedOn) / 1000; // seconds
+    if (elapsed < 5) return "Calculating...";
+
+    const processed = progress.processed;
+    const total = progress.total;
+    const remaining = total - processed;
+
+    if (remaining <= 0) return null;
+
+    const rate = processed / elapsed; // items per second
+    if (rate <= 0) return null;
+
+    const etaSeconds = remaining / rate;
+    return formatETASeconds(etaSeconds);
+  };
+
+  const TRANSCRIPTION_STAGES = ["processing", "fetching_chunks", "combining_audio", "transcribing", "saving_result", "completed"] as const;
+  const STAGE_LABELS: Record<string, string> = {
+    processing: "Starting...",
+    fetching_chunks: "Fetching audio",
+    combining_audio: "Combining audio",
+    transcribing: "Transcribing",
+    saving_result: "Saving",
+    completed: "Done",
+    empty_result: "No speech detected",
+  };
+
+  const getStageProgress = (stage: string): { current: number; total: number; label: string } | null => {
+    const idx = TRANSCRIPTION_STAGES.indexOf(stage as any);
+    if (idx === -1) return null;
+    return {
+      current: idx + 1,
+      total: TRANSCRIPTION_STAGES.length,
+      label: STAGE_LABELS[stage] || stage,
+    };
   };
 
   const handleCancelAll = async () => {
@@ -424,28 +474,82 @@ export default function JobsPage() {
                     </TableCell>
                     <TableCell>
                       {job.progress ? (
-                        <div className="space-y-2">
+                        <div className="space-y-1">
                           {(() => {
                             const percentage = getProgressPercentage(job.progress);
+                            const eta = calculateETA(job);
+                            const hasProcessedTotal = typeof job.progress?.processed === "number" && typeof job.progress?.total === "number";
+                            const stageProgress = job.progress?.stage ? getStageProgress(job.progress.stage) : null;
+                            const timeRange = job.progress?.timeRange as { start: string; end: string } | undefined;
+                            const sequenceInfo = job.progress?.sequence as { current: number; total: number } | undefined;
+                            const otherFields = typeof job.progress === "object"
+                              ? Object.entries(job.progress).filter(([k]) =>
+                                  !["processed", "total", "stage", "sequenceId", "timeRange", "sequence"].includes(k)
+                                )
+                              : [];
+
                             return (
                               <>
-                                {percentage !== null && (
-                                  <Progress value={percentage} className="h-2" />
+                                {percentage !== null ? (
+                                  <div className="flex items-center gap-2">
+                                    <Progress value={percentage} className="h-2 flex-1" />
+                                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                      {Math.round(percentage)}%
+                                    </span>
+                                  </div>
+                                ) : stageProgress && (
+                                  <div className="flex items-center gap-2">
+                                    <Progress value={(stageProgress.current / stageProgress.total) * 100} className="h-2 flex-1" />
+                                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                      {stageProgress.current}/{stageProgress.total}
+                                    </span>
+                                  </div>
                                 )}
-                                <div className="text-xs space-y-1">
-                                  {typeof job.progress === "object" ? (
-                                    Object.entries(job.progress)
-                                      .slice(0, 3)
-                                      .map(([k, v]) => (
+                                {hasProcessedTotal && (
+                                  <div className="text-xs font-medium">
+                                    {job.progress.processed} / {job.progress.total}
+                                  </div>
+                                )}
+                                {stageProgress && (
+                                  <div className="text-xs font-medium">
+                                    {stageProgress.label}
+                                  </div>
+                                )}
+                                {sequenceInfo && (
+                                  <div className="text-xs text-muted-foreground">
+                                    Sequence {sequenceInfo.current} of {sequenceInfo.total}
+                                  </div>
+                                )}
+                                {timeRange && (
+                                  <div className="text-xs text-muted-foreground">
+                                    {format(new Date(timeRange.start), "HH:mm:ss")} - {format(new Date(timeRange.end), "HH:mm:ss")}
+                                  </div>
+                                )}
+                                {eta && (
+                                  <div className="text-xs text-muted-foreground">
+                                    ETA: {eta}
+                                  </div>
+                                )}
+                                {otherFields.length > 0 && (
+                                  <div className="text-xs text-muted-foreground space-y-0.5">
+                                    {otherFields.slice(0, 2).map(([k, v]) => {
+                                      let displayValue = String(v);
+                                      // Format duration/audioSize as readable values
+                                      if (k === "duration" && typeof v === "number") {
+                                        const mins = Math.floor(v / 60);
+                                        const secs = Math.round(v % 60);
+                                        displayValue = `${mins}m ${secs}s`;
+                                      } else if (k === "audioSize" && typeof v === "number") {
+                                        displayValue = `${(v / 1024 / 1024).toFixed(1)} MB`;
+                                      }
+                                      return (
                                         <div key={k}>
-                                          <span className="opacity-70">{k}:</span>{" "}
-                                          {String(v)}
+                                          <span className="opacity-70">{k}:</span> {displayValue}
                                         </div>
-                                      ))
-                                  ) : (
-                                    <span>{String(job.progress)}</span>
-                                  )}
-                                </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </>
                             );
                           })()}

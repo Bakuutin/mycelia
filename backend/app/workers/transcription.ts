@@ -22,12 +22,24 @@ const capability: JobCapability = {
     const mongo = await auth.getResource("mongo");
     const transcriptionResource = await getTranscriptionResource(auth);
 
-    const processSequence = async (sequence: any) => {
+    const processSequence = async (sequence: any, batchInfo?: { current: number; total: number }) => {
       if (!sequence || sequence.state !== "ready") {
         return { status: "skipped", reason: "Sequence not found or not ready" };
       }
 
-      await job.updateProgress({ stage: "processing", sequenceId: sequence._id.toString() });
+      const progressBase = {
+        sequenceId: sequence._id.toString(),
+        timeRange: {
+          start: sequence.start,
+          end: sequence.end,
+        },
+        ...(batchInfo && { sequence: batchInfo }),
+      };
+
+      await job.updateProgress({
+        ...progressBase,
+        stage: "processing",
+      });
 
       // 2. Mark sequence as processing
       await mongo({
@@ -38,7 +50,7 @@ const capability: JobCapability = {
       });
 
       try {
-        await job.updateProgress({ stage: "fetching_chunks", sequenceId: sequence._id.toString() });
+        await job.updateProgress({ ...progressBase, stage: "fetching_chunks" });
         // 3. Get all chunks for this sequence using the range
         const chunks = await mongo({
           action: "find",
@@ -54,11 +66,11 @@ const capability: JobCapability = {
           throw new Error("No chunks found for sequence range");
         }
 
-        await job.updateProgress({ stage: "combining_audio", chunkCount: chunks.length });
+        await job.updateProgress({ ...progressBase, stage: "combining_audio", chunkCount: chunks.length });
         // 4. Combine chunks into one audio file
         const combinedAudio = await combineChunks(chunks);
 
-        await job.updateProgress({ stage: "transcribing", audioSize: combinedAudio.length });
+        await job.updateProgress({ ...progressBase, stage: "transcribing", audioSize: combinedAudio.length });
         // 5. Call transcription API
         const transcript = await transcriptionResource({
           action: "transcribe",
@@ -72,7 +84,7 @@ const capability: JobCapability = {
         const filteredSegments = filterSegments(segments);
 
         if (filteredSegments.length === 0) {
-          await job.updateProgress({ stage: "empty_result" });
+          await job.updateProgress({ ...progressBase, stage: "empty_result" });
           // No speech detected after filtering
           await mongo({
             action: "updateOne",
@@ -85,7 +97,7 @@ const capability: JobCapability = {
         }
 
         const duration = filteredSegments[filteredSegments.length - 1].end;
-        await job.updateProgress({ stage: "saving_result", duration });
+        await job.updateProgress({ ...progressBase, stage: "saving_result", duration });
 
         // 7. Save transcription result
         const transcriptionDoc = {
@@ -131,7 +143,7 @@ const capability: JobCapability = {
           update: { $set: { state: "completed", updatedAt: new Date() } },
         });
 
-        await job.updateProgress({ stage: "completed" });
+        await job.updateProgress({ ...progressBase, stage: "completed" });
         return { status: "success", result: "transcribed" };
 
       } catch (error) {
@@ -168,8 +180,8 @@ const capability: JobCapability = {
       let processedCount = 0;
       const total = readySequences.length;
       for (const sequence of readySequences) {
-        await processSequence(sequence);
         processedCount++;
+        await processSequence(sequence, { current: processedCount, total });
         await job.updateProgress({ processed: processedCount, total });
       }
       return { status: "success", processed: processedCount };
