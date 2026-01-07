@@ -482,9 +482,11 @@ export default function JobsPage() {
                             const stageProgress = job.progress?.stage ? getStageProgress(job.progress.stage) : null;
                             const timeRange = job.progress?.timeRange as { start: string; end: string } | undefined;
                             const sequenceInfo = job.progress?.sequence as { current: number; total: number } | undefined;
+                            const chunkCount = job.progress?.chunkCount as number | undefined;
+                            const audioDuration = job.progress?.duration as number | undefined;
                             const otherFields = typeof job.progress === "object"
                               ? Object.entries(job.progress).filter(([k]) =>
-                                  !["processed", "total", "stage", "sequenceId", "timeRange", "sequence"].includes(k)
+                                  !["processed", "total", "stage", "sequenceId", "timeRange", "sequence", "chunkCount", "duration", "audioSize"].includes(k)
                                 )
                               : [];
 
@@ -505,24 +507,35 @@ export default function JobsPage() {
                                     </span>
                                   </div>
                                 )}
-                                {hasProcessedTotal && (
-                                  <div className="text-xs font-medium">
-                                    {job.progress.processed} / {job.progress.total}
-                                  </div>
-                                )}
-                                {stageProgress && (
-                                  <div className="text-xs font-medium">
-                                    {stageProgress.label}
-                                  </div>
-                                )}
                                 {sequenceInfo && (
-                                  <div className="text-xs text-muted-foreground">
-                                    Sequence {sequenceInfo.current} of {sequenceInfo.total}
+                                  <div className="text-xs font-medium">
+                                    Loop {sequenceInfo.current} of {sequenceInfo.total}
                                   </div>
                                 )}
                                 {timeRange && (
                                   <div className="text-xs text-muted-foreground">
-                                    {format(new Date(timeRange.start), "HH:mm:ss")} - {format(new Date(timeRange.end), "HH:mm:ss")}
+                                    <span className="opacity-70">Range:</span>{" "}
+                                    {format(new Date(timeRange.start), "MMM d HH:mm:ss")} → {format(new Date(timeRange.end), "HH:mm:ss")}
+                                  </div>
+                                )}
+                                {stageProgress && (
+                                  <div className="text-xs text-muted-foreground">
+                                    {stageProgress.label}
+                                  </div>
+                                )}
+                                {hasProcessedTotal && !sequenceInfo && (
+                                  <div className="text-xs font-medium">
+                                    {job.progress.processed} / {job.progress.total}
+                                  </div>
+                                )}
+                                {(chunkCount || audioDuration) && (
+                                  <div className="text-xs text-muted-foreground flex gap-2">
+                                    {chunkCount && <span>{chunkCount} chunks</span>}
+                                    {audioDuration && (
+                                      <span>
+                                        {Math.floor(audioDuration / 60)}m {Math.round(audioDuration % 60)}s audio
+                                      </span>
+                                    )}
                                   </div>
                                 )}
                                 {eta && (
