@@ -14,16 +14,18 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import type { JobInfo } from "@/types/jobs";
 
@@ -36,8 +38,10 @@ type VadJobFormData = {
 };
 
 export default function JobsPage() {
-  const [filterType, setFilterType] = useState<string>("all");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
+  const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set(ALL_STATUSES));
+  const [filterTypes, setFilterTypes] = useState<Set<string>>(new Set());
+  const [allTypesSelected, setAllTypesSelected] = useState(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
   const queryClient = useQueryClient();
@@ -54,26 +58,97 @@ export default function JobsPage() {
     },
   });
 
+  const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
+
   const filteredJobs = useMemo(() => {
     let result = jobs;
-    if (filterType !== "all") {
-      result = result.filter(j => j.type === filterType);
+    if (!allTypesSelected) {
+      if (filterTypes.size === 0) {
+        result = [];
+      } else {
+        result = result.filter(j => filterTypes.has(j.type));
+      }
     }
-    if (filterStatus !== "all") {
-      result = result.filter(j => j.state === filterStatus);
+    if (filterStatuses.size > 0 && filterStatuses.size < ALL_STATUSES.length) {
+      result = result.filter(j => filterStatuses.has(j.state));
+    } else if (filterStatuses.size === 0) {
+      result = [];
     }
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      result = result.filter(j => 
-        j.id.toLowerCase().includes(query) || 
+      result = result.filter(j =>
+        j.id.toLowerCase().includes(query) ||
         j.type.toLowerCase().includes(query)
       );
     }
     return result.slice(0, limit);
-  }, [jobs, filterType, filterStatus, searchQuery, limit]);
+  }, [jobs, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+  };
+
+  const toggleStatus = (status: string) => {
+    setFilterStatuses(prev => {
+      const next = new Set(prev);
+      if (next.has(status)) {
+        next.delete(status);
+      } else {
+        next.add(status);
+      }
+      return next;
+    });
+  };
+
+  const selectAllStatuses = () => setFilterStatuses(new Set(ALL_STATUSES));
+  const selectNoStatuses = () => setFilterStatuses(new Set());
+
+  const toggleType = (type: string) => {
+    if (allTypesSelected) {
+      // Deselect this one type, keep all others
+      setAllTypesSelected(false);
+      const allExceptThis = new Set(allTypes.filter(t => t !== type));
+      setFilterTypes(allExceptThis);
+    } else {
+      setFilterTypes(prev => {
+        const next = new Set(prev);
+        if (next.has(type)) {
+          next.delete(type);
+        } else {
+          next.add(type);
+        }
+        // If all are now selected, switch back to allTypesSelected mode
+        if (next.size === allTypes.length) {
+          setAllTypesSelected(true);
+          return new Set();
+        }
+        return next;
+      });
+    }
+  };
+
+  const selectAllTypes = () => {
+    setAllTypesSelected(true);
+    setFilterTypes(new Set());
+  };
+
+  const selectNoTypes = () => {
+    setAllTypesSelected(false);
+    setFilterTypes(new Set());
+  };
+
+  const getTypesLabel = () => {
+    if (allTypesSelected) return "All Types";
+    if (filterTypes.size === 0) return "No Types";
+    if (filterTypes.size === 1) return Array.from(filterTypes)[0];
+    return `${filterTypes.size} types`;
+  };
+
+  const getStatusesLabel = () => {
+    if (filterStatuses.size === ALL_STATUSES.length) return "All Statuses";
+    if (filterStatuses.size === 0) return "No Statuses";
+    if (filterStatuses.size === 1) return Array.from(filterStatuses)[0];
+    return `${filterStatuses.size} statuses`;
   };
 
   const createTestJobMutation = useMutation({
@@ -215,41 +290,64 @@ export default function JobsPage() {
             />
           </div>
 
-          <div className="w-[200px]">
-            <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger>
-                <SelectValue placeholder="Job Type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {isLoadingSchemas ? (
-                  <SelectItem value="loading" disabled>Loading...</SelectItem>
-                ) : (
-                  Object.keys(schemas || {}).map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="w-[200px] justify-between">
+                {getTypesLabel()}
+                <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-[200px]">
+              <DropdownMenuItem onClick={selectAllTypes}>
+                Select All
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={selectNoTypes}>
+                Select None
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {isLoadingSchemas ? (
+                <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
+              ) : (
+                allTypes.map((type) => (
+                  <DropdownMenuCheckboxItem
+                    key={type}
+                    checked={allTypesSelected || filterTypes.has(type)}
+                    onCheckedChange={() => toggleType(type)}
+                  >
+                    {type}
+                  </DropdownMenuCheckboxItem>
+                ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-          <div className="w-[200px]">
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger>
-                <SelectValue placeholder="Job Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="waiting">Waiting</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="delayed">Delayed</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="w-[200px] justify-between capitalize">
+                {getStatusesLabel()}
+                <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-[200px]">
+              <DropdownMenuItem onClick={selectAllStatuses}>
+                Select All
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={selectNoStatuses}>
+                Select None
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {ALL_STATUSES.map((status) => (
+                <DropdownMenuCheckboxItem
+                  key={status}
+                  checked={filterStatuses.has(status)}
+                  onCheckedChange={() => toggleStatus(status)}
+                  className="capitalize"
+                >
+                  {status}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <div className="w-[120px]">
             <Select value={limit.toString()} onValueChange={(v) => setLimit(parseInt(v))}>
