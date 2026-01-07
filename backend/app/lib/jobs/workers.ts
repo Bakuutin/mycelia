@@ -1,6 +1,6 @@
 import type { Worker } from "bullmq";
 import { ObjectId } from "mongodb";
-import { createWorker } from "./queue.ts";
+import { createWorker, getQueueEvents } from "./queue.ts";
 import { processJob } from "./processor.ts";
 import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
@@ -21,16 +21,19 @@ export async function startWorkers() {
   for (const jobType of jobTypes) {
     const worker = createWorker(jobType, processJob);
 
-    worker.on("active", async (job) => {
-      console.log(`[${jobType}] Job ${job.id} started`);
-      
+    // Global events listener to ensure MongoDB is in sync with BullMQ
+    // This catches events even from other worker instances (like Python workers)
+    const events = getQueueEvents(jobType);
+
+    events.on("active", async ({ jobId, prev }) => {
+      console.log(`[${jobType}] Job ${jobId} is now active (prev: ${prev})`);
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const startedAt = new Date();
       await mongo({
         action: "updateOne",
         collection: "jobs",
-        query: { _id: new ObjectId(job.id) },
+        query: { _id: new ObjectId(jobId) },
         update: { 
           $set: { 
             state: "active", 
@@ -41,68 +44,74 @@ export async function startWorkers() {
         },
       });
 
-      await publishJobUpdate(job.id!, jobType, "job.started", {
+      await publishJobUpdate(jobId, jobType, "job.active", {
         state: "active",
         processedOn: startedAt.getTime(),
-        progress: job.progress,
       });
     });
 
-    worker.on("completed", async (job) => {
-      console.log(`[${jobType}] Job ${job.id} completed`);
-
+    events.on("completed", async ({ jobId, returnvalue }) => {
+      console.log(`[${jobType}] Job ${jobId} completed globally`);
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const finishedAt = new Date();
       await mongo({
         action: "updateOne",
         collection: "jobs",
-        query: { _id: new ObjectId(job.id) },
+        query: { _id: new ObjectId(jobId) },
         update: { 
           $set: { 
             state: "completed", 
             finishedAt,
-            result: job.returnvalue,
+            result: returnvalue,
             updatedAt: new Date() 
           } 
         },
       });
 
-      await publishJobUpdate(job.id!, jobType, "job.completed", {
+      await publishJobUpdate(jobId, jobType, "job.completed", {
         state: "completed",
         finishedOn: finishedAt.getTime(),
-        processedOn: job.processedOn,
-        result: job.returnvalue,
+        result: returnvalue,
       });
     });
 
-    worker.on("failed", async (job, err) => {
-      console.error(`[${jobType}] Job ${job?.id} failed:`, err.message);
-      if (job?.id) {
-        const auth = await getServerAuth();
-        const mongo = await getMongoResource(auth);
-        const finishedAt = new Date();
-        await mongo({
-          action: "updateOne",
-          collection: "jobs",
-          query: { _id: new ObjectId(job.id) },
-          update: { 
-            $set: { 
-              state: "failed", 
-              finishedAt,
-              failedReason: err.message,
-              updatedAt: new Date() 
-            } 
-          },
-        });
+    events.on("failed", async ({ jobId, failedReason }) => {
+      console.error(`[${jobType}] Job ${jobId} failed globally:`, failedReason);
+      const auth = await getServerAuth();
+      const mongo = await getMongoResource(auth);
+      const finishedAt = new Date();
+      await mongo({
+        action: "updateOne",
+        collection: "jobs",
+        query: { _id: new ObjectId(jobId) },
+        update: { 
+          $set: { 
+            state: "failed", 
+            finishedAt,
+            failedReason: failedReason,
+            updatedAt: new Date() 
+          } 
+        },
+      });
 
-        await publishJobUpdate(job.id, jobType, "job.failed", {
-          state: "failed",
-          finishedOn: finishedAt.getTime(),
-          processedOn: job.processedOn,
-          failedReason: err.message,
-        });
-      }
+      await publishJobUpdate(jobId, jobType, "job.failed", {
+        state: "failed",
+        finishedOn: finishedAt.getTime(),
+        failedReason: failedReason,
+      });
+    });
+
+    worker.on("active", (job) => {
+      console.log(`[${jobType}] Local worker started job ${job.id}`);
+    });
+
+    worker.on("completed", (job) => {
+      console.log(`[${jobType}] Local worker completed job ${job.id}`);
+    });
+
+    worker.on("failed", (job, err) => {
+      console.error(`[${jobType}] Local worker failed job ${job?.id}:`, err.message);
     });
 
     worker.on("progress", async (job, progress) => {

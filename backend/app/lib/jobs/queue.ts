@@ -1,4 +1,4 @@
-import { Job, Queue, Worker } from "bullmq";
+import { Job, Queue, QueueEvents, Worker } from "bullmq";
 import { ObjectId } from "mongodb";
 import { redis } from "@/lib/redis.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
@@ -8,6 +8,7 @@ export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
 
 const queues = new Map<string, Queue<JobData>>();
+const queueEvents = new Map<string, QueueEvents>();
 
 function getQueueName(type: string): string {
   return `jobs-${type}`;
@@ -37,6 +38,17 @@ export function getQueue(type: string): Queue<JobData> {
     queues.set(type, queue);
   }
   return queue;
+}
+
+export function getQueueEvents(type: string): QueueEvents {
+  let events = queueEvents.get(type);
+  if (!events) {
+    events = new QueueEvents(getQueueName(type), {
+      connection: redis,
+    });
+    queueEvents.set(type, events);
+  }
+  return events;
 }
 
 export async function enqueueJob(
