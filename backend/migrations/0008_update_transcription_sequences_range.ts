@@ -59,3 +59,4 @@ export async function down(db: Db, _client: MongoClient): Promise<void> {
   await db.collection("transcription_sequences").dropIndex("original_id_range");
 }
 
+

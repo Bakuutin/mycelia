@@ -155,9 +155,20 @@ async function persistSequence(
 ): Promise<number> {
   // Chunks are in reverse chronological order, reverse to get chronological
   const chunksInOrder = [...seq.chunks].reverse();
-  const fromIndex = chunksInOrder[0].index;
+  let fromIndex = chunksInOrder[0].index;
   const toIndex = chunksInOrder[chunksInOrder.length - 1].index;
-  const chunkCount = chunksInOrder.length;
+  let chunkCount = chunksInOrder.length;
+  let start = chunksInOrder[0].start;
+
+  // SPECIAL CASE: Single chunk sequence with index > 0
+  // Include previous chunk as context/neighbor
+  const isSingleChunkWithNeighbor = chunkCount === 1 && fromIndex > 0;
+  if (isSingleChunkWithNeighbor) {
+    fromIndex--;
+    chunkCount++;
+    // Estimate start time for N-1 (10s chunk duration)
+    start = new Date(new Date(start).getTime() - 10000);
+  }
 
   const sequenceId = new ObjectId();
 
@@ -171,7 +182,7 @@ async function persistSequence(
       fromIndex,
       toIndex,
       chunk_count: chunkCount,
-      start: chunksInOrder[0].start,
+      start,
       end: chunksInOrder[chunksInOrder.length - 1].start,
       state: "ready",
       createdAt: new Date(),
@@ -187,17 +198,31 @@ async function persistSequence(
     : seq.chunks;
 
   if (chunksToUpdate.length > 0) {
+    const idsToUpdate = chunksToUpdate.map(c => c._id);
+    const query: any = isSingleChunkWithNeighbor
+      ? {
+          $or: [
+            { _id: { $in: idsToUpdate } },
+            {
+              original_id: seq.originalId,
+              index: fromIndex,
+              transcription_sequence_id: { $exists: false },
+            },
+          ],
+        }
+      : {
+          _id: { $in: idsToUpdate },
+        };
+
     await mongo({
       action: "updateMany",
       collection: "audio_chunks",
-      query: {
-        _id: { $in: chunksToUpdate.map(c => c._id) },
-      },
+      query,
       update: {
         $set: { transcription_sequence_id: sequenceId },
       },
     });
-    return chunksToUpdate.length;
+    return isSingleChunkWithNeighbor ? chunksToUpdate.length + 1 : chunksToUpdate.length;
   }
 
   return 0;
