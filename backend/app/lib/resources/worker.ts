@@ -37,6 +37,11 @@ const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
 });
 
+const CancelJobSchema = z.object({
+  action: z.literal("cancel"),
+  id: z.string(),
+});
+
 const GetJobSchema = z.object({
   action: z.literal("get"),
   id: z.string(),
@@ -60,6 +65,7 @@ const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
   CancelAllJobsSchema,
+  CancelJobSchema,
   GetJobSchema,
   EnqueueJobSchema,
   SchemasSchema,
@@ -83,6 +89,8 @@ export class JobsResource
         return this.get(input, auth);
       case "enqueue":
         return this.enqueue(input, auth);
+      case "cancel":
+        return this.cancel(input, auth);
       case "cancel_all":
         return this.cancelAll(input, auth);
       case "list":
@@ -141,6 +149,59 @@ export class JobsResource
       success: true,
       jobId: job.id,
     };
+  }
+
+  private async cancel(input: z.infer<typeof CancelJobSchema>, auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const { id } = input;
+
+    const jobDocs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(id) },
+      options: { limit: 1 },
+    });
+
+    const jobDoc = jobDocs[0];
+    if (!jobDoc) {
+      throw new Error(`Job ${id} not found`);
+    }
+
+    const jobType = jobDoc.type as string;
+    const queue = getQueue(jobType);
+    const job = await queue.getJob(id);
+
+    if (job) {
+      try {
+        await job.remove();
+      } catch (err) {
+        console.log(
+          `[jobs] Could not remove BullMQ job ${id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: new ObjectId(id) },
+      update: {
+        $set: {
+          state: "cancelled",
+          finishedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
+    });
+
+    await publishJobUpdate(id, jobType, "job.state", {
+      state: "cancelled",
+      finishedOn: Date.now(),
+    });
+
+    return { success: true };
   }
 
   private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>, auth: Auth) {
@@ -290,13 +351,15 @@ export class JobsResource
       case "list":
         return [{ path: ["jobs"], actions: ["read"] }];
       case "schemas":
-        return [{ path: ["jobs"], actions: ["read"] }];
+        return [{ path: ["jobs", "schemas"], actions: ["read"] }];
       case "cancel_all":
-        return [{ path: ["jobs"], actions: ["write"] }];
+        return [{ path: ["jobs"], actions: ["cancel"] }];
+      case "cancel":
+        return [{ path: ["jobs"], actions: ["cancel"] }];
       case "enqueue":
         return [{ path: ["jobs"], actions: ["write"] }];
       case "progressUpdate":
-        return [{ path: [], actions: ["write"] }];
+        return [{ path: ["jobs"], actions: ["write"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }

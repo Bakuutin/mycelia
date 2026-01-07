@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Ban } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo } from "@/types/jobs";
 
@@ -85,6 +85,7 @@ function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
 export default function JobDetailPage() {
     const { id } = useParams<{ id: string }>();
     const { getJobById, isLoading: isListenerLoading } = useJobsListener();
+    const queryClient = useQueryClient();
     
     const cachedJob = id ? getJobById(id) : null;
 
@@ -103,6 +104,25 @@ export default function JobDetailPage() {
         enabled: !!id && !cachedJob,
     });
 
+    const cancelJobMutation = useMutation({
+        mutationFn: async () => {
+            if (!id) return;
+            return await api.callResource("jobs", {
+                action: "cancel",
+                id: id,
+            });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["job", id] });
+            queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+        },
+    });
+
+    const handleCancel = async () => {
+        if (!confirm("Are you sure you want to cancel this job?")) return;
+        cancelJobMutation.mutate();
+    };
+
     const job = cachedJob || fetchedJob;
     const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
@@ -116,6 +136,8 @@ export default function JobDetailPage() {
                 return "bg-blue-500/10 text-blue-500";
             case "waiting":
                 return "bg-yellow-500/10 text-yellow-500";
+            case "cancelled":
+                return "bg-slate-500/10 text-slate-500";
             default:
                 return "bg-gray-500/10 text-gray-500";
         }
@@ -172,6 +194,17 @@ export default function JobDetailPage() {
                         </p>
                     </div>
                 </div>
+                {["active", "waiting", "delayed"].includes(job.state) && (
+                    <Button 
+                        variant="destructive" 
+                        size="sm"
+                        onClick={handleCancel}
+                        disabled={cancelJobMutation.isPending}
+                    >
+                        <Ban className="h-4 w-4 mr-2" />
+                        Cancel Job
+                    </Button>
+                )}
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
