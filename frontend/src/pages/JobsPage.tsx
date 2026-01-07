@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
@@ -21,8 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import type { JobInfo } from "@/types/jobs";
 
@@ -36,18 +37,40 @@ type VadJobFormData = {
 
 export default function JobsPage() {
   const [filterType, setFilterType] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
   const queryClient = useQueryClient();
 
   const { jobs, isLoading } = useJobsListener();
+
+  const { data: schemas, isLoading: isLoadingSchemas } = useQuery({
+    queryKey: ["job-schemas"],
+    queryFn: async () => {
+      const response = await api.callResource("jobs", {
+        action: "schemas",
+      });
+      return response as Record<string, any>;
+    },
+  });
 
   const filteredJobs = useMemo(() => {
     let result = jobs;
     if (filterType !== "all") {
       result = result.filter(j => j.type === filterType);
     }
+    if (filterStatus !== "all") {
+      result = result.filter(j => j.state === filterStatus);
+    }
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(j => 
+        j.id.toLowerCase().includes(query) || 
+        j.type.toLowerCase().includes(query)
+      );
+    }
     return result.slice(0, limit);
-  }, [jobs, filterType, limit]);
+  }, [jobs, filterType, filterStatus, searchQuery, limit]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
@@ -180,10 +203,18 @@ export default function JobsPage() {
 
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Filters</CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-center gap-4">
+        <CardContent className="flex flex-wrap items-center gap-4 mt-6">
+          <div className="relative w-full sm:w-[300px]">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder="Search by ID or type..."
+              className="pl-8"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+
           <div className="w-[200px]">
             <Select value={filterType} onValueChange={setFilterType}>
               <SelectTrigger>
@@ -191,21 +222,36 @@ export default function JobsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="vad">VAD</SelectItem>
-                <SelectItem value="transcription">Transcription</SelectItem>
-                <SelectItem value="diarization">Diarization</SelectItem>
-                <SelectItem value="ingestion">Ingestion</SelectItem>
-                <SelectItem value="histRecalculation">
-                  Pipeline Recalculation
-                </SelectItem>
-                <SelectItem value="testPythonIntegration">
-                  Test Python Integration
-                </SelectItem>
+                {isLoadingSchemas ? (
+                  <SelectItem value="loading" disabled>Loading...</SelectItem>
+                ) : (
+                  Object.keys(schemas || {}).map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {type}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
 
-          <div className="w-[100px]">
+          <div className="w-[200px]">
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger>
+                <SelectValue placeholder="Job Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="waiting">Waiting</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="failed">Failed</SelectItem>
+                <SelectItem value="delayed">Delayed</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-[120px]">
             <Select value={limit.toString()} onValueChange={(v) => setLimit(parseInt(v))}>
               <SelectTrigger>
                 <SelectValue placeholder="Limit" />

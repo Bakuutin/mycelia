@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 
 // In Docker build, interfaces is copied to ./interfaces
 // In local dev, interfaces is at ../interfaces
-const interfacesPath = existsSync("./interfaces") ? "./interfaces/" : "../interfaces/";
+const interfacesPath = existsSync("../interfaces") ? "../interfaces/" : "./interfaces/";
 
 export default defineConfig({
   plugins: [deno(), react()],
