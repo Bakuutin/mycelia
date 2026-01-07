@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Save } from "lucide-react";
+import { Save, Zap, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -22,6 +22,8 @@ const InferenceSettingsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const form = useForm<InferenceConfig>({
     resolver: zodResolver(inferenceConfigSchema),
@@ -80,6 +82,62 @@ const InferenceSettingsPage = () => {
       setError(err instanceof Error ? err.message : "Failed to save provider configuration");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const testApiConnection = async () => {
+    const values = form.getValues();
+
+    if (!values.baseUrl || !values.apiKey) {
+      setTestResult({ success: false, message: "Please enter both Base URL and API Key" });
+      return;
+    }
+
+    setTesting(true);
+    setTestResult(null);
+
+    try {
+      // Test the API by calling the /v1/models endpoint
+      const response = await fetch(
+        values.baseUrl.replace(/\/$/, "") + "/v1/models",
+        {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${values.apiKey}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const modelCount = data.data?.length || 0;
+        setTestResult({
+          success: true,
+          message: `Connection successful! Found ${modelCount} model${modelCount !== 1 ? 's' : ''}.`
+        });
+      } else {
+        const errorText = await response.text();
+        let errorMessage = `API returned ${response.status}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error?.message) {
+            errorMessage = errorJson.error.message;
+          }
+        } catch {
+          if (errorText) {
+            errorMessage = errorText.substring(0, 100);
+          }
+        }
+        setTestResult({ success: false, message: errorMessage });
+      }
+    } catch (err) {
+      setTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : "Failed to connect to API"
+      });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -165,8 +223,41 @@ const InferenceSettingsPage = () => {
             </div>
           </div>
 
-          <div className="flex justify-end">
-            <Button type="submit" disabled={saving}>
+          {testResult && (
+            <div className={`p-4 rounded-md flex items-center gap-2 ${
+              testResult.success
+                ? "bg-green-50 border border-green-200 text-green-700"
+                : "bg-red-50 border border-red-200 text-red-700"
+            }`}>
+              {testResult.success ? (
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              ) : (
+                <XCircle className="w-5 h-5 text-red-600" />
+              )}
+              <span>{testResult.message}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={testApiConnection}
+              disabled={testing || saving}
+            >
+              {testing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 mr-2" />
+                  Test API
+                </>
+              )}
+            </Button>
+            <Button type="submit" disabled={saving || testing}>
               {saving
                 ? (
                   "Saving..."
