@@ -1,49 +1,5 @@
 import { Db, MongoClient } from "mongodb";
-
-async function ensureCollectionExists(
-  db: Db,
-  collectionName: string,
-): Promise<void> {
-  const collections = await db.listCollections({ name: collectionName })
-    .toArray();
-
-  if (collections.length === 0) {
-    await db.createCollection(collectionName);
-    console.log(`Created collection: ${collectionName}`);
-  }
-}
-
-async function ensureIndexExists(
-  db: Db,
-  collectionName: string,
-  indexSpec: any,
-  options: any = {},
-): Promise<void> {
-  const collection = db.collection(collectionName);
-  const indexName: string = options.name as string;
-
-  const exists = await collection.indexExists(indexName);
-
-  if (exists) {
-    return;
-  }
-
-  try {
-    await collection.createIndex(indexSpec, options);
-    console.log(
-      `Created index on ${collectionName}: ${
-        indexName || JSON.stringify(indexSpec)
-      }`,
-    );
-  } catch (error) {
-    if (
-      error instanceof Error && error.message.includes("Index already exists")
-    ) {
-      return;
-    }
-    throw error;
-  }
-}
+import { ensureCollectionExists, ensureIndexExists } from "@/utils/migrations.ts";
 
 export async function up(db: Db, _client: MongoClient): Promise<void> {
   console.log("Running migration 0007: Adding transcription_sequences collection and indexes...");
@@ -77,6 +33,3 @@ export async function down(db: Db, _client: MongoClient): Promise<void> {
   console.log("Rolling back migration 0007: Removing transcription_sequences collection...");
   await db.dropCollection("transcription_sequences");
 }
-
-
-

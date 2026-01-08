@@ -162,7 +162,7 @@ const capability: JobCapability = {
         action: "find",
         collection: "transcription_sequences",
         query: { state: "ready" },
-        options: { sort: { start: 1 }, limit: 10 },
+        options: { sort: { start: 1 }, limit: 1 },
       }) as any[];
 
       let processedCount = 0;

@@ -1,8 +1,13 @@
 import { Db, ObjectId } from "mongodb";
-import type { CreateIndexesOptions, IndexSpecification, MongoClient } from "mongodb";
+import type { MongoClient } from "mongodb";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import * as path from "@std/path";
+import { 
+  ensureCollectionExists, 
+  ensureGridFSBucketExists, 
+  ensureIndexExists 
+} from "@/utils/migrations.ts";
 
 export const REGULAR_COLLECTIONS = [
   "api_keys",
@@ -37,65 +42,6 @@ export function getAllExpectedCollections(): string[] {
 
 export function getAllExpectedGridFSBuckets(): string[] {
   return [...GRIDFS_BUCKETS];
-}
-
-async function ensureCollectionExists(
-  db: Db,
-  collectionName: string,
-): Promise<void> {
-  const collections = await db.listCollections({ name: collectionName })
-    .toArray();
-
-  if (collections.length === 0) {
-    await db.createCollection(collectionName);
-    console.log(`Created collection: ${collectionName}`);
-  }
-}
-
-async function ensureGridFSBucketExists(
-  db: Db,
-  bucketName: string,
-): Promise<void> {
-  const filesCollectionName = `${bucketName}.files`;
-  const chunksCollectionName = `${bucketName}.chunks`;
-
-  await ensureCollectionExists(db, filesCollectionName);
-  await ensureCollectionExists(db, chunksCollectionName);
-}
-
-async function ensureIndexExists(
-  db: Db,
-  collectionName: string,
-  indexSpec: IndexSpecification,
-  options: CreateIndexesOptions = {},
-): Promise<void> {
-  await ensureCollectionExists(db, collectionName);
-
-  const collection = db.collection(collectionName);
-  const indexName: string = options.name as string;
-
-  const exists = await collection.indexExists(indexName);
-
-  if (exists) {
-    return;
-  }
-
-  try {
-    await collection.createIndex(indexSpec, options);
-    console.log(
-      `Created index on ${collectionName}: ${
-        indexName || JSON.stringify(indexSpec)
-      }`,
-    );
-  } catch (error) {
-    // Silently ignore if index already exists with a different name
-    if (
-      error instanceof Error && error.message.includes("Index already exists")
-    ) {
-      return;
-    }
-    throw error;
-  }
 }
 
 async function ensureAudioChunksIndexes(db: Db): Promise<void> {

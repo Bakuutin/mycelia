@@ -1,37 +1,5 @@
 import type { Db } from "mongodb";
-import type { CreateIndexesOptions, IndexSpecification } from "mongodb";
-
-async function ensureIndexExists(
-  db: Db,
-  collectionName: string,
-  indexSpec: IndexSpecification,
-  options: CreateIndexesOptions = {},
-): Promise<void> {
-  const collection = db.collection(collectionName);
-  const indexName: string = options.name as string;
-
-  const exists = await collection.indexExists(indexName);
-
-  if (exists) {
-    return;
-  }
-
-  try {
-    await collection.createIndex(indexSpec, options);
-    console.log(
-      `Created index on ${collectionName}: ${
-        indexName || JSON.stringify(indexSpec)
-      }`,
-    );
-  } catch (error) {
-    if (
-      error instanceof Error && error.message.includes("Index already exists")
-    ) {
-      return;
-    }
-    throw error;
-  }
-}
+import { ensureIndexExists } from "@/utils/migrations.ts";
 
 export const up = async (db: Db) => {
   console.log("Creating VAD pending work index on audio_chunks...");
@@ -61,4 +29,3 @@ export const down = async (db: Db) => {
     await collection.dropIndex("audio_chunks_vad_pending_work");
   }
 };
-

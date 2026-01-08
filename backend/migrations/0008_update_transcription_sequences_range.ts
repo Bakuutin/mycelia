@@ -1,36 +1,5 @@
 import { Db, MongoClient } from "mongodb";
-
-async function ensureIndexExists(
-  db: Db,
-  collectionName: string,
-  indexSpec: any,
-  options: any = {},
-): Promise<void> {
-  const collection = db.collection(collectionName);
-  const indexName: string = options.name as string;
-
-  const exists = await collection.indexExists(indexName);
-
-  if (exists) {
-    return;
-  }
-
-  try {
-    await collection.createIndex(indexSpec, options);
-    console.log(
-      `Created index on ${collectionName}: ${
-        indexName || JSON.stringify(indexSpec)
-      }`,
-    );
-  } catch (error) {
-    if (
-      error instanceof Error && error.message.includes("Index already exists")
-    ) {
-      return;
-    }
-    throw error;
-  }
-}
+import { ensureIndexExists } from "@/utils/migrations.ts";
 
 export async function up(db: Db, _client: MongoClient): Promise<void> {
   console.log("Running migration 0008: Updating transcription_sequences to use range indices...");
@@ -58,6 +27,3 @@ export async function down(db: Db, _client: MongoClient): Promise<void> {
   console.log("Rolling back migration 0008: Removing range index...");
   await db.collection("transcription_sequences").dropIndex("original_id_range");
 }
-
-
-
