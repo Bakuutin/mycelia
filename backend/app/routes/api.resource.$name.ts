@@ -49,7 +49,7 @@ export async function apiResourceHandler(req: Request, res: ExpressResponse) {
         return;
       }
 
-      const run = await defaultResourceManager.getResource(toolName, auth);
+      const run = defaultResourceManager.getResource(toolName, auth);
 
       // Express already parses JSON, so body is already an object
       // EJSON.deserialize handles BSON-extended JSON ($oid, $date, etc.) but is a no-op for regular JSON

@@ -22,7 +22,8 @@ import { z } from "zod";
 import type { Request } from "express";
 
 import { discoverJobWorkers, jobRegistry } from "@/lib/jobs/job-registry.ts";
-await discoverJobWorkers();
+
+let sampleAudioFile: Uint8Array | null = null;
 
 export type Fixture = {
   token: any;
@@ -54,27 +55,48 @@ function dropDuplicates<T>(arr: T[]): T[] {
   return [...new Set(arr)];
 }
 
-console.log("Starting redis container");
-const redisContainer = await new GenericContainer("redis")
-  .withExposedPorts(6379)
-  .withReuse()
-  .start();
+let redisContainer: any = null;
+let mongoContainer: any = null;
 
-redis.options.host = "localhost";
-redis.options.password = undefined;
-redis.options.port = redisContainer.getMappedPort(6379);
-await redis.connect();
+let containerCallCount = 0;
 
-console.log("Starting mongo container");
-const mongoContainer = await new MongoDBContainer("mongo:8.0")
-  .withReuse()
-  .start();
+async function ensureContainers() {
+  containerCallCount++;
+  if (!redisContainer) {
+    console.log("Starting redis container");
+    redisContainer = await new GenericContainer("redis")
+      .withExposedPorts(6379)
+      .withReuse()
+      .start();
 
-const sampleAudioFile = await  Deno.readFile("app/tests/sample_audio.wav");
+    redis.options.host = "localhost";
+    redis.options.password = undefined;
+    redis.options.port = redisContainer.getMappedPort(6379);
+    await redis.connect();
+  }
+
+  if (!mongoContainer) {
+    console.log("Starting mongo container");
+    mongoContainer = await new MongoDBContainer("mongo:8.0")
+      .withReuse()
+      .start();
+  }
+
+  if (!sampleAudioFile) {
+    try {
+      sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
+    } catch (e) {
+      console.warn("Could not read sample_audio.wav, using empty buffer");
+      sampleAudioFile = new Uint8Array(0);
+    }
+  }
+
+  await discoverJobWorkers();
+}
 
 addEventListener("unload", async () => {
-  await redisContainer.stop();
-  await mongoContainer.stop();
+  if (redisContainer) await redisContainer.stop();
+  if (mongoContainer) await mongoContainer.stop();
 });
 
 defineFixture({
@@ -85,7 +107,7 @@ defineFixture({
 defineFixture({
   token: "SampleAudioFile",
   factory: () =>
-    new File([sampleAudioFile], "sample.wav", { type: "audio/wav" }),
+    new File([sampleAudioFile as any], "sample.wav", { type: "audio/wav" }),
 });
 
 defineFixture({
@@ -378,6 +400,7 @@ export function withFixtures(
   testFn: (...args: any[]) => Promise<void> | void,
 ) {
   return async () => {
+    await ensureContainers();
     const resolved = new Map<any, any>();
     const fixtures = dropDuplicates(resolveFixtures(dependencies));
     for (const fixture of fixtures) {

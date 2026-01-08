@@ -40,6 +40,13 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 const capability: JobCapability = {
   name,
   schema,
+  policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
+    { resource: "db/diarizations", action: "read", effect: "allow" },
+    { resource: "db/transcriptions", action: "read", effect: "allow" },
+    { resource: "db/histogram_*", action: "*", effect: "allow" },
+    { resource: "db/configs", action: "read", effect: "allow" },
+  ],
   use,
 };
 

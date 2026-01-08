@@ -18,7 +18,7 @@ Deno.test(
 
     const job = await enqueueJob(jobData as any);
 
-    const jobsResource = await auth.getResource("jobs");
+    const jobsResource = auth.getResource("jobs");
 
     await jobsResource({
       action: "progressUpdate",
@@ -51,7 +51,7 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const jobsResource = await auth.getResource("jobs");
+    const jobsResource = auth.getResource("jobs");
 
     await jobsResource({
       action: "progressUpdate",
@@ -82,7 +82,7 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const jobsResource = await auth.getResource("jobs");
+    const jobsResource = auth.getResource("jobs");
 
     await jobsResource({
       action: "progressUpdate",
@@ -106,7 +106,7 @@ Deno.test(
   "JobsResource gracefully handles non-existent job",
   withFixtures(["Admin", "JobsResource"], async (auth: Auth) => {
     const fakeJobId = "67a1b2c3d4e5f6789abcdef0";
-    const jobsResource = await auth.getResource("jobs");
+    const jobsResource = auth.getResource("jobs");
 
     // Should not throw - returns error response
     const result = await jobsResource({
@@ -132,7 +132,7 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const jobsResource = await auth.getResource("jobs");
+    const jobsResource = auth.getResource("jobs");
 
     await jobsResource({
       action: "progressUpdate",
@@ -170,7 +170,7 @@ Deno.test(
     };
 
     const job = await enqueueJob(jobData as any);
-    const jobsResource = await auth.getResource("jobs");
+    const jobsResource = auth.getResource("jobs");
 
     await jobsResource({
       action: "progressUpdate",
