@@ -6,8 +6,6 @@ export default new NetworkJobCapability({
   schema: z.object({
     type: z.literal("testPythonIntegration"),
   }),
-  policies: [
-    { resource: "db/testPythonIntegration", action: "read", effect: "allow" },
-  ],
+  policies: [],
   url: `${Deno.env.get("PYTHON_WORKER_URL")}/jobs/testPythonIntegration`,
 })

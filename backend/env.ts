@@ -1,11 +1,18 @@
 import { load as loadEnv } from "@std/dotenv";
 import { existsSync } from "@std/fs/exists";
 
-if (existsSync(".env")) {
+
+if (
+  Deno.permissions.querySync({ name: "read", path: ".env" }).state === "granted" &&
+  existsSync(".env")
+) {
   await loadEnv({ envPath: ".env", export: true });
 }
 
-if (existsSync("../.env")) {
+if (
+  Deno.permissions.querySync({ name: "read", path: "../.env" }).state === "granted" &&
+  existsSync("../.env")
+) {
   await loadEnv({ envPath: "../.env", export: true });
 }
 

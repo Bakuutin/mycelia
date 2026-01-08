@@ -9,18 +9,21 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
 
+  const policies = [
+    ...(capability.manifest.policies || []),
+    { resource: `jobs/${job.id}`, action: "progressUpdate", effect: "allow" },
+  ]
+
   const token = await signJWT(
-    "job-system",
+    jobType,
     `job:${job.id}`,
-    capability.manifest.policies || [],
+      policies,
     "15m",
   );
 
-  // 2. Prepare environment and command
   const sdkPath = Deno.cwd();
   const myceliaUrl = env.MYCELIA_URL || "http://localhost:5173";
 
-  // Grant the child process access to essential environment variables
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
       MYCELIA_URL: myceliaUrl,
@@ -37,7 +40,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       `${sdkPath}/deno.json`,
       `--allow-read=${sdkPath}`,
       `--allow-read=${sdkPath}/../interfaces`,
-      `--allow-net`, // Allow net for MongoDB, Redis, and Mycelia API
+      `--allow-net`, // TODO: limit to specific hosts
       launcherPath,
     ],
     env: jobEnv,
