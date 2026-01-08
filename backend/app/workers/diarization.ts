@@ -9,7 +9,10 @@ export const schema = z.object({
   end: zDateOrString().optional(),
 });
 
-const capability = createPythonJobCapability("diarization", schema);
+const capability = createPythonJobCapability("diarization", schema, [
+  { resource: "db/transcriptions", action: "read", effect: "allow" },
+  { resource: "db/transcriptions", action: "update", effect: "allow" },
+]);
 
 export default capability;
 

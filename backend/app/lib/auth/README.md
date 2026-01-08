@@ -129,7 +129,7 @@ multiple permissions.
 resourceManager.registerResource(userResource);
 
 // Get resource function with access control
-const userFn = await auth.getResource("users");
+const userFn = auth.getResource("users");
 
 // Use the resource (access control applied automatically, 'auth' is injected)
 const result = await userFn({ id: 123 });
