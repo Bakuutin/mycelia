@@ -138,6 +138,30 @@ This documentation package provides a comprehensive plan for transforming Myceli
 
 ---
 
+### 5. [Authentication & Authorization Model](AUTH_MODEL.md)
+**Purpose**: Detailed explanation of the Policy-Based Access Control (PBAC) system
+
+**Contents**:
+- Core concepts: Principals, Auth objects, and Policies
+- Resource-based architecture and Action extraction
+- Policy effects: Allow, Deny, and Modify
+- Resource sharing strategy via middleware (e.g., MongoDB filter injection)
+- Scalability and security considerations
+
+---
+
+### 6. [System Resources](resources/README.md)
+**Purpose**: Documentation for each functional block in the system
+
+**Contents**:
+- Unified resource interface
+- Implementation guide for new resources
+- Detailed action and policy path documentation for:
+  - `mongo`, `fs`, `redis`, `llm`, `transcription`
+  - `objects`, `timeline`, `jobs`, `messenger`, `apikeys`
+
+---
+
 ## Quick Navigation
 
 ### For Project Managers
@@ -158,6 +182,7 @@ This documentation package provides a comprehensive plan for transforming Myceli
 ### For Backend Engineers
 - Start with: [PROCESSING_AND_ARTIFACTS.md](PROCESSING_AND_ARTIFACTS.md)
 - Focus on: Architecture, data models, API endpoints
+- Also see: [AUTH_MODEL.md](AUTH_MODEL.md) for security and resource isolation
 - Use for: Implementation details, schema design
 
 ### For DevOps Engineers
@@ -295,6 +320,10 @@ mycelia/
 │   ├── TASK_BREAKDOWN.md       # Task list
 │   ├── ONBOARDING_FLOW.md      # User journeys
 │   ├── PROCESSING_AND_ARTIFACTS.md  # Processing system
+│   ├── AUTH_MODEL.md               # NEW: Authentication & Authorization
+│   ├── resources/                  # NEW: Resource documentation
+│   │   ├── README.md               # Resource system overview
+│   │   └── ...                     # Individual resource docs
 │   ├── QUICKSTART.md           # NEW
 │   ├── ARCHITECTURE.md         # NEW
 │   ├── DOCKER.md               # NEW
