@@ -14,12 +14,12 @@ export const schema = z.object({
 
 const capability: JobCapability = {
   name: "transcription",
-  inputSchema: schema,
-  outputSchema: z.object({
+  inputSchema: z.toJSONSchema(schema),
+  outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
     result: z.literal("transcribed").optional(),
     reason: z.string().optional(),
-  }),
+  })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "update", effect: "allow" },

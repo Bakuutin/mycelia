@@ -171,12 +171,12 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
 const capability: JobCapability = {
   name,
-  inputSchema: schema,
-  outputSchema: z.object({
+  inputSchema: z.toJSONSchema(schema),
+  outputSchema: z.toJSONSchema(z.object({
     success: z.boolean(),
     objectId: z.string(),
     description: z.string(),
-  }),
+  })),
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
     { resource: "llm/chat", action: "completions", effect: "allow" },

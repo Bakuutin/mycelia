@@ -3,6 +3,7 @@ import type { JobData, JobResult } from "./types.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
 import { env } from "#/env.ts";
+import { EJSON } from "bson";
 
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
@@ -49,7 +50,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   // 3. Send job data via stdin
   const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(JSON.stringify({
+  await writer.write(new TextEncoder().encode(EJSON.stringify({
     ...job.data,
     id: job.id,
   })));

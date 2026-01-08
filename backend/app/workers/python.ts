@@ -49,7 +49,7 @@ export class NetworkJobCapability<
   }
 
   get inputSchema() {
-    return (z as any).toJSONSchema(this.schema);
+    return z.toJSONSchema(this.schema);
   }
 
   get outputSchema() {

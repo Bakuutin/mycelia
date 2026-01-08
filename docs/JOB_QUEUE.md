@@ -1,28 +1,37 @@
 # Job Queue System
 
-Mycelia uses a distributed job queue system with TypeScript workers that can execute tasks locally or delegate to Python workers.
+Mycelia uses a distributed job queue system with **isolated worker processes** that execute tasks in sandboxed environments with scoped permissions.
 
 ## Architecture
 
 ```
-Client → Deno Server (BullMQ) → TypeScript Worker ──┐
-                ↓                     │             │
-            Redis Queue               ▼             ▼
-                                Python FastAPI   Internal Task (TypeScript)
-                                      │             │
-                                      ▼             ▼
-                                   MongoDB/Redis/Storage
+Client → Deno Server (BullMQ) → Job Processor ──→ Isolated Child Process (Worker)
+                ↓                                         ↓
+            Redis Queue                          JWT with scoped permissions
+                                                          ↓
+                                                 ┌────────┴────────┐
+                                                 ▼                 ▼
+                                         Python FastAPI     Internal Resources
+                                         (via HTTP)         (via HTTP callback)
+                                                 ▼                 ▼
+                                           MongoDB/Redis/Storage
 ```
 
 ### Components
 
 1. **BullMQ (Redis)** - Job queue and state management
-2. **TypeScript Workers** - Job orchestration. Can execute:
-   - **Internal Tasks**: Pure TypeScript logic (e.g., database maintenance, histograms)
-   - **Python Tasks**: Heavy computation delegation (VAD, STT, diarization)
-3. **Python FastAPI** - Heavy AI/ML computation
-4. **Redis Streams** - Real-time progress updates
-5. **Resources** - MongoDB access via authenticated API
+2. **Job Processor** - Spawns isolated child processes for each job
+3. **Isolated Workers** - Execute in sandboxed Deno processes with:
+   - **Short-lived JWT** (15 min expiry) with scoped permissions
+   - **Limited file system access** (only SDK directory)
+   - **Network access** for callbacks to main process
+   - **Process isolation** (crashes don't affect main server)
+4. **Worker Types**:
+   - **Network Workers**: Delegate to external services (Python FastAPI for AI/ML)
+   - **Internal Workers**: Execute TypeScript logic with resource callbacks
+5. **Python FastAPI** - Heavy AI/ML computation
+6. **Redis Streams** - Real-time progress updates
+7. **Resource System** - Scoped database access via JWT-authenticated HTTP API
 
 ## Quick Start
 
@@ -116,14 +125,31 @@ Response:
 ## Job Lifecycle
 
 ```
-1. WAITING    → Job enqueued in Redis
-2. ACTIVE     → TypeScript worker picks up job
-3. PROCESSING → IF Python Task: Calls Python FastAPI
-                IF Internal Task: Executes TypeScript logic
-4. COMPLETED  → Result returned
-               → TypeScript updates BullMQ
-5. REMOVED    → After retention period
+1. WAITING    → Job enqueued in Redis (BullMQ)
+2. ACTIVE     → Job processor picks up job
+3. ISOLATION  → Processor spawns isolated child process:
+                 • Generates short-lived JWT with scoped permissions
+                 • Sets MYCELIA_JWT, MYCELIA_URL env vars
+                 • Launches worker with limited permissions
+4. PROCESSING → Worker executes in sandbox:
+                 IF Network Worker: Calls external service (Python FastAPI)
+                 IF Internal Worker: Calls back to main process via HTTP
+5. COMPLETED  → Worker outputs result to stdout
+               → Parent process captures result
+               → Updates BullMQ with result
+               → Child process exits
+6. REMOVED    → After retention period
 ```
+
+### Security Flow
+
+Each job runs with the **principle of least privilege**:
+
+1. **Job Discovery**: Registry discovers worker manifests with declared permissions
+2. **JWT Generation**: Processor creates token with ONLY permissions from manifest
+3. **Process Spawn**: Child process receives JWT via environment variable
+4. **Scoped Access**: Worker can only access resources specified in its policy
+5. **Automatic Expiry**: JWT expires after 15 minutes (prevents token reuse)
 
 ## Job Types
 
@@ -141,20 +167,31 @@ All jobs are enqueued via the `jobs` resource.
 
 ### Environment Variables
 
-**TypeScript (Deno):**
+**Main Server (Deno):**
 ```bash
 PYTHON_WORKER_URL=http://localhost:8000  # Python FastAPI URL (Optional if using only TS jobs)
+MYCELIA_URL=http://localhost:5173       # Main server URL for worker callbacks
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=
+SECRET_KEY=your_secret_key_for_jwt      # Required for JWT generation
+```
+
+**Worker Process (Auto-set by processor):**
+```bash
+MYCELIA_JWT=eyJhbG...                    # Short-lived JWT with scoped permissions
+MYCELIA_URL=http://localhost:5173       # Server URL for resource callbacks
+MYCELIA_WORKER_PATH=file:///.../worker.ts  # Path to worker implementation
 ```
 
 **Python:**
 ```bash
 MYCELIA_URL=http://localhost:3000        # TypeScript API URL
-MYCELIA_API_KEY=your_api_key            # For progress callbacks
+MYCELIA_API_KEY=your_api_key            # For progress callbacks (legacy)
 PORT=8000
 ```
+
+**Note**: Workers receive `MYCELIA_JWT` automatically from the processor. Never set this manually in production.
 
 ### Job Options
 
@@ -180,31 +217,123 @@ export function createWorker(type: JobType, processor) {
 }
 ```
 
-## TypeScript-only Jobs
+## Creating Workers
 
-Some jobs are executed entirely within the TypeScript environment and do not require the Python worker. These are useful for:
-- Database maintenance
-- Data aggregation (e.g., histograms)
-- File management cleanup
-- Lightweight processing
+Workers are auto-discovered from `backend/app/workers/*.ts` at startup. Each worker declares its capabilities via a manifest.
 
-Example Implementation (`backend/app/lib/jobs/processor.ts`):
+### Worker Manifest Structure
 
 ```typescript
-export async function processJob(job: Job<JobData>): Promise<JobResult> {
-  const jobType = job.data.type;
+// backend/app/workers/my-worker.ts
+import { z } from "zod";
+import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 
-  if (jobType === "histRecalculation") {
-    // Execute pure TypeScript logic
-    const auth = await getServerAuth();
-    await updateAllHistogram(auth, job.data.start, job.data.end);
-    return { success: true };
-  }
+const schema = z.object({
+  type: z.literal("my-worker"),
+  someInput: z.string(),
+});
 
-  // Fallback to Python worker
-  // ...
-}
+const capability: JobCapability = {
+  name: "my-worker",
+  inputSchema: (z as any).toJSONSchema(schema),
+  outputSchema: { type: "object" },
+  policies: [
+    { resource: "db/my_collection", action: "read", effect: "allow" },
+    { resource: "db/my_collection", action: "update", effect: "allow" },
+  ],
+  use: async (job) => {
+    // Worker logic runs in isolated process
+    const auth = await getServerAuth(); // Uses JWT from MYCELIA_JWT env var
+    const mongo = auth.getResource("mongo");
+
+    // Do work with scoped permissions
+    const result = await mongo({
+      action: "find",
+      collection: "my_collection",
+      query: { someField: job.data.someInput },
+    });
+
+    return { success: true, count: result.length };
+  },
+  maxConcurrency: 1, // Optional: limit concurrent jobs
+};
+
+export default capability;
 ```
+
+### Network Workers (Delegating to External Services)
+
+For workers that call external services (like Python workers):
+
+```typescript
+// backend/app/workers/vad.ts
+import { NetworkJobCapability } from "./python.ts";
+
+export default new NetworkJobCapability({
+  name: "vad",
+  schema: vadSchema,
+  url: `${PYTHON_WORKER_URL}/jobs/vad`,
+  policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
+    { resource: "db/audio_chunks", action: "update", effect: "allow" },
+  ],
+  maxConcurrency: 1,
+});
+```
+
+The `NetworkJobCapability` class:
+- Automatically attaches `MYCELIA_JWT` to outgoing requests
+- Serializes job data with EJSON (handles MongoDB types)
+- Forwards job to external service
+- Returns deserialized result
+
+### Auto-Discovery
+
+Workers are discovered at server startup:
+
+```typescript
+// backend/app/lib/jobs/job-registry.ts
+await discoverJobWorkers(); // Scans app/workers/*.ts
+
+// Registers each worker's manifest (NOT implementation)
+// Implementation is loaded on-demand in isolated process
+```
+
+### Worker Triggers (Auto-Enqueue)
+
+Workers can declare triggers to automatically enqueue jobs in response to events:
+
+```typescript
+const capability: JobCapability = {
+  name: "vad",
+  // ... other fields
+  triggers: {
+    sources: [
+      {
+        channel: "mycelia:mongo:audio_chunks",
+        name: "auto_new_chunks",
+        filter: {
+          event: "mongo.change",
+          "data.operationType": "insert",
+          "data.document": { $exists: true },
+          "data.document.vad": { $exists: false },
+        },
+      },
+    ],
+    debounceMs: 1000, // Wait 1s after last event before enqueueing
+  },
+};
+```
+
+**Filter Syntax**: Uses [Sift](https://github.com/crcn/sift.js) MongoDB-style queries for declarative event filtering.
+
+**How it Works**:
+1. Redis Pub/Sub messages arrive on `channel`
+2. Filter is evaluated against message payload
+3. If matches, job is debounced and enqueued
+4. Trigger metadata is added to job data: `{ trigger: { type: "auto", reason: "auto_new_chunks", principal: "server" } }`
+
+See [VAD_TRIGGERING.md](./VAD_TRIGGERING.md) for detailed examples.
 
 ## Progress Callbacks
 
@@ -435,11 +564,82 @@ curl -X POST http://localhost:8000/jobs/vad \
   -d '{"jobId": "test", "data": {"limit": 5}}'
 ```
 
-TypeScript without Python:
-```typescript
-const result = await processJob(job);
-// Mock Python response
+Test Worker in Isolation:
+```bash
+# Set required env vars
+export MYCELIA_JWT=$(deno run -A scripts/generate-test-jwt.ts)
+export MYCELIA_URL=http://localhost:5173
+export MYCELIA_WORKER_PATH=file:///path/to/worker.ts
+
+# Run worker launcher
+deno run -A backend/app/lib/jobs/workerLauncher.ts < test-job-data.json
 ```
+
+## Security & Isolation
+
+### Permission Model
+
+Each worker declares its required permissions in its manifest:
+
+```typescript
+policies: [
+  { resource: "db/audio_chunks", action: "read", effect: "allow" },
+  { resource: "db/audio_chunks", action: "update", effect: "allow" },
+]
+```
+
+**What This Means**:
+- Worker can ONLY access `audio_chunks` collection
+- Cannot read from `users`, `configs`, or other collections
+- Cannot write to other collections
+- Cannot escalate privileges
+
+### JWT Lifecycle
+
+1. **Generation**: When job starts, processor generates JWT with:
+   - `principal`: `job:{jobId}` (unique identity)
+   - `policies`: Exact list from worker manifest
+   - `exp`: 15 minutes from now
+
+2. **Usage**: Worker receives JWT via `MYCELIA_JWT` environment variable
+   - Automatically attached to all resource calls
+   - Cannot be modified or regenerated by worker
+
+3. **Expiration**: After 15 minutes, JWT becomes invalid
+   - Long-running jobs should complete within window
+   - Prevents token reuse after job completion
+
+### Process Isolation
+
+Workers run in separate Deno processes with limited permissions:
+
+```bash
+deno run \
+  -E                                    # Allow env access (for MYCELIA_JWT)
+  --allow-read=/path/to/sdk             # Only SDK directory
+  --allow-net                           # Network for callbacks
+  workerLauncher.ts
+```
+
+**Benefits**:
+- Worker crash doesn't affect main server
+- Memory leaks are isolated
+- CPU-intensive work doesn't block main event loop
+- Clear audit trail per job (`job:123` principal)
+
+### Security Best Practices
+
+1. **Declare Minimal Permissions**: Only request resources you need
+   ```typescript
+   // Good
+   policies: [{ resource: "db/audio_chunks", action: "read", effect: "allow" }]
+
+   // Bad (overly permissive)
+   policies: [{ resource: "**", action: "*", effect: "allow" }]
+   ```
+
+2. **Validate Input**: Workers should validate job data against schema
+
 
 ## VAD Auto-Triggering
 

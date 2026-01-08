@@ -16,7 +16,9 @@ export interface JobTriggerSource extends TriggerSource {
  * A job capability represents a worker that can process a specific job type.
  * Each capability defines its own name, processor, and data schema.
  */
-export interface JobCapability<T = Job<JobData>> extends CapabilityManifest {
+export interface JobCapability<T = Job<JobData>> extends Omit<CapabilityManifest, 'inputSchema' | 'outputSchema'> {
+  inputSchema: any; // Should be serializable JSON Schema
+  outputSchema: any; // Should be serializable JSON Schema
   use: (job: T) => Promise<JobResult>;
   policies: Policy[];
   triggers?: Omit<Triggers, 'sources'> & {

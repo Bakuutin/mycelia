@@ -351,7 +351,63 @@ mycelia/
 
 ---
 
+## Technical Documentation
+
+### Job Queue & Worker System
+
+#### [Job Queue System](JOB_QUEUE.md)
+**Purpose**: Comprehensive guide to Mycelia's background job processing system
+
+**Contents**:
+- Architecture overview with worker isolation
+- Job lifecycle and execution flow
+- Creating workers (internal and network-based)
+- Auto-triggering system
+- Progress reporting
+- Security model and JWT authentication
+- Configuration and debugging
+- Best practices
+
+**Key Features**:
+- Isolated worker processes for security
+- JWT-based scoped permissions
+- Auto-discovery of worker capabilities
+- Support for TypeScript and Python workers
+
+#### [Worker Isolation Architecture](WORKER_ISOLATION.md)
+**Purpose**: Deep dive into the security and isolation model for background jobs
+
+**Contents**:
+- Detailed architecture diagrams
+- Security model and permission scoping
+- JWT lifecycle and privilege escalation prevention
+- Process isolation with Deno permissions
+- Remote resource mode implementation
+- Registry and lazy loading
+- Common patterns and examples
+- Migration guide from legacy system
+
+**Key Security Features**:
+- Short-lived JWTs (15 min expiry)
+- Principle of least privilege
+- Process-level crash isolation
+- Audit trail per job
+- No privilege escalation possible
+
+**Use Cases**:
+- Understanding how jobs execute securely
+- Creating new workers with proper permissions
+- Debugging worker issues
+- Auditing security model
+
+---
+
 ## Changelog
+
+### 2026-01-08 - v1.1
+- Added JOB_QUEUE.md with worker isolation architecture
+- Added WORKER_ISOLATION.md with detailed security model
+- Updated documentation for isolated worker processes
 
 ### 2025-11-27 - v1.0 (Initial Release)
 - Created DX_ROADMAP.md

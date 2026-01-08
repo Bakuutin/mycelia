@@ -230,11 +230,11 @@ async function persistSequence(
 
 const capability: JobCapability = {
   name: "transcription_sequence_creator",
-  inputSchema: schema,
-  outputSchema: z.object({
+  inputSchema: z.toJSONSchema(schema),
+  outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
     processed: z.number(),
-  }),
+  })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "update", effect: "allow" },

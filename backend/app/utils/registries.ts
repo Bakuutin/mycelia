@@ -143,10 +143,10 @@ export async function discoverCapabilities<Input, Output>(
       
       // Ensure we have schemas before attempting to use them
       if (manifest.inputSchema) {
-        (z as any).fromJSONSchema(manifest.inputSchema);
+        z.fromJSONSchema(manifest.inputSchema);
       }
       if (manifest.outputSchema) {
-        (z as any).fromJSONSchema(manifest.outputSchema);
+        z.fromJSONSchema(manifest.outputSchema);
       }
       
       discovered.push({ manifest, path: capabilityModule });
