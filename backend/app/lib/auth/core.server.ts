@@ -70,7 +70,33 @@ export class Auth {
 
   getResource<Input, Output>(
     code: string,
-  ): Promise<(input: Input) => Promise<Output | Response>> {
+  ): (input: Input) => Promise<Output | Response> {
+    const token = Deno.env.get("MYCELIA_JWT");
+    const myceliaUrl = env.MYCELIA_URL;
+
+    if (token && myceliaUrl) {
+      console.log(`[Auth] Using remote resource call for ${code} via ${myceliaUrl}`);
+      return async (input: Input): Promise<Output | Response> => {
+        const url = `${myceliaUrl.replace(/\/$/, "")}/api/resource/${code}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+          },
+          body: EJSON.stringify(EJSON.serialize(input)),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Resource call failed: ${response.status} ${errorText}`);
+        }
+
+        const text = await response.text();
+        return EJSON.deserialize(JSON.parse(text)) as Output;
+      };
+    }
+
     return defaultResourceManager.getResource(code, this);
   }
 }
@@ -142,6 +168,13 @@ export const authenticateOr401 = async (
 };
 
 export const getServerAuth = async (): Promise<Auth> => {
+  const token = Deno.env.get("MYCELIA_JWT");
+  if (token) {
+    const auth = await verifyToken(token);
+    if (auth) return auth;
+    console.warn("MYCELIA_JWT found but invalid, falling back to system permissions");
+  }
+
   return new Auth({
     principal: "server",
     policies: [{ resource: "**", action: "*", effect: "allow" }],

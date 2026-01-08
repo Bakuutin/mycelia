@@ -29,7 +29,7 @@ Deno.test(
       limit: 500,
     };
 
-    const result = vadCapability!.schema.parse(validData);
+    const result = jobRegistry.validateJobData(validData);
     expect(result.type).toBe("vad");
     expect((result as any).limit).toBe(500);
   }),

@@ -14,12 +14,25 @@ export const schema = z.object({
 
 const capability: JobCapability = {
   name: "transcription",
-  schema,
+  inputSchema: schema,
+  outputSchema: z.object({
+    status: z.literal("success"),
+    result: z.literal("transcribed").optional(),
+    reason: z.string().optional(),
+  }),
+  policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
+    { resource: "db/audio_chunks", action: "update", effect: "allow" },
+    { resource: "db/transcription_sequences", action: "read", effect: "allow" },
+    { resource: "db/transcription_sequences", action: "update", effect: "allow" },
+    { resource: "db/transcriptions", action: "write", effect: "allow" },
+    { resource: "transcription/audio", action: "transcribe", effect: "allow" },
+  ],
   maxConcurrency: 1, // Only one transcription at a time to avoid overloading provider
   use: async (job) => {
     const { sequenceId } = job.data as z.infer<typeof schema>;
     const auth = await getServerAuth();
-    const mongo = await auth.getResource("mongo");
+    const mongo = auth.getResource("mongo");
     const transcriptionResource = await getTranscriptionResource(auth);
 
     const processSequence = async (sequence: any) => {
@@ -175,15 +188,16 @@ const capability: JobCapability = {
       return { status: "success", processed: processedCount };
     }
   },
-  trigger: {
+  triggers: {
     sources: [
       {
         channel: "mycelia:mongo:transcription_sequences",
         name: "sequence_ready",
-        filter: (payload: any) =>
-          payload.event === "mongo.change" &&
-          (payload.data.operationType === "insert" || payload.data.operationType === "update") &&
-          payload.data.document?.state === "ready",
+        filter: {
+          event: "mongo.change",
+          "data.operationType": { $in: ["insert", "update"] },
+          "data.document.state": "ready",
+        },
       },
     ],
     debounceMs: 5000,

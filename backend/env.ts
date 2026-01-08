@@ -19,7 +19,7 @@ export const env = {
 
   PYTHON_WORKER_URL: Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000",
 
-  SECRET_KEY: Deno.env.get("SECRET_KEY") as string,
+  get SECRET_KEY() { return Deno.env.get("SECRET_KEY") as string; },
 
   MYCELIA_FRONTEND_HOST: Deno.env.get("MYCELIA_FRONTEND_HOST") || "http://localhost:3001",
 

@@ -230,12 +230,21 @@ async function persistSequence(
 
 const capability: JobCapability = {
   name: "transcription_sequence_creator",
-  schema,
+  inputSchema: schema,
+  outputSchema: z.object({
+    status: z.literal("success"),
+    processed: z.number(),
+  }),
+  policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
+    { resource: "db/audio_chunks", action: "update", effect: "allow" },
+    { resource: "db/transcription_sequences", action: "write", effect: "allow" },
+  ],
   maxConcurrency: 1, // Only one creator at a time to avoid race conditions
   use: async (job) => {
     const { chunkId } = job.data as z.infer<typeof schema>;
     const auth = await getServerAuth();
-    const mongo = await auth.getResource("mongo");
+    const mongo = auth.getResource("mongo");
 
     // Single chunk mode not supported - batch processing required for proper sequencing
     if (chunkId) {
@@ -260,16 +269,17 @@ const capability: JobCapability = {
 
     return { status: "success", processed: processedCount };
   },
-  trigger: {
+  triggers: {
     sources: [
       {
         channel: "mycelia:mongo:audio_chunks",
         name: "new_speech_chunk",
-        filter: (payload: any) =>
-          payload.event === "mongo.change" &&
-          (payload.data.operationType === "insert" || payload.data.operationType === "update") &&
-          payload.data.document?.vad?.has_speech === true &&
-          payload.data.document?.transcription_sequence_id === undefined,
+        filter: {
+          event: "mongo.change",
+          "data.operationType": { $in: ["insert", "update"] },
+          "data.document.vad.has_speech": true,
+          "data.document.transcription_sequence_id": { $exists: false },
+        },
       },
     ],
     debounceMs: 1000,

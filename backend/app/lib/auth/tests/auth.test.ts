@@ -40,7 +40,7 @@ Deno.test("getResource: should get a resource function when resource is register
     ) => [{ path: "test", actions: ["read"] }],
   };
   defaultResourceManager.registerResource(testResource);
-  const resourceFn = await auth.getResource("test");
+  const resourceFn = auth.getResource("test");
   expect(typeof resourceFn).toBe("function");
 }));
 
@@ -48,10 +48,12 @@ Deno.test("getResource: should throw when resource is not registered", withFixtu
   "TestAuth",
   "accessLogger",
 ], async (auth) => {
-  await expect(auth.getResource("nonexistent")).rejects.toHaveProperty(
-    "status",
-    403,
-  );
+  try {
+    auth.getResource("nonexistent");
+    expect(true).toBe(false); // Should not reach here
+  } catch (error) {
+    expect(error).toHaveProperty("status", 403);
+  }
 }));
 
 Deno.test("getResource: should allow access when policy matches", withFixtures([
@@ -74,7 +76,7 @@ Deno.test("getResource: should allow access when policy matches", withFixtures([
     principal: "test-user",
     policies: [{ resource: "users", action: "read", effect: "allow" }],
   });
-  const resourceFn = await authWithPolicy.getResource("users");
+  const resourceFn = authWithPolicy.getResource("users");
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 }));
@@ -98,7 +100,7 @@ Deno.test("getResource: should deny access when policy effect is deny", withFixt
     principal: "test-user",
     policies: [{ resource: "users", action: "read", effect: "deny" }],
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -121,7 +123,7 @@ Deno.test("getResource: should deny access when no matching policy", withFixture
     principal: "test-user",
     policies: [{ resource: "other", action: "read", effect: "allow" }],
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -166,7 +168,7 @@ Deno.test("getResource: should apply middleware when modify policy is present", 
       middleware: { code: "addFlag", arg: { flag: "test-flag" } },
     }],
   });
-  const resourceFn = await resourceManager.getResource("users", auth);
+  const resourceFn = resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123, modified: true, flag: "test-flag" });
 }));
@@ -195,7 +197,7 @@ Deno.test("getResource: should deny access when modify policy present but modifi
       middleware: { code: "missing", arg: {} },
     }],
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -232,7 +234,7 @@ Deno.test("getResource: should deny access when modify policy present but schema
       middleware: { code: "addFlag", arg: { invalid: "data" } },
     }],
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = auth.getResource("users");
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -260,7 +262,7 @@ Deno.test("getResource: should handle multiple actions from extractActions", wit
       { resource: "users", action: "write", effect: "allow" },
     ],
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = auth.getResource("users");
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 }));
@@ -290,7 +292,7 @@ Deno.test("getResource: should handle multiple action groups from extractActions
       { resource: "users/profile", action: "read", effect: "allow" },
     ],
   });
-  const resourceFn = await auth.getResource("users");
+  const resourceFn = auth.getResource("users");
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 }));
@@ -318,7 +320,7 @@ Deno.test("getResource: should deny access when some actions are not covered by 
       // Missing write policy
     ],
   });
-  const resourceFn = await resourceManager.getResource("users", auth);
+  const resourceFn = resourceManager.getResource("users", auth);
   await expect(resourceFn({ id: 123 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -375,7 +377,7 @@ Deno.test("getResource: should apply multiple modifiers in correct order", withF
       },
     ],
   });
-  const resourceFn = await resourceManager.getResource("users", auth);
+  const resourceFn = resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({
     id: 123,
@@ -404,7 +406,7 @@ Deno.test("getResource: should handle wildcard resource patterns", withFixtures(
     principal: "test-user",
     policies: [{ resource: "users/*", action: "read", effect: "allow" }],
   });
-  const resourceFn = await resourceManager.getResource("users", auth);
+  const resourceFn = resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 }));
@@ -429,7 +431,7 @@ Deno.test("getResource: should handle wildcard action patterns", withFixtures([
     principal: "test-user",
     policies: [{ resource: "users", action: "rea*", effect: "allow" }],
   });
-  const resourceFn = await resourceManager.getResource("users", auth);
+  const resourceFn = resourceManager.getResource("users", auth);
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({ id: 123 });
 }));

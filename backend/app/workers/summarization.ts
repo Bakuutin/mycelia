@@ -171,7 +171,19 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
 const capability: JobCapability = {
   name,
-  schema,
+  inputSchema: schema,
+  outputSchema: z.object({
+    success: z.boolean(),
+    objectId: z.string(),
+    description: z.string(),
+  }),
+  policies: [
+    { resource: "db/transcriptions", action: "read", effect: "allow" },
+    { resource: "llm/chat", action: "completions", effect: "allow" },
+    { resource: "objects", action: "read", effect: "allow" },
+    { resource: "objects", action: "create", effect: "allow" },
+    { resource: "objects", action: "update", effect: "allow" },
+  ],
   use,
 };
 

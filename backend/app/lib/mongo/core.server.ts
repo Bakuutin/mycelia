@@ -577,6 +577,6 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
 
 export function getMongoResource(
   auth: Auth,
-): Promise<(input: MongoRequest) => Promise<MongoResponse>> {
-  return auth.getResource("mongo");
+): (input: MongoRequest) => Promise<MongoResponse> {
+  return auth.getResource<MongoRequest, MongoResponse>("mongo") 
 }

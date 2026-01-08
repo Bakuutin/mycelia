@@ -33,7 +33,7 @@ Deno.test(
     "Mongo",
   ], async (auth: Auth) => {
     const mongo = await getMongoResource(auth);
-    const resourceFn = await auth.getResource("mongo");
+    const resourceFn = auth.getResource("mongo");
     const result = await mongo({
       action: "insertOne",
       collection: "users",
@@ -76,7 +76,7 @@ Deno.test(
         middleware: { code: "filter", arg: { filter: { role: "user" } } },
       }],
     });
-    const mongo = await auth.getResource("mongo");
+        const mongo = auth.getResource("mongo");
     await expect(
       mongo({
         action: "insertOne",

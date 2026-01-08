@@ -13,13 +13,7 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
-  ], async (admin, mongo) => {
-    const { db } = mongo;
-    
-    // Ensure collections exist
-    await db.createCollection("audio_chunks");
-    await db.createCollection("jobs");
-
+  ], async (admin) => {
     // Start only the VAD trigger worker (mocking the change stream via Redis)
     await triggerManager.start();
 
@@ -60,7 +54,11 @@ Deno.test(
       await delay(1000); 
 
       // 4. Check if a VAD job was created in the 'jobs' collection
-      const job = await db.collection("jobs").findOne({ type: "vad" });
+      const job = await mongoResource({
+        action: "findOne",
+        collection: "jobs",
+        query: { type: "vad" },
+      });
       
       expect(job).not.toBeNull();
       if (job) {
@@ -77,7 +75,11 @@ Deno.test(
       await redis.publish(channel, JSON.stringify(payload));
 
       await delay(500);
-      const jobsCount = await db.collection("jobs").countDocuments({ type: "vad" });
+      const jobsCount = await mongoResource({
+        action: "count",
+        collection: "jobs",
+        query: { type: "vad" },
+      });
       expect(jobsCount).toBe(1);
       console.log("[Test] Correctly skipped trigger for second event as job already exists.");
 

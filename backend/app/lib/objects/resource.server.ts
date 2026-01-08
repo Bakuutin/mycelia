@@ -760,7 +760,7 @@ export class ObjectsResource
 
 export function getObjectsResource(
   auth: Auth,
-): Promise<(input: ObjectsRequest) => Promise<ObjectsResponse>> {
+): (input: ObjectsRequest) => Promise<ObjectsResponse> {
   return auth.getResource<ObjectsRequest, ObjectsResponse>(
     "objects",
   );

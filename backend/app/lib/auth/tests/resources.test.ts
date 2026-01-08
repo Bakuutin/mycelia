@@ -51,7 +51,7 @@ Deno.test("should register a resource and evaluate access with custom auth polic
       },
     ],
   });
-  const resourceFn = await customAuth.getResource("users");
+  const resourceFn = customAuth.getResource("users");
   const result = await resourceFn({ id: 123 });
   expect(result).toEqual({
     id: 123,
@@ -79,7 +79,7 @@ Deno.test("ResourceManager edge cases: denies access if policy effect is deny", 
     ) => [{ path: "test", actions: ["read"] }],
   };
   defaultResourceManager.registerResource(baseResource);
-  const fn = await authWithPolicy.getResource("test");
+  const fn = authWithPolicy.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -102,7 +102,7 @@ Deno.test("ResourceManager edge cases: denies access if no matching policy", wit
     ) => [{ path: "test", actions: ["read"] }],
   };
   defaultResourceManager.registerResource(baseResource);
-  const fn = await authWithPolicy.getResource("test");
+  const fn = authWithPolicy.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -115,11 +115,12 @@ Deno.test("ResourceManager edge cases: denies access if resource is not register
     principal: "test-user",
     policies: [{ resource: "test", action: "read", effect: "allow" }],
   });
-  await expect(resourceManager.getResource("test", authWithPolicy)).rejects
-    .toHaveProperty(
-      "status",
-      403,
-    );
+  try {
+    resourceManager.getResource("test", authWithPolicy);
+    expect(true).toBe(false);
+  } catch (error) {
+    expect(error).toHaveProperty("status", 403);
+  }
 }));
 
 Deno.test("ResourceManager edge cases: calls modifier if modify policy present and schema passes", withFixtures([
@@ -155,7 +156,7 @@ Deno.test("ResourceManager edge cases: calls modifier if modify policy present a
     extractActions = () => [{ path: "test", actions: ["read"] }];
   }
   resourceManager.registerResource(new TestResource());
-  const fn = await resourceManager.getResource("test", authWithPolicy);
+    const fn = resourceManager.getResource("test", authWithPolicy);
   const result = await fn({ id: 2 });
   expect(result).toEqual({ id: 2, foo: "bar" });
 }));
@@ -184,7 +185,7 @@ Deno.test("ResourceManager edge cases: denies access if modify policy present bu
     ) => [{ path: "test", actions: ["read"] }],
   };
   defaultResourceManager.registerResource(baseResource);
-  const fn = await authWithPolicy.getResource("test");
+  const fn = authWithPolicy.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -226,7 +227,7 @@ Deno.test("ResourceManager edge cases: denies access if modify policy present bu
     ) => [{ path: "test", actions: ["read"] }],
   };
   defaultResourceManager.registerResource(baseResource);
-  const fn = await authWithPolicy.getResource("test");
+  const fn = authWithPolicy.getResource("test");
   await expect(fn({ id: 1 })).rejects.toHaveProperty("status", 403);
 }));
 
@@ -305,7 +306,7 @@ Deno.test("ResourceManager edge cases: calls all modifiers", withFixtures([
       middleware: { code: "private" },
     }],
   } as any;
-  const fnResource = await resourceManager.getResource("users", auth);
+  const fnResource = resourceManager.getResource("users", auth);
   const result = await fnResource({ id: 2 });
   expect(result).toEqual({ id: 2, foo: "default" });
   expect(sharedCallCount).toBe(1);

@@ -7,7 +7,7 @@ const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 export async function getServerConfig(): Promise<ServerConfig> {
   const auth = await getServerAuth();
-  const mongoResource = await defaultResourceManager.getResource("mongo", auth);
+  const mongoResource = defaultResourceManager.getResource("mongo", auth);
   const configDoc = await mongoResource({
     action: "findOne",
     collection: "configs",
