@@ -27,3 +27,4 @@ export async function down(db: Db, _client: MongoClient): Promise<void> {
   console.log("Rolling back migration 0008: Removing range index...");
   await db.collection("transcription_sequences").dropIndex("original_id_range");
 }
+

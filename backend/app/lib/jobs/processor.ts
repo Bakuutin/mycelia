@@ -35,7 +35,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
       "run",
-      "-E", // allow env
+      "-E",
       "--config",
       `${sdkPath}/deno.json`,
       `--allow-read=${sdkPath}`,

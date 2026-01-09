@@ -80,20 +80,20 @@ export async function discoverCapabilities<Input, Output>(
     const capabilityModule = toFileUrl(file.path);
 
     const sdkPath = Deno.cwd();
+    const launcherPath = `${sdkPath}/app/utils/capabilityLauncher.ts`;
 
     const cmd = new Deno.Command(Deno.execPath(), {
       args: [
-        "eval",
+        "run",
+        "-E",
         "--config",
         `${sdkPath}/deno.json`,
-        [
-          `import * as mod from "${capabilityModule}";`,
-          `const capability = (mod.default && typeof mod.default === "object") ? mod.default : mod;`,
-          `console.log(JSON.stringify({ name: capability.name, inputSchema: capability.inputSchema, outputSchema: capability.outputSchema, policies: capability.policies, maxConcurrency: capability.maxConcurrency, triggers: capability.triggers }));`,
-        ].join("\n"),
+        `--allow-read=${sdkPath}`,
+        `--allow-read=${sdkPath}/../interfaces`,
+        launcherPath,
       ],
       env: {
-        // do not pass anything
+        MYCELIA_CAPABILITY_PATH: capabilityModule.toString(),
       },
       stdin: "null",
       stdout: "piped",
