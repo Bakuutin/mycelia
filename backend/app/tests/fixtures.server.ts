@@ -23,7 +23,9 @@ import type { Request } from "express";
 
 import { discoverJobWorkers, jobRegistry } from "@/lib/jobs/job-registry.ts";
 
-let sampleAudioFile: Uint8Array | null = null;
+const sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
+
+await discoverJobWorkers();
 
 export type Fixture = {
   token: any;
@@ -81,18 +83,9 @@ async function ensureContainers() {
       .withReuse()
       .start();
   }
-
-  if (!sampleAudioFile) {
-    try {
-      sampleAudioFile = await Deno.readFile("app/tests/sample_audio.wav");
-    } catch (e) {
-      console.warn("Could not read sample_audio.wav, using empty buffer");
-      sampleAudioFile = new Uint8Array(0);
-    }
-  }
-
-  await discoverJobWorkers();
 }
+
+await ensureContainers()
 
 addEventListener("unload", async () => {
   if (redisContainer) await redisContainer.stop();
@@ -400,7 +393,6 @@ export function withFixtures(
   testFn: (...args: any[]) => Promise<void> | void,
 ) {
   return async () => {
-    await ensureContainers();
     const resolved = new Map<any, any>();
     const fixtures = dropDuplicates(resolveFixtures(dependencies));
     for (const fixture of fixtures) {

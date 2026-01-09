@@ -4,6 +4,7 @@ import { ObjectId } from "mongodb";
 import { fn } from "@std/expect";
 import { JobsResource } from "@/lib/resources/worker.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
+import { discoverJobWorkers, jobRegistry } from "../job-registry.ts";
 
 
 defineFixture({
@@ -20,13 +21,8 @@ defineFixture({
   token: "JobQueue",
   dependencies: ["JobWorkers"],
   factory: async () => {
-    await redis.flushdb();
-    return {
-      redis,
-    };
   },
   teardown: async () => {
-    await redis.flushdb();
   },
 });
 

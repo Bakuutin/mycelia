@@ -33,3 +33,4 @@ export async function down(db: Db, _client: MongoClient): Promise<void> {
   console.log("Rolling back migration 0007: Removing transcription_sequences collection...");
   await db.dropCollection("transcription_sequences");
 }
+
