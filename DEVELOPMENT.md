@@ -2,13 +2,6 @@
 
 This guide is for developers who want to contribute to Mycelia or run it in development mode with hot reload.
 
-## Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- [Deno](https://deno.land/) 2.x (for native development)
-- [uv](https://github.com/astral-sh/uv) (for Python tooling)
-- macOS: Full Disk Access for your terminal app (for audio import)
-
 ## Development Setup
 
 ### Option A: Docker with Hot Reload
@@ -26,34 +19,22 @@ Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` d
 
 Ports can be customized via environment variables (in `.env` or inline):
 
-| Service  | Variable         | Default |
-|----------|------------------|---------|
-| Frontend | `FRONTEND_PORT`  | 8080    |
-| Backend  | `BACKEND_PORT`   | 5173    |
+| Service | Variable | Default |
+|---------|----------|---------|
+| **Nginx (Proxy)** | `NGINX_PORT` | `4433` |
+| **Nginx (HTTP)** | `NGINX_HTTP_PORT` | `80` |
+| **Nginx (HTTPS)** | `NGINX_HTTPS_PORT` | `443` |
+| **Frontend** | `FRONTEND_PORT` | `8080` |
+| **Backend** | `BACKEND_PORT` | `5173` |
+| **Worker** | `PYTHON_WORKER_PORT` | `8000` |
+| **Database** | `MONGO_PORT` | `27017` |
 
 Example:
 ```bash
-FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
+NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
 ```
 
-### Option B: Native Development
-
-For full control and faster iteration:
-
-```bash
-# Terminal 1: Start MongoDB
-docker compose up -d mongodb redis mongo-search
-
-# Terminal 2: Backend
-cd backend
-deno task dev
-# → http://localhost:5173
-
-# Terminal 3: Frontend
-cd frontend
-deno task dev
-# → http://localhost:3001
-```
+For more details on networking and SSL setup, see **[NETWORKING.md](docs/NETWORKING.md)**.
 
 ## Frontend Development
 

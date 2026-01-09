@@ -3,6 +3,7 @@ import { z } from "zod";
 import { dirname, fromFileUrl } from "@std/path";
 import type { JobData, JobResult } from "./types.ts";
 import { Capability, Registry, discoverCapabilities } from "@/utils/registries.ts";
+import { Policy } from "@/lib/auth/resources.ts";
 
 /**
  * Trigger source for jobs based on Redis events.
@@ -24,6 +25,8 @@ export interface JobCapability extends Capability<Job<JobData>, JobResult> {
   use: (job: Job<JobData>) => Promise<JobResult>;
   /** Zod schema to validate job data for this type */
   schema: z.ZodType<JobData>;
+  /** Permissions required by this worker */
+  policies: Policy[];
   /** Optional trigger configuration */
   trigger?: {
     sources: JobTriggerSource[];
@@ -31,6 +34,7 @@ export interface JobCapability extends Capability<Job<JobData>, JobResult> {
   };
   /** Optional maximum concurrency (e.g. 1 for singleton workers) */
   maxConcurrency?: number;
+  
 }
 
 /**
@@ -108,6 +112,9 @@ export const jobRegistry = new JobRegistry();
  * Workers should export `name`, `use` (processor function), and `schema`.
  */
 export async function discoverJobWorkers(): Promise<void> {
+  if (jobRegistry.list().length > 0) {
+    return;
+  }
   const workersDir = Deno.cwd() + "/app/workers";
 
   const capabilities = await discoverCapabilities<Job<JobData>, JobResult>(

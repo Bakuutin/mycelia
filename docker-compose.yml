@@ -6,10 +6,9 @@ services:
       - --requirepass ${REDIS_PASSWORD}
       - --protected-mode yes
       - --bind 0.0.0.0
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: always
     environment:
       - REDIS_PASSWORD
   mongo:
@@ -17,32 +16,37 @@ services:
     entrypoint: ["/mongo-entrypoint.sh"]
     command: mongod --config /etc/mongod.conf
     ports:
-      - "27017:27017"
+      - "${MONGO_PORT:-27017}:27017"
     volumes:
       - mongo_data:/data/db
-      - ./misc/mongod.conf:/etc/mongod.conf:ro
-      - ./misc/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
-      - ./misc/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
-    restart: unless-stopped
+      - ./misc/mongo/mongod.conf:/etc/mongod.conf:ro
+      - ./misc/mongo/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
+      - ./misc/mongo/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
+    restart: always
     environment:
       - MONGO_INITDB_ROOT_USERNAME
       - MONGO_INITDB_ROOT_PASSWORD
-  mongo-search:
-    image: mongodb/mongodb-community-search:latest
-    entrypoint: ["/mongot-entrypoint.sh"]
-    ports:
-      - "27028:27028"
-      - "9946:9946"
-    volumes:
-      - mongo_search_data:/data/mongot
-      - ./misc/mongot.conf:/mongot-community/config.default.yml:ro
-      - ./misc/mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD
-    depends_on:
-      - mongo
-
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    
+  # mongo-search:
+  #   image: mongodb/mongodb-community-search:latest
+  #   entrypoint: ["/mongot-entrypoint.sh"]
+  #   ports:
+  #     - "27028:27028"
+  #     - "9946:9946"
+  #   volumes:
+  #     - mongo_search_data:/data/mongot
+  #     - ./misc/mongo/mongot.conf:/mongot-community/config.default.yml:ro
+  #     - ./misc/mongo/mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
+  #   environment:
+  #     - MONGO_INITDB_ROOT_USERNAME
+  #     - MONGO_INITDB_ROOT_PASSWORD
+  #   depends_on:
+  #     - mongo
   frontend:
     image: bakuutin/mycelia-frontend:dev
     build:
@@ -50,6 +54,7 @@ services:
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
     ports:
       - "${FRONTEND_PORT:-8080}:8080"
+    restart: always
     volumes:
       - ./frontend:/app
       - ./interfaces:/app/interfaces
@@ -61,6 +66,7 @@ services:
       dockerfile: ./backend/Dockerfile
     ports:
       - "${BACKEND_PORT:-5173}:5173"
+    restart: always
     command: deno task dev
     env_file:
       - .env
@@ -70,6 +76,14 @@ services:
       PYTHON_WORKER_URL: http://python-worker:8000
     volumes:
       - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.2'
+          memory: 1G
 
   python-worker:
     image: bakuutin/mycelia-python:dev
@@ -78,13 +92,29 @@ services:
       dockerfile: ./python/Dockerfile
     environment:
       MYCELIA_URL: http://backend:5173
-    depends_on:
-      - backend
-    ports:
-      - "${PYTHON_WORKER_PORT:-8000}:8000"
     volumes:
       - ./python:/app
       - worker_data:/root/.cache
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+            cpus: '0.5'
+            memory: 1G
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${NGINX_PORT:-4433}:4433"
+    volumes:
+      - ./misc/nginx/templates:/etc/nginx/templates:ro
+      - ./misc/nginx/ssl:/etc/nginx/ssl:ro
+    restart: always
+
+
 
 volumes:
   mongo_data:
