@@ -7,7 +7,7 @@ services:
       - --protected-mode yes
       - --bind 0.0.0.0
     volumes:
-      - /mnt/data/mycelia/redis:/data
+      - redis_data:/data
     restart: always
     environment:
       - REDIS_PASSWORD
@@ -15,8 +15,10 @@ services:
     image: mongo:8.2
     entrypoint: ["/mongo-entrypoint.sh"]
     command: mongod --config /etc/mongod.conf
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
     volumes:
-      - /mnt/data/mycelia/mongo:/data/db
+      - mongo_data:/data/db
       - ./misc/mongo/mongod.conf:/etc/mongod.conf:ro
       - ./misc/mongo/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
       - ./misc/mongo/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
@@ -33,8 +35,11 @@ services:
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
   #   entrypoint: ["/mongot-entrypoint.sh"]
+  #   ports:
+  #     - "27028:27028"
+  #     - "9946:9946"
   #   volumes:
-  #     - /mnt/data/mycelia/mongo-search:/data/mongot
+  #     - mongo_search_data:/data/mongot
   #     - ./misc/mongo/mongot.conf:/mongot-community/config.default.yml:ro
   #     - ./misc/mongo/mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
   #   environment:
@@ -47,8 +52,8 @@ services:
     build:
       context: .
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
-    expose:
-      - "8080"
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
     restart: always
     volumes:
       - ./frontend:/app
@@ -59,8 +64,8 @@ services:
     build:
       context: .
       dockerfile: ./backend/Dockerfile
-    expose:
-      - "5173"
+    ports:
+      - "${BACKEND_PORT:-5173}:5173"
     restart: always
     command: deno task dev
     env_file:
@@ -103,9 +108,7 @@ services:
   nginx:
     image: nginx:1.27-alpine
     ports:
-      - "4433:4433"
-    environment:
-      - MYCELIA_DOMAIN=${MYCELIA_DOMAIN:-example.com}
+      - "${NGINX_PORT:-4433}:4433"
     volumes:
       - ./misc/nginx/templates:/etc/nginx/templates:ro
       - ./misc/nginx/ssl:/etc/nginx/ssl:ro
@@ -114,4 +117,7 @@ services:
 
 
 volumes:
+  mongo_data:
+  mongo_search_data:
+  redis_data:
   worker_data:

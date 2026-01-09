@@ -6,8 +6,9 @@ if [ -f .env ]; then
   export $(grep -v '^#' .env | xargs)
 fi
 
-DOMAIN=${MYCELIA_DOMAIN:-example.com}
 SSL_DIR="./misc/nginx/ssl"
+
+DOMAIN="mycelia.local"
 
 mkdir -p "$SSL_DIR"
 
