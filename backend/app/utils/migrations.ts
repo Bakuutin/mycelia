@@ -43,7 +43,11 @@ export async function ensureIndexExists(
   await ensureCollectionExists(db, collectionName);
 
   const collection = db.collection(collectionName);
-  const indexName: string = options.name as string;
+  const indexName = options.name;
+
+  if (!indexName) {
+    throw new Error(`Index name is required in options for collection: ${collectionName}`);
+  }
 
   const exists = await collection.indexExists(indexName);
 

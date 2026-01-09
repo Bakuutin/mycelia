@@ -5,9 +5,6 @@ import { signJWT } from "@/lib/auth/tokens.ts";
 import { env } from "#/env.ts";
 
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/ef9fc8e4-41f8-4f5d-a482-3ca76d45a827',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'processor.ts:processJob',message:'processJob entry',data:{jobId:job.id,jobType:job.data.type},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
 

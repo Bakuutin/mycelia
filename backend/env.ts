@@ -19,7 +19,16 @@ export const env = {
 
   PYTHON_WORKER_URL: Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000",
 
-  get SECRET_KEY() { return Deno.env.get("SECRET_KEY") as string; },
+  get SECRET_KEY() {
+    const key = Deno.env.get("SECRET_KEY");
+    if (!key) {
+      throw new Error("SECRET_KEY environment variable is required");
+    }
+    if (key.length < 32) {
+      console.warn("WARNING: SECRET_KEY should be at least 32 characters for security");
+    }
+    return key;
+  },
 
   MYCELIA_FRONTEND_HOST: Deno.env.get("MYCELIA_FRONTEND_HOST") || "http://localhost:3001",
 
