@@ -19,15 +19,22 @@ Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` d
 
 Ports can be customized via environment variables (in `.env` or inline):
 
-| Service  | Variable         | Default |
-|----------|------------------|---------|
-| Frontend | `FRONTEND_PORT`  | 8080    |
-| Backend  | `BACKEND_PORT`   | 5173    |
+| Service | Variable | Default |
+|---------|----------|---------|
+| **Nginx (Proxy)** | `NGINX_PORT` | `4433` |
+| **Nginx (HTTP)** | `NGINX_HTTP_PORT` | `80` |
+| **Nginx (HTTPS)** | `NGINX_HTTPS_PORT` | `443` |
+| **Frontend** | `FRONTEND_PORT` | `8080` |
+| **Backend** | `BACKEND_PORT` | `5173` |
+| **Worker** | `PYTHON_WORKER_PORT` | `8000` |
+| **Database** | `MONGO_PORT` | `27017` |
 
 Example:
 ```bash
-FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
+NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
 ```
+
+For more details on networking and SSL setup, see **[NETWORKING.md](docs/NETWORKING.md)**.
 
 ## Frontend Development
 

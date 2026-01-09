@@ -59,7 +59,9 @@ docker compose pull
 docker compose up -d
 ```
 
-Open [http://localhost:8080](http://localhost:8080) in your browser
+Open [https://localhost:4433](https://localhost:4433) in your browser.
+
+> **Note**: For local development, Mycelia uses a self-signed certificate. You may need to click "Advanced" and "Proceed" in your browser. See [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and SSL.
 
 ### Configuration
 
