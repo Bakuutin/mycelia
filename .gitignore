@@ -18,3 +18,11 @@ debug.*
 .htpasswd
 misc/.htpasswd
 .playwright-mcp/*
+
+# SSL / Certificates
+*.pem
+/misc/letsencrypt/
+/misc/certbot/
+/misc/nginx/ssl/
+/misc/secrets/
+cloudflare.ini
