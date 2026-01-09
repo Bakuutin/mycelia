@@ -156,10 +156,10 @@ export class ResourceManager {
     return matchedPolicies;
   }
 
-  async getResource<Input, Output>(
+  getResource<Input, Output>(
     code: Code,
     auth: Auth,
-  ): Promise<(input: Input) => Promise<Output | Response>> {
+  ): (input: Input) => Promise<Output | Response> {
     const resource: Resource<Input, Output> | undefined = this.resources.get(
       code,
     );

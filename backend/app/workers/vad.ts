@@ -13,11 +13,15 @@ export const schema = z.object({
   batchSize: z.number().default(100),
 });
 
-const pythonCap = createPythonJobCapability("vad", schema);
+const pythonCap = createPythonJobCapability("vad", schema, [
+  { resource: "db/audio_chunks", action: "read", effect: "allow" },
+  { resource: "db/audio_chunks", action: "update", effect: "allow" },
+]);
 
 const capability: JobCapability = {
   ...pythonCap,
   schema, // Ensure schema is explicitly included
+  policies: pythonCap.policies,
   maxConcurrency: 1,
   trigger: {
     sources: [

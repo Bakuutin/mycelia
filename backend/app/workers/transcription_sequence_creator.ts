@@ -231,11 +231,16 @@ async function persistSequence(
 const capability: JobCapability = {
   name: "transcription_sequence_creator",
   schema,
+  policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
+    { resource: "db/audio_chunks", action: "update", effect: "allow" },
+    { resource: "db/transcription_sequences", action: "write", effect: "allow" },
+  ],
   maxConcurrency: 1, // Only one creator at a time to avoid race conditions
   use: async (job) => {
     const { chunkId } = job.data as z.infer<typeof schema>;
     const auth = await getServerAuth();
-    const mongo = await auth.getResource("mongo");
+    const mongo = auth.getResource("mongo");
 
     // Single chunk mode not supported - batch processing required for proper sequencing
     if (chunkId) {

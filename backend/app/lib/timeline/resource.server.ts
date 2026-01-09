@@ -126,6 +126,6 @@ export class TimelineResource
 
 export function getTimelineResource(
   auth: Auth,
-): Promise<(input: TimelineRequest) => Promise<TimelineResponse>> {
-  return auth.getResource("timeline");
+): (input: TimelineRequest) => Promise<TimelineResponse> {
+  return auth.getResource<TimelineRequest, TimelineResponse>("timeline") 
 }

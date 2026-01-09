@@ -7,7 +7,9 @@ export const schema = z.object({
   source: z.string().optional(),
 });
 
-const capability = createPythonJobCapability("ingestion", schema);
+const capability = createPythonJobCapability("ingestion", schema, [
+  { resource: "db/audio_chunks", action: "write", effect: "allow" },
+]);
 
 export default capability;
 
