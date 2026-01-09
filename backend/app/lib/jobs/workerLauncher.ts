@@ -1,25 +1,30 @@
 import { verifyToken } from "@/lib/auth/core.server.ts";
-import { jobRegistry, discoverJobWorkers } from "@/lib/jobs/job-registry.ts";
 import { readAll } from "@std/io/read-all";
+import { EJSON } from "bson";
 
 /**
  * Worker Launcher - Entry point for isolated job processes
  * 
  * 1. Validates the short-lived JWT from environment
- * 2. Loads the target worker capability
+ * 2. Loads the target worker capability directly from path
  * 3. Executes the job with limited permissions
  */
 
 async function main() {
   const jwt = Deno.env.get("MYCELIA_JWT");
+  const workerPath = Deno.env.get("MYCELIA_WORKER_PATH");
   const jobDataRaw = await readAll(Deno.stdin);
-  const jobData = JSON.parse(new TextDecoder().decode(jobDataRaw));
+  const jobData = EJSON.parse(new TextDecoder().decode(jobDataRaw));
 
   if (!jwt) {
     console.error("Missing MYCELIA_JWT environment variable");
     Deno.exit(1);
   }
 
+  if (!workerPath) {
+    console.error("Missing MYCELIA_WORKER_PATH environment variable");
+    Deno.exit(1);
+  }
   // Verify the short-lived token
   const auth = await verifyToken(jwt);
   if (!auth) {
@@ -27,12 +32,13 @@ async function main() {
     Deno.exit(1);
   }
 
-  // Discover workers and find the one for this job
-  await discoverJobWorkers();
-  const capability = jobRegistry.get(jobData.type);
-
-  if (!capability) {
-    console.error(`No capability found for job type: ${jobData.type}`);
+  // Load the capability implementation directly
+  let capability: any;
+  try {
+    const mod = await import(workerPath);
+    capability = (mod.default && typeof mod.default === "object") ? mod.default : mod;
+  } catch (err) {
+    console.error(`Failed to load worker at ${workerPath}: ${err}`);
     Deno.exit(1);
   }
 
@@ -53,7 +59,7 @@ async function main() {
     console.log(JSON.stringify(result));
     Deno.exit(0);
   } catch (err) {
-    console.error(`Job failed: ${err.message}`);
+    console.error(`Job failed: ${err instanceof Error ? err.message : String(err)}`);
     Deno.exit(1);
   }
 }

@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { ObjectId } from "mongodb";
-import type { Auth } from "@/lib/auth/core.server.ts";
-import { getServerAuth } from "@/lib/auth/core.server.ts";
+import { getServerAuth, type Auth } from "@/lib/auth/core.server.ts";
 import type { Resource, ResourcePath } from "@/lib/auth/resources.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { jobRegistry } from "@/lib/jobs/job-registry.ts";
@@ -267,10 +266,10 @@ export class JobsResource
   }
 
   private async progressUpdate(input: z.infer<typeof UpdateProgressSchema>, auth: Auth) {
-    const mongo = await getMongoResource(auth);
+    const mongoRoot = await getMongoResource(await getServerAuth());
     const { jobId, progress } = input;
 
-    const jobDocs = await mongo({
+    const jobDocs = await mongoRoot({
       action: "find",
       collection: "jobs",
       query: { _id: new ObjectId(jobId) },
@@ -307,7 +306,7 @@ export class JobsResource
       }
     }
 
-    await mongo({
+    await mongoRoot({
       action: "updateOne",
       collection: "jobs",
       query: { _id: new ObjectId(jobId) },
@@ -351,15 +350,15 @@ export class JobsResource
       case "list":
         return [{ path: ["jobs"], actions: ["read"] }];
       case "schemas":
-        return [{ path: ["jobs", "schemas"], actions: ["read"] }];
+        return [{ path: ["jobs"], actions: ["schemas"] }];
       case "cancel_all":
-        return [{ path: ["jobs"], actions: ["cancel"] }];
+        return [{ path: ["jobs", "all"], actions: ["cancel"] }];
       case "cancel":
-        return [{ path: ["jobs"], actions: ["cancel"] }];
+        return [{ path: ["jobs", input.id], actions: ["cancel"] }];
       case "enqueue":
         return [{ path: ["jobs"], actions: ["write"] }];
       case "progressUpdate":
-        return [{ path: ["jobs"], actions: ["write"] }];
+        return [{ path: ["jobs", input.jobId], actions: ["progressUpdate"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }

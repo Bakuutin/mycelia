@@ -1,10 +1,11 @@
 import { redis } from "@/lib/redis.ts";
 import { debounce } from "@std/async/debounce";
-import { jobRegistry, JobCapability, JobTriggerSource } from "./job-registry.ts";
+import { jobRegistry, JobCapability, JobTriggerSource, JobRegistryEntry } from "./job-registry.ts";
+import { TriggerSource } from "@/utils/registries.ts";
 import { enqueueJob } from "./queue.ts";
 import { EnqueueJobOptions } from "./types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
-import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { getMongoResource, sift } from "@/lib/mongo/core.server.ts";
 
 export class TriggerManager {
   private isRunning = false;
@@ -19,22 +20,23 @@ export class TriggerManager {
 
     console.log("[TriggerManager] Starting trigger manager...");
 
-    const capabilities = this.registry.list();
+    const capabilities = this.registry.list() ;
     for (const cap of capabilities) {
-      if (cap.trigger) {
+      if (cap.manifest.triggers) {
         await this.setupTriggers(cap);
       }
     }
   }
 
-  private async setupTriggers(cap: JobCapability) {
-    const { trigger, name } = cap;
-    if (!trigger) return;
+  private async setupTriggers(cap: JobRegistryEntry) {
+    const triggers = cap.manifest.triggers;
+    const { name } = cap.manifest;
+    if (!triggers) return;
 
     console.log(`[TriggerManager] Setting up triggers for ${name}...`);
 
     const isTest = Deno.env.get("DENO_ENV") === "test";
-    const debounceMs = isTest ? 10 : (trigger.debounceMs || 5000);
+    const debounceMs = isTest ? 10 : (triggers.debounceMs || 5000);
 
     const handleTrigger = debounce(async (reason: string) => {
       await this.checkAndTrigger(cap, reason);
@@ -42,7 +44,7 @@ export class TriggerManager {
 
     this.debouncers.set(name, handleTrigger);
 
-    for (const source of trigger.sources) {
+    for (const source of triggers.sources) {
       await this.setupRedisTrigger(cap, source, (_payload) => 
         handleTrigger(source.name));
     }
@@ -53,10 +55,10 @@ export class TriggerManager {
     }
   }
 
-  private async setupRedisTrigger(cap: JobCapability, source: JobTriggerSource, onTrigger: (payload: any) => void) {
+  private async setupRedisTrigger(cap: JobRegistryEntry, source: TriggerSource, onTrigger: (payload: any) => void) {
     const channel = source.channel;
     if (!channel) {
-      console.warn(`[TriggerManager] Missing channel for trigger in ${cap.name}`);
+      console.warn(`[TriggerManager] Missing channel for trigger in ${cap.manifest.name}`);
       return;
     }
 
@@ -74,40 +76,42 @@ export class TriggerManager {
       if (chan !== channel) return;
       try {
         const payload = JSON.parse(message);
-        if (!source.filter || source.filter(payload)) {
-          console.log(`[TriggerManager] Redis event on ${channel} for ${cap.name} (trigger: ${source.name})`);
+        // Use sift to evaluate the filter if it exists
+        const matches = !source.filter || sift(source.filter)(payload);
+        if (matches) {
+          console.log(`[TriggerManager] Redis event on ${channel} for ${cap.manifest.name} (trigger: ${source.name})`);
           onTrigger(payload);
         }
       } catch (error) {
-        console.error(`[TriggerManager] Error in Redis trigger for ${cap.name}:`, error);
+        console.error(`[TriggerManager] Error in Redis trigger for ${cap.manifest.name}:`, error);
       }
     });
   }
 
-  private async checkAndTrigger(cap: JobCapability, reason: string) {
+  private async checkAndTrigger(cap: JobRegistryEntry, reason: string) {
     try {
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
 
       // 1. Check maxConcurrency if defined
-      if (cap.maxConcurrency !== undefined) {
+      if (cap.manifest.maxConcurrency !== undefined) {
         const activeJobs = await mongo({
           action: "count",
           collection: "jobs",
           query: {
-            type: cap.name,
+            type: cap.manifest.name,
             state: { $in: ["waiting", "active"] },
           },
         }) as number;
 
-        if (activeJobs >= cap.maxConcurrency) {
-          console.log(`[TriggerManager] Max concurrency (${cap.maxConcurrency}) reached for ${cap.name}, skipping trigger.`);
+        if (activeJobs >= cap.manifest.maxConcurrency) {
+          console.log(`[TriggerManager] Max concurrency (${cap.manifest.maxConcurrency}) reached for ${cap.manifest.name}, skipping trigger.`);
           return;
         }
       }
 
       // 2. Enqueue job
-      console.log(`[TriggerManager] Triggering ${cap.name} job (reason: ${reason})...`);
+      console.log(`[TriggerManager] Triggering ${cap.manifest.name} job (reason: ${reason})...`);
       const options: EnqueueJobOptions = {
         trigger: {
           type: "auto",
@@ -115,10 +119,10 @@ export class TriggerManager {
         }
       };
       await enqueueJob({
-        type: cap.name,
+        type: cap.manifest.name,
       } as any, options);
     } catch (error) {
-      console.error(`[TriggerManager] Error triggering ${cap.name}:`, error);
+      console.error(`[TriggerManager] Error triggering ${cap.manifest.name}:`, error);
     }
   }
 

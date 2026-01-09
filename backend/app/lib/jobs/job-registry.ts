@@ -1,50 +1,47 @@
 import type { Job } from "bullmq";
-import { z } from "zod";
-import { dirname, fromFileUrl } from "@std/path";
+import { fromJSONSchema } from "zod";
 import type { JobData, JobResult } from "./types.ts";
-import { Capability, Registry, discoverCapabilities } from "@/utils/registries.ts";
+import { Registry, RegistryEntry, CapabilityManifest, discoverCapabilities, TriggerSource, Triggers } from "@/utils/registries.ts";
 import { Policy } from "@/lib/auth/resources.ts";
 
 /**
  * Trigger source for jobs based on Redis events.
  */
-export interface JobTriggerSource {
-  channel: string;
-  name: string; // Used for trigger.reason
-  filter?: (payload: any) => boolean;
+export interface JobTriggerSource extends TriggerSource {
+  // Use sift syntax for filters so they can be serialized
+  filter?: Record<string, any>;
 }
 
 /**
  * A job capability represents a worker that can process a specific job type.
  * Each capability defines its own name, processor, and data schema.
  */
-export interface JobCapability extends Capability<Job<JobData>, JobResult> {
-  /** The job type name (used as registry key) */
-  name: string;
-  /** Process the job and return a result */
-  use: (job: Job<JobData>) => Promise<JobResult>;
-  /** Zod schema to validate job data for this type */
-  schema: z.ZodType<JobData>;
-  /** Permissions required by this worker */
+export interface JobCapability<T = Job<JobData>> extends Omit<CapabilityManifest, 'inputSchema' | 'outputSchema'> {
+  inputSchema: any; // Should be serializable JSON Schema
+  outputSchema: any; // Should be serializable JSON Schema
+  use: (job: T) => Promise<JobResult>;
   policies: Policy[];
-  /** Optional trigger configuration */
-  trigger?: {
+  triggers?: Omit<Triggers, 'sources'> & {
     sources: JobTriggerSource[];
-    debounceMs?: number;
   };
-  /** Optional maximum concurrency (e.g. 1 for singleton workers) */
   maxConcurrency?: number;
   
 }
 
 /**
+ * Registry entry for jobs. Combines the discovered manifest and path
+ * with the optional loaded implementation.
+ */
+export type JobRegistryEntry = RegistryEntry & Partial<JobCapability>;
+
+/**
  * Registry for job workers. Each worker is registered by its job type name.
  */
-export class JobRegistry extends Registry<Job<JobData>, JobResult, JobCapability> {
+export class JobRegistry extends Registry<JobRegistryEntry> {
   /**
    * Get a worker for a specific job type, throwing if not found.
    */
-  getOrThrow(jobType: string): JobCapability {
+  getOrThrow(jobType: string): JobRegistryEntry {
     const worker = this.get(jobType);
     if (!worker) {
       throw new Error(`No worker registered for job type: ${jobType}`);
@@ -56,7 +53,7 @@ export class JobRegistry extends Registry<Job<JobData>, JobResult, JobCapability
    * Get all registered job type names.
    */
   getJobTypes(): string[] {
-    return this.list().map((c) => c.name);
+    return this.list().map((c) => c.manifest.name);
   }
 
   /**
@@ -66,9 +63,9 @@ export class JobRegistry extends Registry<Job<JobData>, JobResult, JobCapability
     const schemas: Record<string, any> = {};
     for (const capability of this.list()) {
       try {
-        schemas[capability.name] = (z as any).toJSONSchema(capability.schema);
+        schemas[capability.manifest.name] = capability.manifest.inputSchema;
       } catch (err: any) {
-        console.error(`Failed to convert schema for job type ${capability.name}:`, err.message);
+        console.error(`Failed to convert schema for job type ${capability.manifest.name}:`, err.message);
         throw err;
       }
     }
@@ -91,16 +88,39 @@ export class JobRegistry extends Registry<Job<JobData>, JobResult, JobCapability
       throw new Error(`Unknown job type: ${jobType}`);
     }
     
-    return capability.schema.parse(data);
+    return fromJSONSchema(capability.manifest.inputSchema).parse(data) as JobData;
   }
 
   /**
    * Process a job using the registered worker for its type.
+   * Note: This requires the worker implementation to be loaded.
    */
   async process(job: Job<JobData>): Promise<JobResult> {
     const jobType = job.data.type;
-    const worker = this.getOrThrow(jobType);
-    return worker.use(job);
+    const worker = await this.loadImplementation(jobType);
+    return worker.use!(job);
+  }
+
+  /**
+   * Load the full implementation for a capability.
+   */
+  async loadImplementation(name: string): Promise<JobRegistryEntry> {
+    const entry = this.getOrThrow(name);
+    if (entry.use) return entry;
+
+    const mod = await import(entry.path.href);
+    const capability = (mod.default && typeof mod.default === "object") ? mod.default : mod;
+    
+    // Merge implementation into the entry
+    Object.assign(entry, capability);
+    return entry;
+  }
+
+  /**
+   * Load all implementations for all registered capabilities.
+   */
+  async loadAllImplementations(): Promise<void> {
+    await Promise.all(this.list().map((c) => this.loadImplementation(c.manifest.name)));
   }
 }
 
@@ -117,22 +137,14 @@ export async function discoverJobWorkers(): Promise<void> {
   }
   const workersDir = Deno.cwd() + "/app/workers";
 
-  const capabilities = await discoverCapabilities<Job<JobData>, JobResult>(
-    "*.ts",
-    workersDir,
-    ["python.ts", "*.test.ts"],
-  );
+  const capabilities = await discoverCapabilities<Job<JobData>, JobResult>({
+    globPattern: "*.ts",
+    root: workersDir,
+    exclude: ["python.ts", "*.test.ts"],
+  });
 
-  for (const capability of capabilities) {
-    const cap = capability as JobCapability;
-    
-    // Validate that the capability has a schema
-    if (!cap.schema) {
-      console.warn(`Job capability '${cap.name}' missing schema, skipping`);
-      continue;
-    }
-    
-    jobRegistry.register(cap);
+  for (const discovered of capabilities) {
+      jobRegistry.register(discovered);
   }
 
   console.log(`Discovered ${jobRegistry.list().length} job worker(s): ${jobRegistry.getJobTypes().join(", ")}`);

@@ -1,14 +1,11 @@
 import { z } from "zod";
-import { createPythonJobCapability } from "./python.ts";
+import { NetworkJobCapability } from "./python.ts";
 
-/** Schema for test Python integration job data */
-export const schema = z.object({
-  type: z.literal("testPythonIntegration"),
-});
-
-const capability = createPythonJobCapability("testPythonIntegration", schema);
-
-export default capability;
-
-
-
+export default new NetworkJobCapability({
+  name: "testPythonIntegration",
+  schema: z.object({
+    type: z.literal("testPythonIntegration"),
+  }),
+  policies: [],
+  url: `${Deno.env.get("PYTHON_WORKER_URL")}/jobs/testPythonIntegration`,
+})

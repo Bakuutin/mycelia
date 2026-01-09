@@ -3,27 +3,31 @@ import type { JobData, JobResult } from "./types.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
 import { env } from "#/env.ts";
+import { EJSON } from "bson";
 
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
 
-  // 1. Generate short-lived token scoped to the job's required policies
+  const policies = [
+    ...(capability.manifest.policies || []),
+    { resource: `jobs/${job.id}`, action: "progressUpdate", effect: "allow" },
+  ]
+
   const token = await signJWT(
-    "job-system",
+    jobType,
     `job:${job.id}`,
-    capability.policies || [],
+      policies,
     "15m",
   );
 
-  // 2. Prepare environment and command
   const sdkPath = Deno.cwd();
   const myceliaUrl = env.MYCELIA_URL || "http://localhost:5173";
 
-  // Grant the child process access to essential environment variables
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
       MYCELIA_URL: myceliaUrl,
+      MYCELIA_WORKER_PATH: capability.path.href,
   };
 
   const launcherPath = `${sdkPath}/app/lib/jobs/workerLauncher.ts`;
@@ -31,12 +35,12 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
       "run",
-      "-E", // allow env
+      "-E",
       "--config",
       `${sdkPath}/deno.json`,
       `--allow-read=${sdkPath}`,
       `--allow-read=${sdkPath}/../interfaces`,
-      `--allow-net`, // Allow net for MongoDB, Redis, and Mycelia API
+      `--allow-net`, // TODO: limit to specific hosts
       launcherPath,
     ],
     env: jobEnv,
@@ -49,7 +53,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   // 3. Send job data via stdin
   const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(JSON.stringify({
+  await writer.write(new TextEncoder().encode(EJSON.stringify({
     ...job.data,
     id: job.id,
   })));

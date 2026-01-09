@@ -230,7 +230,11 @@ async function persistSequence(
 
 const capability: JobCapability = {
   name: "transcription_sequence_creator",
-  schema,
+  inputSchema: z.toJSONSchema(schema),
+  outputSchema: z.toJSONSchema(z.object({
+    status: z.literal("success"),
+    processed: z.number(),
+  })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "update", effect: "allow" },
@@ -265,16 +269,17 @@ const capability: JobCapability = {
 
     return { status: "success", processed: processedCount };
   },
-  trigger: {
+  triggers: {
     sources: [
       {
         channel: "mycelia:mongo:audio_chunks",
         name: "new_speech_chunk",
-        filter: (payload: any) =>
-          payload.event === "mongo.change" &&
-          (payload.data.operationType === "insert" || payload.data.operationType === "update") &&
-          payload.data.document?.vad?.has_speech === true &&
-          payload.data.document?.transcription_sequence_id === undefined,
+        filter: {
+          event: "mongo.change",
+          "data.operationType": { $in: ["insert", "update"] },
+          "data.document.vad.has_speech": true,
+          "data.document.transcription_sequence_id": { $exists: false },
+        },
       },
     ],
     debounceMs: 1000,

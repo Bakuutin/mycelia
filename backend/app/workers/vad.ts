@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { createPythonJobCapability } from "./python.ts";
+import { NetworkJobCapability } from "./python.ts";
 import { zDateOrString } from "@/lib/zod-json-schema.ts";
-import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 
 /** Schema for VAD job data */
 export const schema = z.object({
@@ -13,30 +12,30 @@ export const schema = z.object({
   batchSize: z.number().default(100),
 });
 
-const pythonCap = createPythonJobCapability("vad", schema, [
-  { resource: "db/audio_chunks", action: "read", effect: "allow" },
-  { resource: "db/audio_chunks", action: "update", effect: "allow" },
-]);
+const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
 
-const capability: JobCapability = {
-  ...pythonCap,
-  schema, // Ensure schema is explicitly included
-  policies: pythonCap.policies,
+export default new NetworkJobCapability({
+  name: "vad",
+  schema,
+  url: `${PYTHON_WORKER_URL}/jobs/vad`,
+  policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
+    { resource: "db/audio_chunks", action: "update", effect: "allow" },
+  ],
   maxConcurrency: 1,
-  trigger: {
+  triggers: {
     sources: [
       {
         channel: "mycelia:mongo:audio_chunks",
         name: "auto_new_chunks",
-        filter: (payload: any) => 
-          payload.event === "mongo.change" && 
-          payload.data.operationType === "insert" &&
-          payload.data.document && 
-          payload.data.document.vad === undefined,
+        filter: {
+          event: "mongo.change",
+          "data.operationType": "insert",
+          "data.document": { $exists: true },
+          "data.document.vad": { $exists: false },
+        },
       },
     ],
     debounceMs: 1000,
-  }
-};
-
-export default capability;
+  },
+});

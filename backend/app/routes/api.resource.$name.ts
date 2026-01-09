@@ -74,6 +74,7 @@ export async function apiResourceHandler(req: Request, res: ExpressResponse) {
         res.json(result);
       }
     } catch (error) {
+      console.error(`[apiResourceHandler] resource ${toolName} error:`, error);
       if (error instanceof Error && error.message === "Unauthorized") {
         return; // Already sent 401 response
       }

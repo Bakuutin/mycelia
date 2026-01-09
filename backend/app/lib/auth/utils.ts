@@ -1,4 +1,5 @@
 export function permissionDenied(detail?: any): never {
+  console.error("Permission denied", detail);
   throw new Response(
     JSON.stringify({
       status: 403,

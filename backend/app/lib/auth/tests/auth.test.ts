@@ -48,10 +48,12 @@ Deno.test("getResource: should throw when resource is not registered", withFixtu
   "TestAuth",
   "accessLogger",
 ], async (auth) => {
-    expect(auth.getResource("nonexistent")).rejects.toHaveProperty(
-    "status",
-    403,
-  );
+  try {
+    auth.getResource("nonexistent");
+    expect(true).toBe(false); // Should not reach here
+  } catch (error) {
+    expect(error).toHaveProperty("status", 403);
+  }
 }));
 
 Deno.test("getResource: should allow access when policy matches", withFixtures([

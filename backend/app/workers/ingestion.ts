@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createPythonJobCapability } from "./python.ts";
+import { NetworkJobCapability } from "./python.ts";
 
 /** Schema for ingestion job data */
 export const schema = z.object({
@@ -7,11 +7,16 @@ export const schema = z.object({
   source: z.string().optional(),
 });
 
-const capability = createPythonJobCapability("ingestion", schema, [
-  { resource: "db/audio_chunks", action: "write", effect: "allow" },
-]);
+const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
 
-export default capability;
+export default new NetworkJobCapability({
+  name: "ingestion",
+  schema,
+  url: `${PYTHON_WORKER_URL}/jobs/ingestion`,
+  policies: [
+    { resource: "db/audio_chunks", action: "write", effect: "allow" },
+  ],
+});
 
 
 

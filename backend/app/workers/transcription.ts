@@ -14,7 +14,12 @@ export const schema = z.object({
 
 const capability: JobCapability = {
   name: "transcription",
-  schema,
+  inputSchema: z.toJSONSchema(schema),
+  outputSchema: z.toJSONSchema(z.object({
+    status: z.literal("success"),
+    result: z.literal("transcribed").optional(),
+    reason: z.string().optional(),
+  })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "update", effect: "allow" },
@@ -183,15 +188,16 @@ const capability: JobCapability = {
       return { status: "success", processed: processedCount };
     }
   },
-  trigger: {
+  triggers: {
     sources: [
       {
         channel: "mycelia:mongo:transcription_sequences",
         name: "sequence_ready",
-        filter: (payload: any) =>
-          payload.event === "mongo.change" &&
-          (payload.data.operationType === "insert" || payload.data.operationType === "update") &&
-          payload.data.document?.state === "ready",
+        filter: {
+          event: "mongo.change",
+          "data.operationType": { $in: ["insert", "update"] },
+          "data.document.state": "ready",
+        },
       },
     ],
     debounceMs: 5000,

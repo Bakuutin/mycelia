@@ -115,11 +115,12 @@ Deno.test("ResourceManager edge cases: denies access if resource is not register
     principal: "test-user",
     policies: [{ resource: "test", action: "read", effect: "allow" }],
   });
-  expect(resourceManager.getResource("test", authWithPolicy)).rejects
-    .toHaveProperty(
-      "status",
-      403,
-    );
+  try {
+    resourceManager.getResource("test", authWithPolicy);
+    expect(true).toBe(false);
+  } catch (error) {
+    expect(error).toHaveProperty("status", 403);
+  }
 }));
 
 Deno.test("ResourceManager edge cases: calls modifier if modify policy present and schema passes", withFixtures([
