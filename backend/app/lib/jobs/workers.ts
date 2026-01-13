@@ -1,6 +1,6 @@
 import type { Worker } from "bullmq";
 import { ObjectId } from "mongodb";
-import { createWorker, getQueueEvents } from "./queue.ts";
+import { createWorker, getQueueEvents, enqueueJob } from "./queue.ts";
 import { processJob } from "./processor.ts";
 import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
@@ -108,6 +108,13 @@ export async function startWorkers() {
 
     worker.on("completed", (job) => {
       console.log(`[${jobType}] Local worker completed job ${job.id}`);
+
+      if (job.returnvalue?.hasMore === true) {
+        console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);
+        enqueueJob(job.data, {
+          trigger: { type: "auto", reason: "hasMore" },
+        });
+      }
     });
 
     worker.on("failed", (job, err) => {

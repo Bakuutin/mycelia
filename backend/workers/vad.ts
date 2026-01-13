@@ -8,7 +8,7 @@ export const schema = z.object({
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
   originalId: z.string().optional(),
-  limit: z.number().default(1000),
+  limit: z.number().default(100),
   batchSize: z.number().default(100),
 });
 

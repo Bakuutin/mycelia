@@ -82,7 +82,7 @@ const capability: JobCapability = {
         });
 
         // 6. Filter segments
-        const segments = transcript.segments || [];
+        const segments = (transcript as any).segments || [];
         const filteredSegments = filterSegments(segments);
 
         if (filteredSegments.length === 0) {
@@ -176,17 +176,21 @@ const capability: JobCapability = {
         action: "find",
         collection: "transcription_sequences",
         query: { state: "ready" },
-        options: { sort: { start: 1 }, limit: 1 },
+        options: { sort: { start: -1 }, limit: 2 },
       }) as any[];
 
+      const hasMore = readySequences.length > 1;
+
+
       let processedCount = 0;
-      const total = readySequences.length;
-      for (const sequence of readySequences) {
-        await processSequence(sequence);
+
+      if (readySequences.length > 0) {
+        await processSequence(readySequences[0]);
         processedCount++;
-        await job.updateProgress({ processed: processedCount, total });
       }
-      return { status: "success", processed: processedCount };
+      
+      
+      return { status: "success", processed: processedCount, hasMore };
     }
   },
   triggers: {
