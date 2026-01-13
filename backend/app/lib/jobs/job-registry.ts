@@ -135,7 +135,7 @@ export async function discoverJobWorkers(): Promise<void> {
   if (jobRegistry.list().length > 0) {
     return;
   }
-  const workersDir = Deno.cwd() + "/app/workers";
+  const workersDir = Deno.cwd() + "/workers";
 
   const capabilities = await discoverCapabilities<Job<JobData>, JobResult>({
     globPattern: "*.ts",

@@ -25,7 +25,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
-      MYCELIA_URL:  env.MYCELIA_URL,
+      MYCELIA_URL:  'http://backend:5173',
       MYCELIA_WORKER_PATH: capability.path.href,
       MYCELIA_JOB_ID: job.id || "",
   };
