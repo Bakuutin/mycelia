@@ -101,8 +101,6 @@ export class NetworkJobCapability<
         `Network capability failed for ${url} (${response.status}): ${errorText}`,
       );
     }
-
-    const result = await response.json();
-    return EJSON.deserialize(result) as Output;
+    return response.json();
   }
 }

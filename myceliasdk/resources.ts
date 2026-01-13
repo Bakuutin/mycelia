@@ -16,5 +16,5 @@ export async function callResource<Input, Output>(code: string, input: Input, {
     if (!response.ok) {
         throw new Error(`Failed to call resource ${code}: ${response.statusText}`);
     }
-    return EJSON.deserialize(await response.json()) as Output;
+    return EJSON.parse(await response.text()) as Output;
 }

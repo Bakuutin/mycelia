@@ -45,8 +45,11 @@ import { up, down, to, status } from "@/lib/mongo/migrator.ts";
 let logFile: Deno.FsFile | null = null;
 
 function setupLogging() {
+  const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
+  const LOG_FILE_PATH = "server.log";
+
   try {
-    logFile = Deno.openSync("server.log", {
+    logFile = Deno.openSync(LOG_FILE_PATH, {
       create: true,
       write: true,
       append: true,
@@ -74,6 +77,32 @@ function setupLogging() {
       try {
         originalLog(...args);
         if (logFile) {
+          try {
+            const stats = Deno.statSync(LOG_FILE_PATH);
+            if (stats.size > MAX_LOG_SIZE) {
+              logFile.close();
+              if (existsSync(LOG_FILE_PATH + ".old")) {
+                Deno.removeSync(LOG_FILE_PATH + ".old");
+              }
+              Deno.renameSync(LOG_FILE_PATH, LOG_FILE_PATH + ".old");
+              logFile = Deno.openSync(LOG_FILE_PATH, {
+                create: true,
+                write: true,
+                append: true,
+              });
+            }
+          } catch (rotateError) {
+            // If rotation fails, we'll just try to continue writing to the current file
+            // Re-open if it was closed but rename failed
+            if (!logFile) {
+              logFile = Deno.openSync(LOG_FILE_PATH, {
+                create: true,
+                write: true,
+                append: true,
+              });
+            }
+          }
+
           logFile.writeSync(new TextEncoder().encode(logLine));
           logFile.syncDataSync();
         }
@@ -85,7 +114,7 @@ function setupLogging() {
     console.log = (...args: any[]) => writeToLog(args, false);
     console.error = (...args: any[]) => writeToLog(args, true);
 
-    console.log("Logging initialized - logs will be written to server.log");
+    console.log(`Logging initialized - logs will be written to ${LOG_FILE_PATH}`);
   } catch (error) {
     console.error("Failed to setup logging:", error);
   }

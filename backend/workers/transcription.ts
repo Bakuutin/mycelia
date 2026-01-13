@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId, Binary} from "bson";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
@@ -76,7 +76,7 @@ const capability: JobCapability = {
         // 5. Call transcription API
         const transcript = await transcriptionResource({
           action: "transcribe",
-          file: combinedAudio,
+          file: new Binary(combinedAudio),
           fileName: "combined.wav",
           fileType: "audio/wav",
         });

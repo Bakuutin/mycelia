@@ -44,8 +44,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       "-E",
       "--config",
       `${sdkPath}/deno.json`,
-      `--allow-read=${sdkPath}`,
-      `--allow-read=${sdkPath}/../myceliasdk`,
+      `--allow-read=${sdkPath},${sdkPath}/../myceliasdk,${tmpDir}`,
       `--allow-write=${tmpDir}`,
       `--allow-net=backend:5173,python-worker:8000`, // TODO: allow extra hosts in manifest
       `--allow-run=ffmpeg`,
