@@ -1,6 +1,7 @@
 import { getRootDB } from "./core.server.ts";
 import { publishEvent } from "@/lib/events/publisher.ts";
 import type { ChangeStreamDocument } from "mongodb";
+import { debounce } from "@std/async/debounce";
 
 let changeStreamWorker: { stop: () => Promise<void> } | null = null;
 
@@ -10,6 +11,13 @@ function getDocumentId(doc: any): string {
   }
   return "unknown";
 }
+
+const debouncedFrequentChanges = debounce(async (collectionName: string) => {
+  await publishEvent(`mongo:${collectionName}`, "mongo.change", {
+    collection: collectionName,
+  });
+}, 1000);
+
 
 async function publishMongoChange(
   collectionName: string,
@@ -25,12 +33,20 @@ async function publishMongoChange(
     timestamp: new Date().toISOString(),
   };
 
+  
+  if (collectionName in [
+    "histogram_5min",
+    "histogram_1hour",
+    "histogram_1day",
+    "histogram_1week",
+    "access_logs",
+  ]) {
+    debouncedFrequentChanges(collectionName);
+    return;
+  }
+
   await publishEvent(`mongo:${collectionName}:${documentId}`, "mongo.change", eventData);
   await publishEvent(`mongo:${collectionName}`, "mongo.change", eventData);
-
-  if (collectionName.startsWith("histogram_")) {
-    await publishEvent("mongo:histogram", "mongo.change", eventData);
-  }
 }
 
 export async function startChangeStreamWorker(): Promise<void> {
