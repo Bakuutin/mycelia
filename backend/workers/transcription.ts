@@ -32,7 +32,7 @@ const capability: JobCapability = {
   use: async (job) => {
     const { sequenceId } = job.data as z.infer<typeof schema>;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
-    const myceliaUrl = env.MYCELIA_URL;
+    const myceliaUrl = env.MYCELIA_URL as string;
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
     const transcriptionResource = (input: any) => callResource("transcription", input, { jwt, myceliaUrl });
 

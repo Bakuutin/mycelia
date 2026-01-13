@@ -21,6 +21,8 @@ import ObjectHistoryPage from "./pages/ObjectHistoryPage";
 import CreateObjectPage from "./pages/CreateObjectPage";
 import CreateAudioRecordPage from "./pages/CreateAudioRecordPage";
 import AudioPlayerPage from "./pages/AudioPlayerPage";
+import AudioSourceFilesPage from "./pages/AudioSourceFilesPage";
+import AudioSourceFileDetailPage from "./pages/AudioSourceFileDetailPage";
 import AudioExportPage from "./pages/AudioExportPage";
 import MessengerPage from "./pages/MessengerPage";
 import OAuthConsentPage from "./pages/OAuthConsentPage";
@@ -94,6 +96,14 @@ export const router = createBrowserRouter([
       {
         path: "audio",
         element: <AudioPlayerPage />,
+      },
+      {
+        path: "audio/source_files",
+        element: <AudioSourceFilesPage />,
+      },
+      {
+        path: "audio/source_files/:id",
+        element: <AudioSourceFileDetailPage />,
       },
       {
         path: "audio/record",
