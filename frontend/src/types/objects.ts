@@ -1,1 +1,1 @@
-export * from "@interfaces/objects.ts";
+export * from "@myceliasdk/objects.ts";

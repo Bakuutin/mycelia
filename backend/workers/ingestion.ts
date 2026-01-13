@@ -14,6 +14,7 @@ export default new NetworkJobCapability({
   schema,
   url: `${PYTHON_WORKER_URL}/jobs/ingestion`,
   policies: [
+    { resource: "db/audio_chunks", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "write", effect: "allow" },
   ],
 });

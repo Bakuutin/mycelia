@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { NetworkJobCapability } from "./python.ts";
-import { zDateOrString } from "@/lib/zod-json-schema.ts";
+import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
 /** Schema for diarization job data */
 export const schema = z.object({
@@ -16,8 +16,8 @@ export default new NetworkJobCapability({
   schema,
   url: `${PYTHON_WORKER_URL}/jobs/diarization`,
   policies: [
-    { resource: "db/transcriptions", action: "read", effect: "allow" },
-    { resource: "db/transcriptions", action: "update", effect: "allow" },
+    { resource: "db/audio_chunks", action: "*", effect: "allow" },
+    { resource: "db/diarizations", action: "write", effect: "allow" },
   ],
 });
 

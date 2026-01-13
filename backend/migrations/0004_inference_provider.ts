@@ -1,5 +1,4 @@
 import { Db, ObjectId } from "mongodb";
-import { zServerConfig } from "@interfaces/config.ts";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 

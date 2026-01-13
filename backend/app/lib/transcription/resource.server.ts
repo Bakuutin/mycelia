@@ -4,7 +4,7 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
-import { zServerConfig } from "@interfaces/config.ts";
+import { zServerConfig } from "@myceliasdk/config.ts";
 import { ObjectId, Binary } from "bson";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");

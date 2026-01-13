@@ -7,7 +7,7 @@ services:
       - --protected-mode yes
       - --bind 0.0.0.0
     volumes:
-      - redis_data:/data
+      - /mnt/data/mycelia/redis:/data
     restart: always
     environment:
       - REDIS_PASSWORD
@@ -15,10 +15,8 @@ services:
     image: mongo:8.2
     entrypoint: ["/mongo-entrypoint.sh"]
     command: mongod --config /etc/mongod.conf
-    ports:
-      - "${MONGO_PORT:-27017}:27017"
     volumes:
-      - mongo_data:/data/db
+      - /mnt/data/mycelia/mongo:/data/db
       - ./misc/mongo/mongod.conf:/etc/mongod.conf:ro
       - ./misc/mongo/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
       - ./misc/mongo/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
@@ -35,11 +33,8 @@ services:
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
   #   entrypoint: ["/mongot-entrypoint.sh"]
-  #   ports:
-  #     - "27028:27028"
-  #     - "9946:9946"
   #   volumes:
-  #     - mongo_search_data:/data/mongot
+  #     - /mnt/data/mycelia/mongo-search:/data/mongot
   #     - ./misc/mongo/mongot.conf:/mongot-community/config.default.yml:ro
   #     - ./misc/mongo/mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
   #   environment:
@@ -52,20 +47,20 @@ services:
     build:
       context: .
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
-    ports:
-      - "${FRONTEND_PORT:-8080}:8080"
+    expose:
+      - "8080"
     restart: always
     volumes:
       - ./frontend:/app
-      - ./interfaces:/app/interfaces
+      - ./myceliasdk:/app/myceliasdk
 
   backend:
     image: bakuutin/mycelia-backend:dev
     build:
       context: .
       dockerfile: ./backend/Dockerfile
-    ports:
-      - "${BACKEND_PORT:-5173}:5173"
+    expose:
+      - "5173"
     restart: always
     command: deno task dev
     env_file:
@@ -76,6 +71,7 @@ services:
       PYTHON_WORKER_URL: http://python-worker:8000
     volumes:
       - ./backend:/app
+      - ./myceliasdk:/myceliasdk
     deploy:
       resources:
         limits:
@@ -108,7 +104,8 @@ services:
   nginx:
     image: nginx:1.27-alpine
     ports:
-      - "${NGINX_PORT:-4433}:4433"
+      - "4433:4433"
+      - "3210:80"
     volumes:
       - ./misc/nginx/templates:/etc/nginx/templates:ro
       - ./misc/nginx/ssl:/etc/nginx/ssl:ro
@@ -117,7 +114,4 @@ services:
 
 
 volumes:
-  mongo_data:
-  mongo_search_data:
-  redis_data:
   worker_data:

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Chat, Message } from "@interfaces/messengers.ts";
+import type { Chat, Message } from "@myceliasdk/messengers.ts";
 
 interface MessengerState {
   chats: Chat[];

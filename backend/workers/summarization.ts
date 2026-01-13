@@ -1,12 +1,12 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
 import type { JobData, JobResult } from "@/lib/jobs/types.ts";
-import { getServerAuth } from "@/lib/auth/core.server.ts";
-import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import { getLLMResource } from "@/lib/llm/resource.server.ts";
-import { getObjectsResource } from "@/lib/objects/resource.server.ts";
-import { zDateOrString, zObjectId } from "@/lib/zod-json-schema.ts";
+import { env } from "#/env.ts";
+import { callResource } from "@myceliasdk/resources.ts";
+import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
+import type { MongoRequest, MongoResponse } from "@/lib/mongo/core.server.ts";
+import type { ObjectsRequest, ObjectsResponse } from "@/lib/objects/resource.server.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -40,17 +40,17 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const start = new Date(startStr);
   const end = new Date(endStr);
   
-  const auth = await getServerAuth();
+  const jwt = Deno.env.get("MYCELIA_JWT")!;
+  const myceliaUrl = env.MYCELIA_URL;
 
-  const mongo = await getMongoResource(auth);
-  const transcripts = await mongo({
+  const transcripts = await callResource<MongoRequest, MongoResponse>("mongo", {
     action: "find",
     collection: "transcriptions",
     query: {
       start: { $gte: start, $lte: end },
     },
     options: { sort: { start: 1 } },
-  });
+  }, { jwt, myceliaUrl });
 
   if (!transcripts || transcripts.length === 0) {
     return { success: false, message: "No transcripts found in range" };
@@ -79,19 +79,18 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }
   promptText += getTimestampMessage(new Date(lastEnd));
 
-  const llm = await getLLMResource(auth);
   const modelAlias = userModel || "medium";
   const systemPrompt = userPrompt ||
     `You are a helpful assistant. Summarize the following conversation transcript.`;
 
-  const completion = await llm({
+  const completion = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: promptText },
     ],
-  });
+  }, { jwt, myceliaUrl });
 
   const summary: string = completion.choices[0].message.content;
 
@@ -110,13 +109,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
   let objectId;
 
-  const objects = await getObjectsResource(auth);
-
   if (existingObjectId) {
-    const currentObject = await objects({
+    const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "get",
       id: existingObjectId.toString(),
-    });
+    }, { jwt, myceliaUrl });
 
     if (!currentObject) {
       throw new Error(`Object ${existingObjectId} not found`);
@@ -125,25 +122,26 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     const currentSummaries = currentObject.summaries || [];
     const newSummaries = [...currentSummaries, summaryEntry];
 
-    await objects({
+    await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "update",
       id: existingObjectId.toString(),
       version: currentObject.version ?? 0,
       field: "summaries",
       value: newSummaries,
-    });
+    }, { jwt, myceliaUrl });
 
     objectId = existingObjectId;
   } else {
-    const titleResponse = await llm({
+    const titleResponse = await callResource<any, any>("llm", {
       action: "completions",
       model: modelAlias,
       messages: [
         { role: "system", content: "Generate a short title for this conversation, no formatting" },
         { role: "user", content: summaryEntry.text },
       ],
-    });
-    const resultObject = await objects({
+    }, { jwt, myceliaUrl });
+
+    const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "create",
       object: {
         isConversation: true,
@@ -158,7 +156,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
           jobId: job.id,
         },
       },
-    });
+    }, { jwt, myceliaUrl });
     objectId = resultObject.insertedId.toString();
   }
 

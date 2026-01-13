@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { callResource } from "@/lib/api";
-import { zPrompt, zPromptForm, type PromptFormData } from "@interfaces/config.ts";
+import { zPrompt, zPromptForm, type PromptFormData } from "@myceliasdk/config.ts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

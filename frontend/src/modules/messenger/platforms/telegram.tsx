@@ -58,7 +58,7 @@ function renderTelegramText(text: any): React.ReactNode {
 }
 
 interface TelegramBubbleProps {
-  message: import("@interfaces/messengers.ts").Message;
+  message: import("@myceliasdk/messengers.ts").Message;
   children?: React.ReactNode;
 }
 

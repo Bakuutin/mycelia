@@ -192,7 +192,7 @@ mycelia/
 ├── backend/            # Deno API server
 ├── python/             # Audio import, STT, conversation extraction
 ├── gpu/                # GPU inference stack
-├── interfaces/         # Shared TypeScript interfaces
+├── myceliasdk/         # Shared TypeScript myceliasdk
 └── docs/               # Additional documentation
 ```
 

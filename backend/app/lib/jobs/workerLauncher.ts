@@ -1,6 +1,7 @@
 import { verifyToken } from "@/lib/auth/core.server.ts";
 import { readAll } from "@std/io/read-all";
 import { EJSON } from "bson";
+import { setupResources } from "@/lib/resources/registry.ts";
 
 /**
  * Worker Launcher - Entry point for isolated job processes
@@ -11,6 +12,7 @@ import { EJSON } from "bson";
  */
 
 async function main() {
+  await setupResources();
   const jwt = Deno.env.get("MYCELIA_JWT");
   const workerPath = Deno.env.get("MYCELIA_WORKER_PATH");
   const jobDataRaw = await readAll(Deno.stdin);

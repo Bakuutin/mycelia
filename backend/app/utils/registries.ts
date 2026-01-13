@@ -89,7 +89,7 @@ export async function discoverCapabilities<Input, Output>(
         "--config",
         `${sdkPath}/deno.json`,
         `--allow-read=${sdkPath}`,
-        `--allow-read=${sdkPath}/../interfaces`,
+        `--allow-read=${sdkPath}/../myceliasdk`,
         launcherPath,
       ],
       env: {

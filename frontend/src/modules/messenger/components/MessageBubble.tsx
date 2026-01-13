@@ -1,4 +1,4 @@
-import type { Message } from "@interfaces/messengers.ts";
+import type { Message } from "@myceliasdk/messengers.ts";
 import { useMessageRenderer } from "../core/useMessageRenderer.ts";
 
 export function MessageBubble({ message }: { message: Message }) {

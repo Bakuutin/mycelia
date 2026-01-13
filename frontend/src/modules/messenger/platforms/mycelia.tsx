@@ -14,7 +14,7 @@ import {
 } from "@/components/ai-elements/tool";
 
 interface MyceliaMessageProps {
-  message: import("@interfaces/messengers.ts").Message;
+  message: import("@myceliasdk/messengers.ts").Message;
   children?: React.ReactNode;
 }
 

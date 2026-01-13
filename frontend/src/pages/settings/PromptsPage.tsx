@@ -4,7 +4,7 @@ import { ObjectId } from "bson";
 import { z } from "zod";
 import { callResource } from "@/lib/api";
 import type { Prompt, ServerConfig } from "@/types/config";
-import { zPrompt, zServerConfig, zServerConfigPrompts, PROMPT_TASK_LABELS } from "@interfaces/config.ts";
+import { zPrompt, zServerConfig, zServerConfigPrompts, PROMPT_TASK_LABELS } from "@myceliasdk/config.ts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {

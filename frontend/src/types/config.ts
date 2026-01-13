@@ -7,5 +7,5 @@ export {
   type Prompt,
   type ServerConfig,
   type PromptFormData,
-} from "@interfaces/config.ts";
+} from "@myceliasdk/config.ts";
 

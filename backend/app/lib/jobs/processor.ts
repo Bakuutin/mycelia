@@ -22,13 +22,16 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   );
 
   const sdkPath = Deno.cwd();
-  const myceliaUrl = env.MYCELIA_URL || "http://localhost:5173";
 
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
-      MYCELIA_URL: myceliaUrl,
+      MYCELIA_URL:  env.MYCELIA_URL,
       MYCELIA_WORKER_PATH: capability.path.href,
+      MYCELIA_JOB_ID: job.id || "",
   };
+
+
+
 
   const launcherPath = `${sdkPath}/app/lib/jobs/workerLauncher.ts`;
 
@@ -39,8 +42,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       "--config",
       `${sdkPath}/deno.json`,
       `--allow-read=${sdkPath}`,
-      `--allow-read=${sdkPath}/../interfaces`,
-      `--allow-net`, // TODO: limit to specific hosts
+      `--allow-read=${sdkPath}/../myceliasdk`,
+      `--allow-net=backend:5173,python-worker:8000`,
+      `--allow-sys=hostname,osRelease`,
+       // TODO: allow extra hosts in manifest
       launcherPath,
     ],
     env: jobEnv,
