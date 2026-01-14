@@ -97,6 +97,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const summaryEntry = {
     text: summary,
     model: modelAlias,
+    modelName: completion.model,
     date: new Date(),
     prompt: systemPrompt,
     usage: completion.usage ? {
@@ -178,9 +179,7 @@ const capability: JobCapability = {
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
     { resource: "llm/chat", action: "completions", effect: "allow" },
-    { resource: "objects", action: "read", effect: "allow" },
-    { resource: "objects", action: "create", effect: "allow" },
-    { resource: "objects", action: "update", effect: "allow" },
+    { resource: "objects", action: "*", effect: "allow" },
   ],
   use,
 };

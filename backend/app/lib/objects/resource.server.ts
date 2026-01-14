@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ObjectId } from "bson";
 import { Resource } from "@/lib/auth/resources.ts";
-import { Auth } from "@/lib/auth/core.server.ts";
+import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
@@ -245,7 +245,8 @@ export class ObjectsResource
     }
   }
 
-  async use(input: ObjectsRequest, auth: Auth): Promise<ObjectsResponse> {
+  async use(input: ObjectsRequest): Promise<ObjectsResponse> {
+    const auth = await getServerAuth(); // already checked objects permissions 
     const mongo = await getMongoResource(auth);
 
     switch (input.action) {

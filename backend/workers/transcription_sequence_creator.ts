@@ -49,6 +49,8 @@ async function* getSpeechSequences(
     },
     {
       sort: { start: -1 }, // DESCENDING - newest first
+      hint: "audio_chunks_pending_work",
+      projection: { _id: 1, original_id: 1, start: 1, index: 1, vad: 1, transcription_sequence_id: 1 },
     },
     200 // batch size
   );
