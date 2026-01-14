@@ -1,7 +1,7 @@
 import type { Job } from "bullmq";
 import type { JobData, JobResult } from "@/lib/jobs/types.ts";
+import type { JobTriggerSource } from "@/lib/jobs/job-registry.ts";
 import { EJSON } from "bson";
-import type { JobTriggerSource } from "../lib/jobs/job-registry.ts";
 import { z } from "zod";
 import type { Policy } from "@/lib/auth/resources.ts";
 

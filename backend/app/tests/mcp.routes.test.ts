@@ -15,7 +15,7 @@ Deno.test(
 
     expect(data.message).toBe("MCP endpoint - Use POST to call MCP tools");
     expect(data.authenticated).toBe(true);
-    expect(data.principal).toBe("admin");
+    expect(data.principal).toBe("server");
   }),
 );
 
