@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { NetworkJobCapability } from "./python.ts";
-import { zDateOrString } from "@/lib/zod-json-schema.ts";
+import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
 /** Schema for VAD job data */
 export const schema = z.object({
@@ -8,7 +8,7 @@ export const schema = z.object({
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
   originalId: z.string().optional(),
-  limit: z.number().default(1000),
+  limit: z.number().default(100),
   batchSize: z.number().default(100),
 });
 

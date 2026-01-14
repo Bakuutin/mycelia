@@ -28,11 +28,8 @@ export const env = {
 
   get SECRET_KEY() {
     const key = Deno.env.get("SECRET_KEY");
-    if (!key) {
+    if (!key || key === 'change-me-please') {
       throw new Error("SECRET_KEY environment variable is required");
-    }
-    if (key.length < 32) {
-      console.warn("WARNING: SECRET_KEY should be at least 32 characters for security");
     }
     return key;
   },
@@ -41,7 +38,7 @@ export const env = {
 
   OTEL_EXPORTER_OTLP_ENDPOINT: Deno.env.get("OTEL_EXPORTER_OTLP_ENDPOINT") ?? "http://localhost:4318",
 
-  MYCELIA_URL: Deno.env.get("MYCELIA_URL"),
+  MYCELIA_URL: Deno.env.get("MYCELIA_URL") || "http://backend:5173",
   MYCELIA_TOKEN: Deno.env.get("MYCELIA_TOKEN"),
   MYCELIA_CLIENT_ID: Deno.env.get("MYCELIA_CLIENT_ID"),
 };

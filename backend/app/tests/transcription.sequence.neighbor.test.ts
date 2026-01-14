@@ -5,13 +5,15 @@ import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { ObjectId } from "mongodb";
-import transcription_sequence_creator from "@/workers/transcription_sequence_creator.ts";
+import transcription_sequence_creator from "#/workers/transcription_sequence_creator.ts";
 
 Deno.test(
   "Sequence Creator - Single chunk with neighbor (index-1)",
   withFixtures([
     "Admin",
     "Mongo",
+    "Migrations",
+    "MockCallResourceSDK",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -84,6 +86,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "Migrations",
+    "MockCallResourceSDK",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);

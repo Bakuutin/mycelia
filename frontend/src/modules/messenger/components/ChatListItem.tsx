@@ -1,5 +1,5 @@
 import { usePlatform } from "../core/useMessageRenderer.ts";
-import type { Chat } from "@interfaces/messengers.ts";
+import type { Chat } from "@myceliasdk/messengers.ts";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { useFormattedTime } from "@/lib/formatTime";

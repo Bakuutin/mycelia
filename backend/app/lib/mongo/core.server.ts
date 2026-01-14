@@ -508,12 +508,38 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
   }
 
   extractActions(input: MongoRequest) {
-    const actions = [...actionMap[input.action]];
-    if (
-      (input.action === "updateOne" || input.action === "updateMany") &&
-      input.options?.upsert
-    ) {
-      actions.push("update");
+    let actions: string[];
+
+    if (input.action === "bulkWrite") {
+      const actionSet = new Set<string>();
+      for (const op of input.operations) {
+        if (op.insertOne || op.insertMany) actionSet.add("write");
+        if (op.updateOne || op.updateMany || op.replaceOne) {
+          actionSet.add("update");
+          const updateOp = op.updateOne || op.updateMany || op.replaceOne;
+          if (updateOp.options?.upsert) {
+            actionSet.add("write");
+          }
+        }
+        if (op.deleteOne || op.deleteMany) actionSet.add("delete");
+      }
+      actions = Array.from(actionSet);
+      // If no operations, default to read just to have something,
+      // though bulkWrite with no ops is technically a no-op.
+      if (actions.length === 0) actions.push("read");
+    } else if (input.action === "aggregate") {
+      const isWrite = input.pipeline.some(
+        (stage) => "$out" in stage || "$merge" in stage,
+      );
+      actions = isWrite ? ["read", "write", "update", "delete"] : ["read"];
+    } else {
+      actions = [...actionMap[input.action]];
+      if (
+        (input.action === "updateOne" || input.action === "updateMany") &&
+        (input as any).options?.upsert
+      ) {
+        actions.push("write");
+      }
     }
 
     return [
@@ -577,6 +603,6 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
 
 export function getMongoResource(
   auth: Auth,
-): (input: MongoRequest) => Promise<MongoResponse> {
-  return auth.getResource<MongoRequest, MongoResponse>("mongo") 
+) {
+  return auth.getResource<MongoRequest, MongoResponse>("mongo");
 }

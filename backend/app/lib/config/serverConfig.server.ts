@@ -1,6 +1,6 @@
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
-import { ServerConfig, zServerConfig } from "@interfaces/config.ts";
+import { ServerConfig, zServerConfig } from "@myceliasdk/config.ts";
 import { ObjectId } from "mongodb";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");

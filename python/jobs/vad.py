@@ -171,5 +171,5 @@ def process_vad_job(job_id: str, data: VadJobData, progress_callback: Callable) 
         "processed": total_processed,
         "hasSpeech": has_speech,
         "duration": duration,
-        "hasMoreChunks": has_more,
+        "hasMore": has_more,
     }

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { Message } from "@interfaces/messengers.ts";
+import type { Message } from "@myceliasdk/messengers.ts";
 import { registry } from "./registry.ts";
 
 export function useMessageRenderer(message: Message) {

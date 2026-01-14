@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from contextvars import ContextVar
 
-from .config import get_url, client_id, client_secret
+from .config import get_url, client_id, client_secret, ALLOW_INSECURE_TRANSPORT
 
 # ContextVars to store per-request job state
 job_token_var: ContextVar[Optional[str]] = ContextVar("job_token", default=None)
@@ -23,6 +23,7 @@ def exchange_api_key_for_jwt() -> str:
             "client_id": client_id,
             "client_secret": client_secret,
         },
+        verify=not ALLOW_INSECURE_TRANSPORT,
     )
     response.raise_for_status()
     data = response.json()
@@ -34,6 +35,7 @@ def get_session() -> requests.Session:
     session = job_session_var.get()
     if session is None:
         session = requests.Session()
+        session.verify = not ALLOW_INSECURE_TRANSPORT
         token = job_token_var.get()
         if token:
             session.headers.update({"Authorization": f"Bearer {token}"})

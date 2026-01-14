@@ -2,7 +2,6 @@ import type { Job } from "bullmq";
 import type { JobData, JobResult } from "./types.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
-import { env } from "#/env.ts";
 import { EJSON } from "bson";
 
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
@@ -22,15 +21,21 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   );
 
   const sdkPath = Deno.cwd();
-  const myceliaUrl = env.MYCELIA_URL || "http://localhost:5173";
+
+  const tmpDir = await Deno.makeTempDir({
+    prefix: `mycelia-${job.id}-`,
+  });
 
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
-      MYCELIA_URL: myceliaUrl,
+      MYCELIA_URL: 'http://backend:5173',
       MYCELIA_WORKER_PATH: capability.path.href,
+      MYCELIA_JOB_ID: job.id || "",
+      TMPDIR: tmpDir,
   };
 
   const launcherPath = `${sdkPath}/app/lib/jobs/workerLauncher.ts`;
+
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
@@ -38,9 +43,11 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       "-E",
       "--config",
       `${sdkPath}/deno.json`,
-      `--allow-read=${sdkPath}`,
-      `--allow-read=${sdkPath}/../interfaces`,
-      `--allow-net`, // TODO: limit to specific hosts
+      `--allow-read=${sdkPath},${sdkPath}/../myceliasdk,${tmpDir}`,
+      `--allow-write=${tmpDir}`,
+      `--allow-net=backend:5173,python-worker:8000`, // TODO: allow extra hosts in manifest
+      `--allow-run=ffmpeg`,
+      `--allow-sys=hostname,osRelease`,
       launcherPath,
     ],
     env: jobEnv,
@@ -51,7 +58,6 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   const child = cmd.spawn();
 
-  // 3. Send job data via stdin
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(EJSON.stringify({
     ...job.data,
@@ -59,7 +65,6 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   })));
   await writer.close();
 
-  // 4. Handle stdout and stderr streams
   let stdoutContent = "";
   let stderrContent = "";
 
@@ -81,7 +86,6 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       const chunk = new TextDecoder().decode(value);
       stderrContent += chunk;
 
-      // Check for progress messages in real-time
       const lines = chunk.split("\n");
       for (const line of lines) {
         if (line.startsWith("__PROGRESS__:")) {

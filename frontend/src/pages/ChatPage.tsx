@@ -19,7 +19,7 @@ import { Paperclip } from "lucide-react";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
-import type { Message as MessengerMessage } from "@interfaces/messengers";
+import type { Message as MessengerMessage } from "@myceliasdk/messengers";
 
 async function fetchMessages(chatId: string) {
   const messages = await callResource("mongo", {

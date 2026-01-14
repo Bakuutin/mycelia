@@ -8,7 +8,7 @@ import {
   type Resolution,
   updateAllHistogram,
 } from "@/services/timeline.server.ts";
-import { zDateOrRelativeTime } from "@/lib/zod-json-schema.ts";
+import { zDateOrRelativeTime } from "@myceliasdk/zod-json-schema.ts";
 
 function parseDateOrRelativeTime(expr: string | Date): Date {
   if (expr instanceof Date) {

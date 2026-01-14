@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import type { Chat, Message } from "@interfaces/messengers.ts";
+import type { Chat, Message } from "@myceliasdk/messengers.ts";
 
 export interface Platform {
   id: string; // e.g., 'telegram', 'whatsapp', 'signal'

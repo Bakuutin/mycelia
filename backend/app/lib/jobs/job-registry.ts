@@ -87,6 +87,10 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
     if (!capability) {
       throw new Error(`Unknown job type: ${jobType}`);
     }
+    console.log(JSON.stringify(data));
+
+    data = JSON.parse(JSON.stringify(data)); // serialize native json types
+
     
     return fromJSONSchema(capability.manifest.inputSchema).parse(data) as JobData;
   }
@@ -135,7 +139,7 @@ export async function discoverJobWorkers(): Promise<void> {
   if (jobRegistry.list().length > 0) {
     return;
   }
-  const workersDir = Deno.cwd() + "/app/workers";
+  const workersDir = Deno.cwd() + "/workers";
 
   const capabilities = await discoverCapabilities<Job<JobData>, JobResult>({
     globPattern: "*.ts",

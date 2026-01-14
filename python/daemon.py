@@ -4,7 +4,6 @@ from discovery import Importer, extract_device_info
 import argparse
 import logging
 from datetime import datetime, UTC
-from diarization import run_voice_activity_detection
 import time
 
 import platform
@@ -366,8 +365,6 @@ def main(reset_errors=False):
     backfill_device_info(limit=50)
     step += 1
 
-    logger.info(f"\n[{step}/{total_steps}] Running voice activity detection...")
-    run_voice_activity_detection(limit=1000)
 
     logger.info("=" * 60)
     logger.info("Daemon cycle complete")

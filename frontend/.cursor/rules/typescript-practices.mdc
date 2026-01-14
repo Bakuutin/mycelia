@@ -13,7 +13,7 @@ This project uses TypeScript with strict settings enabled. Follow these patterns
 - Use PascalCase for type names (e.g., `ConversationData`, `EventItem`)
 - Export types at the end of type definition files
 - Use union types (`|`) for mutually exclusive values
-- Prefer interfaces for object shapes, types for unions/aliases
+- Prefer myceliasdk for object shapes, types for unions/aliases
 
 ## Imports and Exports
 - Use named exports for components and utilities: `export function MyComponent()`

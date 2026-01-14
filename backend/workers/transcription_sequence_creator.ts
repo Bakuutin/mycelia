@@ -1,14 +1,14 @@
 import { z } from "zod";
 import { ObjectId } from "mongodb";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
-import { getServerAuth } from "@/lib/auth/core.server.ts";
+import { env } from "#/env.ts";
+import { callResource } from "@myceliasdk/resources.ts";
 
 import { MAX_SEQUENCE_LENGTH, MAX_GAP_MS } from "@/lib/transcription-constants.ts";
 import { mongoCursor } from "@/lib/mongo/cursor.ts";
 
 export const schema = z.object({
   type: z.literal("transcription_sequence_creator"),
-  chunkId: z.string().optional(),
 });
 
 
@@ -49,6 +49,8 @@ async function* getSpeechSequences(
     },
     {
       sort: { start: -1 }, // DESCENDING - newest first
+      hint: "audio_chunks_pending_work",
+      projection: { _id: 1, original_id: 1, start: 1, index: 1, vad: 1, transcription_sequence_id: 1 },
     },
     200 // batch size
   );
@@ -240,20 +242,12 @@ const capability: JobCapability = {
     { resource: "db/audio_chunks", action: "update", effect: "allow" },
     { resource: "db/transcription_sequences", action: "write", effect: "allow" },
   ],
-  maxConcurrency: 1, // Only one creator at a time to avoid race conditions
+  maxConcurrency: 1,
   use: async (job) => {
-    const { chunkId } = job.data as z.infer<typeof schema>;
-    const auth = await getServerAuth();
-    const mongo = auth.getResource("mongo");
+    const jwt = Deno.env.get("MYCELIA_JWT")!;
+    const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
+    const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
 
-    // Single chunk mode not supported - batch processing required for proper sequencing
-    if (chunkId) {
-      throw new Error(
-        "Single chunk processing not supported. Use batch mode (no chunkId) instead."
-      );
-    }
-
-    // Build and persist sequences using Option A algorithm
     let processedCount = 0;
     let sequencesCreated = 0;
 

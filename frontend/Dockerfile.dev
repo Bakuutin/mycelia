@@ -12,8 +12,8 @@ COPY ./frontend/deno.json ./frontend/deno.lock ./frontend/package.json ./fronten
 # Pre-resolve npm packages Vite needs into node_modules via Deno
 RUN deno cache --node-modules-dir --lock=deno.lock --reload npm:vite
 
-# Copy interfaces for import resolution
-COPY ./interfaces ./interfaces
+# Copy myceliasdk for import resolution
+COPY ./myceliasdk ./myceliasdk
 
 # Source files will be mounted as a volume for hot reload
 # COPY ./frontend .  # Not needed - volume mount in docker-compose

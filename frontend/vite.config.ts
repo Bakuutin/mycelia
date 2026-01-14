@@ -3,16 +3,16 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { existsSync } from "node:fs";
 
-// In Docker build, interfaces is copied to ./interfaces
-// In local dev, interfaces is at ../interfaces
-const interfacesPath = existsSync("../interfaces") ? "../interfaces/" : "./interfaces/";
+// In Docker build, myceliasdk is copied to ./myceliasdk
+// In local dev, myceliasdk is at ../myceliasdk
+const interfacesPath = existsSync("../myceliasdk") ? "../myceliasdk/" : "./myceliasdk/";
 
 export default defineConfig({
   plugins: [deno(), react()],
   resolve: {
     alias: {
       "@": "./src",
-      "@interfaces/": interfacesPath,
+      "@myceliasdk/": interfacesPath,
     },
   },
   server: {

@@ -26,7 +26,7 @@
   "nodeModulesDir": "auto",
   "imports": {
     "@/": "./src/",
-    "@interfaces/": "../interfaces/",
+    "@myceliasdk/": "../myceliasdk/",
     "@radix-ui/react-avatar": "npm:@radix-ui/react-avatar@^1.1.3",
     "@radix-ui/react-checkbox": "npm:@radix-ui/react-checkbox@^1.3.3",
     "@radix-ui/react-collapsible": "npm:@radix-ui/react-collapsible@^1.1.3",

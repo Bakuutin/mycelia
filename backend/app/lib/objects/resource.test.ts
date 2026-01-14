@@ -463,7 +463,7 @@ Deno.test(
 
     const createEntry = history.find((h: any) => h.action === "create");
     expect(createEntry).toBeDefined();
-    expect(createEntry.userId).toBe("admin");
+    expect(createEntry.userId).toBe("server");
     expect(createEntry.version).toBe(1);
 
     const nameUpdate = history.find(
@@ -602,7 +602,7 @@ Deno.test(
 
     const deleteEntry = history.find((h: any) => h.action === "delete");
     expect(deleteEntry).toBeDefined();
-    expect(deleteEntry.userId).toBe("admin");
+    expect(deleteEntry.userId).toBe("server");
     expect(deleteEntry.field).toBeNull();
   }),
 );

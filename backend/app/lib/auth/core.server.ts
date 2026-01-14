@@ -74,6 +74,11 @@ export class Auth {
     const token = Deno.env.get("MYCELIA_JWT");
     const myceliaUrl = env.MYCELIA_URL;
 
+    // Prefer local resource if it's registered
+    if (defaultResourceManager.listResources().some(r => r.code === code)) {
+      return defaultResourceManager.getResource(code, this);
+    }
+
     if (token && myceliaUrl) {
       console.log(`[Auth] Using remote resource call for ${code} via ${myceliaUrl}`);
       return async (input: Input): Promise<Output | Response> => {

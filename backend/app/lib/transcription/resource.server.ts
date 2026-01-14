@@ -4,8 +4,9 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
-import { zServerConfig } from "@interfaces/config.ts";
+import { zServerConfig } from "@myceliasdk/config.ts";
 import { ObjectId, Binary } from "bson";
+import { Binary as MongoBinary } from "mongodb";
 
 const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
@@ -78,16 +79,16 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           let fileBuffer: Uint8Array;
           if (input.file instanceof Uint8Array) {
             fileBuffer = input.file;
-          } else if (input.file instanceof Buffer) {
+          } else if (input.file instanceof Buffer ) {
             fileBuffer = new Uint8Array(input.file);
-          } else if (input.file instanceof Binary) {
+          } else if (input.file?.buffer instanceof Uint8Array) {
             fileBuffer = new Uint8Array(input.file.buffer);
           } else if (input.file && typeof input.file === "object" && "$binary" in input.file) {
             const binary = (input.file as { $binary: { base64: string; subType?: string } }).$binary;
             const decoded = Buffer.from(binary.base64, "base64");
             fileBuffer = new Uint8Array(decoded);
           } else {
-            throw new Error("Invalid file format. Expected Uint8Array, Buffer, or EJSON binary.");
+            throw new Error(`Invalid file format. Expected Uint8Array, Buffer, or EJSON binary. Got ${typeof input.file}, ${Object.keys(input.file)}`);
           }
 
           const formData = new FormData();

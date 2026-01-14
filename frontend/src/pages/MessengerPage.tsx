@@ -5,7 +5,7 @@ import { Info } from "lucide-react";
 import * as InfiniteScrollModule from "react-infinite-scroll-component";
 const InfiniteScroll = (InfiniteScrollModule as any).default || InfiniteScrollModule;
 import { callResource } from "@/lib/api";
-import type { Chat, Message as IMessage } from "@interfaces/messengers.ts";
+import type { Chat, Message as IMessage } from "@myceliasdk/messengers.ts";
 import {
   ResizableHandle,
   ResizablePanel,

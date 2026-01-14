@@ -1,5 +1,15 @@
 import { Link } from "react-router-dom";
-import { ArrowRight } from "lucide-react";
+import { 
+  ArrowRight, 
+  Clock, 
+  MessageSquare, 
+  AudioWaveform, 
+  Mic, 
+  Download, 
+  FolderTree,
+  FileText,
+  Package
+} from "lucide-react";
 
 const HomePage = () => {
   return (
@@ -19,7 +29,10 @@ const HomePage = () => {
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Timeline</h2>
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              <Clock className="w-6 h-6 text-primary" />
+              Timeline
+            </h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
@@ -29,11 +42,86 @@ const HomePage = () => {
         </Link>
 
         <Link
+          to="/chat"
+          className="p-6 border rounded-lg hover:border-primary transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              <MessageSquare className="w-6 h-6 text-primary" />
+              Chat
+            </h2>
+            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+          </div>
+          <p className="text-muted-foreground">
+            Interactive AI assistant with access to your memories
+          </p>
+        </Link>
+
+        {/* Audio Card with sub-links */}
+        <div className="p-6 border rounded-lg flex flex-col">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              <AudioWaveform className="w-6 h-6 text-primary" />
+              Audio
+            </h2>
+          </div>
+          
+          <div className="grid grid-cols-1 gap-2">
+            <Link
+              to="/audio"
+              className="flex items-center justify-between p-3 rounded-md hover:bg-accent group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <AudioWaveform className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="font-medium">Audio Player</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary" />
+            </Link>
+
+            <Link
+              to="/audio/record"
+              className="flex items-center justify-between p-3 rounded-md hover:bg-accent group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Mic className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="font-medium">Record</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary" />
+            </Link>
+
+            <Link
+              to="/audio/export"
+              className="flex items-center justify-between p-3 rounded-md hover:bg-accent group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Download className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="font-medium">Export</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary" />
+            </Link>
+
+            <Link
+              to="/audio/source_files"
+              className="flex items-center justify-between p-3 rounded-md hover:bg-accent group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <FolderTree className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="font-medium">Source Files</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary" />
+            </Link>
+          </div>
+        </div>
+
+        <Link
           to="/transcript"
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Transcript</h2>
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              <FileText className="w-6 h-6 text-primary" />
+              Transcript
+            </h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
@@ -42,40 +130,18 @@ const HomePage = () => {
         </Link>
 
         <Link
-          to="/audio"
+          to="/objects"
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Audio Player</h2>
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              <Package className="w-6 h-6 text-primary" />
+              Objects
+            </h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">
-            Listen to your past
-          </p>
-        </Link>
-        <Link
-          to="/audio/record"
-          className="p-6 border rounded-lg hover:border-primary transition-colors group"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Record</h2>
-            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-          </div>
-          <p className="text-muted-foreground">
-            Stream audio from this device directly to mycelia
-          </p>
-        </Link>
-
-        <Link
-          to="/audio/export"
-          className="p-6 border rounded-lg hover:border-primary transition-colors group"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Export Audio</h2>
-            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-          </div>
-          <p className="text-muted-foreground">
-            Export audio segments as WAV files by selecting a time range
+            Manage your personal data, entities, and memories
           </p>
         </Link>
 
@@ -84,7 +150,10 @@ const HomePage = () => {
           className="p-6 border rounded-lg hover:border-primary transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-semibold">Messenger</h2>
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              <MessageSquare className="w-6 h-6 text-primary" />
+              Messenger
+            </h2>
             <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
           <p className="text-muted-foreground">

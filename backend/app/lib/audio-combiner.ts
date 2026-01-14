@@ -1,5 +1,6 @@
-import { Binary } from "mongodb";
+import { Binary } from "bson";
 import { Buffer } from "node:buffer";
+import { Binary as MongoBinary } from "mongodb";
 
 export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
   const tempFiles: string[] = [];
@@ -12,14 +13,14 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
       
       if (chunk.data instanceof Uint8Array) {
         data = chunk.data;
-      } else if (chunk.data instanceof Binary) {
+      } else if (chunk.data instanceof Binary || chunk.data instanceof MongoBinary) {
         data = new Uint8Array(chunk.data.buffer);
       } else if (chunk.data && typeof chunk.data === "object" && "$binary" in chunk.data) {
         data = new Uint8Array(Buffer.from(chunk.data.$binary.base64, "base64"));
       } else if (Buffer.isBuffer(chunk.data)) {
         data = new Uint8Array(chunk.data);
       } else {
-        throw new Error(`Unsupported chunk data format at index ${i}`);
+        throw new Error(`Unsupported chunk data format at index ${i}: ${typeof chunk.data}`);
       }
       
       const tempPath = await Deno.makeTempFile({ suffix: ".opus" });

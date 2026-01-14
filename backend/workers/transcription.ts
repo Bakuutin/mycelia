@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId, Binary} from "bson";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
-import { getServerAuth } from "@/lib/auth/core.server.ts";
+import { env } from "#/env.ts";
+import { callResource } from "@myceliasdk/resources.ts";
 import { combineChunks } from "@/lib/audio-combiner.ts";
 import { filterSegments } from "@/lib/transcription-filters.ts";
-import { getTranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { MAX_SEQUENCE_LENGTH } from "@/lib/transcription-constants.ts";
 
 export const schema = z.object({
@@ -31,9 +31,10 @@ const capability: JobCapability = {
   maxConcurrency: 1, // Only one transcription at a time to avoid overloading provider
   use: async (job) => {
     const { sequenceId } = job.data as z.infer<typeof schema>;
-    const auth = await getServerAuth();
-    const mongo = auth.getResource("mongo");
-    const transcriptionResource = await getTranscriptionResource(auth);
+    const jwt = Deno.env.get("MYCELIA_JWT")!;
+    const myceliaUrl = env.MYCELIA_URL as string;
+    const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
+    const transcriptionResource = (input: any) => callResource("transcription", input, { jwt, myceliaUrl });
 
     const processSequence = async (sequence: any) => {
       if (!sequence || sequence.state !== "ready") {
@@ -75,13 +76,13 @@ const capability: JobCapability = {
         // 5. Call transcription API
         const transcript = await transcriptionResource({
           action: "transcribe",
-          file: combinedAudio,
+          file: new Binary(combinedAudio),
           fileName: "combined.wav",
           fileType: "audio/wav",
         });
 
         // 6. Filter segments
-        const segments = transcript.segments || [];
+        const segments = (transcript as any).segments || [];
         const filteredSegments = filterSegments(segments);
 
         if (filteredSegments.length === 0) {
@@ -175,17 +176,21 @@ const capability: JobCapability = {
         action: "find",
         collection: "transcription_sequences",
         query: { state: "ready" },
-        options: { sort: { start: 1 }, limit: 1 },
+        options: { sort: { start: -1 }, limit: 2 },
       }) as any[];
 
+      const hasMore = readySequences.length > 1;
+
+
       let processedCount = 0;
-      const total = readySequences.length;
-      for (const sequence of readySequences) {
-        await processSequence(sequence);
+
+      if (readySequences.length > 0) {
+        await processSequence(readySequences[0]);
         processedCount++;
-        await job.updateProgress({ processed: processedCount, total });
       }
-      return { status: "success", processed: processedCount };
+      
+      
+      return { status: "success", processed: processedCount, hasMore };
     }
   },
   triggers: {
