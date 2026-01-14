@@ -1,3 +1,4 @@
+import { EJSON } from "bson";
 import {
   Auth,
   defaultResourceManager,
@@ -14,12 +15,13 @@ import { MongoDBContainer } from "@testcontainers/mongodb";
 import { MongoClient, UUID } from "mongodb";
 import { TimelineResource } from "@/lib/timeline/resource.server.ts";
 import { generateApiKey } from "@/lib/auth/tokens.ts";
-import { accessLogger } from "@/lib/auth/core.server.ts";
+import { accessLogger, getServerAuth } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 import { z } from "zod";
 import type { Request } from "express";
+import { up } from "@/lib/mongo/migrator.ts";
 
 import { discoverJobWorkers, jobRegistry } from "@/lib/jobs/job-registry.ts";
 
@@ -253,7 +255,7 @@ defineFixture({
 defineFixture({
   token: "accessLogger",
   factory: () => {
-    const stub = fn(() => {}) as any;
+    const stub = fn(() => { }) as any;
     accessLogger.log = (auth, resource, actions) =>
       stub(auth.principal, resource.code, actions);
     return stub;
@@ -313,6 +315,62 @@ defineFixture({
 });
 
 defineFixture({
+  token: "MockFetch",
+  factory: async () => {
+    const mocks: { rule: RegExp, handler: any }[] = [];
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      for (const mock of mocks) {
+        if (mock.rule.test(url)) {
+          return mock.handler(input, init);
+        }
+      }
+      return originalFetch(input, init);
+    };
+    return {
+      mocks,
+      addMock: (rule: RegExp, handler: any) => {
+        mocks.push({ rule, handler });
+      },
+      restore: () => {
+        globalThis.fetch = originalFetch;
+      },
+    };
+  },
+  teardown: ({ restore }) => {
+    restore();
+  },
+});
+
+defineFixture({
+  token: "MockCallResourceSDK",
+  dependencies: ["MockFetch"],
+  factory: async ({ addMock }) => {
+    Deno.env.set("MYCELIA_JWT", "foo");
+    Deno.env.set("MYCELIA_URL", "http://not-used");
+    addMock(/.*\/api\/resource\/(.*)/, async (input: any, data: any) => {
+      const auth = await getServerAuth();
+      const code = input.toString().split("/").pop()!;
+      const resource = defaultResourceManager.getResource(code, auth);
+      const result = await resource(EJSON.deserialize(JSON.parse(data.body)));
+      return new Response(EJSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+  },
+});
+
+defineFixture({
+  token: "Migrations",
+  dependencies: ["Mongo"],
+  factory: async ({ db, client }) => {
+    await up(db, client);
+  },
+});
+
+defineFixture({
   token: "TestResource",
   factory: () => {
     return {
@@ -361,7 +419,7 @@ defineFixture({
     }) => {
       const contentType = options.headers?.["content-type"] || "";
       let body = options.body;
-      
+
       if (typeof body === "string") {
         if (contentType.includes("application/x-www-form-urlencoded")) {
           const params = new URLSearchParams(body);
@@ -374,7 +432,7 @@ defineFixture({
           }
         }
       }
-      
+
       return {
         method: options.method || "GET",
         headers: options.headers || {},

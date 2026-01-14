@@ -21,6 +21,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "MockCallResourceSDK",
+    "Migrations",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -74,6 +76,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "MockCallResourceSDK",
+    "Migrations",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -129,6 +133,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "MockCallResourceSDK",
+    "Migrations",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -198,6 +204,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "MockCallResourceSDK",
+    "Migrations",
   ], async (admin, mongo) => {
     const { db} = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -278,6 +286,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "MockCallResourceSDK",
+    "Migrations",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -333,6 +343,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "MockCallResourceSDK",
+    "Migrations",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);

@@ -9,7 +9,7 @@ Deno.test(
   withFixtures([
     "Admin",
   ], async (admin: Auth) => {
-    expect(admin.principal).toBe("server");
+    expect(admin.principal).toBe("admin");
   }),
 );
 

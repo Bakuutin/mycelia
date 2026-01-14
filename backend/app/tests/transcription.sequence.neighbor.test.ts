@@ -12,6 +12,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "Migrations",
+    "MockCallResourceSDK",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);
@@ -84,6 +86,8 @@ Deno.test(
   withFixtures([
     "Admin",
     "Mongo",
+    "Migrations",
+    "MockCallResourceSDK",
   ], async (admin, mongo) => {
     const { db } = mongo;
     const mongoResource = await getMongoResource(admin);

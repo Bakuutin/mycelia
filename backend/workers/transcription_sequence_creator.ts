@@ -245,7 +245,7 @@ const capability: JobCapability = {
   maxConcurrency: 1,
   use: async (job) => {
     const jwt = Deno.env.get("MYCELIA_JWT")!;
-    const myceliaUrl = env.MYCELIA_URL;
+    const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
 
     let processedCount = 0;
