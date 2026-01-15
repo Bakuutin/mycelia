@@ -36,6 +36,10 @@ const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
 });
 
+const ClearCompletedJobsSchema = z.object({
+  action: z.literal("clear_completed"),
+});
+
 const CancelJobSchema = z.object({
   action: z.literal("cancel"),
   id: z.string(),
@@ -64,6 +68,7 @@ const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
   CancelAllJobsSchema,
+  ClearCompletedJobsSchema,
   CancelJobSchema,
   GetJobSchema,
   EnqueueJobSchema,
@@ -92,6 +97,8 @@ export class JobsResource
         return this.cancel(input, auth);
       case "cancel_all":
         return this.cancelAll(input, auth);
+      case "clear_completed":
+        return this.clearCompleted(input, auth);
       case "list":
         return this.list(input, auth);
       case "progressUpdate":
@@ -207,7 +214,7 @@ export class JobsResource
 
   private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
-    
+
     const types = jobRegistry.getJobTypes();
     for (const type of types) {
       const queue = getQueue(type);
@@ -228,6 +235,22 @@ export class JobsResource
     });
 
     return { success: true };
+  }
+
+  private async clearCompleted(_input: z.infer<typeof ClearCompletedJobsSchema>, auth: Auth) {
+    const mongo = await getMongoResource(auth);
+
+    // Delete all completed, failed, and cancelled jobs from MongoDB
+    const result = await mongo({
+      action: "deleteMany",
+      collection: "jobs",
+      query: { state: { $in: ["completed", "failed", "cancelled"] } },
+    });
+
+    return {
+      success: true,
+      deletedCount: result.deletedCount || 0,
+    };
   }
 
   private async list(input: z.infer<typeof ListJobsSchema>, auth: Auth) {
@@ -355,6 +378,8 @@ export class JobsResource
         return [{ path: ["jobs"], actions: ["schemas"] }];
       case "cancel_all":
         return [{ path: ["jobs", "all"], actions: ["cancel"] }];
+      case "clear_completed":
+        return [{ path: ["jobs", "completed"], actions: ["delete"] }];
       case "cancel":
         return [{ path: ["jobs", input.id], actions: ["cancel"] }];
       case "enqueue":
