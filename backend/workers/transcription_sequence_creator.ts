@@ -236,6 +236,7 @@ const capability: JobCapability = {
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
     processed: z.number(),
+    hasMore: z.boolean(),
   })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
@@ -250,8 +251,14 @@ const capability: JobCapability = {
 
     let processedCount = 0;
     let sequencesCreated = 0;
+    let hasMore = false;
+    const maxSequences = 30;
 
-    for await (const seq of getSpeechSequences(mongo)) {
+    for await (const seq of getSpeechSequences(mongo, maxSequences + 1)) {
+      if (sequencesCreated >= maxSequences) {
+        hasMore = true;
+        break;
+      }
       processedCount += await persistSequence(mongo, seq);
       sequencesCreated++;
 
@@ -261,7 +268,7 @@ const capability: JobCapability = {
       });
     }
 
-    return { status: "success", processed: processedCount };
+    return { status: "success", processed: processedCount, hasMore };
   },
   triggers: {
     sources: [
@@ -277,6 +284,7 @@ const capability: JobCapability = {
       },
     ],
     debounceMs: 1000,
+    interval: 300,
   },
 };
 

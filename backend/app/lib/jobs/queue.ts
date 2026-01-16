@@ -20,11 +20,7 @@ export function getQueue(type: string): Queue<JobData> {
     queue = new Queue<JobData>(getQueueName(type), {
       connection: redis,
       defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-          type: "exponential",
-          delay: 2000,
-        },
+        attempts: 1,
         removeOnComplete: {
           count: 100,
           age: 24 * 3600,

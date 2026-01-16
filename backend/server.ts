@@ -36,6 +36,7 @@ import { registerRoutes } from "./routes.ts";
 import { errorHandler } from "@/middleware/errorHandler.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
+import { maintenanceManager } from "@/lib/jobs/maintenance-manager.ts";
 import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
 import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
@@ -144,6 +145,7 @@ async function startServer(
     await startChangeStreamWorker();
     await startAccessLogWorker();
     await triggerManager.start();
+    await maintenanceManager.start();
   }
 
   const app = express();
@@ -216,6 +218,7 @@ async function startServer(
       await stopAccessLogWorker();
       await stopChangeStreamWorker();
       await triggerManager.stop();
+      await maintenanceManager.stop();
       await shutdownTelemetry();
       cleanupLogging();
     });

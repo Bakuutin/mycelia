@@ -37,5 +37,6 @@ export default new NetworkJobCapability({
       },
     ],
     debounceMs: 1000,
+    interval: 300,
   },
 });

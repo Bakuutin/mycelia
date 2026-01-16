@@ -175,7 +175,15 @@ const capability: JobCapability = {
       const readySequences = await mongo({
         action: "find",
         collection: "transcription_sequences",
-        query: { state: "ready" },
+        query: {
+          $or: [
+            { state: "ready" },
+            {
+              state: "error",
+              updatedAt: { $lt: new Date(Date.now() - 30 * 60 * 1000) }
+            }
+          ]
+        },
         options: { sort: { start: -1 }, limit: 2 },
       }) as any[];
 
@@ -206,6 +214,7 @@ const capability: JobCapability = {
       },
     ],
     debounceMs: 5000,
+    interval: 300,
   },
 };
 

@@ -131,7 +131,7 @@ Response:
                  • Generates short-lived JWT with scoped permissions
                  • Sets MYCELIA_JWT, MYCELIA_URL env vars
                  • Launches worker with limited permissions
-4. PROCESSING → Worker executes in sandbox:
+4. PROCESSING → Worker executes in sandbox (15-minute job timeout):
                  IF Network Worker: Calls external service (Python FastAPI)
                  IF Internal Worker: Calls back to main process via HTTP
 5. COMPLETED  → Worker outputs result to stdout
@@ -140,6 +140,11 @@ Response:
                → Child process exits
 6. REMOVED    → After retention period
 ```
+
+**Job Timeout**: All jobs have a hard 15-minute timeout. If a job exceeds this limit:
+- The child process is forcefully terminated (`SIGKILL`)
+- The job is marked as failed with error: `"Job timed out after 15 minutes"`
+- No retries are attempted for timeout failures
 
 ### Security Flow
 
@@ -155,13 +160,14 @@ Each job runs with the **principle of least privilege**:
 
 All jobs are enqueued via the `jobs` resource.
 
-| Type | Backend | Description | Example Body |
-|------|---------|-------------|--------------|
-| `vad` | Python | Voice Activity Detection (auto-triggered or manual) | `{"action": "enqueue", "data": {"type": "vad", "limit": 1000, "trigger": "manual"}}` |
-| `transcription` | Python | Speech-to-text | `{"action": "enqueue", "data": {"type": "transcription", "audioChunkIds": [...]}}` |
-| `diarization` | Python | Speaker identification | `{"action": "enqueue", "data": {"type": "diarization", "start": {"$date": "..."}, "end": {"$date": "..."}}}` |
-| `ingestion` | Python | Audio file processing | `{"action": "enqueue", "data": {"type": "ingestion", "sourceId": "..."}}` |
-| `histRecalculation` | TypeScript | Recalculate timeline histograms | `{"action": "enqueue", "data": {"type": "histRecalculation", "all": true}}` |
+| Type | Backend | Description | Triggers | Example Body |
+|------|---------|-------------|----------|--------------|
+| `vad` | Python | Voice Activity Detection (auto-triggered or manual) | Event (debounce 1s), Interval (5min) | `{"action": "enqueue", "data": {"type": "vad", "limit": 1000, "trigger": "manual"}}` |
+| `transcription` | Python | Speech-to-text | Event (debounce 5s), Interval (5min) | `{"action": "enqueue", "data": {"type": "transcription", "audioChunkIds": [...]}}` |
+| `transcription_sequence_creator` | TypeScript | Create speech sequences from processed chunks (max 30 per job, returns hasMore flag) | Event (debounce 1s), Interval (5min) | `{"action": "enqueue", "data": {"type": "transcription_sequence_creator"}}` |
+| `diarization` | Python | Speaker identification | Manual only | `{"action": "enqueue", "data": {"type": "diarization", "start": {"$date": "..."}, "end": {"$date": "..."}}}` |
+| `ingestion` | Python | Audio file processing | Manual only | `{"action": "enqueue", "data": {"type": "ingestion", "sourceId": "..."}}` |
+| `histRecalculation` | TypeScript | Recalculate timeline histograms | Manual only | `{"action": "enqueue", "data": {"type": "histRecalculation", "all": true}}` |
 
 ## Configuration
 
@@ -301,7 +307,11 @@ await discoverJobWorkers(); // Scans app/workers/*.ts
 
 ### Worker Triggers (Auto-Enqueue)
 
-Workers can declare triggers to automatically enqueue jobs in response to events:
+Workers can declare triggers to automatically enqueue jobs in response to events or at regular intervals:
+
+#### Event-Based Triggers
+
+Workers can trigger on Redis Pub/Sub events:
 
 ```typescript
 const capability: JobCapability = {
@@ -325,13 +335,43 @@ const capability: JobCapability = {
 };
 ```
 
+#### Interval-Based Triggers
+
+Workers can also trigger at regular intervals:
+
+```typescript
+const capability: JobCapability = {
+  name: "transcription",
+  // ... other fields
+  triggers: {
+    sources: [
+      // Event-based triggers can be combined with intervals
+    ],
+    debounceMs: 5000,
+    interval: 300, // Trigger every 300 seconds (5 minutes)
+  },
+};
+```
+
 **Filter Syntax**: Uses [Sift](https://github.com/crcn/sift.js) MongoDB-style queries for declarative event filtering.
 
-**How it Works**:
+**How It Works**:
+
+**Event Triggers**:
 1. Redis Pub/Sub messages arrive on `channel`
 2. Filter is evaluated against message payload
 3. If matches, job is debounced and enqueued
 4. Trigger metadata is added to job data: `{ trigger: { type: "auto", reason: "auto_new_chunks", principal: "server" } }`
+
+**Interval Triggers**:
+1. `TriggerManager` sets up `setInterval` for the specified duration
+2. At each interval, checks if job should run (respects `maxConcurrency` and `requireIdle`)
+3. If conditions met, enqueues job with reason: `"interval:{intervalSeconds}s"`
+4. Intervals are cleaned up when server shuts down
+
+**Interval Options**:
+- `requireIdle: true` - Only trigger if no jobs of this type are currently running (waiting/active)
+- Intervals run in non-test environments only
 
 See [VAD_TRIGGERING.md](./VAD_TRIGGERING.md) for detailed examples.
 
@@ -354,13 +394,27 @@ This triggers:
 3. Publishes to Redis Stream: `progress:{type}:{jobId}`
 4. Clients receive via SSE
 
+## Maintenance
+
+The system includes a **Maintenance Manager** that runs every minute to ensure job queue consistency and handle edge cases.
+
+### Maintenance Tasks
+
+1. **Timeout Cleanup**: Cancels jobs that have been active longer than 15 minutes (backup mechanism if processor timeout fails)
+2. **Queue Synchronization**: Re-enqueues jobs that exist in database but are missing from BullMQ queue (after 2-minute grace period)
+
+**Implementation** (`backend/app/lib/jobs/maintenance-manager.ts`):
+- Runs every 60 seconds
+- Processes up to 500 jobs per maintenance cycle
+- Updates job states and publishes events for cancelled/re-enqueued jobs
+
 ## Error Handling
 
 ### Retries
 
-Jobs automatically retry on failure:
-- 3 attempts max
-- Exponential backoff (2s, 4s, 8s)
+Jobs do not automatically retry on failure:
+- 1 attempt max (no retries)
+- Jobs that fail will not be retried automatically
 
 ### Failed Jobs
 

@@ -4,6 +4,8 @@ import { jobRegistry } from "./job-registry.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
 import { EJSON } from "bson";
 
+const JOB_TIMEOUT_MS = 15 * 60 * 1000;
+
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
@@ -57,6 +59,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   });
 
   const child = cmd.spawn();
+  let timeoutId: number | null = null;
 
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(EJSON.stringify({
@@ -102,24 +105,46 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     }
   };
 
-  await Promise.all([readStdout(), readStderr()]);
+  const runChild = async () => {
+    await Promise.all([readStdout(), readStderr()]);
 
-  const { code } = await child.status;
+    const { code } = await child.status;
 
-  if (code !== 0) {
-    console.error(`[Worker Error] Job ${job.id} failed with code ${code}:`, stderrContent);
-    throw new Error(`Worker exited with code ${code}: ${stderrContent}`);
-  }
+    if (code !== 0) {
+      console.error(`[Worker Error] Job ${job.id} failed with code ${code}:`, stderrContent);
+      throw new Error(`Worker exited with code ${code}: ${stderrContent}`);
+    }
 
-  // Find the last line of output which should be the JSON result
-  const lines = stdoutContent.trim().split("\n");
-  const lastLine = lines[lines.length - 1];
+    // Find the last line of output which should be the JSON result
+    const lines = stdoutContent.trim().split("\n");
+    const lastLine = lines[lines.length - 1];
+
+    try {
+      return JSON.parse(lastLine);
+    } catch (err) {
+      console.error("Failed to parse worker output:", stdoutContent);
+      const message = err instanceof Error ? err.message : "Unknown error";
+      throw new Error(`Failed to parse worker output: ${message}`);
+    }
+  };
 
   try {
-    return JSON.parse(lastLine);
-  } catch (err) {
-    console.error("Failed to parse worker output:", stdoutContent);
-    const message = err instanceof Error ? err.message : "Unknown error";
-    throw new Error(`Failed to parse worker output: ${message}`);
+    return await Promise.race([
+      runChild(),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // Ignore kill errors; we still fail the job on timeout.
+          }
+          reject(new Error("Job timed out after 15 minutes"));
+        }, JOB_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
   }
 }

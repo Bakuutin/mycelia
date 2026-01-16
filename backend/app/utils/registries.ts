@@ -15,6 +15,7 @@ export type TriggerSource = z.infer<typeof zTriggerSource>;
 export const zTriggers = z.object({
   sources: z.array(zTriggerSource),
   debounceMs: z.number().optional(),
+  interval: z.number().optional(),
 });
 
 export type Triggers = z.infer<typeof zTriggers>;

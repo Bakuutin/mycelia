@@ -60,8 +60,14 @@ Jobs track how they were triggered via the `trigger` object:
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | `"manual"` \| `"auto"` | Whether triggered by user or system |
-| `reason` | `string` | The reason for the trigger (e.g., `auto_new_chunks`) |
+| `reason` | `string` | The reason for the trigger (e.g., `auto_new_chunks`, `interval:300s`) |
 | `principal` | `string` | The ID of the user or system component that initiated the job |
+
+### Trigger Types
+
+1. **Manual Triggers**: User-initiated via API calls
+2. **Event Triggers**: Automatic triggers based on Redis Pub/Sub events (e.g., new audio chunks)
+3. **Interval Triggers**: Automatic triggers at regular time intervals (e.g., every 5 minutes)
 
 ## How It Works
 
@@ -122,6 +128,60 @@ await mongo({
   },
 });
 ```
+
+## Interval Triggers
+
+In addition to event-based triggers, the system supports time-based interval triggers that run jobs at regular intervals.
+
+### Configuration
+
+Interval triggers are configured in the job capability:
+
+```typescript
+// backend/app/workers/transcription.ts
+export const capability: JobCapability = {
+  name: "transcription",
+  // ... other fields
+  triggers: {
+    sources: [
+      // Event triggers can be combined with intervals
+      {
+        channel: "mycelia:mongo:audio_chunks",
+        name: "auto_new_chunks",
+        filter: { /* ... */ },
+      },
+    ],
+    debounceMs: 5000,
+    interval: 300, // Trigger every 300 seconds (5 minutes)
+  },
+};
+```
+
+### How Interval Triggers Work
+
+1. **Setup**: When `TriggerManager.start()` is called, interval timers are created using `setInterval`
+2. **Execution**: At each interval, the system:
+   - Checks if `maxConcurrency` would be exceeded
+   - Optionally checks if jobs are currently running (`requireIdle: true`)
+   - Enqueues job if conditions are met
+3. **Cleanup**: Intervals are cleared when `TriggerManager.stop()` is called
+
+### Interval Trigger Options
+
+**requireIdle**: Prevents overlapping jobs by only triggering when no jobs of the same type are running:
+
+```typescript
+await this.checkAndTrigger(
+  cap,
+  `interval:${triggers.interval}s`,
+  { requireIdle: true }, // Only run if no active jobs
+);
+```
+
+**Benefits**:
+- Ensures continuous processing without manual intervention
+- Respects concurrency limits to prevent resource exhaustion
+- Can be combined with event triggers for hybrid scheduling
 
 ## Debouncing
 
@@ -261,6 +321,13 @@ The system is designed to be resilient:
 - `backend/server.ts` - Server integration
 
 ## Changelog
+
+### 2026-01-16 - Interval Triggers
+- Added support for time-based interval triggers
+- Implemented `requireIdle` option to prevent overlapping jobs
+- Added interval cleanup on server shutdown
+- Updated transcription, VAD, and transcription_sequence_creator workers with interval triggers (300s)
+- Enhanced TriggerManager with interval timer management
 
 ### 2026-01-06 - Unified Trigger System
 - Replaced standalone VAD trigger worker with `TriggerManager`

@@ -11,6 +11,7 @@ export class TriggerManager {
   private isRunning = false;
   private subscribers = new Map<string, any>();
   private debouncers = new Map<string, any>();
+  private intervals = new Map<string, number>();
 
   constructor(private registry: typeof jobRegistry) {}
 
@@ -47,6 +48,20 @@ export class TriggerManager {
     for (const source of triggers.sources) {
       await this.setupRedisTrigger(cap, source, (_payload) => 
         handleTrigger(source.name));
+    }
+
+    if (!isTest && triggers.interval && triggers.interval > 0) {
+      if (!this.intervals.has(name)) {
+        const intervalMs = triggers.interval * 1000;
+        const intervalId = setInterval(() => {
+          this.checkAndTrigger(
+            cap,
+            `interval:${triggers.interval}s`,
+            { requireIdle: true },
+          );
+        }, intervalMs);
+        this.intervals.set(name, intervalId);
+      }
     }
     
     // Initial check on startup (skipped in tests to avoid interference)
@@ -88,10 +103,30 @@ export class TriggerManager {
     });
   }
 
-  private async checkAndTrigger(cap: JobRegistryEntry, reason: string) {
+  private async checkAndTrigger(
+    cap: JobRegistryEntry,
+    reason: string,
+    triggerOptions: { requireIdle?: boolean } | undefined = undefined,
+  ) {
     try {
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
+
+      if (triggerOptions && triggerOptions.requireIdle) {
+        const activeJobs = await mongo({
+          action: "count",
+          collection: "jobs",
+          query: {
+            type: cap.manifest.name,
+            state: { $in: ["waiting", "active"] },
+          },
+        }) as number;
+
+        if (activeJobs > 0) {
+          console.log(`[TriggerManager] ${cap.manifest.name} already running, skipping interval trigger.`);
+          return;
+        }
+      }
 
       // 1. Check maxConcurrency if defined
       if (cap.manifest.maxConcurrency !== undefined) {
@@ -112,7 +147,7 @@ export class TriggerManager {
 
       // 2. Enqueue job
       console.log(`[TriggerManager] Triggering ${cap.manifest.name} job (reason: ${reason})...`);
-      const options: EnqueueJobOptions = {
+      const enqueueOptions: EnqueueJobOptions = {
         trigger: {
           type: "auto",
           reason,
@@ -120,7 +155,7 @@ export class TriggerManager {
       };
       await enqueueJob({
         type: cap.manifest.name,
-      } as any, options);
+      } as any, enqueueOptions);
     } catch (error) {
       console.error(`[TriggerManager] Error triggering ${cap.manifest.name}:`, error);
     }
@@ -134,6 +169,11 @@ export class TriggerManager {
       debouncer.clear();
     }
     this.debouncers.clear();
+
+    for (const [_, intervalId] of this.intervals) {
+      clearInterval(intervalId);
+    }
+    this.intervals.clear();
 
     for (const [_, subscriber] of this.subscribers) {
       try {

@@ -26,6 +26,7 @@ export class NetworkJobCapability<
   triggers?: {
     sources: JobTriggerSource[];
     debounceMs?: number;
+    interval?: number;
   };
   maxConcurrency?: number;
 
@@ -37,6 +38,7 @@ export class NetworkJobCapability<
     triggers?: {
       sources: JobTriggerSource[];
       debounceMs?: number;
+      interval?: number;
     };
     maxConcurrency?: number;
   }) {
