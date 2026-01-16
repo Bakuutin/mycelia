@@ -16,3 +16,4 @@ node_modules
 .ruff_cache
 *.ipynb
 *.log
+*.old

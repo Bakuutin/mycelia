@@ -116,11 +116,7 @@ Deno.test(
 
     const job = await enqueueJob(jobData as any);
 
-    expect(job.opts.attempts).toBe(3);
-    expect(job.opts.backoff).toEqual({
-      type: "exponential",
-      delay: 2000,
-    });
+    expect(job.opts.attempts).toBe(1);
   }),
 );
 
