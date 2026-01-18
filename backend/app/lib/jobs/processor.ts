@@ -2,7 +2,9 @@ import type { Job } from "bullmq";
 import type { JobData, JobResult } from "./types.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
+import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { EJSON } from "bson";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -61,6 +63,35 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const child = cmd.spawn();
   let timeoutId: number | null = null;
 
+  const mongo = await getMongoResource(await getServerAuth());
+  let logQueue = Promise.resolve();
+
+  const enqueueLog = (stream: "stdout" | "stderr", text: string) => {
+    if (!text) return;
+    logQueue = logQueue.then(() =>
+      mongo({
+        action: "insertOne",
+        collection: "job_logs",
+        doc: {
+          jobId: job.id,
+          stream,
+          text,
+          timestamp: new Date(),
+        },
+      })
+    ).catch((err) => {
+      console.error(`[Processor] Failed to write log for job ${job.id}:`, err);
+    });
+  };
+
+  const splitLines = (buffer: string, chunk: string): { lines: string[]; rest: string } => {
+    const combined = buffer + chunk;
+    const parts = combined.split(/\r?\n/);
+    const rest = parts.pop() ?? "";
+    const lines = parts.filter((line) => line.length > 0);
+    return { lines, rest };
+  };
+
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(EJSON.stringify({
     ...job.data,
@@ -70,6 +101,8 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   let stdoutContent = "";
   let stderrContent = "";
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
 
   const stdoutReader = child.stdout.getReader();
   const stderrReader = child.stderr.getReader();
@@ -78,7 +111,17 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     while (true) {
       const { done, value } = await stdoutReader.read();
       if (done) break;
-      stdoutContent += new TextDecoder().decode(value);
+      const chunk = new TextDecoder().decode(value);
+      stdoutContent += chunk;
+      const { lines, rest } = splitLines(stdoutBuffer, chunk);
+      stdoutBuffer = rest;
+      for (const line of lines) {
+        enqueueLog("stdout", line);
+      }
+    }
+    if (stdoutBuffer.trim().length > 0) {
+      enqueueLog("stdout", stdoutBuffer);
+      stdoutBuffer = "";
     }
   };
 
@@ -88,8 +131,8 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       if (done) break;
       const chunk = new TextDecoder().decode(value);
       stderrContent += chunk;
-
-      const lines = chunk.split("\n");
+      const { lines, rest } = splitLines(stderrBuffer, chunk);
+      stderrBuffer = rest;
       for (const line of lines) {
         if (line.startsWith("__PROGRESS__:")) {
           try {
@@ -97,11 +140,16 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
             job.updateProgress(progress).catch((err) =>
               console.error(`[Processor] Failed to update progress for job ${job.id}:`, err)
             );
-          } catch (e) {
+          } catch {
             // Ignore parse errors for progress
           }
         }
+        enqueueLog("stderr", line);
       }
+    }
+    if (stderrBuffer.trim().length > 0) {
+      enqueueLog("stderr", stderrBuffer);
+      stderrBuffer = "";
     }
   };
 
@@ -109,6 +157,8 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     await Promise.all([readStdout(), readStderr()]);
 
     const { code } = await child.status;
+
+    await logQueue;
 
     if (code !== 0) {
       console.error(`[Worker Error] Job ${job.id} failed with code ${code}:`, stderrContent);

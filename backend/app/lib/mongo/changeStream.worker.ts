@@ -45,6 +45,16 @@ async function publishMongoChange(
     return;
   }
 
+  if (collectionName === "job_logs" && operationType === "insert" && document?.jobId) {
+    await publishEvent(`jobs:${document.jobId}:logs`, "job.log", {
+      logId: documentId,
+      jobId: document.jobId,
+      stream: document.stream,
+      text: document.text,
+      timestamp: document.timestamp ?? new Date().toISOString(),
+    });
+  }
+
   await publishEvent(`mongo:${collectionName}:${documentId}`, "mongo.change", eventData);
   await publishEvent(`mongo:${collectionName}`, "mongo.change", eventData);
 }

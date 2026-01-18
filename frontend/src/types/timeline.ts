@@ -40,11 +40,6 @@ export type TimelineItem = z.infer<typeof zTimelineItem>;
 export type QueryParams = z.infer<typeof zQueryParams>;
 export type LoaderData = z.infer<typeof zLoaderData>;
 
-export interface StartEnd {
-  start: Date;
-  end: Date;
-  _id: ObjectId;
-}
 
 export interface TimelineDimensions {
   width: number;

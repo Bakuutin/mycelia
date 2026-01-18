@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
 import { useJobsListener } from "@/hooks/useJobsListener";
+import { useWebSocketSubscription } from "@/hooks/useWebSocket";
 import {
     Card,
     CardContent,
@@ -103,6 +104,47 @@ export default function JobDetailPage() {
         },
         enabled: !!id && !cachedJob,
     });
+
+    const { data: jobLogs = [], isLoading: isLogsLoading } = useQuery({
+        queryKey: ["job-logs", id],
+        queryFn: async () => {
+            if (!id) return [];
+            const response = await api.callResource("mongo", {
+                action: "find",
+                collection: "job_logs",
+                query: { jobId: id },
+                options: {
+                    sort: { timestamp: 1 },
+                    limit: 500,
+                },
+            });
+            return response as JobLogEntry[];
+        },
+        enabled: !!id,
+    });
+
+    useWebSocketSubscription(
+        `jobs:${id}:logs`,
+        (event) => {
+            if (event.event !== "job.log" || !event.data) return;
+            const data = event.data as Partial<JobLogEntry> & { logId?: string };
+            const logId = data.logId ?? data._id;
+            queryClient.setQueryData<JobLogEntry[]>(["job-logs", id], (oldLogs = []) => {
+                if (logId && oldLogs.some((log) => log._id === logId)) {
+                    return oldLogs;
+                }
+                const nextLog: JobLogEntry = {
+                    _id: logId,
+                    jobId: data.jobId ?? (id ?? "unknown"),
+                    stream: (data.stream as "stdout" | "stderr") ?? "stdout",
+                    text: data.text ?? "",
+                    timestamp: data.timestamp ?? new Date().toISOString(),
+                };
+                return [...oldLogs, nextLog];
+            });
+        },
+        !!id,
+    );
 
     const cancelJobMutation = useMutation({
         mutationFn: async () => {
@@ -311,9 +353,46 @@ export default function JobDetailPage() {
                         </CardContent>
                     </Card>
                 )}
-
-
             </div>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Logs</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {isLogsLoading ? (
+                        <Skeleton className="h-48 w-full" />
+                    ) : jobLogs.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No logs yet</div>
+                    ) : (
+                        <div className="max-h-96 overflow-auto space-y-2 font-mono text-xs">
+                            {jobLogs.map((log, index) => {
+                                const timestampDate = log.timestamp ? new Date(log.timestamp) : null;
+                                const timestamp = timestampDate && !isNaN(timestampDate.getTime())
+                                    ? format(timestampDate, "PPpp")
+                                    : "-";
+                                const streamStyle = log.stream === "stderr"
+                                    ? "text-red-500"
+                                    : "text-muted-foreground";
+                                return (
+                                    <div
+                                        key={log._id ?? `${log.timestamp}-${index}`}
+                                        className="flex flex-col gap-1 border-b border-border/50 pb-2 last:border-b-0"
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <Badge variant="outline">{log.stream}</Badge>
+                                            <span className="text-xs text-muted-foreground">{timestamp}</span>
+                                        </div>
+                                        <div className={`whitespace-pre-wrap break-words ${streamStyle}`}>
+                                            {log.text}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
         </div>
     );
 }

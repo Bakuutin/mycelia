@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
 
 export type Timestamp = number & { readonly __brand: unique symbol };
 
@@ -39,14 +38,3 @@ export type TimelineItem = z.infer<typeof zTimelineItem>;
 // export type Transcript = z.infer<typeof zTranscript>;
 export type QueryParams = z.infer<typeof zQueryParams>;
 export type LoaderData = z.infer<typeof zLoaderData>;
-
-export interface StartEnd {
-  start: Date;
-  end: Date;
-  _id: ObjectId;
-}
-
-export interface TimelineDimensions {
-  width: number;
-  height: number;
-}
