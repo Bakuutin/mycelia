@@ -33,20 +33,35 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     response: z.any() as z.ZodType<TranscriptionResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
+  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string; model?: string } | null> {
+    // Stateless config: read from env vars first (ushadow pattern)
+    const envBaseUrl = Deno.env.get("TRANSCRIPTION_BASE_URL");
+    const envApiKey = Deno.env.get("TRANSCRIPTION_API_KEY");
+    const envModel = Deno.env.get("TRANSCRIPTION_MODEL");
+
+    if (envBaseUrl && envApiKey) {
+      return {
+        baseUrl: envBaseUrl,
+        apiKey: envApiKey,
+        model: envModel || "whisper-1",
+      };
+    }
+
+    // Fallback to MongoDB config for backward compatibility
     const rootDb = await getRootDB();
     const configDoc = await rootDb.collection("configs").findOne({ _id: SERVER_CONFIG_ID });
     if (!configDoc) {
       return null;
     }
     const config = zServerConfig.parse(configDoc);
-    const inference = config.inference;
-    if (!inference?.baseUrl || !inference?.apiKey) {
+    const provider = config.transcription || config.inference;
+    if (!provider?.baseUrl || !provider?.apiKey) {
       return null;
     }
     return {
-      baseUrl: inference.baseUrl,
-      apiKey: inference.apiKey,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model,
     };
   }
 
