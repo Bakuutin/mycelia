@@ -90,15 +90,30 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     response: z.any() as z.ZodType<LLMResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
+  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string; model?: string } | null> {
+    // Stateless config: read from env vars first (ushadow pattern)
+    const envBaseUrl = Deno.env.get("OPENAI_BASE_URL");
+    const envApiKey = Deno.env.get("OPENAI_API_KEY");
+    const envModel = Deno.env.get("OPENAI_MODEL");
+
+    if (envBaseUrl && envApiKey) {
+      return {
+        baseUrl: envBaseUrl,
+        apiKey: envApiKey,
+        model: envModel,
+      };
+    }
+
+    // Fallback to MongoDB config for backward compatibility
     const config = await getServerConfig();
-    const inference = config.inference;
-    if (!inference?.baseUrl || !inference?.apiKey) {
+    const provider = config.llm || config.inference;
+    if (!provider?.baseUrl || !provider?.apiKey) {
       return null;
     }
     return {
-      baseUrl: inference.baseUrl,
-      apiKey: inference.apiKey,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model,
     };
   }
 
