@@ -54,7 +54,7 @@ const TARGET_COLLECTIONS: Record<string, AggregationConfig> = {
 
 const day = 1000 * 60 * 60 * 24;
 
-async function updateHistogram(
+export async function updateHistogram(
   auth: Auth,
   start: Date,
   end: Date,
@@ -313,7 +313,7 @@ async function updateHistogramOptimized(
   console.log(`   └─ ✓ Completed writing ${ops.length} bins`);
 }
 
-async function updateAllHistogram(
+export async function updateAllHistogram(
   auth: Auth,
   start?: Date,
   end?: Date,

@@ -34,13 +34,13 @@ async function publishMongoChange(
   };
 
   
-  if (collectionName in [
+  if ([
     "histogram_5min",
     "histogram_1hour",
     "histogram_1day",
     "histogram_1week",
     "access_logs",
-  ]) {
+  ].includes(collectionName)) {
     debouncedFrequentChanges(collectionName);
     return;
   }

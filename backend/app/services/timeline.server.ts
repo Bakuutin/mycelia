@@ -10,6 +10,10 @@ import {
   RESOLUTION_ORDER,
   RESOLUTION_TO_MS,
 } from "@/types/resolution.ts";
+export {
+  updateAllHistogram,
+  updateHistogram,
+} from "#/workers/histRecalculation.ts";
 
 export type { Resolution };
 

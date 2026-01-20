@@ -153,7 +153,7 @@ async function getPrompts(
     action: "findOne",
     collection: "configs",
     query: { _id: new ObjectId(SERVER_CONFIG_ID) },
-  });
+  }) as { prompts?: Record<string, ObjectId> } | null;
 
   if (!config?.prompts) {
     throw new Error("Server configuration not found or missing prompts mapping");
@@ -165,9 +165,9 @@ async function getPrompts(
     action: "find",
     collection: "prompts",
     query: { _id: { $in: promptIds } },
-  });
+  }) as Array<{ _id: ObjectId; text: string }>;
 
-  const promptsMap = new Map(prompts.map((p: any) => [p._id.toString(), p.text]));
+  const promptsMap = new Map(prompts.map((p) => [p._id.toString(), p.text]));
 
   const result: Record<string, string> = {};
   for (const [key, promptId] of Object.entries(config.prompts)) {
@@ -376,7 +376,7 @@ const capability: JobCapability = {
         action: "findOne",
         collection: "conversation_chunks",
         query: { _id: new ObjectId(data.chunkId) },
-      });
+      }) as ConversationChunk | null;
       chunks = chunk ? [chunk] : [];
     } else {
       // Find ready chunks, or stuck processing chunks
@@ -396,7 +396,7 @@ const capability: JobCapability = {
           sort: { start: -1 },
           limit: data.limit + 1,  // +1 to check if there's more
         },
-      });
+      }) as ConversationChunk[];
     }
 
     const hasMore = chunks.length > data.limit;
@@ -447,7 +447,7 @@ const capability: JobCapability = {
               processedByJobId: job.id,
             },
           },
-        });
+        }) as { modifiedCount: number };
 
         if (updateResult.modifiedCount === 0) {
           // Another worker claimed it
@@ -474,7 +474,11 @@ const capability: JobCapability = {
           collection: "transcriptions",
           query: { _id: { $in: chunk.transcriptionIds } },
           options: { sort: { start: 1 } },
-        });
+        }) as Array<{
+          start: Date;
+          end: Date;
+          segments?: Array<{ text: string }>;
+        }>;
 
         if (!transcriptions || transcriptions.length === 0) {
           await mongo({
@@ -596,7 +600,7 @@ const capability: JobCapability = {
                 },
               },
             },
-          });
+          }) as { insertedId: ObjectId };
 
           const conversationId = convResult.insertedId;
 

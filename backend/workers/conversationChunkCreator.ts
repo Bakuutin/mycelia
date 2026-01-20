@@ -34,17 +34,15 @@ const gapThresholdsSchema = z.object({
   sparse: z.number().default(45 * 60 * 1000),  // 45 min
   normal: z.number().default(5 * 60 * 1000),   // 5 min
   dense: z.number().default(40 * 1000),        // 40 sec
-}).default({});
+});
 
 const charThresholdsSchema = z.object({
   sparseMax: z.number().default(500),
   normalMax: z.number().default(20000),
-}).default({});
+});
 
 const scanSpecSchema = z.object({
   mode: z.enum(["range", "cursor"]).default("range"),
-  startDate: zDateOrString().optional(),
-  endDate: zDateOrString().optional(),
   after: z.object({
     start: zDateOrString(),
     _id: z.string(),
@@ -55,9 +53,22 @@ const scanSpecSchema = z.object({
 
 export const schema = z.object({
   type: z.literal("conversation_chunk_creator"),
-  scan: scanSpecSchema,
-  gapThresholds: gapThresholdsSchema,
-  charThresholds: charThresholdsSchema,
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
+  scan: scanSpecSchema.default({
+    mode: "range",
+    maxLookbackMs: 5 * 60 * 1000,
+    watermarkDelayMs: 60 * 1000,
+  }),
+  gapThresholds: gapThresholdsSchema.default({
+    sparse: 45 * 60 * 1000,
+    normal: 5 * 60 * 1000,
+    dense: 40 * 1000,
+  }),
+  charThresholds: charThresholdsSchema.default({
+    sparseMax: 500,
+    normalMax: 20000,
+  }),
   policyVersion: z.string().default("v1"),
   model: z.enum(["small", "medium", "large"]).default("small"),
   force: z.boolean().default(false),
@@ -249,12 +260,14 @@ async function saveCheckpoint(
 async function* iterateTranscriptions(
   mongo: (input: any) => Promise<any>,
   scan: z.infer<typeof scanSpecSchema>,
+  start?: string | Date,
+  end?: string | Date,
 ): AsyncIterableIterator<Utterance> {
   const query: any = {};
   
   if (scan.mode === "range") {
-    if (scan.startDate) query.start = { ...query.start, $gte: new Date(scan.startDate) };
-    if (scan.endDate) query.start = { ...query.start, $lt: new Date(scan.endDate) };
+    if (start) query.start = { ...query.start, $gte: new Date(start) };
+    if (end) query.start = { ...query.start, $lt: new Date(end) };
   } else if (scan.mode === "cursor" && scan.after) {
     // Cursor mode: resume from checkpoint
     query.$or = [
@@ -309,7 +322,7 @@ const capability: JobCapability = {
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
 
     // Resolve scan spec
-    let scan = { ...data.scan };
+    const scan = { ...data.scan };
     if (scan.mode === "cursor" && !scan.after) {
       const checkpoint = await loadCheckpoint(mongo, "conversation_chunk_creator");
       if (checkpoint) {
@@ -327,9 +340,10 @@ const capability: JobCapability = {
     let lastUtterance: Utterance | null = null;
     let hasMore = false;
 
-    const maxChunks = data.maxChunks ?? Infinity;
+    const hasRange = Boolean(data.start || data.end);
+    const maxChunks = data.maxChunks ?? (hasRange ? Infinity : 5);
 
-    for await (const utterance of iterateTranscriptions(mongo, scan)) {
+    for await (const utterance of iterateTranscriptions(mongo, scan, data.start, data.end)) {
       if (chunksCreated >= maxChunks) {
         hasMore = true;
         break;
