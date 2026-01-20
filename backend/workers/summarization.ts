@@ -79,7 +79,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }
   promptText += getTimestampMessage(new Date(lastEnd));
 
-  const modelAlias = userModel || "medium";
+  const modelAlias = userModel || "small";
   const systemPrompt = userPrompt ||
     `You are a helpful assistant. Summarize the following conversation transcript.`;
 

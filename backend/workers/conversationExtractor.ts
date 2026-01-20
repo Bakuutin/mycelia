@@ -691,7 +691,6 @@ const capability: JobCapability = {
                 start: segment.start.toISOString(),
                 end: segment.end.toISOString(),
                 objectId: conversationId.toString(),
-                model: chunk.params.model,
               },
               trigger: {
                 type: "auto",

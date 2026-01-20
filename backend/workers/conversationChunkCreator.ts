@@ -692,7 +692,7 @@ const capability: JobCapability = {
     const gapThresholds = data.gapThresholds ?? { sparse: 45 * 60 * 1000, normal: 5 * 60 * 1000, dense: 40 * 1000 };
     const charThresholds = data.charThresholds ?? { sparseMax: 500, normalMax: 20000 };
     const policyVersion = data.policyVersion ?? "v1";
-    const model = data.model ?? "small";
+    const model = data.model ?? "medium";
     const mode = data.mode ?? "auto";
     const force = data.force ?? false;
 
