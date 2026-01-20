@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ObjectId } from "bson";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { callResource } from "@myceliasdk/resources.ts";
-import { zObjectId } from "@myceliasdk/zod-json-schema.ts";
+import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { createHash } from "node:crypto";
 
 // ============================================================================
@@ -48,6 +48,8 @@ interface ConversationChunk {
 export const schema = z.object({
   type: z.literal("conversation_extractor"),
   chunkId: zObjectId().optional(),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
   limit: z.number().default(1),
   extractorVersion: z.string().default("v1"),
 });
@@ -339,10 +341,17 @@ const capability: JobCapability = {
   name: "conversation_extractor",
   inputSchema: z.toJSONSchema(schema),
   outputSchema: z.toJSONSchema(z.object({
-    status: z.literal("success"),
+    status: z.literal("completed"),
+    success: z.boolean(),
     conversationsCreated: z.number(),
     chunksProcessed: z.number(),
     hasMore: z.boolean(),
+    errors: z.array(z.object({
+      type: z.string(),
+      message: z.string(),
+      conversationId: z.string().optional(),
+      entity: z.string().optional(),
+    })).optional(),
   })),
   policies: [
     { resource: "db/conversation_chunks", action: "read", effect: "allow" },
@@ -379,19 +388,31 @@ const capability: JobCapability = {
       }) as ConversationChunk | null;
       chunks = chunk ? [chunk] : [];
     } else {
+      // Build query with optional date range filters
+      const stateFilter = {
+        $or: [
+          { state: "ready" },
+          {
+            state: { $in: ["processing", "error"] },
+            processingStartedAt: { $lt: new Date(Date.now() - processingTimeoutMs) },
+          },
+        ],
+      };
+
+      const dateFilter: Record<string, any> = {};
+      if (data.start) dateFilter.$gte = new Date(data.start);
+      if (data.end) dateFilter.$lt = new Date(data.end);
+
+      const query: Record<string, any> = { ...stateFilter };
+      if (Object.keys(dateFilter).length > 0) {
+        query.start = dateFilter;
+      }
+
       // Find ready chunks, or stuck processing chunks
       chunks = await mongo({
         action: "find",
         collection: "conversation_chunks",
-        query: {
-          $or: [
-            { state: "ready" },
-            {
-              state: "processing",
-              processingStartedAt: { $lt: new Date(Date.now() - processingTimeoutMs) },
-            },
-          ],
-        },
+        query,
         options: {
           sort: { start: -1 },
           limit: data.limit + 1,  // +1 to check if there's more
@@ -404,6 +425,7 @@ const capability: JobCapability = {
 
     let conversationsCreated = 0;
     let chunksProcessed = 0;
+    const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
 
     // Load prompts
     let prompts: Record<string, string>;
@@ -588,15 +610,15 @@ const capability: JobCapability = {
               icon: { text: metadata.emoji },
               agreed_upon_something: metadata.agreed_upon_something,
               timeRanges: [{
-                start: segment.start,
-                end: segment.end,
+                start: segment.start.toISOString(),
+                end: segment.end.toISOString(),
               }],
               metadata: {
                 extractedWith: {
                   model: chunk.params.model,
                   extractorVersion: data.extractorVersion,
                   chunkId: chunk._id.toString(),
-                  timestamp: new Date(),
+                  timestamp: new Date().toISOString(),
                 },
               },
             },
@@ -622,6 +644,12 @@ const capability: JobCapability = {
               });
             } catch (error) {
               console.error(`Failed to create entity relationship for "${entityName}":`, error);
+              errors.push({
+                type: "entity_relationship",
+                message: error instanceof Error ? error.message : String(error),
+                conversationId: conversationId.toString(),
+                entity: entityName,
+              });
             }
           }
 
@@ -643,6 +671,11 @@ const capability: JobCapability = {
             });
           } catch (error) {
             console.error(`Failed to queue summarization job for conversation ${conversationId}:`, error);
+            errors.push({
+              type: "summarization_job",
+              message: error instanceof Error ? error.message : String(error),
+              conversationId: conversationId.toString(),
+            });
           }
 
           chunkConversations++;
@@ -682,17 +715,36 @@ const capability: JobCapability = {
             $unset: { processingStartedAt: "" },
           },
         });
+
+        // Re-throw to fail the job - chunk state is saved, job can be retried
+        throw error;
       }
     }
 
     return {
-      status: "success",
+      status: "completed" as const,
+      success: errors.length === 0,
       conversationsCreated,
       chunksProcessed,
       hasMore,
+      ...(errors.length > 0 && { errors }),
     };
   },
-  // No triggers by default - manual only
+  triggers: {
+    sources: [
+      {
+        channel: "mycelia:mongo:conversation_chunks",
+        name: "chunk_ready",
+        filter: {
+          event: "mongo.change",
+          "data.operationType": { $in: ["insert", "update"] },
+          "data.document.state": "ready",
+        },
+      },
+    ],
+    debounceMs: 5000,
+    interval: 300,
+  },
 };
 
 export default capability;

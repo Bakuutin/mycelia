@@ -138,11 +138,13 @@ export class JobsResource
   }
 
   private async enqueue(input: z.infer<typeof EnqueueJobSchema>, auth: Auth) {
+    // Access already checked by ResourceManager - escalate to server auth
+    const serverAuth = await getServerAuth();
     const options: EnqueueJobOptions = {
       priority: input.priority,
       trigger: input.trigger,
     };
-    const job = await enqueueJob(input.data, options, auth);
+    const job = await enqueueJob(input.data, options, serverAuth);
 
     return {
       success: true,
@@ -356,7 +358,7 @@ export class JobsResource
       case "cancel":
         return [{ path: ["jobs", input.id], actions: ["cancel"] }];
       case "enqueue":
-        return [{ path: ["jobs"], actions: ["write"] }];
+        return [{ path: ["jobs", input.data.type], actions: ["enqueue"] }];
       case "progressUpdate":
         return [{ path: ["jobs", input.jobId], actions: ["progressUpdate"] }];
     }
