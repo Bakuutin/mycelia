@@ -7,14 +7,26 @@ import { mongoCursor } from "@/lib/mongo/cursor.ts";
 import { createHash } from "node:crypto";
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+const GAP_TIMEOUT_MS = 60 * 1000;           // 60s silence = finalize open chunk
+const RECENT_WINDOW_MS = 5 * 60 * 1000;     // Last 5 min = "recent" (streaming mode)
+const BACKFILL_BATCH_SIZE = 100;            // Max transcriptions per backfill batch
+const MAX_OPEN_CHUNKS_PER_RUN = 10;         // Max open chunks to finalize per run
+const MAX_STREAMING_PER_RUN = 50;           // Max transcriptions to stream per run
+
+// ============================================================================
 // Types
 // ============================================================================
 
 interface Utterance {
   _id: ObjectId;
+  original?: ObjectId;
   start: Date;
   end: Date;
   text: string;
+  createdAt?: Date;
 }
 
 interface PendingChunk {
@@ -24,7 +36,18 @@ interface PendingChunk {
   totalTextLength: number;
 }
 
+interface OpenChunk {
+  _id: ObjectId;
+  original_id?: ObjectId;
+  start: Date;
+  end: Date;
+  transcriptionIds: ObjectId[];
+  totalTextLength: number;
+  lastActivityAt: Date;
+}
+
 type ChunkState = "open" | "ready" | "processing" | "completed" | "error" | "empty";
+type ChunkMode = "streaming" | "backfill";
 
 // ============================================================================
 // Schema
@@ -41,38 +64,22 @@ const charThresholdsSchema = z.object({
   normalMax: z.number().default(20000),
 });
 
-const scanSpecSchema = z.object({
-  mode: z.enum(["range", "cursor"]).default("range"),
-  after: z.object({
-    start: zDateOrString(),
-    _id: z.string(),
-  }).optional(),
-  maxLookbackMs: z.number().default(5 * 60 * 1000),      // 5 min
-  watermarkDelayMs: z.number().default(60 * 1000),       // 60 sec
-});
-
 export const schema = z.object({
   type: z.literal("conversation_chunk_creator"),
+  // Manual range override (for explicit reprocessing)
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
-  scan: scanSpecSchema.default({
-    mode: "range",
-    maxLookbackMs: 5 * 60 * 1000,
-    watermarkDelayMs: 60 * 1000,
-  }),
-  gapThresholds: gapThresholdsSchema.default({
-    sparse: 45 * 60 * 1000,
-    normal: 5 * 60 * 1000,
-    dense: 40 * 1000,
-  }),
-  charThresholds: charThresholdsSchema.default({
-    sparseMax: 500,
-    normalMax: 20000,
-  }),
-  policyVersion: z.string().default("v1"),
-  model: z.enum(["small", "medium", "large"]).default("small"),
-  force: z.boolean().default(false),
+  // Thresholds
+  gapThresholds: gapThresholdsSchema.optional(),
+  charThresholds: charThresholdsSchema.optional(),
+  // Processing options
+  policyVersion: z.string().optional(),
+  model: z.string().optional(),
+  force: z.boolean().optional(),
+  // Limits
   maxChunks: z.number().optional(),
+  // Mode override (for testing/manual runs)
+  mode: z.string().optional(),
 });
 
 export type ConversationChunkCreatorJobData = z.infer<typeof schema>;
@@ -101,7 +108,7 @@ function generateChunkKey(
 }
 
 // ============================================================================
-// Chunking Engine
+// Chunking Engine (for backfill batch processing)
 // ============================================================================
 
 class ChunkingEngine {
@@ -171,43 +178,250 @@ class ChunkingEngine {
 // Database Operations
 // ============================================================================
 
-async function checkChunkExists(
-  mongo: (input: any) => Promise<any>,
-  chunkKey: string,
+type MongoFn = (input: any) => Promise<any>;
+
+async function findStaleOpenChunks(mongo: MongoFn): Promise<OpenChunk[]> {
+  return await mongo({
+    action: "find",
+    collection: "conversation_chunks",
+    query: {
+      state: "open",
+      lastActivityAt: { $lt: new Date(Date.now() - GAP_TIMEOUT_MS) },
+    },
+    options: { limit: MAX_OPEN_CHUNKS_PER_RUN },
+  }) as OpenChunk[];
+}
+
+async function findRecentUnassignedTranscriptions(mongo: MongoFn): Promise<Utterance[]> {
+  const docs = await mongo({
+    action: "find",
+    collection: "transcriptions",
+    query: {
+      chunk_id: { $exists: false },
+      createdAt: { $gte: new Date(Date.now() - RECENT_WINDOW_MS) },
+    },
+    options: { 
+      sort: { start: 1 },  // Oldest first within recent window
+      limit: MAX_STREAMING_PER_RUN,
+    },
+  }) as any[];
+  
+  return docs.map(doc => ({
+    _id: doc._id,
+    original: doc.original,
+    start: new Date(doc.start),
+    end: new Date(doc.end),
+    text: doc.segments?.map((s: any) => s.text).join("").trim() ?? doc.text ?? "",
+    createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
+  }));
+}
+
+async function findHistoricalUnassignedTranscriptions(mongo: MongoFn): Promise<Utterance[]> {
+  const docs = await mongo({
+    action: "find",
+    collection: "transcriptions",
+    query: {
+      chunk_id: { $exists: false },
+      createdAt: { $lt: new Date(Date.now() - RECENT_WINDOW_MS) },
+    },
+    options: { 
+      sort: { start: -1 },  // Newest historical first (work backwards)
+      limit: BACKFILL_BATCH_SIZE,
+    },
+  }) as any[];
+  
+  return docs.map(doc => ({
+    _id: doc._id,
+    original: doc.original,
+    start: new Date(doc.start),
+    end: new Date(doc.end),
+    text: doc.segments?.map((s: any) => s.text).join("").trim() ?? doc.text ?? "",
+    createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
+  }));
+}
+
+async function findOrCreateOpenChunk(
+  mongo: MongoFn,
+  originalId: ObjectId | undefined,
+  policyVersion: string,
+  model: string,
+): Promise<OpenChunk> {
+  // Find existing open chunk for this recording
+  const query: any = { state: "open" };
+  if (originalId) {
+    query.original_id = originalId;
+  } else {
+    query.original_id = { $exists: false };
+  }
+  
+  let chunk = await mongo({
+    action: "findOne",
+    collection: "conversation_chunks",
+    query,
+  }) as OpenChunk | null;
+
+  if (!chunk) {
+    const newId = new ObjectId();
+    const now = new Date();
+    const doc: any = {
+      _id: newId,
+      state: "open",
+      mode: "streaming" as ChunkMode,
+      transcriptionIds: [],
+      transcriptionCount: 0,
+      totalTextLength: 0,
+      lastActivityAt: now,
+      createdAt: now,
+      policyVersion,
+      params: { model, force: false },
+    };
+    if (originalId) {
+      doc.original_id = originalId;
+    }
+    
+    await mongo({
+      action: "insertOne",
+      collection: "conversation_chunks",
+      doc,
+    });
+
+    chunk = {
+      _id: newId,
+      original_id: originalId,
+      start: now,
+      end: now,
+      transcriptionIds: [],
+      totalTextLength: 0,
+      lastActivityAt: now,
+    };
+  }
+
+  return chunk;
+}
+
+async function appendToChunk(
+  mongo: MongoFn,
+  chunk: OpenChunk,
+  transcription: Utterance,
+): Promise<void> {
+  const isFirst = chunk.transcriptionIds.length === 0;
+  
+  const update: any = {
+    $push: { transcriptionIds: transcription._id },
+    $inc: { 
+      totalTextLength: transcription.text.length,
+      transcriptionCount: 1,
+    },
+    $set: { 
+      end: transcription.end,
+      lastActivityAt: new Date(),
+    },
+  };
+  
+  if (isFirst) {
+    update.$set.start = transcription.start;
+  }
+
+  await mongo({
+    action: "updateOne",
+    collection: "conversation_chunks",
+    query: { _id: chunk._id },
+    update,
+  });
+
+  // Mark transcription as assigned
+  await mongo({
+    action: "updateOne",
+    collection: "transcriptions",
+    query: { _id: transcription._id },
+    update: { $set: { chunk_id: chunk._id } },
+  });
+  
+  // Update local state
+  chunk.transcriptionIds.push(transcription._id);
+  chunk.totalTextLength += transcription.text.length;
+  chunk.end = transcription.end;
+  if (isFirst) {
+    chunk.start = transcription.start;
+  }
+}
+
+async function finalizeChunk(
+  mongo: MongoFn,
+  chunk: OpenChunk,
+  policyVersion: string,
 ): Promise<boolean> {
+  if (chunk.transcriptionIds.length === 0) {
+    // Empty chunk, just delete it
+    await mongo({
+      action: "deleteOne",
+      collection: "conversation_chunks",
+      query: { _id: chunk._id },
+    });
+    return false;
+  }
+
+  const chunkKey = generateChunkKey(policyVersion, chunk.start, chunk.end);
+  
+  await mongo({
+    action: "updateOne",
+    collection: "conversation_chunks",
+    query: { _id: chunk._id },
+    update: { 
+      $set: { 
+        state: "ready",
+        chunkKey,
+        finalizedAt: new Date(),
+      },
+    },
+  });
+  
+  return true;
+}
+
+async function createBackfillChunk(
+  mongo: MongoFn,
+  chunk: PendingChunk,
+  params: {
+    policyVersion: string;
+    model: string;
+    jobId?: string;
+  },
+): Promise<ObjectId> {
+  const chunkKey = generateChunkKey(params.policyVersion, chunk.start, chunk.end);
+  
+  // Check if chunk already exists
   const existing = await mongo({
     action: "findOne",
     collection: "conversation_chunks",
     query: { chunkKey },
   });
-  return existing !== null;
-}
+  
+  if (existing) {
+    // Mark transcriptions as belonging to existing chunk
+    await mongo({
+      action: "updateMany",
+      collection: "transcriptions",
+      query: { _id: { $in: chunk.transcriptionIds } },
+      update: { $set: { chunk_id: existing._id } },
+    });
+    return existing._id;
+  }
 
-async function createChunk(
-  mongo: (input: any) => Promise<any>,
-  chunk: PendingChunk,
-  params: {
-    chunkKey: string;
-    policyVersion: string;
-    model: string;
-    force: boolean;
-    jobId?: string;
-    state: ChunkState;
-  },
-): Promise<ObjectId> {
   const doc = {
     _id: new ObjectId(),
-    chunkKey: params.chunkKey,
+    chunkKey,
     policyVersion: params.policyVersion,
     start: chunk.start,
     end: chunk.end,
     transcriptionIds: chunk.transcriptionIds,
     transcriptionCount: chunk.transcriptionIds.length,
     totalTextLength: chunk.totalTextLength,
-    state: params.state,
+    state: "ready" as ChunkState,
+    mode: "backfill" as ChunkMode,
     params: {
       model: params.model,
-      force: params.force,
+      force: false,
     },
     createdAt: new Date(),
     createdByJobId: params.jobId,
@@ -219,70 +433,137 @@ async function createChunk(
     doc,
   });
 
+  // Mark transcriptions as assigned
+  await mongo({
+    action: "updateMany",
+    collection: "transcriptions",
+    query: { _id: { $in: chunk.transcriptionIds } },
+    update: { $set: { chunk_id: doc._id } },
+  });
+
   return doc._id;
 }
 
-async function loadCheckpoint(
-  mongo: (input: any) => Promise<any>,
-  jobName: string,
-): Promise<{ start: Date; _id: string } | null> {
-  const doc = await mongo({
-    action: "findOne",
-    collection: "checkpoints",
-    query: { _id: jobName },
-  });
-  return doc?.cursor ?? null;
-}
-
-async function saveCheckpoint(
-  mongo: (input: any) => Promise<any>,
-  jobName: string,
-  cursor: { start: Date; _id: string },
-): Promise<void> {
-  await mongo({
-    action: "updateOne",
-    collection: "checkpoints",
-    query: { _id: jobName },
-    update: {
-      $set: {
-        cursor,
-        updatedAt: new Date(),
-      },
-    },
-    options: { upsert: true },
-  });
-}
-
 // ============================================================================
-// Main Worker
+// Processing Functions
 // ============================================================================
 
-async function* iterateTranscriptions(
-  mongo: (input: any) => Promise<any>,
-  scan: z.infer<typeof scanSpecSchema>,
-  start?: string | Date,
-  end?: string | Date,
-): AsyncIterableIterator<Utterance> {
-  const query: any = {};
+async function processStalOpenChunks(
+  mongo: MongoFn,
+  policyVersion: string,
+): Promise<number> {
+  const staleChunks = await findStaleOpenChunks(mongo);
+  let finalized = 0;
   
-  if (scan.mode === "range") {
-    if (start) query.start = { ...query.start, $gte: new Date(start) };
-    if (end) query.start = { ...query.start, $lt: new Date(end) };
-  } else if (scan.mode === "cursor" && scan.after) {
-    // Cursor mode: resume from checkpoint
-    query.$or = [
-      { start: { $lt: new Date(scan.after.start) } },
-      { start: new Date(scan.after.start), _id: { $lt: new ObjectId(scan.after._id) } },
-    ];
+  for (const chunk of staleChunks) {
+    const wasFinalized = await finalizeChunk(mongo, chunk, policyVersion);
+    if (wasFinalized) finalized++;
   }
+  
+  return finalized;
+}
 
+async function processStreamingTranscriptions(
+  mongo: MongoFn,
+  gapThresholds: { sparse: number; normal: number; dense: number },
+  charThresholds: { sparseMax: number; normalMax: number },
+  policyVersion: string,
+  model: string,
+): Promise<{ streamed: number; chunksFinalized: number }> {
+  const transcriptions = await findRecentUnassignedTranscriptions(mongo);
+  let streamed = 0;
+  let chunksFinalized = 0;
+  
+  // Group by original_id for efficient processing
+  const byOriginal = new Map<string, Utterance[]>();
+  for (const t of transcriptions) {
+    const key = t.original?.toString() ?? "__none__";
+    if (!byOriginal.has(key)) byOriginal.set(key, []);
+    byOriginal.get(key)!.push(t);
+  }
+  
+  for (const [originalKey, utterances] of byOriginal) {
+    const originalId = originalKey === "__none__" ? undefined : new ObjectId(originalKey);
+    
+    // Sort by start time within this recording
+    utterances.sort((a, b) => a.start.getTime() - b.start.getTime());
+    
+    let openChunk = await findOrCreateOpenChunk(mongo, originalId, policyVersion, model);
+    
+    for (const transcription of utterances) {
+      // Check if gap threshold exceeded → finalize current, create new
+      if (openChunk.transcriptionIds.length > 0) {
+        const gap = transcription.start.getTime() - openChunk.end.getTime();
+        const threshold = allowedGap(openChunk.totalTextLength, gapThresholds, charThresholds);
+        
+        if (gap > threshold) {
+          const wasFinalized = await finalizeChunk(mongo, openChunk, policyVersion);
+          if (wasFinalized) chunksFinalized++;
+          openChunk = await findOrCreateOpenChunk(mongo, originalId, policyVersion, model);
+        }
+      }
+      
+      await appendToChunk(mongo, openChunk, transcription);
+      streamed++;
+    }
+  }
+  
+  return { streamed, chunksFinalized };
+}
+
+async function processBackfillBatch(
+  mongo: MongoFn,
+  gapThresholds: { sparse: number; normal: number; dense: number },
+  charThresholds: { sparseMax: number; normalMax: number },
+  policyVersion: string,
+  model: string,
+  jobId?: string,
+): Promise<{ backfilled: number; chunksCreated: number }> {
+  const transcriptions = await findHistoricalUnassignedTranscriptions(mongo);
+  
+  if (transcriptions.length === 0) {
+    return { backfilled: 0, chunksCreated: 0 };
+  }
+  
+  const engine = new ChunkingEngine(gapThresholds, charThresholds);
+  let chunksCreated = 0;
+  
+  for (const t of transcriptions) {
+    const pendingChunk = engine.process(t);
+    if (pendingChunk) {
+      await createBackfillChunk(mongo, pendingChunk, { policyVersion, model, jobId });
+      chunksCreated++;
+    }
+  }
+  
+  // Finalize remaining buffer
+  const final = engine.finalize();
+  if (final) {
+    await createBackfillChunk(mongo, final, { policyVersion, model, jobId });
+    chunksCreated++;
+  }
+  
+  return { backfilled: transcriptions.length, chunksCreated };
+}
+
+// ============================================================================
+// Legacy: Manual Range Processing (for explicit reprocessing)
+// ============================================================================
+
+async function* iterateTranscriptionsInRange(
+  mongo: MongoFn,
+  start: Date,
+  end: Date,
+): AsyncIterableIterator<Utterance> {
   const cursor = mongoCursor(
     mongo,
     "transcriptions",
-    query,
+    {
+      start: { $gte: start, $lt: end },
+    },
     {
       sort: { start: -1, _id: -1 },  // Newest first for backwards iteration
-      projection: { _id: 1, start: 1, end: 1, segments: 1 },
+      projection: { _id: 1, start: 1, end: 1, segments: 1, original: 1 },
     },
     200,
   );
@@ -291,6 +572,7 @@ async function* iterateTranscriptions(
     const text = doc.segments?.map((s: any) => s.text).join("").trim() ?? "";
     yield {
       _id: doc._id,
+      original: doc.original,
       start: new Date(doc.start),
       end: new Date(doc.end),
       text,
@@ -298,141 +580,217 @@ async function* iterateTranscriptions(
   }
 }
 
+async function processManualRange(
+  mongo: MongoFn,
+  start: Date,
+  end: Date,
+  gapThresholds: { sparse: number; normal: number; dense: number },
+  charThresholds: { sparseMax: number; normalMax: number },
+  policyVersion: string,
+  model: string,
+  force: boolean,
+  maxChunks: number,
+  jobId?: string,
+): Promise<{ chunksCreated: number; transcriptionsProcessed: number; hasMore: boolean }> {
+  const engine = new ChunkingEngine(gapThresholds, charThresholds);
+  let chunksCreated = 0;
+  let transcriptionsProcessed = 0;
+  let hasMore = false;
+
+  for await (const utterance of iterateTranscriptionsInRange(mongo, start, end)) {
+    if (chunksCreated >= maxChunks) {
+      hasMore = true;
+      break;
+    }
+
+    const chunk = engine.process(utterance);
+    
+    if (chunk) {
+      const chunkKey = generateChunkKey(policyVersion, chunk.start, chunk.end);
+      
+      const existing = await mongo({
+        action: "findOne",
+        collection: "conversation_chunks",
+        query: { chunkKey },
+      });
+      
+      if (!existing || force) {
+        if (existing && force) {
+          await mongo({
+            action: "deleteMany",
+            collection: "conversation_chunks",
+            query: { chunkKey },
+          });
+        }
+        
+        await createBackfillChunk(mongo, chunk, { policyVersion, model, jobId });
+        chunksCreated++;
+      }
+    }
+
+    transcriptionsProcessed++;
+  }
+
+  // Finalize remaining buffer
+  if (engine.hasContent() && chunksCreated < maxChunks) {
+    const chunk = engine.finalize();
+    if (chunk) {
+      const chunkKey = generateChunkKey(policyVersion, chunk.start, chunk.end);
+      const existing = await mongo({
+        action: "findOne",
+        collection: "conversation_chunks",
+        query: { chunkKey },
+      });
+      
+      if (!existing || force) {
+        if (existing && force) {
+          await mongo({
+            action: "deleteMany",
+            collection: "conversation_chunks",
+            query: { chunkKey },
+          });
+        }
+        await createBackfillChunk(mongo, chunk, { policyVersion, model, jobId });
+        chunksCreated++;
+      }
+    }
+  }
+
+  return { chunksCreated, transcriptionsProcessed, hasMore };
+}
+
+// ============================================================================
+// Main Worker
+// ============================================================================
+
 const capability: JobCapability = {
   name: "conversation_chunk_creator",
   inputSchema: z.toJSONSchema(schema),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
+    finalized: z.number(),
+    streamed: z.number(),
+    backfilled: z.number(),
     chunksCreated: z.number(),
-    transcriptionsProcessed: z.number(),
     hasMore: z.boolean(),
   })),
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
+    { resource: "db/transcriptions", action: "update", effect: "allow" },
     { resource: "db/conversation_chunks", action: "read", effect: "allow" },
     { resource: "db/conversation_chunks", action: "write", effect: "allow" },
-    { resource: "db/checkpoints", action: "read", effect: "allow" },
-    { resource: "db/checkpoints", action: "write", effect: "allow" },
+    { resource: "db/conversation_chunks", action: "update", effect: "allow" },
+    { resource: "db/conversation_chunks", action: "delete", effect: "allow" },
   ],
   maxConcurrency: 1,
   use: async (job) => {
     const data = job.data as ConversationChunkCreatorJobData;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
-    const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
+    const mongo: MongoFn = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
 
-    // Resolve scan spec
-    const scan = { ...data.scan };
-    if (scan.mode === "cursor" && !scan.after) {
-      const checkpoint = await loadCheckpoint(mongo, "conversation_chunk_creator");
-      if (checkpoint) {
-        scan.after = checkpoint;
-      }
-    }
+    const gapThresholds = data.gapThresholds ?? { sparse: 45 * 60 * 1000, normal: 5 * 60 * 1000, dense: 40 * 1000 };
+    const charThresholds = data.charThresholds ?? { sparseMax: 500, normalMax: 20000 };
+    const policyVersion = data.policyVersion ?? "v1";
+    const model = data.model ?? "small";
+    const mode = data.mode ?? "auto";
+    const force = data.force ?? false;
 
-    const engine = new ChunkingEngine(
-      data.gapThresholds ?? { sparse: 45 * 60 * 1000, normal: 5 * 60 * 1000, dense: 40 * 1000 },
-      data.charThresholds ?? { sparseMax: 500, normalMax: 20000 },
-    );
-
-    let chunksCreated = 0;
-    let transcriptionsProcessed = 0;
-    let lastUtterance: Utterance | null = null;
-    let hasMore = false;
-
-    const hasRange = Boolean(data.start || data.end);
-    const maxChunks = data.maxChunks ?? (hasRange ? Infinity : 5);
-
-    for await (const utterance of iterateTranscriptions(mongo, scan, data.start, data.end)) {
-      if (chunksCreated >= maxChunks) {
-        hasMore = true;
-        break;
-      }
-
-      const chunk = engine.process(utterance);
+    // ─────────────────────────────────────────────────────────────────────────
+    // Manual range mode: explicit reprocessing of a time range
+    // ─────────────────────────────────────────────────────────────────────────
+    if (data.start && data.end) {
+      const result = await processManualRange(
+        mongo,
+        new Date(data.start),
+        new Date(data.end),
+        gapThresholds,
+        charThresholds,
+        policyVersion,
+        model,
+        force,
+        data.maxChunks ?? Infinity,
+        job.id,
+      );
       
-      if (chunk) {
-        const chunkKey = generateChunkKey(data.policyVersion, chunk.start, chunk.end);
-        
-        // Check idempotency
-        const exists = await checkChunkExists(mongo, chunkKey);
-        if (!exists || data.force) {
-          if (exists && data.force) {
-            // Delete existing chunk if force
-            await mongo({
-              action: "deleteMany",
-              collection: "conversation_chunks",
-              query: { chunkKey },
-            });
-          }
-          
-          await createChunk(mongo, chunk, {
-            chunkKey,
-            policyVersion: data.policyVersion,
-            model: data.model,
-            force: data.force,
-            jobId: job.id,
-            state: "ready",
-          });
-          chunksCreated++;
-        }
-      }
-
-      transcriptionsProcessed++;
-      lastUtterance = utterance;
-
-      if (transcriptionsProcessed % 100 === 0) {
-        await job.updateProgress({
-          stage: "scanning",
-          transcriptionsProcessed,
-          chunksCreated,
-        });
-      }
+      return {
+        status: "success" as const,
+        finalized: 0,
+        streamed: 0,
+        backfilled: result.transcriptionsProcessed,
+        chunksCreated: result.chunksCreated,
+        hasMore: result.hasMore,
+      };
     }
 
-    // Finalize remaining buffer
-    if (engine.hasContent()) {
-      const chunk = engine.finalize();
-      if (chunk && chunksCreated < maxChunks) {
-        const chunkKey = generateChunkKey(data.policyVersion, chunk.start, chunk.end);
-        const exists = await checkChunkExists(mongo, chunkKey);
-        if (!exists || data.force) {
-          if (exists && data.force) {
-            await mongo({
-              action: "deleteMany",
-              collection: "conversation_chunks",
-              query: { chunkKey },
-            });
-          }
-          await createChunk(mongo, chunk, {
-            chunkKey,
-            policyVersion: data.policyVersion,
-            model: data.model,
-            force: data.force,
-            jobId: job.id,
-            state: "ready",
-          });
-          chunksCreated++;
-        }
-      }
+    // ─────────────────────────────────────────────────────────────────────────
+    // Auto mode: Priority-based streaming + backfill
+    // ─────────────────────────────────────────────────────────────────────────
+    let totalFinalized = 0;
+    let totalStreamed = 0;
+    let totalBackfilled = 0;
+    let totalChunksCreated = 0;
+
+    // Priority 1: Finalize stale open chunks (gap timeout reached)
+    await job.updateProgress({ stage: "finalizing_stale" });
+    const finalized = await processStalOpenChunks(mongo, policyVersion);
+    totalFinalized = finalized;
+    totalChunksCreated += finalized;
+
+    // Priority 2: Stream recent unassigned transcriptions
+    if (mode === "auto" || mode === "streaming") {
+      await job.updateProgress({ stage: "streaming", finalized: totalFinalized });
+      const streamResult = await processStreamingTranscriptions(
+        mongo,
+        gapThresholds,
+        charThresholds,
+        policyVersion,
+        model,
+      );
+      totalStreamed = streamResult.streamed;
+      totalChunksCreated += streamResult.chunksFinalized;
     }
 
-    // Save checkpoint for cursor mode
-    if (scan.mode === "cursor" && lastUtterance) {
-      await saveCheckpoint(mongo, "conversation_chunk_creator", {
-        start: lastUtterance.start,
-        _id: lastUtterance._id.toString(),
-      });
+    // Priority 3: Backfill historical data (only if streaming is caught up)
+    if ((mode === "auto" && totalStreamed === 0) || mode === "backfill") {
+      await job.updateProgress({ stage: "backfilling", finalized: totalFinalized, streamed: totalStreamed });
+      const backfillResult = await processBackfillBatch(
+        mongo,
+        gapThresholds,
+        charThresholds,
+        policyVersion,
+        model,
+        job.id,
+      );
+      totalBackfilled = backfillResult.backfilled;
+      totalChunksCreated += backfillResult.chunksCreated;
     }
+
+    const hasMore = totalStreamed > 0 || totalBackfilled > 0 || totalFinalized > 0;
 
     return {
-      status: "success",
-      chunksCreated,
-      transcriptionsProcessed,
+      status: "success" as const,
+      finalized: totalFinalized,
+      streamed: totalStreamed,
+      backfilled: totalBackfilled,
+      chunksCreated: totalChunksCreated,
       hasMore,
     };
   },
-  // No triggers - manual only by default
+  triggers: {
+    sources: [
+      {
+        channel: "mycelia:mongo:transcriptions",
+        name: "new_transcription",
+        filter: {
+          event: "mongo.change",
+          "data.operationType": "insert",
+        },
+      },
+    ],
+    debounceMs: 2000,   // Quick response for streaming (2s)
+    interval: 30,       // Also check every 30s for stale chunks & backfill
+  },
 };
 
 export default capability;

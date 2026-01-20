@@ -24,7 +24,7 @@ interface Segment {
 interface ConversationMetadata {
   agreed_upon_something: boolean;
   entities: string[];
-  emoji: string;
+  emoji: string | undefined;
 }
 
 interface ConversationChunk {
@@ -225,19 +225,37 @@ async function callLLMStructured<T>(
 function parseSegmentationResponse(content: string): Segment[] {
   const parsed = JSON.parse(content);
   const segments = parsed.segments || [];
-  return segments.map((s: any) => ({
-    title: s.title,
-    start: new Date(s.start),
-    end: new Date(s.end),
-  }));
+  return segments.map((s: any, index: number) => {
+    // Handle null, undefined, non-string, or empty string titles
+    let title = `Segment ${index + 1}`;
+    if (s.title != null && typeof s.title === 'string') {
+      const trimmed = s.title.trim();
+      if (trimmed.length > 0) {
+        title = trimmed;
+      }
+    }
+    return {
+      title,
+      start: new Date(s.start),
+      end: new Date(s.end),
+    };
+  });
 }
 
 function parseMetadataResponse(content: string): ConversationMetadata {
   const parsed = JSON.parse(content);
+  // Only set emoji if valid, otherwise leave undefined (no icon)
+  let emoji: string | undefined = undefined;
+  if (parsed.emoji != null && typeof parsed.emoji === 'string') {
+    const trimmed = parsed.emoji.trim();
+    if (trimmed.length > 0) {
+      emoji = trimmed;
+    }
+  }
   return {
     agreed_upon_something: Boolean(parsed.agreed_upon_something),
     entities: Array.isArray(parsed.entities) ? parsed.entities : [],
-    emoji: parsed.emoji || "💬",
+    emoji,
   };
 }
 
@@ -602,26 +620,37 @@ const capability: JobCapability = {
           );
 
           // Create conversation object (without summary - will be generated separately)
-          const convResult = await objects({
-            action: "create",
-            object: {
-              isConversation: true,
-              name: segment.title,
-              icon: { text: metadata.emoji },
-              agreed_upon_something: metadata.agreed_upon_something,
-              timeRanges: [{
-                start: segment.start.toISOString(),
-                end: segment.end.toISOString(),
-              }],
-              metadata: {
-                extractedWith: {
-                  model: chunk.params.model,
-                  extractorVersion: data.extractorVersion,
-                  chunkId: chunk._id.toString(),
-                  timestamp: new Date().toISOString(),
-                },
+          // Validate required fields before creating
+          if (segment.title == null || typeof segment.title !== 'string' || segment.title.trim().length === 0) {
+            throw new Error(`Invalid segment title: ${JSON.stringify(segment.title)}`);
+          }
+
+          const conversationObject: Record<string, any> = {
+            isConversation: true,
+            name: segment.title.trim(),
+            agreed_upon_something: metadata.agreed_upon_something,
+            timeRanges: [{
+              start: segment.start.toISOString(),
+              end: segment.end.toISOString(),
+            }],
+            metadata: {
+              extractedWith: {
+                model: chunk.params.model,
+                extractorVersion: data.extractorVersion,
+                chunkId: chunk._id.toString(),
+                timestamp: new Date().toISOString(),
               },
             },
+          };
+
+          // Only set icon if emoji was extracted
+          if (metadata.emoji) {
+            conversationObject.icon = { text: metadata.emoji };
+          }
+
+          const convResult = await objects({
+            action: "create",
+            object: conversationObject,
           }) as { insertedId: ObjectId };
 
           const conversationId = convResult.insertedId;
