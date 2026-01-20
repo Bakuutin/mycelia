@@ -353,120 +353,21 @@ mycelia/
 
 ## Technical Documentation
 
-### Job Queue & Worker System
+### Core Architecture
 
-#### [Job Queue System](JOB_QUEUE.md)
-**Purpose**: Comprehensive guide to Mycelia's background job processing system
-
-**Contents**:
-- Architecture overview with worker isolation
-- Job lifecycle and execution flow
-- Creating workers (internal and network-based)
-- Auto-triggering system
-- Progress reporting
-- Security model and JWT authentication
-- Configuration and debugging
-- Best practices
-
-**Key Features**:
-- Isolated worker processes for security
-- JWT-based scoped permissions
-- Auto-discovery of worker capabilities
-- Support for TypeScript and Python workers
-
-#### [Worker Isolation Architecture](WORKER_ISOLATION.md)
-**Purpose**: Deep dive into the security and isolation model for background jobs
+#### [Architecture: Resources vs Workers/Jobs](ARCHITECTURE.md)
+**Purpose**: Explains the two core architectural patterns in Mycelia
 
 **Contents**:
-- Detailed architecture diagrams
-- Security model and permission scoping
-- JWT lifecycle and privilege escalation prevention
-- Process isolation with Deno permissions
-- Remote resource mode implementation
-- Registry and lazy loading
-- Common patterns and examples
-- Migration guide from legacy system
+- Overview diagram showing the relationship between resources and workers
+- Resource interface and available resources
+- Worker/JobCapability interface and available workers
+- Key differences between the two patterns
+- Data flow example (audio processing pipeline)
+- When to use each pattern
 
-**Key Security Features**:
-- Short-lived JWTs (15 min expiry)
-- Principle of least privilege
-- Process-level crash isolation
-- Audit trail per job
-- No privilege escalation possible
+**Key Concepts**:
+- **Resources**: Synchronous, authorized access to system capabilities (database, files, LLM)
+- **Workers/Jobs**: Asynchronous background processing in isolated processes
+- Workers consume resources via JWT-authenticated HTTP calls
 
-**Use Cases**:
-- Understanding how jobs execute securely
-- Creating new workers with proper permissions
-- Debugging worker issues
-- Auditing security model
-
----
-
-## Changelog
-
-### 2026-01-08 - v1.1
-- Added JOB_QUEUE.md with worker isolation architecture
-- Added WORKER_ISOLATION.md with detailed security model
-- Updated documentation for isolated worker processes
-
-### 2025-11-27 - v1.0 (Initial Release)
-- Created DX_ROADMAP.md
-- Created TASK_BREAKDOWN.md
-- Created ONBOARDING_FLOW.md
-- Created PROCESSING_AND_ARTIFACTS.md
-- Created this README
-
----
-
-## License
-
-This documentation is part of the Mycelia project.
-See main repository for license information.
-
----
-
-**Prepared by**: Claude (Anthropic)
-**Commissioned by**: Mycelia Team
-**Repository**: https://github.com/mycelia-tech/mycelia
-
----
-
-## Appendix: Philosophy & Design Principles
-
-### Why This Matters
-
-Mycelia is not just another productivity tool. It's a **personal memory system** that respects privacy and sovereignty. The developer experience must reflect these values:
-
-1. **Respect for Time**: Users shouldn't spend hours configuring. The system should work immediately.
-
-2. **Respect for Privacy**: Every decision point must clearly communicate what data goes where. Self-hosting must be a first-class option, not an afterthought.
-
-3. **Respect for Intelligence**: Users are smart. Give them sensible defaults but don't hide complexity. Advanced users should have full control.
-
-4. **Respect for Sovereignty**: Users own their data and their infrastructure. The system should support this, not fight it.
-
-### Inspiration
-
-This roadmap draws inspiration from:
-- **Docker**: Simple getting started (`docker run hello-world`)
-- **Next.js**: Interactive setup and excellent DX
-- **Obsidian**: Privacy-first, local-first philosophy
-- **Supabase**: Self-hosting as first-class citizen
-- **Linear**: Polished onboarding and beautiful UX
-
-### Guiding Questions
-
-When implementing any feature, ask:
-
-1. **Is this the simplest it can be?** Remove friction at every step.
-2. **Is the privacy impact clear?** Users should never be surprised about where data goes.
-3. **Does this respect user sovereignty?** Can advanced users customize or self-host?
-4. **Is this well-documented?** Future users (and your future self) should understand why decisions were made.
-
----
-
-**End of Documentation Package**
-
-You now have everything needed to transform Mycelia's developer experience.
-
-Good luck! 🚀

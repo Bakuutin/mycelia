@@ -32,19 +32,17 @@ Deno.test(
     });
 
     expect(result.success).toBe(true);
+    expect(result.jobId).toBeDefined();
 
-    const histogramData = await mongo({
+    const jobs = await mongo({
       action: "find",
-      collection: "histogram_5min",
-      query: {
-        start: {
-          $gte: new Date("2024-01-01T00:00:00.000Z"),
-          $lt: new Date("2024-01-01T01:00:00.000Z"),
-        },
-      },
+      collection: "jobs",
+      query: { type: "histRecalculation" },
     });
 
-    expect(histogramData.length).toBeGreaterThan(0);
+    expect(jobs.length).toBeGreaterThan(0);
+    expect(jobs[0].data.start).toBe("2024-01-01T00:00:00.000Z");
+    expect(jobs[0].data.end).toBe("2024-01-01T01:00:00.000Z");
   }),
 );
 
