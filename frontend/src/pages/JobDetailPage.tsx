@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Ban } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { JobInfo } from "@/types/jobs";
+import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
 
 const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
     const result: Array<[string, any]> = [];
@@ -119,6 +119,24 @@ export default function JobDetailPage() {
                 },
             });
             return response as JobLogEntry[];
+        },
+        enabled: !!id,
+    });
+
+    const { data: accessLogs = [], isLoading: isAccessLogsLoading } = useQuery({
+        queryKey: ["job-access-logs", id],
+        queryFn: async () => {
+            if (!id) return [];
+            const response = await api.callResource("mongo", {
+                action: "find",
+                collection: "access_logs",
+                query: { principal: `job:${id}` },
+                options: {
+                    sort: { timestamp: 1 },
+                    limit: 500,
+                },
+            });
+            return response as JobAccessLogEntry[];
         },
         enabled: !!id,
     });
@@ -385,6 +403,55 @@ export default function JobDetailPage() {
                                         </div>
                                         <div className={`whitespace-pre-wrap break-words ${streamStyle}`}>
                                             {log.text}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Access Logs</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {isAccessLogsLoading ? (
+                        <Skeleton className="h-48 w-full" />
+                    ) : accessLogs.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No access logs yet</div>
+                    ) : (
+                        <div className="max-h-96 overflow-auto space-y-3">
+                            {accessLogs.map((log) => {
+                                const timestampDate = log.timestamp ? new Date(log.timestamp) : null;
+                                const timestamp = timestampDate && !isNaN(timestampDate.getTime())
+                                    ? format(timestampDate, "PPpp")
+                                    : "-";
+                                return (
+                                    <div
+                                        key={log._id}
+                                        className="border-b border-border/50 pb-3 last:border-b-0"
+                                    >
+                                        <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-center gap-2">
+                                                <Badge variant="outline">{log.resource}</Badge>
+                                            </div>
+                                            <span className="text-xs text-muted-foreground">{timestamp}</span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {log.actions.map((action, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className="text-xs bg-muted rounded px-2 py-1"
+                                                >
+                                                    <span className="font-mono">
+                                                        {action.path.join(".")}
+                                                    </span>
+                                                    <span className="mx-1">:</span>
+                                                    <span>{action.actions.join(", ")}</span>
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
                                 );

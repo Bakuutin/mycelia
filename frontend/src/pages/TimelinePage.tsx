@@ -22,13 +22,13 @@ import {
   X,
   Maximize2,
   CircleOff,
-  RefreshCw,
   CalendarPlus,
-  Loader2,
   Minimize2,
   Wand2,
+  Play,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
 
 // Yes, it's module level
 // We wanted it that way :)
@@ -64,8 +64,8 @@ const TimelinePage = () => {
     useObjectSelectionStore();
   const { selection: timeSelection, clearSelection: clearTimeSelection } =
     useTimelineSelectionStore();
-  const [recalculating, setRecalculating] = useState(false);
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
+  const [isRunJobOpen, setIsRunJobOpen] = useState(false);
 
   const timeline = useTimeline();
   // const { processingRanges } = useTimelineRecalc(); // Moved to ProcessingLayer
@@ -90,32 +90,6 @@ const TimelinePage = () => {
   const handleZoomToSelection = () => {
     if (timeSelection.start && timeSelection.end) {
       zoomTo(timeSelection.start, timeSelection.end);
-    }
-  };
-
-  const handleRecalculate = async () => {
-    if (!timeSelection.start || !timeSelection.end) return;
-    setRecalculating(true);
-    try {
-      await callResource("jobs", {
-        action: "enqueue",
-        data: {
-          type: "histRecalculation",
-          start: timeSelection.start,
-          end: timeSelection.end,
-          all: false,
-        },
-        trigger: {
-          type: "manual",
-          reason: `Manual recalculation from timeline range selection`,
-        },
-      });
-      console.log("Recalculation job queued");
-    } catch (e) {
-      console.error("Failed to queue recalculation job:", e);
-    } finally {
-      // Short delay to show feedback, as the job is async
-      setTimeout(() => setRecalculating(false), 500);
     }
   };
 
@@ -221,22 +195,23 @@ const TimelinePage = () => {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      onClick={handleRecalculate}
                       variant="outline"
                       size="icon"
-                      disabled={recalculating}
+                      onClick={() => setIsRunJobOpen(true)}
                     >
-                      {recalculating ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="w-4 h-4" />
-                      )}
+                      <Play className="w-4 h-4" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <p>Recalculate histograms</p>
+                    <p>Run job on range</p>
                   </TooltipContent>
                 </Tooltip>
+                <RunJobDialog
+                  open={isRunJobOpen}
+                  onOpenChange={setIsRunJobOpen}
+                  startDate={timeSelection.start || new Date()}
+                  endDate={timeSelection.end || new Date()}
+                />
 
                 {isShortRange && (
                   <>

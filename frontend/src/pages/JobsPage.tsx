@@ -151,19 +151,6 @@ export default function JobsPage() {
     return `${filterStatuses.size} statuses`;
   };
 
-  const createTestJobMutation = useMutation({
-    mutationFn: async () => {
-      return await api.callResource("jobs", {
-        action: "enqueue",
-        data: { type: "testPythonIntegration" },
-        trigger: {
-          type: "manual",
-          reason: "Manual test from System Jobs page",
-        },
-      });
-    }
-  });
-
   const getStatusColor = (status: string) => {
     switch (status) {
       case "completed":
@@ -245,15 +232,6 @@ export default function JobsPage() {
               <Play className="h-4 w-4 mr-2" />
               Launch Job
             </Link>
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => createTestJobMutation.mutate()}
-            disabled={createTestJobMutation.isPending}
-          >
-            <Play className="h-4 w-4 mr-2" />
-            Test Python Integration
           </Button>
           <Button
             variant="destructive"
