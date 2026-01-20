@@ -222,8 +222,23 @@ async function callLLMStructured<T>(
   }
 }
 
+function stripMarkdownCodeBlock(content: string): string {
+  let cleaned = content.trim();
+  // Remove ```json or ``` at the start
+  if (cleaned.startsWith("```json")) {
+    cleaned = cleaned.slice(7);
+  } else if (cleaned.startsWith("```")) {
+    cleaned = cleaned.slice(3);
+  }
+  // Remove trailing ```
+  if (cleaned.endsWith("```")) {
+    cleaned = cleaned.slice(0, -3);
+  }
+  return cleaned.trim();
+}
+
 function parseSegmentationResponse(content: string): Segment[] {
-  const parsed = JSON.parse(content);
+  const parsed = JSON.parse(stripMarkdownCodeBlock(content));
   const segments = parsed.segments || [];
   return segments.map((s: any, index: number) => {
     // Handle null, undefined, non-string, or empty string titles
@@ -243,7 +258,7 @@ function parseSegmentationResponse(content: string): Segment[] {
 }
 
 function parseMetadataResponse(content: string): ConversationMetadata {
-  const parsed = JSON.parse(content);
+  const parsed = JSON.parse(stripMarkdownCodeBlock(content));
   // Only set emoji if valid, otherwise leave undefined (no icon)
   let emoji: string | undefined = undefined;
   if (parsed.emoji != null && typeof parsed.emoji === 'string') {
