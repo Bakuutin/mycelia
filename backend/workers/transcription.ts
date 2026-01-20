@@ -37,8 +37,10 @@ const capability: JobCapability = {
     const transcriptionResource = (input: any) => callResource("transcription", input, { jwt, myceliaUrl });
 
     const processSequence = async (sequence: any) => {
-      if (!sequence || sequence.state !== "ready") {
-        return { status: "skipped", reason: "Sequence not found or not ready" };
+      // Accept "ready" sequences and "error" sequences (for retry)
+      const isProcessable = sequence && (sequence.state === "ready" || sequence.state === "error");
+      if (!isProcessable) {
+        return { status: "skipped", reason: "Sequence not found or not in processable state" };
       }
 
       await job.updateProgress({ stage: "processing", sequenceId: sequence._id.toString() });
@@ -80,6 +82,17 @@ const capability: JobCapability = {
           fileName: "combined.wav",
           fileType: "audio/wav",
         });
+
+        // Validate transcript response structure
+        if (!transcript || typeof transcript !== "object") {
+          throw new Error(`Invalid transcript response: expected object, got ${typeof transcript}`);
+        }
+        if ("error" in transcript) {
+          throw new Error(`Transcription API error: ${(transcript as any).error}`);
+        }
+        if (!("segments" in transcript) && !("text" in transcript)) {
+          throw new Error(`Invalid transcript response: missing segments or text field. Got: ${JSON.stringify(transcript).slice(0, 200)}`);
+        }
 
         // 6. Filter segments
         const segments = (transcript as any).segments || [];

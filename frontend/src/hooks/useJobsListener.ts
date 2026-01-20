@@ -120,13 +120,19 @@ export function useJobsListener() {
           }
         }
       } else if (event.event === "job.failed" && event.data) {
+
+        // check if the job is a manual job
+        const job = jobs.find((j) => j.id === jobData.jobId);
+        if (job?.trigger?.type != "manual") {
+          return;
+        }
+
         toast.error("Job failed", {
           description: `${jobData.jobType}: ${jobData.failedReason || "Unknown error"}`,
           action: {
             label: "View job",
             onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
           },
-          duration: 10000,
         });
       }
     }

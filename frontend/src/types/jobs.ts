@@ -18,4 +18,21 @@ export type JobInfo = {
   attemptsMade?: number;
 };
 
+export interface JobLogEntry {
+  _id?: string;
+  jobId: string;
+  stream: "stdout" | "stderr";
+  text: string;
+  timestamp: string;
+}
 
+export interface JobAccessLogEntry {
+  _id: string;
+  principal: string;
+  resource: string;
+  actions: Array<{
+    path: string[];
+    actions: string[];
+  }>;
+  timestamp: string;
+}

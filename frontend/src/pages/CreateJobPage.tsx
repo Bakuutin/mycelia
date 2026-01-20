@@ -107,7 +107,9 @@ export default function CreateJobPage() {
                 validator={validator}
                 onSubmit={(data: any) => onSubmit(data.formData)}
                 disabled={enqueueMutation.isPending}
-                noValidate={true} 
+                noHtml5Validate={true}
+                showErrorList={false}
+                liveValidate={false}
               >
                 <div className="mt-6">
                   <Button type="submit" disabled={enqueueMutation.isPending} className="w-full sm:w-auto">

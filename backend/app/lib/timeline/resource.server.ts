@@ -6,9 +6,9 @@ import {
   ensureHistogramIndex,
   invalidateHistogram,
   type Resolution,
-  updateAllHistogram,
 } from "@/services/timeline.server.ts";
 import { zDateOrRelativeTime } from "@myceliasdk/zod-json-schema.ts";
+import { getJobsResource } from "@/lib/resources/worker.ts";
 
 function parseDateOrRelativeTime(expr: string | Date): Date {
   if (expr instanceof Date) {
@@ -76,18 +76,28 @@ export class TimelineResource
           ? parseDateOrRelativeTime(input.end)
           : undefined;
 
-        const startTime = Date.now();
-        if (input.all) {
-          await updateAllHistogram(auth);
-        } else {
-          await updateAllHistogram(auth, parsedStart, parsedEnd);
-        }
-        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        const jobsResource = await getJobsResource(auth);
+
+        const jobData = {
+          type: "histRecalculation" as const,
+          start: parsedStart?.toISOString(),
+          end: parsedEnd?.toISOString(),
+          all: input.all || false,
+        };
+
+        const jobResult = await jobsResource({
+          action: "enqueue",
+          data: jobData,
+          trigger: {
+            type: "manual",
+            reason: "Timeline recalculation requested via API",
+          },
+        });
 
         return {
           success: true,
-          duration: `${duration}s`,
-          message: `Timeline histograms recalculated successfully`,
+          jobId: jobResult.jobId,
+          message: `Timeline histogram recalculation job enqueued successfully`,
         };
       }
       case "ensureIndex":

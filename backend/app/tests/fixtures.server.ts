@@ -19,6 +19,7 @@ import { accessLogger, getServerAuth } from "@/lib/auth/core.server.ts";
 import { fn } from "@std/expect";
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { MessengerResource } from "@/lib/messenger/resource.server.ts";
+import { JobsResource } from "@/lib/resources/worker.ts";
 import { z } from "zod";
 import type { Request } from "express";
 import { up } from "@/lib/mongo/migrator.ts";
@@ -174,6 +175,7 @@ defineFixture({
     const timeline = new TimelineResource();
     const objects = new ObjectsResource();
     const messenger = new MessengerResource();
+    const jobs = new JobsResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
     objects.getRootDB = async () => isolatedDB;
@@ -182,6 +184,7 @@ defineFixture({
     defaultResourceManager.registerResource(timeline);
     defaultResourceManager.registerResource(objects);
     defaultResourceManager.registerResource(messenger);
+    defaultResourceManager.registerResource(jobs);
 
     return {
       db: isolatedDB,

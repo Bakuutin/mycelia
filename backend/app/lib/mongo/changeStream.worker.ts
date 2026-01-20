@@ -34,15 +34,25 @@ async function publishMongoChange(
   };
 
   
-  if (collectionName in [
+  if ([
     "histogram_5min",
     "histogram_1hour",
     "histogram_1day",
     "histogram_1week",
     "access_logs",
-  ]) {
+  ].includes(collectionName)) {
     debouncedFrequentChanges(collectionName);
     return;
+  }
+
+  if (collectionName === "job_logs" && operationType === "insert" && document?.jobId) {
+    await publishEvent(`jobs:${document.jobId}:logs`, "job.log", {
+      logId: documentId,
+      jobId: document.jobId,
+      stream: document.stream,
+      text: document.text,
+      timestamp: document.timestamp ?? new Date().toISOString(),
+    });
   }
 
   await publishEvent(`mongo:${collectionName}:${documentId}`, "mongo.change", eventData);
