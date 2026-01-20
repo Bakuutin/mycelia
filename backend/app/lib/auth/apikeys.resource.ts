@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ObjectId } from "bson";
 import { Resource, defaultResourceManager } from "@/lib/auth/resources.ts";
 import { type Auth } from "@/lib/auth/core.server.ts";
-import { generateApiKey, listApiKeys, revokeApiKey, updateApiKeyPolicies } from "./tokens.ts";
+import { generateApiKeyWithId, listApiKeys, revokeApiKey, updateApiKeyPolicies } from "./tokens.ts";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { Policy } from "./resources.ts";
 
@@ -84,7 +84,7 @@ export class ApiKeysResource
         );
       }
 
-      const apiKey = await generateApiKey(
+      const { apiKey, clientId } = await generateApiKeyWithId(
         input.owner,
         input.name,
         policies,
@@ -92,6 +92,7 @@ export class ApiKeysResource
 
       return {
         apiKey,
+        clientId,
         message: "API key created successfully",
       };
     }

@@ -30,8 +30,9 @@ const APIKeysPage = () => {
   const [newKeyOwner, setNewKeyOwner] = useState("system");
   const [newKeyPolicies, setNewKeyPolicies] = useState(defaultPolicyYaml);
   const [creating, setCreating] = useState(false);
-  const [createdKey, setCreatedKey] = useState<string | null>(null);
-  const [copiedKey, setCopiedKey] = useState(false);
+  const [createdKey, setCreatedKey] = useState<{ clientId: string; apiKey: string } | null>(null);
+  const [copiedClientId, setCopiedClientId] = useState(false);
+  const [copiedSecret, setCopiedSecret] = useState(false);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [editedPolicies, setEditedPolicies] = useState<string>("");
   const [updating, setUpdating] = useState(false);
@@ -73,7 +74,7 @@ const APIKeysPage = () => {
         policiesYaml: newKeyPolicies,
       });
 
-      setCreatedKey(result.apiKey);
+      setCreatedKey({ clientId: result.clientId, apiKey: result.apiKey });
       setNewKeyName("");
       setNewKeyPolicies(defaultPolicyYaml);
       await fetchApiKeys();
@@ -134,11 +135,16 @@ const APIKeysPage = () => {
     }
   };
 
-  const copyToClipboard = async (text: string) => {
+  const copyToClipboard = async (text: string, type: 'clientId' | 'secret') => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedKey(true);
-      setTimeout(() => setCopiedKey(false), 2000);
+      if (type === 'clientId') {
+        setCopiedClientId(true);
+        setTimeout(() => setCopiedClientId(false), 2000);
+      } else {
+        setCopiedSecret(true);
+        setTimeout(() => setCopiedSecret(false), 2000);
+      }
     } catch (err) {
       console.error("Failed to copy to clipboard:", err);
     }
@@ -183,7 +189,7 @@ const APIKeysPage = () => {
 
       {createdKey && (
         <Card className="p-6 border-green-500 bg-green-50 dark:bg-green-950">
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Key className="w-5 h-5 text-green-600 dark:text-green-400" />
               <h3 className="font-semibold text-green-900 dark:text-green-100">
@@ -191,22 +197,51 @@ const APIKeysPage = () => {
               </h3>
             </div>
             <p className="text-sm text-green-700 dark:text-green-300">
-              Save this key securely. You won't be able to see it again.
+              Save these credentials securely. You won't be able to see the secret again.
             </p>
-            <div className="flex gap-2">
-              <Input
-                value={createdKey}
-                readOnly
-                className="font-mono text-sm bg-white dark:bg-gray-900"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => copyToClipboard(createdKey)}
-              >
-                {copiedKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              </Button>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-sm font-semibold text-green-800 dark:text-green-200">
+                  Client ID
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={createdKey.clientId}
+                    readOnly
+                    className="font-mono text-sm bg-white dark:bg-gray-900"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copyToClipboard(createdKey.clientId, 'clientId')}
+                  >
+                    {copiedClientId ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-sm font-semibold text-green-800 dark:text-green-200">
+                  Client Secret (API Key)
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={createdKey.apiKey}
+                    readOnly
+                    className="font-mono text-sm bg-white dark:bg-gray-900"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copyToClipboard(createdKey.apiKey, 'secret')}
+                  >
+                    {copiedSecret ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
+              </div>
             </div>
+
             <Button
               variant="outline"
               size="sm"
