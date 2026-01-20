@@ -8,7 +8,8 @@ import {
   Download, 
   FolderTree,
   FileText,
-  Package
+  Package,
+  MessagesSquare
 } from "lucide-react";
 
 const HomePage = () => {
@@ -113,21 +114,39 @@ const HomePage = () => {
           </div>
         </div>
 
-        <Link
-          to="/transcript"
-          className="p-6 border rounded-lg hover:border-primary transition-colors group"
-        >
-          <div className="flex items-center justify-between mb-4">
+        {/* Transcripts Card with sub-links */}
+        <div className="p-6 border rounded-lg flex flex-col">
+          <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-semibold flex items-center gap-3">
               <FileText className="w-6 h-6 text-primary" />
-              Transcript
+              Transcripts
             </h2>
-            <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
-          <p className="text-muted-foreground">
-            View and search through your audio transcriptions
-          </p>
-        </Link>
+          
+          <div className="grid grid-cols-1 gap-2">
+            <Link
+              to="/transcript"
+              className="flex items-center justify-between p-3 rounded-md hover:bg-accent group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <FileText className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="font-medium">Raw Transcript</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary" />
+            </Link>
+
+            <Link
+              to="/conversations"
+              className="flex items-center justify-between p-3 rounded-md hover:bg-accent group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <MessagesSquare className="w-4 h-4 text-muted-foreground group-hover:text-primary" />
+                <span className="font-medium">Conversations</span>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground/50 group-hover:text-primary" />
+            </Link>
+          </div>
+        </div>
 
         <Link
           to="/objects"

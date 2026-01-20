@@ -31,6 +31,7 @@ import InferenceSetupPage from "./pages/setup/InferenceSetupPage";
 import JobsPage from "./pages/JobsPage";
 import JobDetailPage from "./pages/JobDetailPage";
 import CreateJobPage from "./pages/CreateJobPage";
+import ConversationsPage from "./pages/ConversationsPage";
 
 export const router = createBrowserRouter([
   {
@@ -88,6 +89,10 @@ export const router = createBrowserRouter([
       {
         path: "transcript",
         element: <TranscriptPage />,
+      },
+      {
+        path: "conversations",
+        element: <ConversationsPage />,
       },
       {
         path: "diarizations/:id",
