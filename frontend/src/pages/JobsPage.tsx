@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, Pause, PlayCircle, PauseCircle } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -49,6 +49,8 @@ export default function JobsPage() {
   const [allTypesSelected, setAllTypesSelected] = useState(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
+  const [sortColumn, setSortColumn] = useState<string>("timestamp");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const queryClient = useQueryClient();
 
   const { jobs, isLoading } = useJobsListener();
@@ -168,11 +170,65 @@ export default function JobsPage() {
         j.type.toLowerCase().includes(query)
       );
     }
-    return result.slice(0, limit);
-  }, [jobs, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit]);
+
+    // Sort the results
+    const sortedResult = [...result].sort((a, b) => {
+      let aVal: any;
+      let bVal: any;
+
+      switch (sortColumn) {
+        case "state":
+          aVal = a.state;
+          bVal = b.state;
+          break;
+        case "type":
+          aVal = a.type;
+          bVal = b.type;
+          break;
+        case "id":
+          aVal = a.id;
+          bVal = b.id;
+          break;
+        case "timestamp":
+          aVal = a.timestamp || 0;
+          bVal = b.timestamp || 0;
+          break;
+        case "duration":
+          aVal = a.processedOn ? ((a.finishedOn || Date.now()) - a.processedOn) : 0;
+          bVal = b.processedOn ? ((b.finishedOn || Date.now()) - b.processedOn) : 0;
+          break;
+        default:
+          return 0;
+      }
+
+      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
+      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return sortedResult.slice(0, limit);
+  }, [jobs, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+  };
+
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("desc");
+    }
+  };
+
+  const SortIcon = ({ column }: { column: string }) => {
+    if (sortColumn !== column) {
+      return <ArrowUpDown className="ml-1 h-3 w-3 opacity-50" />;
+    }
+    return sortDirection === "asc"
+      ? <ArrowUp className="ml-1 h-3 w-3" />
+      : <ArrowDown className="ml-1 h-3 w-3" />;
   };
 
   const toggleStatus = (status: string) => {
@@ -379,8 +435,8 @@ export default function JobsPage() {
                   <div
                     key={type}
                     className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
-                      isPaused 
-                        ? "bg-amber-500/5 border-amber-500/20" 
+                      isPaused
+                        ? "bg-amber-500/5 border-amber-500/20"
                         : "bg-green-500/5 border-green-500/20"
                     }`}
                   >
@@ -506,11 +562,51 @@ export default function JobsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Status</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Job ID</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Duration</TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("state")}
+                >
+                  <div className="flex items-center">
+                    Status
+                    <SortIcon column="state" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("type")}
+                >
+                  <div className="flex items-center">
+                    Type
+                    <SortIcon column="type" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("id")}
+                >
+                  <div className="flex items-center">
+                    Job ID
+                    <SortIcon column="id" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("timestamp")}
+                >
+                  <div className="flex items-center">
+                    Created
+                    <SortIcon column="timestamp" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("duration")}
+                >
+                  <div className="flex items-center">
+                    Duration
+                    <SortIcon column="duration" />
+                  </div>
+                </TableHead>
                 <TableHead>Progress</TableHead>
               </TableRow>
             </TableHeader>
@@ -600,4 +696,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
