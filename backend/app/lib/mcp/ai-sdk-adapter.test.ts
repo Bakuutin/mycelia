@@ -294,6 +294,32 @@ Deno.test("createAiSdkToolsFromResources - Resource with optional fields works c
   expect(result2).toEqual({ type: "json", value: { result: "test-value" } });
 });
 
+// Tests for tool approval mechanism
+
+Deno.test("createAiSdkToolsFromResources - Tool approval mechanism for simple resource", () => {
+  const resource = new SimpleTestResource();
+  const tools = createAiSdkToolsFromResources([resource], mockAuth, {
+    toolsRequiringApproval: ["test_simple"],
+  });
+
+  expect(tools["test_simple"]).toBeDefined();
+  // needsApproval is a property on the tool object in AI SDK
+  expect((tools["test_simple"] as any).needsApproval).toBe(true);
+});
+
+Deno.test("createAiSdkToolsFromResources - Tool approval mechanism for discriminated union", () => {
+  const resource = new DiscriminatedUnionResource();
+  const tools = createAiSdkToolsFromResources([resource], mockAuth, {
+    toolsRequiringApproval: ["test_discriminated_set"],
+  });
+
+  expect(tools["test_discriminated_get"]).toBeDefined();
+  expect((tools["test_discriminated_get"] as any).needsApproval).toBe(false);
+  
+  expect(tools["test_discriminated_set"]).toBeDefined();
+  expect((tools["test_discriminated_set"] as any).needsApproval).toBe(true);
+});
+
 // Smoke tests with real resources from the codebase
 
 import { MongoResource } from "@/lib/mongo/core.server.ts";
