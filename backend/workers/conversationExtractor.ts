@@ -187,6 +187,7 @@ async function callLLMStructured<T>(
   model: string,
   messages: Array<{ role: string; content: string }>,
   parseResponse: (content: string) => T,
+  logContext?: string,
 ): Promise<T> {
   const response = await llm({
     action: "completions",
@@ -197,12 +198,18 @@ async function callLLMStructured<T>(
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
+    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: EMPTY response from LLM`);
     throw new Error("Empty response from LLM");
   }
+
+  // Log raw LLM response (truncated for sanity)
+  const truncatedContent = content.length > 500 ? content.slice(0, 500) + '...[truncated]' : content;
+  console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: raw response (${content.length} chars): ${truncatedContent}`);
 
   try {
     return parseResponse(content);
   } catch (error) {
+    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: parse failed, retrying with fix prompt`);
     // Retry once with a fix prompt
     const retryResponse = await llm({
       action: "completions",
@@ -218,6 +225,7 @@ async function callLLMStructured<T>(
       throw new Error("Empty retry response from LLM");
     }
 
+    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: retry response: ${retryContent.slice(0, 300)}`);
     return parseResponse(retryContent);
   }
 }
@@ -528,6 +536,11 @@ const capability: JobCapability = {
     const hasMore = chunks.length > data.limit;
     const chunksToProcess = chunks.slice(0, data.limit);
 
+    console.log(`[ConvExtractor] Job ${job.id}: found ${chunks.length} chunks, processing ${chunksToProcess.length}, hasMore=${hasMore}`);
+    for (const c of chunksToProcess) {
+      console.log(`[ConvExtractor]   - Chunk ${c._id}: state=${c.state}, transcriptionIds=${c.transcriptionIds?.length ?? 0}, start=${c.start?.toISOString?.() ?? 'N/A'}`);
+    }
+
     let conversationsCreated = 0;
     let chunksProcessed = 0;
     const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
@@ -608,6 +621,7 @@ const capability: JobCapability = {
         }>;
 
         if (!transcriptions || transcriptions.length === 0) {
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: NO transcriptions found for IDs: ${chunk.transcriptionIds.map(id => id.toString()).join(', ')}`);
           await mongo({
             action: "updateOne",
             collection: "conversation_chunks",
@@ -625,6 +639,13 @@ const capability: JobCapability = {
           text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
         }));
 
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`);
+        const totalTextLen = utterances.reduce((sum, u) => sum + u.text.length, 0);
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: total text length = ${totalTextLen} chars`);
+        if (utterances.length > 0) {
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: time range ${utterances[0].start.toISOString()} to ${utterances[utterances.length - 1].end.toISOString()}`);
+        }
+
         // Delete existing if force
         if (chunk.params.force) {
           await deleteConversationsInRange(objects, mongo, chunk.start, chunk.end);
@@ -632,6 +653,7 @@ const capability: JobCapability = {
 
         // Format prompt
         const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(utterances);
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: prompt length = ${prompt.length} chars`);
 
         await job.updateProgress({
           stage: "segmenting",
@@ -639,6 +661,7 @@ const capability: JobCapability = {
         });
 
         // LLM Call #1: Segmentation
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
         const segments = await callLLMStructured(
           llm,
           chunk.params.model,
@@ -647,13 +670,20 @@ const capability: JobCapability = {
             { role: "user", content: prompt },
           ],
           parseSegmentationResponse,
+          `Chunk ${chunk._id} segmentation`,
         );
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`);
+        for (const seg of segments) {
+          console.log(`[ConvExtractor]   - "${seg.title}" ${seg.start.toISOString()} to ${seg.end.toISOString()}`);
+        }
 
         // Clip and filter segments
         const clippedSegments = segments.map(s => clipSegmentTimes(s, chunkStart, chunkEnd));
         const segmentsWithUtterances = filterSegmentsWithUtterances(clippedSegments, utterances);
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: after filtering, ${segmentsWithUtterances.length} segments have utterances`);
 
         if (segmentsWithUtterances.length === 0) {
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: NO segments with utterances - marking as empty`);
           await mongo({
             action: "updateOne",
             collection: "conversation_chunks",
@@ -704,7 +734,9 @@ const capability: JobCapability = {
             chunk.params.model,
             messages,
             parseMetadataResponse,
+            `Chunk ${chunk._id} segment ${i + 1}/${segmentsWithUtterances.length} metadata`,
           );
+          console.log(`[ConvExtractor] Chunk ${chunk._id} segment ${i + 1}: metadata extracted - entities=${metadata.entities.length}, emoji=${metadata.emoji ?? 'none'}, agreed=${metadata.agreed_upon_something}`);
 
           // Create conversation object (without summary - will be generated separately)
           // Validate required fields before creating
@@ -741,6 +773,7 @@ const capability: JobCapability = {
           }) as { insertedId: ObjectId };
 
           const conversationId = convResult.insertedId;
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`);
 
           // Create entity relationships
           for (const entityName of metadata.entities) {

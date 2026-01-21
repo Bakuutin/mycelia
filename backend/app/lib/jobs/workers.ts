@@ -108,6 +108,7 @@ export async function startWorkers() {
 
     worker.on("completed", (job) => {
       console.log(`[${jobType}] Local worker completed job ${job.id}`);
+      console.log(`[${jobType}] Job ${job.id} result:`, JSON.stringify(job.returnvalue));
 
       if (job.returnvalue?.hasMore === true) {
         console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);

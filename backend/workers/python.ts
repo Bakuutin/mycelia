@@ -91,6 +91,18 @@ export class NetworkJobCapability<
 
   async use(input: Input): Promise<Output> {
     const url = this.getUrl(input);
+    const jobId = (input as any).id;
+    const data = (input as any).data || input;
+    
+    // Log time-related parameters if present
+    const timeInfo: string[] = [];
+    if (data.start) timeInfo.push(`start=${new Date(data.start).toISOString()}`);
+    if (data.end) timeInfo.push(`end=${new Date(data.end).toISOString()}`);
+    if (data.originalId) timeInfo.push(`originalId=${data.originalId}`);
+    if (data.limit) timeInfo.push(`limit=${data.limit}`);
+    
+    console.log(`[${this.name}] Job ${jobId}: delegating to Python worker${timeInfo.length > 0 ? ` (${timeInfo.join(', ')})` : ''}`);
+    
     const response = await fetch(url, {
       method: this.getMethod(input),
       headers: this.getHeaders(input),
@@ -99,10 +111,14 @@ export class NetworkJobCapability<
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.log(`[${this.name}] Job ${jobId}: Python worker FAILED (${response.status})`);
       throw new Error(
         `Network capability failed for ${url} (${response.status}): ${errorText}`,
       );
     }
-    return response.json();
+    
+    const result = await response.json();
+    console.log(`[${this.name}] Job ${jobId}: Python worker completed`, JSON.stringify(result));
+    return result;
   }
 }

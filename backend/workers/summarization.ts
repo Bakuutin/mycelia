@@ -40,6 +40,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const start = new Date(startStr);
   const end = new Date(endStr);
   
+  console.log(`[summarization] Job ${job.id}: processing time range ${start.toISOString()} to ${end.toISOString()} (${Math.round((end.getTime() - start.getTime()) / 1000 / 60)}min)`);
+  if (existingObjectId) {
+    console.log(`[summarization] Job ${job.id}: updating existing object ${existingObjectId}`);
+  }
+  
   const jwt = Deno.env.get("MYCELIA_JWT")!;
   const myceliaUrl = env.MYCELIA_URL;
 
@@ -53,8 +58,10 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }, { jwt, myceliaUrl });
 
   if (!transcripts || transcripts.length === 0) {
+    console.log(`[summarization] Job ${job.id}: NO transcripts found in range`);
     return { success: false, message: "No transcripts found in range" };
   }
+  console.log(`[summarization] Job ${job.id}: found ${transcripts.length} transcripts`);
 
   let promptText = "";
   let lastEnd = new Date(transcripts[0].start).getTime();
@@ -83,6 +90,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const systemPrompt = userPrompt ||
     `You are a helpful assistant. Summarize the following conversation transcript.`;
 
+  console.log(`[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`);
   const completion = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
@@ -93,6 +101,8 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }, { jwt, myceliaUrl });
 
   const summary: string = completion.choices[0].message.content;
+  const truncatedSummary = summary.length > 200 ? summary.slice(0, 200) + '...' : summary;
+  console.log(`[summarization] Job ${job.id}: LLM returned summary (${summary.length} chars): "${truncatedSummary}"`);
 
   const summaryEntry = {
     text: summary,
@@ -133,6 +143,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
     objectId = existingObjectId;
   } else {
+    console.log(`[summarization] Job ${job.id}: calling LLM for title generation`);
     const titleResponse = await callResource<any, any>("llm", {
       action: "completions",
       model: modelAlias,
@@ -141,6 +152,9 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         { role: "user", content: summaryEntry.text },
       ],
     }, { jwt, myceliaUrl });
+
+    const generatedTitle = titleResponse.choices[0].message.content;
+    console.log(`[summarization] Job ${job.id}: LLM generated title: "${generatedTitle}"`);
 
     const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "create",

@@ -22,19 +22,19 @@ From the project root directory (`/srv/mycelia`):
 
 ```bash
 # Apply all pending migrations
-docker-compose exec backend deno run -A server.ts migrate-up
+docker compose exec backend deno run -A server.ts migrate-up
 
 # Check migration status
-docker-compose exec backend deno run -A server.ts migrate-status
+docker compose exec backend deno run -A server.ts migrate-status
 
 # Rollback the last migration
-docker-compose exec backend deno run -A server.ts migrate-down
+docker compose exec backend deno run -A server.ts migrate-down
 
 # Rollback multiple migrations (e.g., last 3)
-docker-compose exec backend deno run -A server.ts migrate-down -n 3
+docker compose exec backend deno run -A server.ts migrate-down -n 3
 
 # Migrate to a specific version
-docker-compose exec backend deno run -A server.ts migrate-to -m 0012_update_chat_system_prompt.ts
+docker compose exec backend deno run -A server.ts migrate-to -m 0012_update_chat_system_prompt.ts
 ```
 
 ### Local Development (without Docker)
