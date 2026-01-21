@@ -317,24 +317,124 @@ function extractJsonFromText(content: string): any {
   return JSON.parse(jsonStr);
 }
 
-function parseSegmentationResponse(content: string): Segment[] {
-  const parsed = extractJsonFromText(content);
-  const segments = parsed.segments || [];
-  return segments.map((s: any, index: number) => {
-    // Handle null, undefined, non-string, or empty string titles
-    let title = `Segment ${index + 1}`;
-    if (s.title != null && typeof s.title === 'string') {
-      const trimmed = s.title.trim();
-      if (trimmed.length > 0) {
-        title = trimmed;
+/**
+ * Parses prompt lines to extract time markers with their line indices.
+ * Time markers are in the format: [time: ISO8601]
+ */
+function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: number; time: Date }> {
+  const markers: Array<{ lineIdx: number; time: Date }> = [];
+  const timeRegex = /^\[time:\s*(.+)\]$/;
+  
+  for (let i = 0; i < promptLines.length; i++) {
+    const match = promptLines[i].match(timeRegex);
+    if (match) {
+      const time = new Date(match[1]);
+      if (!isNaN(time.getTime())) {
+        markers.push({ lineIdx: i, time });
       }
     }
-    return {
-      title,
-      start: new Date(s.start),
-      end: new Date(s.end),
-    };
-  });
+  }
+  
+  return markers;
+}
+
+/**
+ * Finds the time at or before a given line index using time markers.
+ * Returns undefined if no suitable marker is found.
+ */
+function findTimeAtOrBeforeLine(markers: Array<{ lineIdx: number; time: Date }>, lineIdx: number): Date | undefined {
+  // Find the last marker at or before the given line
+  let result: Date | undefined;
+  for (const marker of markers) {
+    if (marker.lineIdx <= lineIdx) {
+      result = marker.time;
+    } else {
+      break;
+    }
+  }
+  return result;
+}
+
+/**
+ * Finds the time at or after a given line index using time markers.
+ * Returns undefined if no suitable marker is found.
+ */
+function findTimeAtOrAfterLine(markers: Array<{ lineIdx: number; time: Date }>, lineIdx: number): Date | undefined {
+  for (const marker of markers) {
+    if (marker.lineIdx >= lineIdx) {
+      return marker.time;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Finds attribute value by prefix (case-insensitive).
+ * Returns the value of the first key starting with the prefix, or undefined.
+ */
+function findAttrStartingWith(obj: Record<string, any>, prefix: string): any {
+  const lowerPrefix = prefix.toLowerCase();
+  for (const key of Object.keys(obj)) {
+    if (key.toLowerCase().startsWith(lowerPrefix)) {
+      return obj[key];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Creates a segment parser that can handle various LLM response formats.
+ * Finds any key containing "start" and "end", then parses both as either:
+ * - Dates (if both are valid date strings)
+ * - Line indices (if both are numbers)
+ */
+function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: Date) {
+  const timeMarkers = extractTimeMarkersFromPrompt(promptLines);
+  
+  return function parseSegmentationResponse(content: string): Segment[] {
+    const parsed = extractJsonFromText(content);
+    const segments = parsed.segments || [];
+    return segments.map((s: any, index: number) => {
+      // Handle null, undefined, non-string, or empty string titles
+      let title = `Segment ${index + 1}`;
+      if (s.title != null && typeof s.title === 'string') {
+        const trimmed = s.title.trim();
+        if (trimmed.length > 0) {
+          title = trimmed;
+        }
+      }
+      
+      // Find any key starting with "start" and "end" (case-insensitive)
+      const startVal = findAttrStartingWith(s, 'start');
+      const endVal = findAttrStartingWith(s, 'end');
+      
+      if (startVal != null && endVal != null) {
+        // Both numbers → line indices
+        if (typeof startVal === 'number' && typeof endVal === 'number') {
+          const start = findTimeAtOrBeforeLine(timeMarkers, startVal) 
+            ?? findTimeAtOrAfterLine(timeMarkers, startVal) 
+            ?? chunkStart;
+          const end = findTimeAtOrAfterLine(timeMarkers, endVal) 
+            ?? findTimeAtOrBeforeLine(timeMarkers, endVal) 
+            ?? chunkEnd;
+          return { title, start, end };
+        }
+        
+        // Both strings → try as dates
+        if (typeof startVal === 'string' && typeof endVal === 'string') {
+          const start = new Date(startVal);
+          const end = new Date(endVal);
+          if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+            return { title, start, end };
+          }
+        }
+      }
+      
+      // Fallback: use chunk boundaries
+      console.warn(`[ConvExtractor] Segment "${title}" has no valid time info (start=${JSON.stringify(startVal)}, end=${JSON.stringify(endVal)}), using chunk boundaries`);
+      return { title, start: chunkStart, end: chunkEnd };
+    });
+  };
 }
 
 function parseMetadataResponse(content: string): ConversationMetadata {
@@ -662,6 +762,7 @@ const capability: JobCapability = {
 
         // LLM Call #1: Segmentation
         console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
+        const promptLines = prompt.split('\n');
         const segments = await callLLMStructured(
           llm,
           chunk.params.model,
@@ -669,7 +770,7 @@ const capability: JobCapability = {
             { role: "system", content: prompts.segmentation_system },
             { role: "user", content: prompt },
           ],
-          parseSegmentationResponse,
+          createSegmentParser(promptLines, chunkStart, chunkEnd),
           `Chunk ${chunk._id} segmentation`,
         );
         console.log(`[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`);
