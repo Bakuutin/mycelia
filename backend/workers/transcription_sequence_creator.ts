@@ -6,6 +6,7 @@ import { callResource } from "@myceliasdk/resources.ts";
 
 import { MAX_SEQUENCE_LENGTH, MAX_GAP_MS } from "@/lib/transcription-constants.ts";
 import { mongoCursor } from "@/lib/mongo/cursor.ts";
+import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
 export const schema = z.object({
   type: z.literal("transcription_sequence_creator"),
@@ -283,8 +284,7 @@ const capability: JobCapability = {
         },
       },
     ],
-    debounceMs: 1000,
-    interval: 300,
+    ...getTriggerTiming("transcription_sequence_creator"),
   },
 };
 
