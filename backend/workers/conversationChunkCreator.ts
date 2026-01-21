@@ -304,23 +304,16 @@ async function appendToChunk(
   chunk: OpenChunk,
   transcription: Utterance,
 ): Promise<void> {
-  const isFirst = chunk.transcriptionIds.length === 0;
-  
   const update: any = {
     $push: { transcriptionIds: transcription._id },
     $inc: { 
       totalTextLength: transcription.text.length,
       transcriptionCount: 1,
     },
-    $set: { 
-      end: transcription.end,
-      lastActivityAt: new Date(),
-    },
+    $min: { start: transcription.start },
+    $max: { end: transcription.end },
+    $set: { lastActivityAt: new Date() },
   };
-  
-  if (isFirst) {
-    update.$set.start = transcription.start;
-  }
 
   await mongo({
     action: "updateOne",
@@ -340,10 +333,8 @@ async function appendToChunk(
   // Update local state
   chunk.transcriptionIds.push(transcription._id);
   chunk.totalTextLength += transcription.text.length;
-  chunk.end = transcription.end;
-  if (isFirst) {
-    chunk.start = transcription.start;
-  }
+  if (transcription.start < chunk.start) chunk.start = transcription.start;
+  if (transcription.end > chunk.end) chunk.end = transcription.end;
 }
 
 async function finalizeChunk(

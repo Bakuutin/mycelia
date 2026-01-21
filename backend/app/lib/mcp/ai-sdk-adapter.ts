@@ -4,8 +4,42 @@ import { z } from "zod";
 import { tool, Tool, jsonSchema } from "ai";
 import { EJSON } from "bson";
 
+const MAX_RESULT_LENGTH = 25000;
+
+function serializeResult(result: unknown): { type: "json" | "text"; value: unknown } {
+  const serialized = EJSON.stringify(result);
+  if (serialized.length <= MAX_RESULT_LENGTH) {
+    return { type: "json", value: JSON.parse(serialized) };
+  }
+  const trimmed = serialized.slice(0, MAX_RESULT_LENGTH);
+  return { type: "text", value: `${trimmed}... [trimmed, total ${serialized.length} characters]` };
+}
+
+export interface ToolAdapterOptions {
+  /** Tool names that require user approval before execution */
+  toolsRequiringApproval?: string[];
+}
+
 function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
-  return z.toJSONSchema(schema) as Record<string, unknown>;
+  // If the top-level schema has a custom toJSONSchema, use it directly
+  if ((schema as any)._zod?.toJSONSchema) {
+    return (schema as any)._zod.toJSONSchema();
+  }
+  
+  // Use override to handle nested custom types (like zObjectId, zDateOrString)
+  // that have their own toJSONSchema methods
+  return z.toJSONSchema(schema, {
+    unrepresentable: "any",
+    override: (ctx) => {
+      const zodSchema = ctx.zodSchema as any;
+      // Check if this nested schema has a custom toJSONSchema method
+      if (zodSchema._zod?.toJSONSchema) {
+        return zodSchema._zod.toJSONSchema();
+      }
+      // Return undefined to use default behavior
+      return undefined;
+    },
+  }) as Record<string, unknown>;
 }
 
 function extractActionDescription(schema: any, actionValue: string): string | undefined {
@@ -25,11 +59,13 @@ function extractActionDescription(schema: any, actionValue: string): string | un
 
 export function resourceToTools<Input, Output>(
   resource: Resource<Input, Output>,
-  auth: Auth
-): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> {
+  auth: Auth,
+  options?: ToolAdapterOptions
+): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> {
+  const toolsRequiringApproval = new Set(options?.toolsRequiringApproval ?? []);
   const schema = resource.schemas.request;
   const def = schema.def as any;
-  const tools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> = {};
+  const tools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> = {};
 
   if ((def?.type === "union")) {
     const discriminator = def.discriminator;
@@ -63,14 +99,17 @@ export function resourceToTools<Input, Output>(
           tools[toolName] = {
             description: actionDescription || resource.description || actionValue,
             inputSchema: inputSchema,
+            needsApproval: toolsRequiringApproval.has(toolName),
             execute: async (args: any) => {
-              const input = {
+              const rawInput = {
                 ...args,
                 [discriminator]: actionValue,
               };
+              // Parse through schema to apply Zod transforms (e.g., string → Date)
+              const input = resource.schemas.request.parse(rawInput);
               const result = await resource.use(input as any, auth);
               // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
-              return { type: "json", value: JSON.parse(EJSON.stringify(result)) };
+              return serializeResult(result);
             },
           };
         }
@@ -85,10 +124,13 @@ export function resourceToTools<Input, Output>(
   tools[resource.code] = {
     description: resource.description,
     inputSchema: schema,
+    needsApproval: toolsRequiringApproval.has(resource.code),
     execute: async (args: any) => {
-      const result = await resource.use(args, auth);
+      // Parse through schema to apply Zod transforms (e.g., string → Date)
+      const input = resource.schemas.request.parse(args);
+      const result = await resource.use(input, auth);
       // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
-      return { type: "json", value: JSON.parse(EJSON.stringify(result)) };
+      return serializeResult(result);
     },
   };
   return tools;
@@ -96,11 +138,12 @@ export function resourceToTools<Input, Output>(
 
 export function createMCPToolsFromResources(
   resources: Resource<any, any>[],
-  auth: Auth
-): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> {
-  let allTools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any> }> = {};
+  auth: Auth,
+  options?: ToolAdapterOptions
+): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> {
+  let allTools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> = {};
   for (const resource of resources) {
-    const resourceTools = resourceToTools(resource, auth);
+    const resourceTools = resourceToTools(resource, auth, options);
     allTools = { ...allTools, ...resourceTools };
   }
   return allTools;
@@ -108,18 +151,18 @@ export function createMCPToolsFromResources(
 
 export function createAiSdkToolsFromResources(
   resources: Resource<any, any>[],
-  auth: Auth
+  auth: Auth,
+  options?: ToolAdapterOptions
 ): Record<string, Tool> {
-  const tools = createMCPToolsFromResources(resources, auth);
+  const tools = createMCPToolsFromResources(resources, auth, options);
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
     try {
-      // Convert Zod schema to JSON Schema manually to handle custom types
       const jsonSchemaObj = zodSchemaToJsonSchema(params.inputSchema);
-      
       aiSdkTools[name] = tool({
         description: params.description,
-        parameters: jsonSchema(jsonSchemaObj as any),
+        inputSchema: jsonSchema(jsonSchemaObj as any),
+        needsApproval: params.needsApproval ?? false,
         execute: params.execute,
       });
     } catch (err) {
@@ -131,18 +174,18 @@ export function createAiSdkToolsFromResources(
 
 export function resourceToAiSdkTools<Input, Output>(
   resource: Resource<Input, Output>,
-  auth: Auth
+  auth: Auth,
+  options?: ToolAdapterOptions
 ): Record<string, Tool> {
-  const tools = resourceToTools(resource, auth);
+  const tools = resourceToTools(resource, auth, options);
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
     try {
-      // Convert Zod schema to JSON Schema manually to handle custom types
       const jsonSchemaObj = zodSchemaToJsonSchema(params.inputSchema);
-      
       aiSdkTools[name] = tool({
         description: params.description,
-        parameters: jsonSchema(jsonSchemaObj as any),
+        inputSchema: jsonSchema(jsonSchemaObj as any),
+        needsApproval: params.needsApproval ?? false,
         execute: params.execute,
       });
     } catch (err) {
