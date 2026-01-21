@@ -9,7 +9,7 @@ import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { ObjectId } from "mongodb";
 
-const RESOURCES_FOR_AI = ["mongo", "timeline", "objects"];
+const RESOURCES_FOR_AI = ["search", "objects", "docs"];
 
 export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);

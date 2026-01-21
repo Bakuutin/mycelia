@@ -5,6 +5,9 @@ import { tool, Tool, jsonSchema } from "ai";
 import { EJSON } from "bson";
 
 function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  if ((schema as any)._zod?.toJSONSchema) {
+    return (schema as any)._zod.toJSONSchema();
+  }
   return z.toJSONSchema(schema) as Record<string, unknown>;
 }
 
@@ -114,12 +117,10 @@ export function createAiSdkToolsFromResources(
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
     try {
-      // Convert Zod schema to JSON Schema manually to handle custom types
       const jsonSchemaObj = zodSchemaToJsonSchema(params.inputSchema);
-      
       aiSdkTools[name] = tool({
         description: params.description,
-        parameters: jsonSchema(jsonSchemaObj as any),
+        inputSchema: jsonSchema(jsonSchemaObj as any),
         execute: params.execute,
       });
     } catch (err) {
@@ -137,12 +138,10 @@ export function resourceToAiSdkTools<Input, Output>(
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
     try {
-      // Convert Zod schema to JSON Schema manually to handle custom types
       const jsonSchemaObj = zodSchemaToJsonSchema(params.inputSchema);
-      
       aiSdkTools[name] = tool({
         description: params.description,
-        parameters: jsonSchema(jsonSchemaObj as any),
+        inputSchema: jsonSchema(jsonSchemaObj as any),
         execute: params.execute,
       });
     } catch (err) {
