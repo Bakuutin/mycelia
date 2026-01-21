@@ -237,8 +237,80 @@ function stripMarkdownCodeBlock(content: string): string {
   return cleaned.trim();
 }
 
+/**
+ * Robustly extract and parse JSON from LLM response that may contain extra text.
+ * Handles cases where LLM adds explanatory text before or after the JSON.
+ */
+function extractJsonFromText(content: string): any {
+  const cleaned = stripMarkdownCodeBlock(content);
+  
+  // First, try to parse as-is (for clean JSON responses)
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // Continue to more robust extraction
+  }
+  
+  // Try to find JSON object {} or array []
+  // Look for the first { or [ and find its matching closing bracket
+  const jsonStart = Math.min(
+    cleaned.indexOf('{') >= 0 ? cleaned.indexOf('{') : Infinity,
+    cleaned.indexOf('[') >= 0 ? cleaned.indexOf('[') : Infinity
+  );
+  
+  if (jsonStart === Infinity) {
+    throw new Error("No JSON object or array found in response");
+  }
+  
+  // Find the matching closing bracket
+  const startChar = cleaned[jsonStart];
+  const endChar = startChar === '{' ? '}' : ']';
+  let depth = 0;
+  let jsonEnd = -1;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = jsonStart; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !escapeNext) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === startChar) {
+        depth++;
+      } else if (char === endChar) {
+        depth--;
+        if (depth === 0) {
+          jsonEnd = i + 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  if (jsonEnd === -1) {
+    throw new Error("Could not find complete JSON object/array in response");
+  }
+  
+  const jsonStr = cleaned.substring(jsonStart, jsonEnd);
+  return JSON.parse(jsonStr);
+}
+
 function parseSegmentationResponse(content: string): Segment[] {
-  const parsed = JSON.parse(stripMarkdownCodeBlock(content));
+  const parsed = extractJsonFromText(content);
   const segments = parsed.segments || [];
   return segments.map((s: any, index: number) => {
     // Handle null, undefined, non-string, or empty string titles
@@ -258,7 +330,7 @@ function parseSegmentationResponse(content: string): Segment[] {
 }
 
 function parseMetadataResponse(content: string): ConversationMetadata {
-  const parsed = JSON.parse(stripMarkdownCodeBlock(content));
+  const parsed = extractJsonFromText(content);
   // Only set emoji if valid, otherwise leave undefined (no icon)
   let emoji: string | undefined = undefined;
   if (parsed.emoji != null && typeof parsed.emoji === 'string') {

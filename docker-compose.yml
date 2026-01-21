@@ -74,6 +74,7 @@ services:
     volumes:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk
+      - ./docs:/docs:ro
     deploy:
       resources:
         limits:

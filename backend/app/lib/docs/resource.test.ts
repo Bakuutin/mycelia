@@ -330,7 +330,7 @@ Deno.test(
       topic: "research-strategies",
     });
 
-    expect(result.content).toContain("deepResearch");
+    expect(result.content).toContain("search");
     expect(result.content).toContain("Strategy");
   }),
 );

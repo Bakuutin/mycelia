@@ -9,7 +9,7 @@ import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { ObjectId } from "mongodb";
 
-const RESOURCES_FOR_AI = ["search", "objects", "docs"];
+const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
 
 // Tools that require user confirmation before execution
 // These can modify or delete user data
@@ -27,7 +27,11 @@ export async function apiChatHandler(req: Request, res: Response) {
   
   let { messages, chatId } = req.body;
   
+  // Debug: Log incoming messages to understand the structure
+  console.log("[apiChatHandler] Incoming messages:", JSON.stringify(messages, null, 2));
+  
   // Normalize messages for AI SDK v6 compatibility
+  // Claude requires that each tool_result has a matching tool_use in the previous message
   if (Array.isArray(messages)) {
     const normalizedMessages: any[] = [];
     
@@ -36,48 +40,77 @@ export async function apiChatHandler(req: Request, res: Response) {
       const content = msg.content ?? msg.parts;
       
       if (msg.role === "assistant" && Array.isArray(content)) {
-        // Extract tool-result parts and create separate tool messages
+        // Extract tool-call and tool-result/tool-error parts
+        const toolCalls: any[] = [];
         const toolResults: any[] = [];
-        const cleanedContent: any[] = [];
+        const otherContent: any[] = [];
         
         for (const part of content) {
           if (part.type === "tool-result") {
-            // Create a separate tool message for each tool-result
             toolResults.push({
               type: "tool-result",
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               output: part.output,
             });
+          } else if (part.type === "tool-error") {
+            // Handle tool errors the same as tool results - they are responses to tool calls
+            // Use 'error-text' output type for AI SDK compatibility
+            const errorMessage = part.error?.errmsg || part.error?.message || JSON.stringify(part.error) || "Tool execution failed";
+            toolResults.push({
+              type: "tool-result",
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              output: { type: "error-text", value: errorMessage },
+            });
           } else if (part.type === "tool-call") {
-            // Clean null values from tool-call parts
-            cleanedContent.push({
+            toolCalls.push({
               type: "tool-call",
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               input: part.input,
             });
           } else if (part.type === "text") {
-            cleanedContent.push({ type: "text", text: part.text });
+            otherContent.push({ type: "text", text: part.text });
           }
           // Skip internal SDK markers like "step-start" - they shouldn't be sent back
         }
         
-        // Add assistant message with cleaned content
+        // Build cleaned content: text + tool-calls only
+        const cleanedContent = [...otherContent, ...toolCalls];
+        
+        // Get the set of tool-call IDs in this message
+        const toolCallIds = new Set(toolCalls.map(tc => tc.toolCallId));
+        
+        // Only include tool-results that have matching tool-calls in THIS message
+        const matchingToolResults = toolResults.filter(tr => toolCallIds.has(tr.toolCallId));
+        const orphanedToolResults = toolResults.filter(tr => !toolCallIds.has(tr.toolCallId));
+        
+        if (orphanedToolResults.length > 0) {
+          console.warn(`[apiChatHandler] Dropping ${orphanedToolResults.length} orphaned tool-results without matching tool-calls:`, 
+            orphanedToolResults.map(tr => tr.toolCallId));
+        }
+        
+        // Add assistant message with cleaned content (only if it has content)
         if (cleanedContent.length > 0) {
           normalizedMessages.push({
             role: "assistant",
             content: cleanedContent,
           });
+          
+          // Only add tool message if we have matching tool-results
+          if (matchingToolResults.length > 0) {
+            normalizedMessages.push({
+              role: "tool",
+              content: matchingToolResults,
+            });
+          }
         }
-        
-        // Add tool message with all tool results
-        if (toolResults.length > 0) {
-          normalizedMessages.push({
-            role: "tool",
-            content: toolResults,
-          });
-        }
+      } else if (msg.role === "tool" && Array.isArray(content)) {
+        // Skip tool messages coming from the client - they should be reconstructed from assistant messages
+        // This prevents orphaned tool-result messages
+        console.warn("[apiChatHandler] Skipping orphaned tool message from client");
+        continue;
       } else if (msg.role === "user" && Array.isArray(content)) {
         // Clean user message content parts
         const cleanedContent = content.map((part: any) => {
@@ -95,6 +128,9 @@ export async function apiChatHandler(req: Request, res: Response) {
     
     messages = normalizedMessages;
   }
+  
+  // Debug: Log normalized messages
+  console.log("[apiChatHandler] Normalized messages:", JSON.stringify(messages, null, 2));
 
   let activeChatId: string | undefined = chatId;
   let chatModel = "medium";

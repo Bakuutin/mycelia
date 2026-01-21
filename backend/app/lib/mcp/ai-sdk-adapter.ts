@@ -4,16 +4,42 @@ import { z } from "zod";
 import { tool, Tool, jsonSchema } from "ai";
 import { EJSON } from "bson";
 
+const MAX_RESULT_LENGTH = 25000;
+
+function serializeResult(result: unknown): { type: "json" | "text"; value: unknown } {
+  const serialized = EJSON.stringify(result);
+  if (serialized.length <= MAX_RESULT_LENGTH) {
+    return { type: "json", value: JSON.parse(serialized) };
+  }
+  const trimmed = serialized.slice(0, MAX_RESULT_LENGTH);
+  return { type: "text", value: `${trimmed}... [trimmed, total ${serialized.length} characters]` };
+}
+
 export interface ToolAdapterOptions {
   /** Tool names that require user approval before execution */
   toolsRequiringApproval?: string[];
 }
 
 function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  // If the top-level schema has a custom toJSONSchema, use it directly
   if ((schema as any)._zod?.toJSONSchema) {
     return (schema as any)._zod.toJSONSchema();
   }
-  return z.toJSONSchema(schema) as Record<string, unknown>;
+  
+  // Use override to handle nested custom types (like zObjectId, zDateOrString)
+  // that have their own toJSONSchema methods
+  return z.toJSONSchema(schema, {
+    unrepresentable: "any",
+    override: (ctx) => {
+      const zodSchema = ctx.zodSchema as any;
+      // Check if this nested schema has a custom toJSONSchema method
+      if (zodSchema._zod?.toJSONSchema) {
+        return zodSchema._zod.toJSONSchema();
+      }
+      // Return undefined to use default behavior
+      return undefined;
+    },
+  }) as Record<string, unknown>;
 }
 
 function extractActionDescription(schema: any, actionValue: string): string | undefined {
@@ -75,13 +101,15 @@ export function resourceToTools<Input, Output>(
             inputSchema: inputSchema,
             needsApproval: toolsRequiringApproval.has(toolName),
             execute: async (args: any) => {
-              const input = {
+              const rawInput = {
                 ...args,
                 [discriminator]: actionValue,
               };
+              // Parse through schema to apply Zod transforms (e.g., string → Date)
+              const input = resource.schemas.request.parse(rawInput);
               const result = await resource.use(input as any, auth);
               // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
-              return { type: "json", value: JSON.parse(EJSON.stringify(result)) };
+              return serializeResult(result);
             },
           };
         }
@@ -98,9 +126,11 @@ export function resourceToTools<Input, Output>(
     inputSchema: schema,
     needsApproval: toolsRequiringApproval.has(resource.code),
     execute: async (args: any) => {
-      const result = await resource.use(args, auth);
+      // Parse through schema to apply Zod transforms (e.g., string → Date)
+      const input = resource.schemas.request.parse(args);
+      const result = await resource.use(input, auth);
       // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
-      return { type: "json", value: JSON.parse(EJSON.stringify(result)) };
+      return serializeResult(result);
     },
   };
   return tools;
