@@ -11,6 +11,14 @@ import { ObjectId } from "mongodb";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs"];
 
+// Tools that require user confirmation before execution
+// These can modify or delete user data
+const TOOLS_REQUIRING_APPROVAL = [
+  "objects_create",  // Can create arbitrary objects
+  "objects_update",  // Can modify existing data
+  "objects_delete",  // Can permanently delete data
+];
+
 export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);
 
@@ -148,9 +156,11 @@ export async function apiChatHandler(req: Request, res: Response) {
     raw: { role: "user", content: lastMessage.content }
   });
 
-  // Setup tools
+  // Setup tools with approval requirements for destructive operations
   const resources = defaultResourceManager.listResources().filter(resource => RESOURCES_FOR_AI.includes(resource.code));
-  const tools = createAiSdkToolsFromResources(resources, auth);
+  const tools = createAiSdkToolsFromResources(resources, auth, {
+    toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
+  });
 
   // Fetch System Prompt
   let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
