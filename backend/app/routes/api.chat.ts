@@ -3,7 +3,6 @@ import { streamText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
-import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
@@ -109,8 +108,7 @@ export async function apiChatHandler(req: Request, res: Response) {
     });
     activeChatId = chatResult.insertedId.toString();
   } else {
-    console.log(55, "activeChatId", activeChatId);
-    // 3. Get Chat Model Config & Verify Ownership
+    // Get Chat Model Config & Verify Ownership
     const chat = await db.collection("chats").findOne({ 
       _id: new ObjectId(activeChatId.toString()),
       userId: auth.principal 
@@ -152,8 +150,7 @@ export async function apiChatHandler(req: Request, res: Response) {
 
   // Setup tools
   const resources = defaultResourceManager.listResources().filter(resource => RESOURCES_FOR_AI.includes(resource.code));
-
-  const tools = createAiSdkToolsFromResources(resources, auth)
+  const tools = createAiSdkToolsFromResources(resources, auth);
 
   // Fetch System Prompt
   let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
@@ -190,6 +187,10 @@ export async function apiChatHandler(req: Request, res: Response) {
         { role: "system", content: systemPrompt },
         ...messages,
       ] as any,
+      onError: (errorEvent: any) => {
+        const error = errorEvent?.error;
+        console.error("[apiChatHandler] Stream error:", error?.message || error);
+      },
       async onStepFinish(result) {
         const { content, usage: totalUsage } = result as any;
         
@@ -236,7 +237,7 @@ export async function apiChatHandler(req: Request, res: Response) {
     res.setHeader("X-Mycelia-Chat-Id", activeChatId!);
     stream.pipeUIMessageStreamToResponse(res);
   } catch (error) {
-    console.error("Chat error:", error);
+    console.error("[apiChatHandler] Chat error:", error);
     // If headers sent, we can't send json
     if (!res.headersSent) {
         res.status(500).json({ error: "Failed to process chat request" });

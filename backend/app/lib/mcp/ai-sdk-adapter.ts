@@ -1,8 +1,12 @@
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { z } from "zod";
-import { tool, Tool } from "ai";
+import { tool, Tool, jsonSchema } from "ai";
 import { EJSON } from "bson";
+
+function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  return z.toJSONSchema(schema) as Record<string, unknown>;
+}
 
 function extractActionDescription(schema: any, actionValue: string): string | undefined {
   const def = schema._def || schema.def;
@@ -109,12 +113,18 @@ export function createAiSdkToolsFromResources(
   const tools = createMCPToolsFromResources(resources, auth);
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
-    // Pass Zod schema directly - AI SDK handles conversion internally
-    aiSdkTools[name] = tool({
-      description: params.description,
-      inputSchema: params.inputSchema,
-      execute: params.execute,
-    });
+    try {
+      // Convert Zod schema to JSON Schema manually to handle custom types
+      const jsonSchemaObj = zodSchemaToJsonSchema(params.inputSchema);
+      
+      aiSdkTools[name] = tool({
+        description: params.description,
+        parameters: jsonSchema(jsonSchemaObj as any),
+        execute: params.execute,
+      });
+    } catch (err) {
+      console.warn(`[ai-sdk-adapter] Failed to create tool ${name}:`, (err as Error).message);
+    }
   }
   return aiSdkTools;
 }
@@ -126,11 +136,18 @@ export function resourceToAiSdkTools<Input, Output>(
   const tools = resourceToTools(resource, auth);
   const aiSdkTools: Record<string, Tool> = {};
   for (const [name, params] of Object.entries(tools)) {
-    aiSdkTools[name] = tool({
-      description: params.description,
-      inputSchema: params.inputSchema,
-      execute: params.execute,
-    });
+    try {
+      // Convert Zod schema to JSON Schema manually to handle custom types
+      const jsonSchemaObj = zodSchemaToJsonSchema(params.inputSchema);
+      
+      aiSdkTools[name] = tool({
+        description: params.description,
+        parameters: jsonSchema(jsonSchemaObj as any),
+        execute: params.execute,
+      });
+    } catch (err) {
+      console.warn(`[ai-sdk-adapter] Failed to create tool ${name}:`, (err as Error).message);
+    }
   }
   return aiSdkTools;
 }
