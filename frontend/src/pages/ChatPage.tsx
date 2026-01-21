@@ -23,7 +23,8 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare } from "lucide-react";
+import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare, Pencil } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
@@ -119,24 +120,72 @@ function formatToolName(toolName: string): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// Chat list item component
+// Update chat name in database
+async function updateChatName(chatId: string, name: string) {
+  await callResource("mongo", {
+    action: "updateOne",
+    collection: "chats",
+    query: { _id: new ObjectId(chatId) },
+    update: { $set: { name, title: name } },
+  });
+}
+
+// Chat list item component with inline rename
 function ChatListItemComponent({
   chat,
   isSelected,
-  onClick
+  onClick,
+  onRename
 }: {
   chat: Chat;
   isSelected: boolean;
   onClick: () => void;
+  onRename: (chatId: string, newName: string) => void;
 }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const lastMessageDate = chat.lastMessageDate ? new Date(chat.lastMessageDate) : new Date(chat.createdAt);
   const formattedTime = useFormattedTime(lastMessageDate);
 
+  const chatName = chat.name || chat.title || "New Chat";
+
+  const handleStartEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditName(chatName);
+    setIsEditing(true);
+  };
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleSave = async () => {
+    const trimmedName = editName.trim();
+    if (trimmedName && trimmedName !== chatName) {
+      await updateChatName(chat._id.toString(), trimmedName);
+      onRename(chat._id.toString(), trimmedName);
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSave();
+    } else if (e.key === "Escape") {
+      setIsEditing(false);
+    }
+  };
+
   return (
-    <button
+    <div
       onClick={onClick}
       className={cn(
-        "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors",
+        "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors cursor-pointer group",
         isSelected && "bg-muted"
       )}
     >
@@ -146,16 +195,39 @@ function ChatListItemComponent({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-sm truncate">
-              {chat.name || chat.title || "New Chat"}
-            </span>
-            <span className="text-xs text-muted-foreground shrink-0">
-              {formattedTime}
-            </span>
+            {isEditing ? (
+              <Input
+                ref={inputRef}
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onBlur={handleSave}
+                onKeyDown={handleKeyDown}
+                onClick={(e) => e.stopPropagation()}
+                className="h-6 text-sm py-0 px-1"
+              />
+            ) : (
+              <>
+                <span className="font-medium text-sm truncate flex-1">
+                  {chatName}
+                </span>
+                <button
+                  onClick={handleStartEdit}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-opacity"
+                  title="Rename"
+                >
+                  <Pencil className="w-3 h-3 text-muted-foreground" />
+                </button>
+              </>
+            )}
+            {!isEditing && (
+              <span className="text-xs text-muted-foreground shrink-0">
+                {formattedTime}
+              </span>
+            )}
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -359,6 +431,14 @@ export default function ChatPage() {
     chat.setMessages([]);
   };
 
+  const handleRenameChat = (chatId: string, newName: string) => {
+    setChats(prev => prev.map(c =>
+      c._id.toString() === chatId
+        ? { ...c, name: newName, title: newName }
+        : c
+    ));
+  };
+
   return (
     <div className="h-[calc(100vh-6rem)] w-full overflow-hidden border rounded-lg shadow-sm bg-background">
       <ResizablePanelGroup direction="horizontal">
@@ -389,6 +469,7 @@ export default function ChatPage() {
                       chat={c}
                       isSelected={chatId === c._id.toString()}
                       onClick={() => navigate(`/chat/${c._id.toString()}`)}
+                      onRename={handleRenameChat}
                     />
                   ))}
                   {chats.length === 0 && (
