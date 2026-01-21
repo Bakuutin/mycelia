@@ -155,15 +155,25 @@ async function startServer(
   app.use(cors({
     exposedHeaders: ["X-Mycelia-Chat-Id"],
   }));
-  app.use(morgan("tiny"));
+  // HTTP request logging - disable with LOG_HTTP=false
+  if (Deno.env.get("LOG_HTTP") !== "false") {
+    app.use(morgan("tiny", {
+      skip: (req) =>
+        req.url === "/health" ||
+        req.url === "/readiness" ||
+        req.url?.startsWith("/api/resource/"),
+    }));
+  }
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
   app.use((req: Request, _res: Response, next: () => void) => {
-    requestCounter.add(1, {
-      method: req.method,
-      route: new URL(req.url || "/", "http://localhost").pathname,
-    });
+    if (req.url !== "/health" && req.url !== "/readiness") {
+      requestCounter.add(1, {
+        method: req.method,
+        route: new URL(req.url || "/", "http://localhost").pathname,
+      });
+    }
     next();
   });
 
@@ -194,10 +204,15 @@ async function startServer(
     }
   });
 
-  app.use((req: Request, _res: Response, next: () => void) => {
-    console.log(`Incoming request: ${req.method} ${req.url}`);
-    next();
-  });
+  // Request logging - enable with DEBUG_REQUESTS=true
+  if (Deno.env.get("DEBUG_REQUESTS") === "true") {
+    app.use((req: Request, _res: Response, next: () => void) => {
+      if (req.url !== "/health" && req.url !== "/readiness") {
+        console.log(`Incoming request: ${req.method} ${req.url}`);
+      }
+      next();
+    });
+  }
 
   // Register all routes
   registerRoutes(app);
