@@ -41,22 +41,31 @@ const consoleMetricReader = new PeriodicExportingMetricReader({
 
 // Use SimpleSpanProcessor in test environment to avoid timer leaks
 // BatchSpanProcessor creates timers that can outlive test scope
-const isTest = Deno.env.get("DENO_TESTING") === "true" || 
+const isTest = Deno.env.get("DENO_TESTING") === "true" ||
                typeof Deno !== "undefined" && Deno.test !== undefined;
+
+// Only log traces to console if explicitly enabled (disabled by default to reduce log noise)
+const enableConsoleTraces = Deno.env.get("OTEL_CONSOLE_TRACES") === "true";
 
 const spanProcessors = isTest
   ? [
       new SimpleSpanProcessor(traceExporter),
-      new SimpleSpanProcessor(consoleTraceExporter),
+      ...(enableConsoleTraces ? [new SimpleSpanProcessor(consoleTraceExporter)] : []),
     ]
   : [
       new BatchSpanProcessor(traceExporter),
-      new BatchSpanProcessor(consoleTraceExporter),
+      ...(enableConsoleTraces ? [new BatchSpanProcessor(consoleTraceExporter)] : []),
     ];
+
+// Only log metrics to console if explicitly enabled (disabled by default to reduce log noise)
+const enableConsoleMetrics = Deno.env.get("OTEL_CONSOLE_METRICS") === "true";
+const metricReaders = enableConsoleMetrics
+  ? [otlpMetricReader, consoleMetricReader]
+  : [otlpMetricReader];
 
 const sdk = new NodeSDK({
   spanProcessors,
-  metricReaders: [otlpMetricReader, consoleMetricReader],
+  metricReaders,
   instrumentations: [
     new HttpInstrumentation(),
     new ExpressInstrumentation(),
