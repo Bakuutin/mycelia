@@ -38,13 +38,20 @@ export const zServerConfigPrompts = z.object({
 
 export const PROMPT_TASK_LABELS = PROMPT_LABELS;
 
-export const zInferenceProviderConfig = z.object({
+export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
+  model: z.string().optional(),
 });
+
+// Deprecated: use llm and transcription instead
+export const zInferenceProviderConfig = zProviderConfig;
 
 export const zServerConfig = z.object({
   prompts: zServerConfigPrompts,
+  llm: zProviderConfig.optional().nullable(),
+  transcription: zProviderConfig.optional().nullable(),
+  // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({
     enable_experimental_processing: z.boolean().describe("Enable experimental processing of conversations. This feature is currently in development and may not work as expected."),
