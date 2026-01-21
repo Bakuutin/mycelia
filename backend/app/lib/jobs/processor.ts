@@ -162,6 +162,9 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
           } catch {
             // Ignore parse errors for progress
           }
+        } else {
+          // Print worker logs to console for visibility
+          console.error(line);
         }
         enqueueLog("stderr", line);
       }

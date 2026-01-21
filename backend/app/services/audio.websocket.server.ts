@@ -5,10 +5,22 @@ import type { IncomingMessage } from "node:http";
 import {
   createAudioChunk,
   createSourceFile,
+  type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
 import { ObjectId } from "mongodb";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
+
+// Debug logging - enable with DEBUG_AUDIO_WS=true
+const DEBUG = Deno.env.get("DEBUG_AUDIO_WS") === "true";
+
+// Logging helper for consistent format
+const log = (level: string, msg: string, data?: Record<string, unknown>) => {
+  if (!DEBUG && level === "DEBUG") return;
+  const timestamp = new Date().toISOString();
+  const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+  console.log(`[AUDIO-WS] ${timestamp} ${level}: ${msg}${dataStr}`);
+};
 
 const CHUNK_DURATION_SECONDS = 10;
 
@@ -18,6 +30,20 @@ interface AudioFormat {
   channels: number;
   mode: string;
   timestamp?: number;
+}
+
+// Determine the audio format type from sample width in bytes
+function getFormatFromWidth(width: number): "pcm" | "float32" {
+  // width=2 means 16-bit PCM (2 bytes per sample)
+  // width=4 means 32-bit float (4 bytes per sample)
+  if (width === 2) {
+    return "pcm";
+  } else if (width === 4) {
+    return "float32";
+  } else {
+    log("WARN", `Unknown audio width, defaulting to float32`, { width });
+    return "float32";
+  }
 }
 
 class AsyncLock {
@@ -60,14 +86,21 @@ class PcmWebSocketSession {
   chunkIndex = 0;
   bytesPerChunk = 0;
   private flushLock = new AsyncLock();
+  private messagesReceived = 0;
+  private bytesReceived = 0;
+  private sessionId: string;
 
   constructor(
     private auth: Auth,
     private ws: WebSocket | any,
-  ) {}
+  ) {
+    this.sessionId = Math.random().toString(36).substring(2, 10);
+    log("INFO", `Session created`, { sessionId: this.sessionId, principal: auth.principal });
+  }
 
   async handleAudioStart(header: WyomingHeader): Promise<void> {
     if (!header.data) {
+      log("WARN", `Audio start received without data`, { sessionId: this.sessionId });
       return;
     }
 
@@ -76,22 +109,49 @@ class PcmWebSocketSession {
       ? new Date(audioFormat.timestamp * 1000)
       : new Date();
 
+    log("INFO", `Audio stream starting`, {
+      sessionId: this.sessionId,
+      rate: audioFormat.rate,
+      width: audioFormat.width,
+      channels: audioFormat.channels,
+      mode: audioFormat.mode,
+      timestamp: audioFormat.timestamp,
+      startTime: startTime.toISOString()
+    });
+
     this.audioFormat = audioFormat;
     this.startedAt = startTime;
     this.bytesFlushed = 0;
     this.chunkIndex = 0;
+    this.messagesReceived = 0;
+    this.bytesReceived = 0;
     this.buffer.clear();
 
     const bytesPerSecond = audioFormat.rate * audioFormat.width *
       audioFormat.channels;
     this.bytesPerChunk = bytesPerSecond * CHUNK_DURATION_SECONDS;
 
+    log("INFO", `Audio format calculated`, {
+      sessionId: this.sessionId,
+      bytesPerSecond,
+      bytesPerChunk: this.bytesPerChunk,
+      chunkDurationSeconds: CHUNK_DURATION_SECONDS
+    });
+
+    // Determine format from width: 2 bytes = 16-bit PCM, 4 bytes = 32-bit float
+    const detectedFormat = getFormatFromWidth(audioFormat.width);
+    log("INFO", `Detected audio format`, {
+      sessionId: this.sessionId,
+      width: audioFormat.width,
+      detectedFormat
+    });
+
     const metadata = {
       rate: audioFormat.rate,
       width: audioFormat.width,
       channels: audioFormat.channels,
       mode: audioFormat.mode,
-      format: "float32",
+      format: detectedFormat,
       source: "websocket",
     };
 
@@ -107,30 +167,47 @@ class PcmWebSocketSession {
         metadata,
         this.auth.principal,
       );
-      const formatDescription = `${audioFormat.rate}Hz ${
-        audioFormat.width * 8
-      }bit ${audioFormat.channels}ch`;
-      console.log(
-        `Created SourceFile: ${this.sourceFileId.toString()}, start: ${startTime.toISOString()}, format: ${formatDescription}`,
-      );
+      log("INFO", `SourceFile created`, {
+        sessionId: this.sessionId,
+        sourceFileId: this.sourceFileId.toString(),
+        startTime: startTime.toISOString(),
+        format: `${audioFormat.rate}Hz ${audioFormat.width * 8}bit ${audioFormat.channels}ch`
+      });
     } catch (error) {
-      console.error("Failed to create SourceFile:", error);
-      const errorMessage = error instanceof Error
-        ? error.message
-        : "Failed to create source file";
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      log("ERROR", `Failed to create SourceFile`, {
+        sessionId: this.sessionId,
+        error: errorMsg
+      });
       this.ws.send(
-        JSON.stringify({ type: "error", message: errorMessage }) + "\n",
+        JSON.stringify({ type: "error", message: errorMsg }) + "\n",
       );
     }
   }
 
   async handleAudioStop(): Promise<void> {
-    console.log("Audio stop received");
+    const durationSeconds = this.startedAt
+      ? (Date.now() - this.startedAt.getTime()) / 1000
+      : 0;
+
+    log("INFO", `Audio stop received`, {
+      sessionId: this.sessionId,
+      sourceFileId: this.sourceFileId?.toString(),
+      messagesReceived: this.messagesReceived,
+      bytesReceived: this.bytesReceived,
+      chunksCreated: this.chunkIndex,
+      durationSeconds: Math.round(durationSeconds * 10) / 10
+    });
+
     if (this.sourceFileId) {
       await this.flushAll();
-      console.log(
-        `Session ended with SourceFile: ${this.sourceFileId.toString()}`,
-      );
+      log("INFO", `Session ended`, {
+        sessionId: this.sessionId,
+        sourceFileId: this.sourceFileId.toString(),
+        totalChunks: this.chunkIndex,
+        totalBytesFlushed: this.bytesFlushed,
+        bufferRemaining: this.buffer.length
+      });
     }
   }
 
@@ -139,14 +216,29 @@ class PcmWebSocketSession {
       return;
     }
 
+    this.messagesReceived++;
+    this.bytesReceived += audioData.byteLength;
+
+    // Log periodically (every 100 messages) to avoid flooding
+    if (this.messagesReceived % 100 === 0) {
+      log("DEBUG", `Audio data progress`, {
+        sessionId: this.sessionId,
+        messagesReceived: this.messagesReceived,
+        bytesReceived: this.bytesReceived,
+        bufferSize: this.buffer.length,
+        chunksCreated: this.chunkIndex
+      });
+    }
+
     if (
       this.audioFormat && audioData.byteLength % this.audioFormat.width !== 0
     ) {
-      console.warn(
-        `Audio data length ${audioData.byteLength} is not divisible by ${this.audioFormat.width} (${
-          this.audioFormat.width * 8
-        }-bit float requires ${this.audioFormat.width} bytes per sample)`,
-      );
+      log("WARN", `Audio data alignment issue`, {
+        sessionId: this.sessionId,
+        dataLength: audioData.byteLength,
+        sampleWidth: this.audioFormat.width,
+        bitsPerSample: this.audioFormat.width * 8
+      });
     }
 
     for (let i = 0; i < audioData.length; i++) {
@@ -236,25 +328,43 @@ class PcmWebSocketSession {
 
       const chunkStartTime = this.calculateChunkStartTime();
 
+      // Determine format from audio header width
+      const format = this.audioFormat ? getFormatFromWidth(this.audioFormat.width) : "float32";
+      const formatConfig: AudioFormatConfig = {
+        format,
+        sampleRate: this.audioFormat?.rate || 16000,
+        channels: this.audioFormat?.channels || 1,
+      };
+
       try {
         await createAudioChunk(
           audioData,
           chunkStartTime,
           this.chunkIndex,
           this.sourceFileId,
-          "float32",
+          formatConfig,
         );
-        const logMessage = flushAll
-          ? `Flushed final audio chunk ${this.chunkIndex}, size: ${audioData.length} bytes, start: ${chunkStartTime.toISOString()}`
-          : `Flushed audio chunk ${this.chunkIndex}, size: ${audioData.length} bytes, start: ${chunkStartTime.toISOString()}`;
-        console.log(logMessage);
+        log("INFO", `Audio chunk created`, {
+          sessionId: this.sessionId,
+          chunkIndex: this.chunkIndex,
+          chunkBytes: audioData.length,
+          chunkStart: chunkStartTime.toISOString(),
+          isFinal: flushAll,
+          sourceFileId: this.sourceFileId?.toString(),
+          format: formatConfig.format,
+          sampleRate: formatConfig.sampleRate,
+          channels: formatConfig.channels
+        });
         this.bytesFlushed += audioData.length;
         this.chunkIndex++;
       } catch (error) {
-        const errorMessage = flushAll
-          ? "Failed to flush final audio chunk:"
-          : "Failed to flush audio chunk:";
-        console.error(errorMessage, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        log("ERROR", `Failed to create audio chunk`, {
+          sessionId: this.sessionId,
+          chunkIndex: this.chunkIndex,
+          isFinal: flushAll,
+          error: errorMsg
+        });
         throw error;
       }
     }
@@ -339,8 +449,9 @@ function normalizeBinaryData(data: any): Uint8Array {
 function parseWyomingHeader(line: string): WyomingHeader | null {
   try {
     return JSON.parse(line) as WyomingHeader;
-  } catch (error) {
-    console.error("Failed to parse Wyoming protocol header:", error);
+  } catch {
+    // Parse errors can happen with partial data - only log in debug mode
+    log("DEBUG", "Failed to parse Wyoming protocol header", { line: line.substring(0, 100) });
     return null;
   }
 }
@@ -382,18 +493,27 @@ export async function handlePcmWebSocket(
   ws: WebSocket | any,
   upgrade: IncomingMessage,
 ): Promise<void> {
+  log("INFO", `WebSocket connection attempt`, {
+    url: upgrade.url,
+    remoteAddress: upgrade.socket?.remoteAddress
+  });
+
   const request = await createRequestFromUpgrade(upgrade);
   const auth = await authenticate(request);
-  
+
   if (!auth) {
+    log("WARN", `WebSocket auth failed`, { url: upgrade.url });
     ws.close(1008, "Unauthorized: Token is missing or invalid");
     throw new Error("Unauthorized");
   }
-  
+
+  log("INFO", `WebSocket authenticated`, { principal: auth.principal });
+
   await defaultResourceManager.ensureAllowed(
     auth,
     { path: "live.audio", actions: ["write"] },
   );
+
   return new Promise((resolve, reject) => {
     const session = new PcmWebSocketSession(auth, ws);
     const payloadHandler = new WyomingPayloadHandler();
@@ -427,10 +547,6 @@ export async function handlePcmWebSocket(
             const payloadResult = payloadHandler.addChunk(payloadData);
             if (payloadResult) {
               const { payload, messageType } = payloadResult;
-              console.log(
-                `Received Wyoming protocol payload, length: ${payload.length}, type: ${messageType}`,
-              );
-
               if (messageType === "audio-chunk") {
                 await session.addAudioData(payload);
               }
@@ -443,10 +559,6 @@ export async function handlePcmWebSocket(
       const payloadResult = payloadHandler.addChunk(binaryData);
       if (payloadResult) {
         const { payload, messageType } = payloadResult;
-        console.log(
-          `Received Wyoming protocol payload, length: ${payload.length}, type: ${messageType}`,
-        );
-
         if (messageType === "audio-chunk") {
           await session.addAudioData(payload);
         }
@@ -472,8 +584,6 @@ export async function handlePcmWebSocket(
         if (!header) {
           continue;
         }
-
-        console.log("Received Wyoming protocol header:", header);
 
         if (header.type === "audio-start") {
           await session.handleAudioStart(header);
@@ -505,21 +615,26 @@ export async function handlePcmWebSocket(
     };
 
     const handleError = (error: Error) => {
-      console.error("WebSocket error:", error);
+      log("ERROR", `WebSocket error`, {
+        error: error.message,
+        stack: error.stack
+      });
       cleanup();
       reject(error);
     };
 
     const handleClose = (code: number, reason: Buffer) => {
       const reasonStr = reason ? reason.toString() : "";
-      console.log("WebSocket closed", code, reasonStr);
+      log("INFO", `WebSocket closed`, { code, reason: reasonStr });
       cleanup();
       resolve();
     };
 
     const cleanup = () => {
       session.flushAll().catch((error) => {
-        console.error("Error flushing buffer on cleanup:", error);
+        log("ERROR", `Error flushing buffer on cleanup`, {
+          error: error instanceof Error ? error.message : String(error)
+        });
       });
 
       if (typeof ws.off === "function") {

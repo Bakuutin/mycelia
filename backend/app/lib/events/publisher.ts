@@ -7,12 +7,7 @@ export async function publishEvent(
 ): Promise<void> {
   const message = JSON.stringify({ event, data, timestamp: new Date().toISOString() });
   const redisChannel = `mycelia:${channel}`;
-
-  console.log(`Publishing to Redis: ${redisChannel}, event: ${event}`);
-
-  const result = await redis.publish(redisChannel, message);
-
-  console.log(`Redis publish result: ${result} subscribers received the message on ${redisChannel}`);
+  await redis.publish(redisChannel, message);
 }
 
 export async function publishJobUpdate(

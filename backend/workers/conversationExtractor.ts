@@ -4,6 +4,14 @@ import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { callResource } from "@myceliasdk/resources.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { createHash } from "node:crypto";
+import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
+
+// Logging helper (use stderr so it appears in parent process logs)
+const log = (level: string, msg: string, data?: Record<string, unknown>) => {
+  const timestamp = new Date().toISOString();
+  const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+  console.error(`[CONV-EXTRACTOR] ${timestamp} ${level}: ${msg}${dataStr}`);
+};
 
 // ============================================================================
 // Types
@@ -188,14 +196,32 @@ async function callLLMStructured<T>(
   messages: Array<{ role: string; content: string }>,
   parseResponse: (content: string) => T,
 ): Promise<T> {
-  const response = await llm({
+  const request = {
     action: "completions",
     model,
     messages,
     response_format: { type: "json_object" },
+  };
+
+  log("INFO", "LLM Request", {
+    model,
+    messageCount: messages.length,
+    systemPrompt: messages[0]?.content?.substring(0, 200),
+    userPromptLength: messages[1]?.content?.length || 0,
+    userPromptPreview: messages[1]?.content?.substring(0, 300),
   });
 
+  const response = await llm(request);
+
   const content = response.choices[0]?.message?.content;
+
+  log("INFO", "LLM Response", {
+    model: response.model,
+    content,
+    finishReason: response.choices[0]?.finish_reason,
+    usage: response.usage,
+  });
+
   if (!content) {
     throw new Error("Empty response from LLM");
   }
@@ -238,9 +264,13 @@ function stripMarkdownCodeBlock(content: string): string {
 }
 
 function parseSegmentationResponse(content: string): Segment[] {
+  log("INFO", "Raw LLM response for segmentation", { content: content.substring(0, 1000) });
   const parsed = JSON.parse(stripMarkdownCodeBlock(content));
+  log("INFO", "Parsed LLM JSON", { parsed: JSON.stringify(parsed).substring(0, 500) });
   const segments = parsed.segments || [];
-  return segments.map((s: any, index: number) => {
+  log("INFO", "Segments from LLM", { segmentCount: segments.length, segments: segments.map((s: any) => ({ title: s.title, start: s.start, end: s.end })) });
+
+  const validSegments = segments.map((s: any, index: number) => {
     // Handle null, undefined, non-string, or empty string titles
     let title = `Segment ${index + 1}`;
     if (s.title != null && typeof s.title === 'string') {
@@ -249,12 +279,40 @@ function parseSegmentationResponse(content: string): Segment[] {
         title = trimmed;
       }
     }
+
+    // Validate dates
+    if (!s.start || !s.end) {
+      log("ERROR", "LLM response missing start/end dates", {
+        rawStart: s.start,
+        rawEnd: s.end,
+        fullSegment: JSON.stringify(s),
+        segmentKeys: Object.keys(s),
+        allSegments: JSON.stringify(segments)
+      });
+      // Return empty array - this segment is unusable
+      return null;
+    }
+
+    const startDate = new Date(s.start);
+    const endDate = new Date(s.end);
+
+    if (isNaN(startDate.getTime())) {
+      log("ERROR", "Invalid start date from LLM", { rawStart: s.start, rawEnd: s.end, fullSegment: s, allSegments: segments });
+      return null;
+    }
+    if (isNaN(endDate.getTime())) {
+      log("ERROR", "Invalid end date from LLM", { rawStart: s.start, rawEnd: s.end, fullSegment: s, allSegments: segments });
+      return null;
+    }
+
     return {
       title,
-      start: new Date(s.start),
-      end: new Date(s.end),
+      start: startDate,
+      end: endDate,
     };
-  });
+  }).filter((s): s is Segment => s !== null);
+
+  return validSegments;
 }
 
 function parseMetadataResponse(content: string): ConversationMetadata {
@@ -456,6 +514,28 @@ const capability: JobCapability = {
     const hasMore = chunks.length > data.limit;
     const chunksToProcess = chunks.slice(0, data.limit);
 
+    log("INFO", "Found chunks to process", {
+      totalFound: chunks.length,
+      toProcess: chunksToProcess.length,
+      hasMore,
+      chunks: chunksToProcess.map(c => ({
+        id: c._id.toString(),
+        state: c.state,
+        transcriptionCount: c.transcriptionIds?.length || 0,
+      })),
+    });
+
+    if (chunksToProcess.length === 0) {
+      log("INFO", "No chunks to process");
+      return {
+        status: "completed" as const,
+        success: true,
+        conversationsCreated: 0,
+        chunksProcessed: 0,
+        hasMore: false,
+      };
+    }
+
     let conversationsCreated = 0;
     let chunksProcessed = 0;
     const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
@@ -468,7 +548,22 @@ const capability: JobCapability = {
       console.error("Failed to load prompts:", error);
       // Use default prompts
       prompts = {
-        segmentation_system: "You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.",
+        segmentation_system: `You are an assistant that segments transcripts into topical sections. Any speech content should be included in at least one segment. Even brief or incomplete speech should be captured.
+
+The transcript includes timestamp markers like "[time: 2026-01-21T17:09:30.927Z]" showing when each part of speech occurred.
+
+Output JSON with this EXACT structure:
+{
+  "segments": [
+    {
+      "title": "Brief descriptive title",
+      "start": "2026-01-21T17:09:30.927Z",
+      "end": "2026-01-21T17:09:40.927Z"
+    }
+  ]
+}
+
+CRITICAL: Each segment MUST have "start" and "end" fields with ISO8601 timestamps copied from the [time: ...] markers in the transcript. If the transcript contains any speech at all, you MUST return at least one segment covering it.`,
         extraction_system: "You are an assistant that extracts metadata from conversations. Output JSON with 'agreed_upon_something' (boolean - true if participants made any agreement, promise, or commitment), 'entities' (array of strings - names of people, places, organizations, or topics mentioned), and 'emoji' (single emoji representing the conversation topic).",
         extraction_guidance: "",
       };
@@ -536,6 +631,7 @@ const capability: JobCapability = {
         }>;
 
         if (!transcriptions || transcriptions.length === 0) {
+          log("WARN", "No transcriptions found for chunk", { chunkId: chunk._id.toString() });
           await mongo({
             action: "updateOne",
             collection: "conversation_chunks",
@@ -553,6 +649,15 @@ const capability: JobCapability = {
           text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
         }));
 
+        const totalTextLength = utterances.reduce((sum, u) => sum + u.text.length, 0);
+        log("INFO", "Processing chunk", {
+          chunkId: chunk._id.toString(),
+          transcriptionCount: transcriptions.length,
+          utteranceCount: utterances.length,
+          totalTextLength,
+          textPreview: utterances.map(u => u.text.substring(0, 50)).join(" | ").substring(0, 200),
+        });
+
         // Delete existing if force
         if (chunk.params.force) {
           await deleteConversationsInRange(objects, mongo, chunk.start, chunk.end);
@@ -561,12 +666,24 @@ const capability: JobCapability = {
         // Format prompt
         const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(utterances);
 
+        log("DEBUG", "Formatted prompt for segmentation", {
+          chunkId: chunk._id.toString(),
+          promptLength: prompt.length,
+          chunkStart: chunkStart.toISOString(),
+          chunkEnd: chunkEnd.toISOString(),
+        });
+
         await job.updateProgress({
           stage: "segmenting",
           chunkId: chunk._id.toString(),
         });
 
         // LLM Call #1: Segmentation
+        log("INFO", "Calling LLM for segmentation", {
+          chunkId: chunk._id.toString(),
+          model: chunk.params.model,
+        });
+
         const segments = await callLLMStructured(
           llm,
           chunk.params.model,
@@ -577,11 +694,39 @@ const capability: JobCapability = {
           parseSegmentationResponse,
         );
 
+        log("INFO", "LLM segmentation returned", {
+          chunkId: chunk._id.toString(),
+          segmentCount: segments.length,
+          segments: segments.map(s => ({
+            title: s.title,
+            start: s.start.toISOString(),
+            end: s.end.toISOString(),
+          })),
+        });
+
         // Clip and filter segments
         const clippedSegments = segments.map(s => clipSegmentTimes(s, chunkStart, chunkEnd));
         const segmentsWithUtterances = filterSegmentsWithUtterances(clippedSegments, utterances);
 
+        log("INFO", "Filtered segments with utterances", {
+          chunkId: chunk._id.toString(),
+          originalSegments: segments.length,
+          clippedSegments: clippedSegments.length,
+          segmentsWithUtterances: segmentsWithUtterances.length,
+        });
+
         if (segmentsWithUtterances.length === 0) {
+          log("WARN", "No segments with utterances after filtering - marking chunk as empty", {
+            chunkId: chunk._id.toString(),
+            reason: segments.length === 0
+              ? "LLM returned 0 segments"
+              : "No segments overlapped with utterance times",
+            llmSegmentCount: segments.length,
+            utteranceTimeRange: {
+              start: utterances[0]?.start.toISOString(),
+              end: utterances[utterances.length - 1]?.end.toISOString(),
+            },
+          });
           await mongo({
             action: "updateOne",
             collection: "conversation_chunks",
@@ -589,9 +734,13 @@ const capability: JobCapability = {
             update: {
               $set: {
                 state: "empty",
-                segmentsFound: 0,
+                segmentsFound: segments.length,
+                segmentsAfterFilter: 0,
                 conversationsCreated: 0,
                 extractionKey,
+                emptyReason: segments.length === 0
+                  ? "LLM returned 0 segments"
+                  : "No segments overlapped with utterance times",
               },
             },
           });
@@ -721,11 +870,25 @@ const capability: JobCapability = {
             });
           }
 
+          log("INFO", "Created conversation", {
+            chunkId: chunk._id.toString(),
+            conversationId: conversationId.toString(),
+            title: segment.title,
+            entityCount: metadata.entities.length,
+            hasEmoji: !!metadata.emoji,
+          });
+
           chunkConversations++;
           conversationsCreated++;
         }
 
         // Mark chunk completed
+        log("INFO", "Chunk processing completed", {
+          chunkId: chunk._id.toString(),
+          segmentsFound: segmentsWithUtterances.length,
+          conversationsCreated: chunkConversations,
+        });
+
         await mongo({
           action: "updateOne",
           collection: "conversation_chunks",
@@ -785,8 +948,7 @@ const capability: JobCapability = {
         },
       },
     ],
-    debounceMs: 5000,
-    interval: 300,
+    ...getTriggerTiming("conversation_extractor"),
   },
 };
 
