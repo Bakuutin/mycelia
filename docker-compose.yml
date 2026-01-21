@@ -106,12 +106,15 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    entrypoint: ["/nginx-entrypoint.sh"]
+    command: ["nginx", "-g", "daemon off;"]
     ports:
       - "4433:4433"
       - "3210:80"
     volumes:
       - ./misc/nginx/templates:/etc/nginx/templates:ro
-      - ./misc/nginx/ssl:/etc/nginx/ssl:ro
+      - ./misc/nginx/ssl:/etc/nginx/ssl
+      - ./misc/nginx/nginx-entrypoint.sh:/nginx-entrypoint.sh:ro
     restart: always
 
 

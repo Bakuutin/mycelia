@@ -23,6 +23,6 @@ misc/.htpasswd
 *.pem
 /misc/letsencrypt/
 /misc/certbot/
-/misc/nginx/ssl/
+/misc/nginx/ssl/*.pem
 /misc/secrets/
 cloudflare.ini
