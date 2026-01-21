@@ -20,13 +20,13 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { JobInfo } from "@/types/jobs";
 
 type VadJobFormData = {
@@ -193,6 +193,15 @@ export default function JobsPage() {
     setFilterTypes(new Set());
   };
 
+  const selectOnlyType = (type: string) => {
+    setAllTypesSelected(false);
+    setFilterTypes(new Set([type]));
+  };
+
+  const selectOnlyStatus = (status: string) => {
+    setFilterStatuses(new Set([status]));
+  };
+
   const getTypesLabel = () => {
     if (allTypesSelected) return "All Types";
     if (filterTypes.size === 0) return "No Types";
@@ -332,24 +341,34 @@ export default function JobsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[200px]">
-              <DropdownMenuItem onClick={selectAllTypes}>
-                Select All
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={selectNoTypes}>
-                Select None
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={selectAllTypes}>
+                <Checkbox
+                  checked={allTypesSelected}
+                  className="mr-2"
+                  onClick={(e) => e.stopPropagation()}
+                  onCheckedChange={(checked) => checked ? selectAllTypes() : selectNoTypes()}
+                />
+                All Types
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {isLoadingSchemas ? (
                 <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
               ) : (
                 allTypes.map((type) => (
-                  <DropdownMenuCheckboxItem
+                  <DropdownMenuItem
                     key={type}
-                    checked={allTypesSelected || filterTypes.has(type)}
-                    onCheckedChange={() => toggleType(type)}
+                    onSelect={(e) => e.preventDefault()}
+                    onClick={() => selectOnlyType(type)}
+                    className="cursor-pointer"
                   >
+                    <Checkbox
+                      checked={allTypesSelected || filterTypes.has(type)}
+                      className="mr-2"
+                      onClick={(e) => e.stopPropagation()}
+                      onCheckedChange={() => toggleType(type)}
+                    />
                     {type}
-                  </DropdownMenuCheckboxItem>
+                  </DropdownMenuItem>
                 ))
               )}
             </DropdownMenuContent>
@@ -363,22 +382,31 @@ export default function JobsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[200px]">
-              <DropdownMenuItem onClick={selectAllStatuses}>
-                Select All
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={selectNoStatuses}>
-                Select None
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={selectAllStatuses}>
+                <Checkbox
+                  checked={filterStatuses.size === ALL_STATUSES.length}
+                  className="mr-2"
+                  onClick={(e) => e.stopPropagation()}
+                  onCheckedChange={(checked) => checked ? selectAllStatuses() : selectNoStatuses()}
+                />
+                All Statuses
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {ALL_STATUSES.map((status) => (
-                <DropdownMenuCheckboxItem
+                <DropdownMenuItem
                   key={status}
-                  checked={filterStatuses.has(status)}
-                  onCheckedChange={() => toggleStatus(status)}
-                  className="capitalize"
+                  onSelect={(e) => e.preventDefault()}
+                  onClick={() => selectOnlyStatus(status)}
+                  className="cursor-pointer capitalize"
                 >
+                  <Checkbox
+                    checked={filterStatuses.has(status)}
+                    className="mr-2"
+                    onClick={(e) => e.stopPropagation()}
+                    onCheckedChange={() => toggleStatus(status)}
+                  />
                   {status}
-                </DropdownMenuCheckboxItem>
+                </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
