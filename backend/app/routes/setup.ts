@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
-import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
-import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { Auth } from "@/lib/auth/core.server.ts";
 import { generateApiKeyWithId } from "@/lib/auth/tokens.ts";
 import type { Policy } from "@/lib/auth/resources.ts";
 import { getObjectsResource } from "../lib/objects/resource.server.ts";
@@ -51,26 +50,17 @@ async function createPostInstallObjects(auth: Auth) {
 }
     
 
-export async function setupHandler(_req: Request, res: Response) {
+export async function setupHandler(req: Request, res: Response) {
   try {
-    const auth = await getServerAuth();
-    const mongo = await getMongoResource(auth);
+    const createCredentials = req.body?.create === true;
 
-    // Check if any API keys exist
-    const existingKeys = await mongo({
-      action: "find",
-      collection: "api_keys",
-      query: {},
-      options: { limit: 1 },
-    });
-
-    if (existingKeys && existingKeys.length > 0) {
-      // API keys already exist, exiting
+    // Only create credentials when explicitly requested
+    if (!createCredentials) {
       res.json({ created: false });
       return;
     }
 
-    // No API keys exist, create the first one with root permissions
+    // Create a new API key with root permissions
     const policies: Policy[] = [
       { resource: "**", action: "**", effect: "allow" },
     ];
