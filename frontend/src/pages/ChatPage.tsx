@@ -16,11 +16,21 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Loader } from "@/components/ai-elements/loader";
 import { Button } from "@/components/ui/button";
-import { Paperclip, Check, X, AlertTriangle } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare } from "lucide-react";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
 import type { Message as MessengerMessage } from "@myceliasdk/messengers";
+import type { Chat } from "@myceliasdk/messengers.ts";
+import { cn } from "@/lib/utils";
+import { useFormattedTime } from "@/lib/formatTime";
 
 async function fetchMessages(chatId: string) {
   const messages = await callResource("mongo", {
@@ -107,6 +117,46 @@ function formatToolName(toolName: string): string {
   return toolName
     .replace(/_/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Chat list item component
+function ChatListItemComponent({
+  chat,
+  isSelected,
+  onClick
+}: {
+  chat: Chat;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  const lastMessageDate = chat.lastMessageDate ? new Date(chat.lastMessageDate) : new Date(chat.createdAt);
+  const formattedTime = useFormattedTime(lastMessageDate);
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors",
+        isSelected && "bg-muted"
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
+          <MessageSquare className="w-4 h-4 text-muted-foreground" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-sm truncate">
+              {chat.name || chat.title || "New Chat"}
+            </span>
+            <span className="text-xs text-muted-foreground shrink-0">
+              {formattedTime}
+            </span>
+          </div>
+        </div>
+      </div>
+    </button>
+  );
 }
 
 // Component for tool approval requests
@@ -222,6 +272,32 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const newChatIdRef = useRef<string | null>(null);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [loadingChats, setLoadingChats] = useState(true);
+
+  // Fetch chats list
+  useEffect(() => {
+    const fetchChats = async () => {
+      try {
+        setLoadingChats(true);
+        const result = await callResource("mongo", {
+          action: "find",
+          collection: "chats",
+          query: { platform: "mycelia" },
+          options: {
+            sort: { lastMessageDate: -1 },
+          },
+        });
+        setChats(result);
+      } catch (err) {
+        console.error("Failed to fetch chats", err);
+      } finally {
+        setLoadingChats(false);
+      }
+    };
+
+    fetchChats();
+  }, []);
 
   const chat = useChat({
     id: chatId,
@@ -232,6 +308,13 @@ export default function ChatPage() {
         const newId = newChatIdRef.current;
         newChatIdRef.current = null;
         navigate(`/chat/${newId}`, { replace: true });
+        // Refresh chats list after creating new chat
+        callResource("mongo", {
+          action: "find",
+          collection: "chats",
+          query: { platform: "mycelia" },
+          options: { sort: { lastMessageDate: -1 } },
+        }).then(setChats);
       }
     },
     transport: new DefaultChatTransport<any>({
@@ -255,10 +338,12 @@ export default function ChatPage() {
     console.log("chatId changed", chatId);
     if (chatId) {
        fetchMessages(chatId).then(msgs => chat.setMessages(msgs));
+    } else {
+       chat.setMessages([]);
     }
   }, [chatId]);
 
-  const handleInputSubmit = (value: { text?: string; files?: any[] }, event: React.FormEvent<HTMLFormElement>) => {
+  const handleInputSubmit = (value: { text?: string; files?: any[] }, _event: React.FormEvent<HTMLFormElement>) => {
     if (value.text) {
       chat.sendMessage({ text: value.text });
       setInput("");
@@ -269,46 +354,109 @@ export default function ChatPage() {
     setInput(e.target.value);
   };
 
-  return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto">
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
-        {chat.messages.map((message) => (
-          <ChatMessage 
-            key={message.id} 
-            message={message} 
-            addToolApprovalResponse={chat.addToolApprovalResponse}
-          />
-        ))}
-      </div>
+  const handleNewChat = () => {
+    navigate('/chat');
+    chat.setMessages([]);
+  };
 
-      <div className="p-4">
-        <PromptInput
-          onSubmit={handleInputSubmit}
-          className="border rounded-lg bg-background shadow-sm"
-        >
-          <PromptInputTextarea
-            ref={textareaRef}
-            placeholder="Type a message..."
-            value={input}
-            onChange={handleTextareaChange}
-            disabled={chat.status === 'streaming' || chat.status === 'submitted'}
-          />
-          <PromptInputFooter>
-            <PromptInputTools>
-              <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger>
-                  <Paperclip className="size-4" />
-                </PromptInputActionMenuTrigger>
-                <PromptInputActionMenuContent>
-                  <PromptInputActionMenuItem>Upload File</PromptInputActionMenuItem>
-                </PromptInputActionMenuContent>
-              </PromptInputActionMenu>
-              <PromptInputSpeechButton textareaRef={textareaRef} />
-            </PromptInputTools>
-            <PromptInputSubmit disabled={!input?.trim() || chat.status === 'streaming' || chat.status === 'submitted'} />
-          </PromptInputFooter>
-        </PromptInput>
-      </div>
+  return (
+    <div className="h-[calc(100vh-6rem)] w-full overflow-hidden border rounded-lg shadow-sm bg-background">
+      <ResizablePanelGroup direction="horizontal">
+        {/* Chat List Sidebar */}
+        <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
+          <div className="h-full flex flex-col">
+            <div className="p-3 border-b bg-muted/40 flex items-center justify-between">
+              <h2 className="font-semibold text-sm">Conversations</h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleNewChat}
+                className="h-8 w-8 p-0"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+            <ScrollArea className="flex-1">
+              {loadingChats ? (
+                <div className="p-3 space-y-3">
+                  {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  {chats.map((c) => (
+                    <ChatListItemComponent
+                      key={c._id.toString()}
+                      chat={c}
+                      isSelected={chatId === c._id.toString()}
+                      onClick={() => navigate(`/chat/${c._id.toString()}`)}
+                    />
+                  ))}
+                  {chats.length === 0 && (
+                    <div className="p-6 text-center text-muted-foreground text-sm">
+                      No conversations yet
+                    </div>
+                  )}
+                </div>
+              )}
+            </ScrollArea>
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle />
+
+        {/* Chat Area */}
+        <ResizablePanel defaultSize={75}>
+          <div className="flex flex-col h-full">
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {chat.messages.length === 0 && !chatId ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  <div className="text-center">
+                    <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>Start a new conversation</p>
+                  </div>
+                </div>
+              ) : (
+                chat.messages.map((message) => (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    addToolApprovalResponse={chat.addToolApprovalResponse}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="p-4 border-t">
+              <PromptInput
+                onSubmit={handleInputSubmit}
+                className="border rounded-lg bg-background shadow-sm"
+              >
+                <PromptInputTextarea
+                  ref={textareaRef}
+                  placeholder="Type a message..."
+                  value={input}
+                  onChange={handleTextareaChange}
+                  disabled={chat.status === 'streaming' || chat.status === 'submitted'}
+                />
+                <PromptInputFooter>
+                  <PromptInputTools>
+                    <PromptInputActionMenu>
+                      <PromptInputActionMenuTrigger>
+                        <Paperclip className="size-4" />
+                      </PromptInputActionMenuTrigger>
+                      <PromptInputActionMenuContent>
+                        <PromptInputActionMenuItem>Upload File</PromptInputActionMenuItem>
+                      </PromptInputActionMenuContent>
+                    </PromptInputActionMenu>
+                    <PromptInputSpeechButton textareaRef={textareaRef} />
+                  </PromptInputTools>
+                  <PromptInputSubmit disabled={!input?.trim() || chat.status === 'streaming' || chat.status === 'submitted'} />
+                </PromptInputFooter>
+              </PromptInput>
+            </div>
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }
