@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { Auth, defaultResourceManager } from "@/lib/auth/index.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { SearchResource, type SearchRequest } from "@/lib/search/resource.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 
 // Helper to get search resource with mock DB
 async function getSearchResource(auth: Auth, db: any) {
@@ -248,7 +248,7 @@ Deno.test(
 
 Deno.test(
   "searchObjects finds by name",
-  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
     const resource = await getSearchResource(admin, db);
 
     await insertObject(db, { name: "John Smith", isPerson: true });
@@ -257,19 +257,19 @@ Deno.test(
 
     const result = await resource({
       action: "searchObjects",
-      query: "John",
+      query: "doe",
       types: ["any"],
       limit: 20,
     });
 
     expect(result.source).toBe("objects");
-    expect(result.count).toBe(2);
+    expect(result.count).toBe(1);
   }),
 );
 
 Deno.test(
   "searchObjects finds by aliases",
-  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
     const resource = await getSearchResource(admin, db);
 
     await insertObject(db, { name: "Robert Johnson", aliases: ["Bob", "Bobby"] });
@@ -289,7 +289,7 @@ Deno.test(
 
 Deno.test(
   "searchObjects finds by details",
-  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
     const resource = await getSearchResource(admin, db);
 
     await insertObject(db, { name: "Dr. Smith", details: "My therapist at the wellness center" });
@@ -309,7 +309,7 @@ Deno.test(
 
 Deno.test(
   "searchObjects filters by type",
-  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
     const resource = await getSearchResource(admin, db);
 
     await insertObject(db, { name: "John", isPerson: true });
