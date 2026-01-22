@@ -218,6 +218,27 @@ export default function JobsPage() {
     }
   };
 
+  const handleClearCompleted = async () => {
+    if (
+      !confirm(
+        "Are you sure you want to clear all completed, failed, and cancelled jobs? This will permanently delete them."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const result = await api.callResource("jobs", {
+        action: "clear_completed",
+      });
+      console.log(`Deleted ${result.deletedCount} jobs`);
+      refetch();
+    } catch (error) {
+      console.error("Failed to clear completed jobs:", error);
+      alert("Failed to clear completed jobs");
+    }
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -240,6 +261,14 @@ export default function JobsPage() {
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Cancel All
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleClearCompleted}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Clear Completed
           </Button>
           <Button
             variant="outline"
