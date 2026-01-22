@@ -31,7 +31,7 @@ import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
 import type { Message as MessengerMessage } from "@myceliasdk/messengers";
 import type { Chat } from "@myceliasdk/messengers.ts";
 import { cn } from "@/lib/utils";
-import { formatRelativeTime } from "@/lib/formatTime";
+import { useFormattedTime } from "@/lib/formatTime";
 
 async function fetchMessages(chatId: string) {
   const messages = await callResource("mongo", {
@@ -146,7 +146,7 @@ function ChatListItemComponent({
   const [editName, setEditName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const lastMessageDate = chat.lastMessageDate ? new Date(chat.lastMessageDate) : new Date(chat.createdAt);
-  const formattedTime = formatRelativeTime(lastMessageDate);
+  const formattedTime = useFormattedTime(lastMessageDate);
 
   const chatName = chat.name || chat.title || "New Chat";
 
