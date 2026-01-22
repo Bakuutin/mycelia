@@ -2,12 +2,12 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exchangeApiKeyForJWT } from "@/lib/auth";
-import { Loader2, CheckCircle2, XCircle, Sparkles, KeyRound } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type SetupStatus = "idle" | "connecting" | "creating" | "success" | "error" | "manual_entry" | "verifying";
+type SetupStatus = "idle" | "verifying" | "creating_new" | "success" | "error";
 
 interface SetupResponse {
   created: boolean;
@@ -18,12 +18,12 @@ interface SetupResponse {
 
 function getFriendlyAuthError(error: string | null): string {
   if (!error) return "Something went wrong. Please try again.";
-  
+
   switch (error) {
     case "invalid_client":
-      return "The Client ID or API Key you entered is incorrect. Please double-check your credentials and try again.";
+      return "The MYCELIA_CLIENT_ID or MYCELIA_TOKEN you entered is incorrect.";
     case "invalid_request":
-      return "Missing required fields. Please enter both Client ID and API Key.";
+      return "Missing required fields. Please enter both MYCELIA_CLIENT_ID and MYCELIA_TOKEN.";
     case "invalid_grant":
       return "Your authorization has expired. Please request new credentials.";
     default:
@@ -46,8 +46,8 @@ export default function SetupPage() {
   } = useSettingsStore();
 
   const [localEndpoint, setLocalEndpoint] = useState(apiEndpoint);
-  const [manualClientId, setManualClientId] = useState("");
-  const [manualClientSecret, setManualClientSecret] = useState("");
+  const [localClientId, setLocalClientId] = useState("");
+  const [localToken, setLocalToken] = useState("");
   const [status, setStatus] = useState<SetupStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -58,20 +58,53 @@ export default function SetupPage() {
     }
   }, [clientId, clientSecret, navigate]);
 
-  const runSetup = async () => {
-    setStatus("connecting");
+  const verifyAndSaveCredentials = async () => {
+    if (!localClientId || !localToken) {
+      setErrorMessage("Please enter both MYCELIA_CLIENT_ID and MYCELIA_TOKEN");
+      return;
+    }
+
+    setStatus("verifying");
+    setErrorMessage(null);
+    setApiEndpoint(localEndpoint);
 
     try {
-      // Save the endpoint first
-      setApiEndpoint(localEndpoint);
+      const result = await exchangeApiKeyForJWT(
+        localEndpoint,
+        localClientId,
+        localToken
+      );
 
-      setStatus("creating");
+      if (result.jwt) {
+        setClientId(localClientId);
+        setClientSecret(localToken);
+        setStatus("success");
 
+        setTimeout(() => {
+          navigate("/setup/inference", { replace: true });
+        }, 1500);
+      } else {
+        setErrorMessage(result.error || "Invalid credentials");
+        setStatus("error");
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Verification failed");
+      setStatus("error");
+    }
+  };
+
+  const createNewCredentials = async () => {
+    setStatus("creating_new");
+    setErrorMessage(null);
+    setApiEndpoint(localEndpoint);
+
+    try {
       const response = await fetch(`${localEndpoint}/setup`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
+        body: JSON.stringify({ create: true }),
       });
 
       if (!response.ok) {
@@ -83,62 +116,22 @@ export default function SetupPage() {
       if (data.created && data.clientId && data.clientSecret) {
         setClientId(data.clientId);
         setClientSecret(data.clientSecret);
-        setErrorMessage(null);
-        setStatus("success");
-
-        // Redirect to inference setup after a short delay
-        setTimeout(() => {
-          navigate("/setup/inference", { replace: true });
-        }, 1500);
-      } else if (!data.created) {
-        // API keys already exist, show manual entry form
-        setErrorMessage(null);
-        setStatus("manual_entry");
-      }
-    } catch (error) {
-      setStatus("error");
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to connect to server"
-      );
-    }
-  };
-
-  const [verifyError, setVerifyError] = useState<string | null>(null);
-
-  const verifyAndSaveCredentials = async () => {
-    if (!manualClientId || !manualClientSecret) {
-      return;
-    }
-
-    setStatus("verifying");
-
-    try {
-      const result = await exchangeApiKeyForJWT(
-        localEndpoint,
-        manualClientId,
-        manualClientSecret
-      );
-
-      if (result.jwt) {
-        // Credentials are valid, save them
-        setClientId(manualClientId);
-        setClientSecret(manualClientSecret);
-        setVerifyError(null);
         setStatus("success");
 
         setTimeout(() => {
           navigate("/setup/inference", { replace: true });
         }, 1500);
       } else {
-        // Invalid credentials
-        setVerifyError(result.error || "Invalid credentials");
-        setStatus("manual_entry");
+        setErrorMessage("Failed to create new credentials");
+        setStatus("error");
       }
     } catch (error) {
-      setVerifyError(error instanceof Error ? error.message : "Verification failed");
-      setStatus("manual_entry");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to create credentials");
+      setStatus("error");
     }
   };
+
+  const isLoading = status === "verifying" || status === "creating_new";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -162,19 +155,23 @@ export default function SetupPage() {
 
         {/* Setup Card */}
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20 shadow-2xl">
-          {(status === "idle" || status === "error" || status === "connecting" || status === "creating") && (
-            <form onSubmit={(e) => { e.preventDefault(); runSetup(); }}>
-              {status === "error" && (
+          {status === "success" ? (
+            <div className="text-center py-8">
+              <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4" />
+              <p className="text-white text-lg font-medium">
+                Connected!
+              </p>
+              <p className="text-slate-400 text-sm mt-2">
+                Continuing to next step...
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={(e) => { e.preventDefault(); verifyAndSaveCredentials(); }}>
+              {errorMessage && (
                 <div className="mb-6 p-4 rounded-lg bg-red-500/20 border border-red-500/30">
                   <div className="flex items-start gap-3">
                     <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-red-300 font-medium">Connection Failed</p>
-                      <p className="text-red-300/80 text-sm mt-1">{errorMessage}</p>
-                      <p className="text-slate-400 text-sm mt-2">
-                        The server might still be starting up. Give it a moment and try again.
-                      </p>
-                    </div>
+                    <p className="text-red-300 text-sm">{getFriendlyAuthError(errorMessage)}</p>
                   </div>
                 </div>
               )}
@@ -189,88 +186,39 @@ export default function SetupPage() {
                     type="url"
                     value={localEndpoint}
                     onChange={(e) => setLocalEndpoint(e.target.value)}
-                    placeholder="http://localhost:5173"
-                    disabled={status === "connecting" || status === "creating"}
+                    placeholder="https://localhost:4433"
+                    disabled={isLoading}
                     className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
                   />
                 </div>
-              </div>
 
-              <Button
-                type="submit"
-                disabled={status === "connecting" || status === "creating"}
-                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50 disabled:opacity-80"
-              >
-                {(status === "connecting" || status === "creating") ? (
-                  <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                      Connecting...
-                  </>
-                ) : status === "error" ? "Try Again" : "Start Setup"}
-              </Button>
-            </form>
-          )}
-
-          {status === "success" && (
-            <div className="text-center py-8">
-              <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-4" />
-              <p className="text-white text-lg font-medium">
-                API Key Created!
-              </p>
-              <p className="text-slate-400 text-sm mt-2">
-                Continuing to next step...
-              </p>
-            </div>
-          )}
-
-          {(status === "manual_entry" || status === "verifying") && (
-            <form onSubmit={(e) => { e.preventDefault(); verifyAndSaveCredentials(); }}>
-              <div className="text-center mb-6">
-                <KeyRound className="w-10 h-10 text-amber-400 mx-auto mb-3" />
-                <p className="text-white text-lg font-medium">
-                  Enter Your Credentials
-                </p>
-                <p className="text-slate-400 text-sm mt-1">
-                  API keys already exist on this server
-                </p>
-              </div>
-
-              {verifyError && (
-                <div className="mb-4 p-4 rounded-lg bg-red-500/20 border border-red-500/30">
-                  <div className="flex items-start gap-3">
-                    <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-                    <p className="text-red-300 text-sm">{getFriendlyAuthError(verifyError)}</p>
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-4 mb-6">
                 <div>
-                  <Label htmlFor="manualClientId" className="text-slate-200 mb-2 block">
-                    Client ID
+                  <Label htmlFor="clientId" className="text-slate-200 mb-2 block font-mono text-sm">
+                    MYCELIA_CLIENT_ID
                   </Label>
                   <Input
-                    id="manualClientId"
+                    id="clientId"
                     type="text"
-                    value={manualClientId}
-                    onChange={(e) => setManualClientId(e.target.value)}
-                    placeholder="Enter your client ID"
-                    disabled={status === "verifying"}
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
+                    value={localClientId}
+                    onChange={(e) => setLocalClientId(e.target.value)}
+                    placeholder="e.g. 695c4437205e4cbcef78776e"
+                    disabled={isLoading}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50 font-mono"
                   />
                 </div>
+
                 <div>
-                  <Label htmlFor="manualClientSecret" className="text-slate-200 mb-2 block">
-                    Client Secret (API Key)
+                  <Label htmlFor="token" className="text-slate-200 mb-2 block font-mono text-sm">
+                    MYCELIA_TOKEN
                   </Label>
                   <Input
-                    id="manualClientSecret"
+                    id="token"
                     type="password"
-                    value={manualClientSecret}
-                    onChange={(e) => setManualClientSecret(e.target.value)}
+                    value={localToken}
+                    onChange={(e) => setLocalToken(e.target.value)}
                     placeholder="mycelia_..."
-                    disabled={status === "verifying"}
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
+                    disabled={isLoading}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50 font-mono"
                   />
                 </div>
               </div>
@@ -278,7 +226,7 @@ export default function SetupPage() {
               <div className="space-y-3">
                 <Button
                   type="submit"
-                  disabled={!manualClientId || !manualClientSecret || status === "verifying"}
+                  disabled={!localClientId || !localToken || isLoading}
                   className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-6 text-lg rounded-xl shadow-lg shadow-purple-500/30 transition-all hover:shadow-purple-500/50 disabled:opacity-80"
                 >
                   {status === "verifying" ? (
@@ -286,26 +234,46 @@ export default function SetupPage() {
                       <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                       Verifying...
                     </>
-                  ) : "Verify & Continue"}
+                  ) : "Connect"}
                 </Button>
+
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-white/20" />
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-transparent text-slate-400">or</span>
+                  </div>
+                </div>
+
                 <Button
                   type="button"
-                  onClick={() => setStatus("idle")}
-                  disabled={status === "verifying"}
-                  variant="ghost"
-                  className="w-full text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-50"
+                  onClick={createNewCredentials}
+                  disabled={isLoading}
+                  variant="outline"
+                  className="w-full border-purple-500/50 text-purple-300 hover:bg-purple-500/20 hover:text-white py-5 rounded-xl disabled:opacity-50"
                 >
-                  Back
+                  {status === "creating_new" ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5 mr-2" />
+                      Generate New API Keys
+                    </>
+                  )}
                 </Button>
+
+                <p className="text-slate-500 text-xs text-center mt-4">
+                  Find these values in your <code className="text-slate-400">.env</code> file
+                </p>
               </div>
             </form>
           )}
-
         </div>
-
-        
       </div>
     </div>
   );
 }
-
