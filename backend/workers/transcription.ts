@@ -40,8 +40,13 @@ const capability: JobCapability = {
       // Accept "ready" sequences and "error" sequences (for retry)
       const isProcessable = sequence && (sequence.state === "ready" || sequence.state === "error");
       if (!isProcessable) {
+        console.log(`[transcription] Job ${job.id}: sequence not processable (state=${sequence?.state})`);
         return { status: "skipped", reason: "Sequence not found or not in processable state" };
       }
+
+      const seqStart = sequence.start ? new Date(sequence.start) : null;
+      const seqEnd = sequence.end ? new Date(sequence.end) : null;
+      console.log(`[transcription] Job ${job.id}: processing sequence ${sequence._id} (chunks ${sequence.fromIndex}-${sequence.toIndex}, time: ${seqStart?.toISOString() ?? 'N/A'} to ${seqEnd?.toISOString() ?? 'N/A'})`);
 
       await job.updateProgress({ stage: "processing", sequenceId: sequence._id.toString() });
 
@@ -159,6 +164,7 @@ const capability: JobCapability = {
         });
 
         await job.updateProgress({ stage: "completed" });
+        console.log(`[transcription] Job ${job.id}: sequence ${sequence._id} completed - created transcription from ${seqStart?.toISOString()} to ${transcriptionDoc.end.toISOString()}`);
         return { status: "success", result: "transcribed" };
 
       } catch (error) {

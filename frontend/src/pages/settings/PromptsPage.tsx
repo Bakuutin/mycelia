@@ -14,9 +14,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Settings, Trash2, FileText } from "lucide-react";
+import { Plus, Settings, Trash2, FileText, CheckCircle2, Bot, MessageSquare } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 
 const SERVER_CONFIG_ID = "000000000000000000000000";
+
+// Group prompt tasks by category for clearer UI
+const PROMPT_CATEGORIES = {
+  "Conversation Processing": {
+    icon: MessageSquare,
+    description: "Used by the conversation_extractor and summarization workers to process audio transcripts.",
+    tasks: ["segmentation_system", "segmentation_guidance", "summarization_system", "summarization_guidance"],
+  },
+  "Chat Assistant": {
+    icon: Bot,
+    description: "Used by the AI chat assistant when you interact with it.",
+    tasks: ["chat_system"],
+  },
+} as const;
 
 const PromptsPage = () => {
   const [config, setConfig] = useState<ServerConfig | null>(null);
@@ -141,51 +157,75 @@ const PromptsPage = () => {
       <div>
         <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
         <p className="text-muted-foreground">
-          Manage system prompts and assign them to tasks.
+          Configure which prompts are used by different parts of the system.
         </p>
       </div>
 
-      {/* Assignments Section */}
-      <Card className="p-6">
-        <h3 className="text-lg font-semibold mb-4">Prompt Assignments</h3>
-        <div className="space-y-4">
-          {Object.keys(zServerConfigPrompts.shape).map((taskKey) => {
-             const currentPromptId = config.prompts[taskKey as keyof ServerConfig["prompts"]];
-            return (
-            <div key={taskKey} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-              <div className="md:col-span-2">
-                <div className="font-medium">{PROMPT_TASK_LABELS[taskKey as keyof typeof PROMPT_TASK_LABELS] || taskKey}</div>
-                <div className="text-sm text-muted-foreground">
-                  {zServerConfigPrompts.shape[taskKey as keyof typeof zServerConfigPrompts.shape].description}
-                </div>
-              </div>
-              <div className="md:col-span-1">
-                <Select
-                  value={currentPromptId?.toString()}
-                  onValueChange={(val) => handlePromptAssignment(taskKey as keyof ServerConfig["prompts"], val)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a prompt" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {prompts.map((prompt) => (
-                      <SelectItem key={prompt._id.toString()} value={prompt._id.toString()}>
-                        {prompt.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+      {/* Assignments by Category */}
+      {Object.entries(PROMPT_CATEGORIES).map(([categoryName, category]) => {
+        const CategoryIcon = category.icon;
+        return (
+          <Card key={categoryName} className="p-6">
+            <div className="flex items-center gap-2 mb-2">
+              <CategoryIcon className="w-5 h-5 text-primary" />
+              <h3 className="text-lg font-semibold">{categoryName}</h3>
             </div>
-            );
-          })}
-        </div>
-      </Card>
+            <p className="text-sm text-muted-foreground mb-4">
+              {category.description}
+            </p>
+            <div className="space-y-4">
+              {category.tasks.map((taskKey) => {
+                const currentPromptId = config.prompts[taskKey as keyof ServerConfig["prompts"]];
+                const currentPrompt = prompts.find(p => p._id.toString() === currentPromptId?.toString());
+                return (
+                  <div key={taskKey} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start border-l-2 border-muted pl-4">
+                    <div className="md:col-span-2">
+                      <div className="font-medium text-sm">{PROMPT_TASK_LABELS[taskKey as keyof typeof PROMPT_TASK_LABELS] || taskKey}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {zServerConfigPrompts.shape[taskKey as keyof typeof zServerConfigPrompts.shape].description}
+                      </div>
+                    </div>
+                    <div className="md:col-span-1">
+                      <Select
+                        value={currentPromptId?.toString()}
+                        onValueChange={(val) => handlePromptAssignment(taskKey as keyof ServerConfig["prompts"], val)}
+                      >
+                        <SelectTrigger className={!currentPromptId ? "border-amber-500/50" : ""}>
+                          <SelectValue placeholder="⚠️ Not configured" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {prompts.map((prompt) => (
+                            <SelectItem key={prompt._id.toString()} value={prompt._id.toString()}>
+                              {prompt.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {currentPrompt && (
+                        <p className="text-xs text-muted-foreground mt-1 truncate" title={currentPrompt.text}>
+                          {currentPrompt.text.slice(0, 60)}...
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })}
 
       {/* Library Section */}
+      <Separator />
+      
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Prompt Library</h3>
+          <div>
+            <h3 className="text-lg font-semibold">Prompt Library</h3>
+            <p className="text-sm text-muted-foreground">
+              All available prompts. Edit or create new ones to customize system behavior.
+            </p>
+          </div>
           <Link to="/settings/prompts/new">
             <Button>
               <Plus className="w-4 h-4 mr-2" />
@@ -194,42 +234,69 @@ const PromptsPage = () => {
           </Link>
         </div>
         
-        <div className="grid gap-4">
-          {prompts.map((prompt) => (
-            <Card key={prompt._id.toString()} className="p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <FileText className="w-4 h-4 text-muted-foreground" />
-                    <h4 className="font-semibold truncate">{prompt.name}</h4>
+        <div className="grid gap-3">
+          {prompts.map((prompt) => {
+            // Find which tasks this prompt is assigned to
+            const assignedTasks = Object.entries(config.prompts)
+              .filter(([_, promptId]) => promptId?.toString() === prompt._id.toString())
+              .map(([taskKey]) => PROMPT_TASK_LABELS[taskKey as keyof typeof PROMPT_TASK_LABELS] || taskKey);
+            const isInUse = assignedTasks.length > 0;
+            
+            return (
+              <Card key={prompt._id.toString()} className={`p-3 ${isInUse ? "border-green-500/30 bg-green-500/5" : "opacity-60"}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {isInUse ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-medium text-sm truncate">{prompt.name}</h4>
+                        {isInUse && (
+                          <div className="flex gap-1 flex-wrap">
+                            {assignedTasks.map((task) => (
+                              <Badge key={task} variant="secondary" className="text-xs bg-green-500/10 text-green-700 dark:text-green-400">
+                                {task}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                        {!isInUse && (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            unused
+                          </Badge>
+                        )}
+                      </div>
+                      {prompt.description && (
+                        <p className="text-xs text-muted-foreground truncate">
+                          {prompt.description}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  {prompt.description && (
-                    <p className="text-sm text-muted-foreground mb-2 line-clamp-1">
-                      {prompt.description}
-                    </p>
-                  )}
-                  <div className="bg-muted p-2 rounded text-xs font-mono text-muted-foreground line-clamp-2">
-                    {prompt.text}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Link to={`/settings/prompts/${prompt._id.toString()}`}>
-                    <Button variant="outline" size="sm">
-                      <Settings className="w-4 h-4" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Link to={`/settings/prompts/${prompt._id.toString()}`}>
+                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                        <Settings className="w-4 h-4" />
+                      </Button>
+                    </Link>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-500/10"
+                      onClick={() => handleDeletePrompt(prompt._id.toString())}
+                      disabled={isInUse}
+                      title={isInUse ? "Unassign this prompt before deleting" : "Delete prompt"}
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </Button>
-                  </Link>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleDeletePrompt(prompt._id.toString())}
-                    className="text-red-500 hover:text-red-700"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  </div>
                 </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       </div>
     </div>

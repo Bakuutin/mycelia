@@ -9,7 +9,6 @@
   ],
   "compilerOptions": {
     "lib": ["DOM", "deno.window", "deno.ns"],
-    "types": ["vite/client"],
     "isolatedModules": true,
     "esModuleInterop": true,
     "jsx": "react",

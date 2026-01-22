@@ -13,11 +13,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, Pause, PlayCircle, PauseCircle } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -27,7 +27,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
 import type { JobInfo } from "@/types/jobs";
+
+type WorkerStatus = {
+  workers: Record<string, { paused: boolean }>;
+};
 
 type VadJobFormData = {
   limit: number;
@@ -58,7 +63,89 @@ export default function JobsPage() {
     },
   });
 
+  const { data: workerStatus, refetch: refetchWorkerStatus } = useQuery({
+    queryKey: ["worker-status"],
+    queryFn: async () => {
+      const response = await api.callResource("jobs", {
+        action: "get_worker_status",
+      });
+      return response as WorkerStatus;
+    },
+  });
+
+  const pauseWorkerMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      await api.callResource("jobs", {
+        action: "pause_worker",
+        workerType,
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
+  const resumeWorkerMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      await api.callResource("jobs", {
+        action: "resume_worker",
+        workerType,
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
+  const pauseAllMutation = useMutation({
+    mutationFn: async () => {
+      await api.callResource("jobs", {
+        action: "pause_all",
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
+  const resumeAllMutation = useMutation({
+    mutationFn: async () => {
+      await api.callResource("jobs", {
+        action: "resume_all",
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
   const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
+
+  const allPaused = useMemo(() => {
+    if (!workerStatus?.workers || allTypes.length === 0) return false;
+    return allTypes.every(type => workerStatus.workers[type]?.paused);
+  }, [workerStatus, allTypes]);
+
+  const somePaused = useMemo(() => {
+    if (!workerStatus?.workers) return false;
+    return Object.values(workerStatus.workers).some(w => w.paused);
+  }, [workerStatus]);
+
+  const handleToggleWorker = (workerType: string, currentlyPaused: boolean) => {
+    if (currentlyPaused) {
+      resumeWorkerMutation.mutate(workerType);
+    } else {
+      pauseWorkerMutation.mutate(workerType);
+    }
+  };
+
+  const handleToggleAll = () => {
+    if (allPaused) {
+      resumeAllMutation.mutate();
+    } else {
+      pauseAllMutation.mutate();
+    }
+  };
 
   const filteredJobs = useMemo(() => {
     let result = jobs;
@@ -255,6 +342,24 @@ export default function JobsPage() {
             </Link>
           </Button>
           <Button
+            variant={allPaused ? "default" : "secondary"}
+            size="sm"
+            onClick={handleToggleAll}
+            disabled={pauseAllMutation.isPending || resumeAllMutation.isPending}
+          >
+            {allPaused ? (
+              <>
+                <PlayCircle className="h-4 w-4 mr-2" />
+                Resume All
+              </>
+            ) : (
+              <>
+                <PauseCircle className="h-4 w-4 mr-2" />
+                Pause All
+              </>
+            )}
+          </Button>
+          <Button
             variant="destructive"
             size="sm"
             onClick={handleCancelAll}
@@ -283,6 +388,59 @@ export default function JobsPage() {
         </div>
       </div>
 
+      {/* Worker Status Card */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Worker Status</CardTitle>
+          <CardDescription>
+            Pause workers to stop them from processing new jobs. Active jobs will complete.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {isLoadingSchemas ? (
+              <div className="col-span-full text-muted-foreground text-sm">Loading workers...</div>
+            ) : (
+              allTypes.map((type) => {
+                const isPaused = workerStatus?.workers[type]?.paused ?? false;
+                const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
+                return (
+                  <div
+                    key={type}
+                    className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                      isPaused 
+                        ? "bg-amber-500/5 border-amber-500/20" 
+                        : "bg-green-500/5 border-green-500/20"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isPaused ? (
+                        <Pause className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                      ) : (
+                        <Play className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                      )}
+                      <span className="text-sm font-medium truncate" title={type}>
+                        {type}
+                      </span>
+                    </div>
+                    <Switch
+                      checked={!isPaused}
+                      onCheckedChange={() => handleToggleWorker(type, isPaused)}
+                      disabled={isMutating}
+                      className="shrink-0 ml-2"
+                    />
+                  </div>
+                );
+              })
+            )}
+          </div>
+          {somePaused && (
+            <p className="text-xs text-amber-600 mt-3">
+              ⚠️ Some workers are paused. New jobs of those types will queue but not process.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-4 mt-6">

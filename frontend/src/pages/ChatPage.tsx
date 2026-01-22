@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { useSearchParams, useParams, useNavigate } from "react-router-dom";
 import {
@@ -15,7 +15,8 @@ import {
   PromptInputSpeechButton,
 } from "@/components/ai-elements/prompt-input";
 import { Loader } from "@/components/ai-elements/loader";
-import { Paperclip } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Paperclip, Check, X, AlertTriangle } from "lucide-react";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
@@ -101,11 +102,99 @@ function toMessengerMessage(message: any): MessengerMessage {
   };
 }
 
-function ChatMessage({ message }: { message: any }) {
+// Format tool name for display (e.g., "objects_create" -> "Create Object")
+function formatToolName(toolName: string): string {
+  return toolName
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Component for tool approval requests
+function ToolApprovalRequest({ 
+  part, 
+  onApprove, 
+  onDeny 
+}: { 
+  part: any; 
+  onApprove: () => void; 
+  onDeny: () => void;
+}) {
+  const toolName = part.toolName || 'Unknown Tool';
+  const input = part.input || {};
+  
+  return (
+    <div className="flex w-full py-2">
+      <div className="flex gap-3 w-full">
+        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-amber-500/20">
+          <AlertTriangle className="w-4 h-4 text-amber-500" />
+        </div>
+        <div className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
+          <div className="font-medium text-amber-700 dark:text-amber-400 mb-2">
+            Confirmation Required: {formatToolName(toolName)}
+          </div>
+          <div className="text-sm text-muted-foreground mb-3">
+            The assistant wants to perform this action:
+          </div>
+          <pre className="text-xs bg-background/50 rounded p-2 mb-4 overflow-auto max-h-40">
+            {JSON.stringify(input, null, 2)}
+          </pre>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={onApprove}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              <Check className="w-4 h-4 mr-1" />
+              Approve
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onDeny}
+              className="border-red-500/50 text-red-500 hover:bg-red-500/10"
+            >
+              <X className="w-4 h-4 mr-1" />
+              Deny
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatMessage({ 
+  message, 
+  addToolApprovalResponse 
+}: { 
+  message: any;
+  addToolApprovalResponse?: (response: { id: string; approved: boolean }) => void;
+}) {
   const messengerMessage = useMemo(() => toMessengerMessage(message), [message]);
   const MessageComponent = myceliaPlatform.MessageComponent;
   
   const isStreaming = message.parts?.some((p: any) => p?.type === 'start-step');
+  
+  // Check for tool approval requests in parts
+  const approvalRequests = message.parts?.filter(
+    (p: any) => p?.state === 'approval-requested' && p?.approval?.id
+  ) || [];
+  
+  if (approvalRequests.length > 0 && addToolApprovalResponse) {
+    return (
+      <>
+        {approvalRequests.map((part: any) => (
+          <ToolApprovalRequest
+            key={part.toolCallId || part.approval.id}
+            part={part}
+            onApprove={() => addToolApprovalResponse({ id: part.approval.id, approved: true })}
+            onDeny={() => addToolApprovalResponse({ id: part.approval.id, approved: false })}
+          />
+        ))}
+      </>
+    );
+  }
   
   if (isStreaming) {
     return (
@@ -136,6 +225,8 @@ export default function ChatPage() {
 
   const chat = useChat({
     id: chatId,
+    // Auto-submit after tool approval responses
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
     onFinish: () => {
       if (!chatId && newChatIdRef.current) {
         const newId = newChatIdRef.current;
@@ -182,7 +273,11 @@ export default function ChatPage() {
     <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto">
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {chat.messages.map((message) => (
-          <ChatMessage key={message.id} message={message} />
+          <ChatMessage 
+            key={message.id} 
+            message={message} 
+            addToolApprovalResponse={chat.addToolApprovalResponse}
+          />
         ))}
       </div>
 

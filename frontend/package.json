@@ -70,7 +70,7 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.63.0",
     "react-infinite-scroll-component": "^6.1.1",
-    "react-leaflet": "^5.0.0",
+    "react-leaflet": "^4.2.1",
     "react-router-dom": "^7.4.0",
     "react-syntax-highlighter": "^16.0.0",
     "sonner": "^2.0.7",
