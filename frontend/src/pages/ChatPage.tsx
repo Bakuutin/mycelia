@@ -534,8 +534,7 @@ export default function ChatPage() {
                     </div>
                   )}
                   {/* Loading indicator while waiting for response */}
-                  {(pendingMessage || chat.status === 'submitted' || chat.status === 'streaming') &&
-                   !chat.messages.some((m: any) => m.role === 'assistant') && (
+                  {(chat.status === 'submitted' || chat.status === 'streaming') && (
                     <div className="flex w-full py-2">
                       <div className="flex gap-3">
                         <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">

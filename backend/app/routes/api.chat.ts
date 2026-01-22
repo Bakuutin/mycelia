@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
-import { streamText, stepCountIs, generateText } from "ai";
+import { streamText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
-import { authenticateOr401 } from "@/lib/auth/core.server.ts";
+import { authenticateOr401, type Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
@@ -12,26 +12,25 @@ import type { Db } from "mongodb";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
 
-// Generate a chat title from the first user message
 async function generateChatTitle(
   db: Db,
   chatId: string,
   userMessage: string,
-  inference: { baseUrl: string; apiKey: string }
+  auth: Auth
 ): Promise<void> {
   try {
-    const openai = createOpenAI({
-      baseURL: inference.baseUrl,
-      apiKey: inference.apiKey,
+    const llm = await auth.getResource("llm");
+
+    const completion = await llm({
+      action: "completions",
+      model: "small",
+      messages: [
+        { role: "system", content: "Generate a very short title (3-6 words) for a chat conversation based on the user's first message. Return ONLY the title, no quotes, no formatting, no explanation." },
+        { role: "user", content: userMessage },
+      ],
     });
 
-    const { text } = await generateText({
-      model: openai.chat("small"),
-      system: "Generate a very short title (3-6 words) for a chat conversation based on the user's first message. Return ONLY the title, no quotes, no formatting, no explanation.",
-      prompt: userMessage,
-    });
-
-    const title = text?.trim();
+    const title = completion.choices[0]?.message?.content?.trim();
     if (title && title.length > 0 && title.length < 100) {
       await db.collection("chats").updateOne(
         { _id: new ObjectId(chatId) },
@@ -41,7 +40,6 @@ async function generateChatTitle(
     }
   } catch (error) {
     console.error("[generateChatTitle] Failed to generate chat title:", error);
-    // Non-critical - don't throw, just log
   }
 }
 
@@ -324,7 +322,7 @@ export async function apiChatHandler(req: Request, res: Response) {
                 : "";
             if (userContent.trim()) {
               // Run title generation in background (don't await)
-              generateChatTitle(db, activeChatId!, userContent.trim(), inference);
+              void generateChatTitle(db, activeChatId!, userContent.trim(), auth);
             }
           }
         }

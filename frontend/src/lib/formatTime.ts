@@ -177,10 +177,6 @@ export function formatRelativeTime(date: Date): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-export function useRelativeTime(date: Date): string {
-  return formatRelativeTime(date);
-}
-
 export function formatTimeRangeDuration(start: Date, end: Date): string {
   const durationMs = end.getTime() - start.getTime();
   const timeFormat = useSettingsStore.getState().timeFormat;
