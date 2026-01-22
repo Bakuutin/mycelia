@@ -1,15 +1,47 @@
 import type { Request, Response } from "express";
 import { streamText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
-import { authenticateOr401 } from "@/lib/auth/core.server.ts";
+import { authenticateOr401, type Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { ObjectId } from "mongodb";
+import type { Db } from "mongodb";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
+
+async function generateChatTitle(
+  db: Db,
+  chatId: string,
+  userMessage: string,
+  auth: Auth
+): Promise<void> {
+  try {
+    const llm = await auth.getResource("llm");
+
+    const completion = await llm({
+      action: "completions",
+      model: "small",
+      messages: [
+        { role: "system", content: "Generate a very short title (3-6 words) for a chat conversation based on the user's first message. Return ONLY the title, no quotes, no formatting, no explanation." },
+        { role: "user", content: userMessage },
+      ],
+    });
+
+    const title = completion.choices[0]?.message?.content?.trim();
+    if (title && title.length > 0 && title.length < 100) {
+      await db.collection("chats").updateOne(
+        { _id: new ObjectId(chatId) },
+        { $set: { name: title, title: title } }
+      );
+      console.log(`[generateChatTitle] Generated title for chat ${chatId}: "${title}"`);
+    }
+  } catch (error) {
+    console.error("[generateChatTitle] Failed to generate chat title:", error);
+  }
+}
 
 // Tools that require user confirmation before execution
 // These can modify or delete user data
@@ -134,9 +166,10 @@ export async function apiChatHandler(req: Request, res: Response) {
 
   let activeChatId: string | undefined = chatId;
   let chatModel = "medium";
-
+  let isNewChat = false;
 
   if (!activeChatId) {
+    isNewChat = true;
     const newChatId = new ObjectId();
     const chatResult = await db.collection("chats").insertOne({
       _id: newChatId,
@@ -270,12 +303,29 @@ export async function apiChatHandler(req: Request, res: Response) {
         // Update chat timestamp
         await db.collection("chats").updateOne(
             { _id: new ObjectId(activeChatId) },
-            { 
-              $set: { 
+            {
+              $set: {
                 lastMessageDate: new Date()
-              } 
+              }
             }
         );
+
+        // Generate title for new chats after first assistant response
+        if (isNewChat) {
+          isNewChat = false; // Only generate once
+          const firstUserMessage = messages.find((m: any) => m.role === "user");
+          if (firstUserMessage) {
+            const userContent = typeof firstUserMessage.content === "string"
+              ? firstUserMessage.content
+              : Array.isArray(firstUserMessage.content)
+                ? firstUserMessage.content.map((p: any) => p.text || "").join(" ")
+                : "";
+            if (userContent.trim()) {
+              // Run title generation in background (don't await)
+              void generateChatTitle(db, activeChatId!, userContent.trim(), auth);
+            }
+          }
+        }
       },
     });
 

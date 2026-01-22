@@ -125,6 +125,58 @@ export function formatTimeRangeCount(count: number): string {
   return `${count} time range${count !== 1 ? "s" : ""}`;
 }
 
+/**
+ * Format a date as a user-friendly relative time string
+ * e.g., "just now", "5m ago", "2h ago", "yesterday", "Mon", "Jan 15"
+ */
+export function formatRelativeTime(date: Date): string {
+  if (!date || isNaN(date.getTime())) {
+    return "N/A";
+  }
+
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  // Just now (less than 1 minute)
+  if (diffSec < 60) {
+    return "just now";
+  }
+
+  // Minutes ago (less than 1 hour)
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+
+  // Hours ago (less than 24 hours)
+  if (diffHour < 24) {
+    return `${diffHour}h ago`;
+  }
+
+  // Yesterday
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return "yesterday";
+  }
+
+  // This week (show day name)
+  if (diffDay < 7) {
+    return date.toLocaleDateString("en-US", { weekday: "short" });
+  }
+
+  // This year (show month and day)
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+
+  // Older (show month, day, and year)
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 export function formatTimeRangeDuration(start: Date, end: Date): string {
   const durationMs = end.getTime() - start.getTime();
   const timeFormat = useSettingsStore.getState().timeFormat;

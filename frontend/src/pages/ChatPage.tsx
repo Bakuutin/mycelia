@@ -23,7 +23,8 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare } from "lucide-react";
+import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare, Pencil } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
@@ -119,24 +120,72 @@ function formatToolName(toolName: string): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// Chat list item component
+// Update chat name in database
+async function updateChatName(chatId: string, name: string) {
+  await callResource("mongo", {
+    action: "updateOne",
+    collection: "chats",
+    query: { _id: new ObjectId(chatId) },
+    update: { $set: { name, title: name } },
+  });
+}
+
+// Chat list item component with inline rename
 function ChatListItemComponent({
   chat,
   isSelected,
-  onClick
+  onClick,
+  onRename
 }: {
   chat: Chat;
   isSelected: boolean;
   onClick: () => void;
+  onRename: (chatId: string, newName: string) => void;
 }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const lastMessageDate = chat.lastMessageDate ? new Date(chat.lastMessageDate) : new Date(chat.createdAt);
   const formattedTime = useFormattedTime(lastMessageDate);
 
+  const chatName = chat.name || chat.title || "New Chat";
+
+  const handleStartEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditName(chatName);
+    setIsEditing(true);
+  };
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleSave = async () => {
+    const trimmedName = editName.trim();
+    if (trimmedName && trimmedName !== chatName) {
+      await updateChatName(chat._id.toString(), trimmedName);
+      onRename(chat._id.toString(), trimmedName);
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSave();
+    } else if (e.key === "Escape") {
+      setIsEditing(false);
+    }
+  };
+
   return (
-    <button
+    <div
       onClick={onClick}
       className={cn(
-        "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors",
+        "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors cursor-pointer group",
         isSelected && "bg-muted"
       )}
     >
@@ -146,16 +195,39 @@ function ChatListItemComponent({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-sm truncate">
-              {chat.name || chat.title || "New Chat"}
-            </span>
-            <span className="text-xs text-muted-foreground shrink-0">
-              {formattedTime}
-            </span>
+            {isEditing ? (
+              <Input
+                ref={inputRef}
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onBlur={handleSave}
+                onKeyDown={handleKeyDown}
+                onClick={(e) => e.stopPropagation()}
+                className="h-6 text-sm py-0 px-1"
+              />
+            ) : (
+              <>
+                <span className="font-medium text-sm truncate flex-1">
+                  {chatName}
+                </span>
+                <button
+                  onClick={handleStartEdit}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-opacity"
+                  title="Rename"
+                >
+                  <Pencil className="w-3 h-3 text-muted-foreground" />
+                </button>
+              </>
+            )}
+            {!isEditing && (
+              <span className="text-xs text-muted-foreground shrink-0">
+                {formattedTime}
+              </span>
+            )}
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -272,8 +344,10 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const newChatIdRef = useRef<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState(true);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
 
   // Fetch chats list
   useEffect(() => {
@@ -336,6 +410,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     console.log("chatId changed", chatId);
+    setPendingMessage(null);
     if (chatId) {
        fetchMessages(chatId).then(msgs => chat.setMessages(msgs));
     } else {
@@ -343,12 +418,25 @@ export default function ChatPage() {
     }
   }, [chatId]);
 
+  // Auto-scroll to bottom when messages change, status changes, or pending message appears
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chat.messages, chat.status, pendingMessage]);
+
   const handleInputSubmit = (value: { text?: string; files?: any[] }, _event: React.FormEvent<HTMLFormElement>) => {
     if (value.text) {
+      setPendingMessage(value.text);
       chat.sendMessage({ text: value.text });
       setInput("");
     }
   };
+
+  // Clear pending message when chat messages update with a user message
+  useEffect(() => {
+    if (pendingMessage && chat.messages.some(m => m.role === 'user')) {
+      setPendingMessage(null);
+    }
+  }, [chat.messages, pendingMessage]);
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -357,6 +445,15 @@ export default function ChatPage() {
   const handleNewChat = () => {
     navigate('/chat');
     chat.setMessages([]);
+    setPendingMessage(null);
+  };
+
+  const handleRenameChat = (chatId: string, newName: string) => {
+    setChats(prev => prev.map(c =>
+      c._id.toString() === chatId
+        ? { ...c, name: newName, title: newName }
+        : c
+    ));
   };
 
   return (
@@ -389,6 +486,7 @@ export default function ChatPage() {
                       chat={c}
                       isSelected={chatId === c._id.toString()}
                       onClick={() => navigate(`/chat/${c._id.toString()}`)}
+                      onRename={handleRenameChat}
                     />
                   ))}
                   {chats.length === 0 && (
@@ -408,7 +506,7 @@ export default function ChatPage() {
         <ResizablePanel defaultSize={75}>
           <div className="flex flex-col h-full">
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {chat.messages.length === 0 && !chatId ? (
+              {chat.messages.length === 0 && !pendingMessage && chat.status === 'ready' ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
                   <div className="text-center">
                     <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
@@ -416,13 +514,41 @@ export default function ChatPage() {
                   </div>
                 </div>
               ) : (
-                chat.messages.map((message) => (
-                  <ChatMessage
-                    key={message.id}
-                    message={message}
-                    addToolApprovalResponse={chat.addToolApprovalResponse}
-                  />
-                ))
+                <>
+                  {chat.messages.map((message) => (
+                    <ChatMessage
+                      key={message.id}
+                      message={message}
+                      addToolApprovalResponse={chat.addToolApprovalResponse}
+                    />
+                  ))}
+                  {/* Show pending message immediately (optimistic UI) */}
+                  {pendingMessage && !chat.messages.some(m => m.role === 'user' &&
+                    (typeof m.content === 'string' ? m.content : '') === pendingMessage) && (
+                    <div className="flex w-full py-2 justify-end">
+                      <div className="flex gap-3 max-w-[80%]">
+                        <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2">
+                          <p className="text-sm whitespace-pre-wrap">{pendingMessage}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Loading indicator while waiting for response */}
+                  {(chat.status === 'submitted' || chat.status === 'streaming') && (
+                    <div className="flex w-full py-2">
+                      <div className="flex gap-3">
+                        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
+                          <span className="text-base" role="img" aria-label="Mycelia">🍄</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Loader />
+                          <span className="text-sm text-muted-foreground">Thinking...</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
+                </>
               )}
             </div>
 

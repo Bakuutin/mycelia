@@ -473,8 +473,8 @@ export default function JobsPage() {
                   <div
                     key={type}
                     className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
-                      isPaused 
-                        ? "bg-amber-500/5 border-amber-500/20" 
+                      isPaused
+                        ? "bg-amber-500/5 border-amber-500/20"
                         : "bg-green-500/5 border-green-500/20"
                     }`}
                   >
@@ -753,4 +753,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
