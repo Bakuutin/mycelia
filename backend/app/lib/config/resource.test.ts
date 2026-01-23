@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getConfigResource as getConfigResourceFn } from "@/lib/config/resource.server.ts";
+import { ServerConfig } from "@myceliasdk/config.ts";
 
 async function getConfigResource(auth: Auth) {
   return getConfigResourceFn(auth);
@@ -22,7 +23,7 @@ Deno.test(
 
     const result = await configResource({
       action: "get",
-    });
+    }) as ServerConfig;
 
     // When DB is empty, config.yml values take precedence over schema defaults
     // config.yml has enable_experimental_processing: true
@@ -38,7 +39,7 @@ Deno.test(
 
     const newConfig = {
       inference: {
-        baseUrl: "https://api.openai.com",
+        baseUrl: "https://api.bigbrother.com",
         apiKey: "sk-test",
       },
       features: {
@@ -56,10 +57,10 @@ Deno.test(
 
     const result = await configResource({
       action: "get",
-    });
+    }) as ServerConfig;
 
     expect(result.features.enable_experimental_processing).toBe(true);
-    expect(result.inference.baseUrl).toBe("https://api.openai.com");
+    expect(result.inference?.baseUrl).toBe("https://api.bigbrother.com");
   }),
 );
 
@@ -94,16 +95,16 @@ Deno.test(
       action: "patch",
       path: "inference",
       updates: {
-        baseUrl: "https://api.openai.com",
+        baseUrl: "https://api.bigbrother.com",
         apiKey: "sk-patch",
       },
     });
 
     const result = await configResource({
       action: "get",
-    });
+    }) as ServerConfig;
 
-    expect(result.inference.apiKey).toBe("sk-patch");
-    expect(result.inference.baseUrl).toBe("https://api.openai.com");
+    expect(result.inference?.apiKey).toBe("sk-patch");
+    expect(result.inference?.baseUrl).toBe("https://api.bigbrother.com");
   }),
 );

@@ -231,23 +231,9 @@ export async function apiChatHandler(req: Request, res: Response) {
     toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
   });
 
-  // Fetch System Prompt
-  let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
+  const systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
 
-  // throw new Error("Not implemented 112");
   const config = await getServerConfig();
-  try {
-
-    if (config.prompts.chat_system) {
-        const promptDoc = await db.collection("prompts").findOne({ _id: config.prompts.chat_system });
-        if (promptDoc && promptDoc.text) {
-            systemPrompt = promptDoc.text;
-        }
-    }
-  } catch (e) {
-      console.warn("Failed to load system prompt from config, using default.", e);
-  }
-
   const inference = config.inference;
   if (!inference?.baseUrl || !inference?.apiKey) {
     res.status(500).json({ error: "Inference provider not configured. Please configure it in server settings." });
