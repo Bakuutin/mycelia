@@ -19,7 +19,6 @@ import {
   Plus,
   Trash2,
   Info,
-  Circle,
 } from "lucide-react";
 import {
   Tooltip,
@@ -462,11 +461,11 @@ const WorkerDetailPage = () => {
             <h3 className="text-lg font-semibold">Configuration Fields</h3>
             <div className="flex items-center gap-4 text-xs text-muted-foreground">
               <div className="flex items-center gap-1">
-                <Circle className="w-3 h-3 fill-blue-500 text-blue-500" />
+                <span>📋</span>
                 <span>Using default</span>
               </div>
               <div className="flex items-center gap-1">
-                <Circle className="w-3 h-3 fill-amber-500 text-amber-500" />
+                <span>✏️</span>
                 <span>Custom value</span>
               </div>
             </div>
@@ -488,13 +487,9 @@ const WorkerDetailPage = () => {
                   <div key={name} className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Circle
-                          className={`w-3 h-3 ${
-                            isUsingDefault
-                              ? "fill-blue-500 text-blue-500"
-                              : "fill-amber-500 text-amber-500"
-                          }`}
-                        />
+                        <span title={isUsingDefault ? "Using schema default" : "Custom override"}>
+                          {isUsingDefault ? "📋" : "✏️"}
+                        </span>
                         <Label htmlFor={name} className="text-sm font-medium">
                           {name}
                         </Label>
@@ -584,7 +579,7 @@ const WorkerDetailPage = () => {
                         key={key}
                         className="p-3 grid grid-cols-[auto_auto_1fr_auto] gap-3 items-center"
                       >
-                        <Circle className="w-3 h-3 fill-amber-500 text-amber-500" />
+                        <span title="Custom field">✏️</span>
                         <div className="font-mono text-sm font-medium">{key}</div>
                         {isBoolean ? (
                           <select

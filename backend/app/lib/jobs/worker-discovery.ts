@@ -19,6 +19,7 @@ export class WorkerDiscoveryManager {
     name: string,
     inputSchema: any,
     outputSchema: any,
+    policies: any[] = [],
   ): Promise<void> {
     const auth = await getServerAuth();
     const mongo = await getMongoResource(auth);
@@ -34,6 +35,7 @@ export class WorkerDiscoveryManager {
           discovered: true,
           inputSchema,
           outputSchema,
+          policies,
           lastSeen: now,
           updatedAt: now,
         },
@@ -137,6 +139,7 @@ export class WorkerDiscoveryManager {
           workerName,
           inputSchema,
           schema.output || {},
+          schema.policies || [],
         );
       }
     }
