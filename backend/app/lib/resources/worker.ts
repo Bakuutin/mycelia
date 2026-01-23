@@ -7,8 +7,7 @@ import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { getConfigResource } from "@/lib/config/resource.server.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -501,18 +500,12 @@ export class JobsResource
     config: { paused: boolean },
     auth: Auth
   ) {
-    const mongo = await getMongoResource(auth);
+    const configResource = await getConfigResource(auth);
     
-    await mongo({
-      action: "updateOne",
-      collection: "configs",
-      query: { _id: SERVER_CONFIG_ID },
-      update: {
-        $set: {
-          [`workers.${workerType}`]: config,
-          updatedAt: new Date(),
-        },
-      },
+    await configResource({
+      action: "patch",
+      path: `workers.${workerType}`,
+      updates: config,
     });
   }
 

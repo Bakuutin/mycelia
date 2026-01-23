@@ -4,11 +4,10 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
-import { zServerConfig } from "@myceliasdk/config.ts";
-import { ObjectId, Binary } from "bson";
+import type { ServerConfig } from "@myceliasdk/config.ts";
+import { Binary } from "bson";
 import { Binary as MongoBinary } from "mongodb";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { getConfigResource } from "@/lib/config/resource.server.ts";
 
 const transcriptionRequestSchema = z.object({
   action: z.literal("transcribe"),
@@ -33,13 +32,10 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     response: z.any() as z.ZodType<TranscriptionResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
-    const rootDb = await getRootDB();
-    const configDoc = await rootDb.collection("configs").findOne({ _id: SERVER_CONFIG_ID });
-    if (!configDoc) {
-      return null;
-    }
-    const config = zServerConfig.parse(configDoc);
+  async getInferenceProvider(auth: Auth): Promise<{ baseUrl: string; apiKey: string } | null> {
+    const configResource = await getConfigResource(auth);
+    const config = await configResource({ action: "get" }) as ServerConfig;
+
     const inference = config.inference;
     if (!inference?.baseUrl || !inference?.apiKey) {
       return null;
@@ -61,7 +57,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     try {
       switch (input.action) {
         case "transcribe": {
-          const provider = await this.getInferenceProvider();
+          const provider = await this.getInferenceProvider(auth);
           if (!provider) {
             span.setStatus({
               code: 2,

@@ -1,6 +1,5 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
-import { ObjectId } from "mongodb";
 import type { JobData, JobResult } from "@/lib/jobs/types.ts";
 import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
@@ -8,8 +7,6 @@ import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import type { MongoRequest, MongoResponse } from "@/lib/mongo/core.server.ts";
 import type { ObjectsRequest, ObjectsResponse } from "@/lib/objects/resource.server.ts";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 /** Job type name */
 export const name = "summarization";
@@ -39,33 +36,6 @@ function getSilenceMessage(gapMs: number): string {
   return `[Silence ${duration}m]`;
 }
 
-async function getSystemPromptFromConfig(jwt: string, myceliaUrl: string): Promise<string | null> {
-  try {
-    // Load server config
-    const config = await callResource<MongoRequest, MongoResponse>("mongo", {
-      action: "findOne",
-      collection: "configs",
-      query: { _id: SERVER_CONFIG_ID },
-    }, { jwt, myceliaUrl });
-
-    if (!config?.prompts?.summarization_system) {
-      return null;
-    }
-
-    // Load the prompt document
-    const promptId = config.prompts.summarization_system;
-    const prompt = await callResource<MongoRequest, MongoResponse>("mongo", {
-      action: "findOne",
-      collection: "prompts",
-      query: { _id: promptId },
-    }, { jwt, myceliaUrl });
-
-    return prompt?.text || null;
-  } catch (err) {
-    console.warn(`[summarization] Failed to load system prompt from config:`, err);
-    return null;
-  }
-}
 
 /** Process the summarization job */
 export async function use(job: Job<JobData>): Promise<JobResult> {
@@ -123,31 +93,10 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
   const modelAlias = userModel || jobData.model;
   
-  // Load system prompt with priority: explicit job param > job data (includes default overrides) > legacy config > fallback
-  let systemPrompt = userPrompt;
-  let promptSource = "explicit";
-  
-  if (!systemPrompt) {
-    systemPrompt = jobData.prompt;
-    promptSource = "job_data";
-    
-    // If prompt is the default value, try legacy config
-    const defaultPrompt = "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.";
-    
-    if (systemPrompt === defaultPrompt) {
-      // Try legacy config for backward compatibility
-      const configPrompt = await getSystemPromptFromConfig(jwt, myceliaUrl);
-      if (configPrompt) {
-        systemPrompt = configPrompt;
-        promptSource = "legacy_config";
-      } else {
-        promptSource = "schema_default";
-      }
-    } else {
-      promptSource = "default_override";
-    }
-  }
-  
+  // Load system prompt with priority: explicit job param > job data (includes default overrides) > schema default
+  const systemPrompt = userPrompt || jobData.prompt;
+  const promptSource = userPrompt ? "explicit" : "job_data";
+
   console.log(`[summarization] Job ${job.id}: using system prompt from ${promptSource}`);
 
   console.log(`[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`);
@@ -252,8 +201,6 @@ const capability: JobCapability = {
   })),
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
-    { resource: "db/configs", action: "read", effect: "allow" },
-    { resource: "db/prompts", action: "read", effect: "allow" },
     { resource: "llm/chat", action: "completions", effect: "allow" },
     { resource: "objects", action: "*", effect: "allow" },
   ],

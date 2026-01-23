@@ -22,7 +22,13 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
-import type { Prompt } from "@/types/config";
+
+interface Prompt {
+  _id: { toString(): string };
+  name: string;
+  text: string;
+  description?: string;
+}
 
 interface SummarizeDialogProps {
   open: boolean;

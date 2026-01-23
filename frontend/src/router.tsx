@@ -10,10 +10,9 @@ import InferenceSettingsPage from "./pages/settings/InferenceSettingsPage";
 import APIKeysPage from "./pages/settings/APIKeysPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
-import PromptsPage from "./pages/settings/PromptsPage";
-import PromptDetailPage from "./pages/settings/PromptDetailPage";
 import WorkersPage from "./pages/settings/WorkersPage";
 import WorkerDetailPage from "./pages/settings/WorkerDetailPage";
+import ConfigSettingsPage from "./pages/settings/ConfigSettingsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
 import DiarizationDetailPage from "./pages/DiarizationDetailPage";
@@ -157,24 +156,16 @@ export const router = createBrowserRouter([
             element: <APIKeysPage />,
           },
           {
+            path: "config",
+            element: <ConfigSettingsPage />,
+          },
+          {
             path: "access-log",
             element: <AccessLogPage />,
           },
           {
             path: "feature-flags",
             element: <FeatureFlagsPage />,
-          },
-          {
-            path: "prompts",
-            element: <PromptsPage />,
-          },
-          {
-            path: "prompts/new",
-            element: <PromptDetailPage />,
-          },
-          {
-            path: "prompts/:id",
-            element: <PromptDetailPage />,
           },
           {
             path: "workers",

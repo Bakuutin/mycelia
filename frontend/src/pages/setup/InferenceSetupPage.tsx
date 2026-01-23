@@ -9,8 +9,6 @@ import { Label } from "@/components/ui/label";
 
 type SetupStatus = "checking" | "idle" | "saving" | "success" | "error";
 
-const SERVER_CONFIG_ID = "000000000000000000000000";
-
 export default function InferenceSetupPage() {
   const navigate = useNavigate();
   const { clientId, clientSecret } = useSettingsStore();
@@ -30,10 +28,8 @@ export default function InferenceSetupPage() {
 
     const checkExistingConfig = async () => {
       try {
-        const config = await callResource("mongo", {
-          action: "findOne",
-          collection: "configs",
-          query: { _id: { $oid: SERVER_CONFIG_ID } },
+        const config = await callResource("config", {
+          action: "get",
         });
 
         // If inference is already configured with both baseUrl and apiKey, skip this step
@@ -65,42 +61,14 @@ export default function InferenceSetupPage() {
     setStatus("saving");
 
     try {
-      // First ensure the config document exists
-      const existing = await callResource("mongo", {
-        action: "findOne",
-        collection: "configs",
-        query: { _id: { $oid: SERVER_CONFIG_ID } },
+      await callResource("config", {
+        action: "patch",
+        path: "inference",
+        updates: {
+          baseUrl,
+          apiKey,
+        },
       });
-
-      if (!existing) {
-        // Create the config document if it doesn't exist
-        await callResource("mongo", {
-          action: "insertOne",
-          collection: "configs",
-          doc: {
-            _id: { $oid: SERVER_CONFIG_ID },
-            inference: {
-              baseUrl,
-              apiKey,
-            },
-          },
-        });
-      } else {
-        // Update the existing config
-        await callResource("mongo", {
-          action: "updateOne",
-          collection: "configs",
-          query: { _id: { $oid: SERVER_CONFIG_ID } },
-          update: {
-            $set: {
-              inference: {
-                baseUrl,
-                apiKey,
-              },
-            },
-          },
-        });
-      }
 
       setErrorMessage(null);
       setStatus("success");

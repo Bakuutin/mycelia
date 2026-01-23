@@ -14,16 +14,8 @@ import {
   Play,
   Settings,
   RefreshCw,
-  Shield,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
-
-interface Policy {
-  resource: string;
-  action: string;
-  effect: "allow" | "deny";
-}
+import type { WorkerPolicy } from "@/types/jobs";
 
 interface WorkerEntry {
   _id: string;
@@ -31,7 +23,7 @@ interface WorkerEntry {
   discovered: boolean;
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
-  policies?: Policy[];
+  policies?: WorkerPolicy[];
   defaultOverrides?: Record<string, unknown>;
   lastSeen: string;
   createdAt: string;
@@ -48,7 +40,6 @@ const WorkersPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
-  const [expandedPolicies, setExpandedPolicies] = useState<Set<string>>(new Set());
 
   const fetchData = async () => {
     try {
@@ -98,18 +89,6 @@ const WorkersPage = () => {
 
   const getOverrideCount = (worker: WorkerEntry): number => {
     return Object.keys(worker.defaultOverrides || {}).length;
-  };
-
-  const togglePoliciesExpanded = (workerName: string) => {
-    setExpandedPolicies((prev) => {
-      const next = new Set(prev);
-      if (next.has(workerName)) {
-        next.delete(workerName);
-      } else {
-        next.add(workerName);
-      }
-      return next;
-    });
   };
 
   const formatLastSeen = (lastSeen: string): string => {
@@ -204,9 +183,6 @@ const WorkersPage = () => {
               const overrideCount = getOverrideCount(worker);
               const isToggling = togglingWorker === worker.name;
 
-              const policies = worker.policies || [];
-              const isPoliciesExpanded = expandedPolicies.has(worker.name);
-
               return (
                 <Card
                   key={worker._id}
@@ -253,22 +229,6 @@ const WorkersPage = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {policies.length > 0 && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => togglePoliciesExpanded(worker.name)}
-                          title="View permissions"
-                        >
-                          <Shield className="w-4 h-4 mr-1" />
-                          <span className="text-xs">{policies.length}</span>
-                          {isPoliciesExpanded ? (
-                            <ChevronUp className="w-3 h-3 ml-1" />
-                          ) : (
-                            <ChevronDown className="w-3 h-3 ml-1" />
-                          )}
-                        </Button>
-                      )}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -292,30 +252,6 @@ const WorkersPage = () => {
                       </Link>
                     </div>
                   </div>
-                  
-                  {/* Policies Section */}
-                  {isPoliciesExpanded && policies.length > 0 && (
-                    <div className="mt-4 pt-4 border-t border-border/50">
-                      <div className="flex items-center gap-2 mb-2 text-xs font-medium text-muted-foreground">
-                        <Shield className="w-3 h-3" />
-                        Permissions
-                      </div>
-                      <div className="grid gap-1">
-                        {policies.map((policy, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-center gap-2 text-xs font-mono bg-muted/30 px-2 py-1 rounded"
-                          >
-                            <span className={policy.effect === "allow" ? "text-green-600" : "text-red-600"}>
-                              {policy.effect === "allow" ? "✓" : "✗"}
-                            </span>
-                            <span className="text-muted-foreground">{policy.resource}</span>
-                            <span className="text-foreground">{policy.action}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </Card>
               );
             })}

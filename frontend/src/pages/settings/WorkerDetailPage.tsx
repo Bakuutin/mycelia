@@ -10,6 +10,12 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   ArrowLeft,
   Save,
   RotateCcw,
@@ -19,13 +25,9 @@ import {
   Plus,
   Trash2,
   Info,
+  Shield,
 } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import type { WorkerPolicy } from "@/types/jobs";
 
 interface SchemaProperty {
   type?: string;
@@ -44,8 +46,11 @@ interface WorkerEntry {
     required?: string[];
   };
   outputSchema: Record<string, unknown>;
+  policies?: WorkerPolicy[];
   defaultOverrides?: Record<string, unknown>;
   lastSeen: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface WorkerDefaults {
@@ -754,6 +759,40 @@ const WorkerDetailPage = () => {
             </div>
           </div>
         </Card>
+
+        {/* Policies Section */}
+        {worker.policies && worker.policies.length > 0 && (
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-muted-foreground" />
+                <h3 className="text-lg font-semibold">Worker Policies</h3>
+                <Badge variant="secondary" className="text-xs">
+                  {worker.policies.length}
+                </Badge>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {worker.policies.map((policy, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-2 p-2 rounded-md bg-muted/50 text-sm font-mono"
+                >
+                  <Badge
+                    variant={policy.effect === "allow" ? "default" : "destructive"}
+                    className="text-xs"
+                  >
+                    {policy.effect}
+                  </Badge>
+                  <span className="text-muted-foreground">{policy.action}</span>
+                  <span className="text-muted-foreground">on</span>
+                  <span>{policy.resource}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
     </TooltipProvider>
   );

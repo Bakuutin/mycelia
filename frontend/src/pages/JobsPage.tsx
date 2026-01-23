@@ -484,9 +484,9 @@ export default function JobsPage() {
                       ) : (
                         <Play className="h-3.5 w-3.5 text-green-500 shrink-0" />
                       )}
-                      <span className="text-sm font-medium truncate" title={type}>
+                      <Link to={`/settings/workers/${type}`} className="text-sm font-medium truncate hover:underline" title={type}>
                         {type}
-                      </span>
+                      </Link>
                     </div>
                     <Switch
                       checked={!isPaused}

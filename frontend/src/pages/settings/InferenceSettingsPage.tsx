@@ -9,7 +9,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
-const SERVER_CONFIG_ID = "000000000000000000000000";
+// Using new ConfigResource instead of direct mongo access
 
 const inferenceConfigSchema = z.object({
   baseUrl: z.string().url("Must be a valid URL"),
@@ -36,16 +36,15 @@ const InferenceSettingsPage = () => {
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const configResult = await callResource("mongo", {
-          action: "findOne",
-          collection: "configs",
-          query: { _id: { $oid: SERVER_CONFIG_ID } },
+        const configResult = await callResource("config", {
+          action: "get",
+          path: "inference",
         });
 
-        if (configResult?.inference) {
+        if (configResult) {
           form.reset({
-            baseUrl: configResult.inference.baseUrl || "https://inference.mycelia.tech",
-            apiKey: configResult.inference.apiKey || "",
+            baseUrl: configResult.baseUrl || "https://inference.mycelia.tech",
+            apiKey: configResult.apiKey || "",
           });
         }
       } catch (err) {
@@ -65,17 +64,12 @@ const InferenceSettingsPage = () => {
       setSaving(true);
       setError(null);
 
-      await callResource("mongo", {
-        action: "updateOne",
-        collection: "configs",
-        query: { _id: { $oid: SERVER_CONFIG_ID } },
-        update: {
-          $set: {
-            inference: {
-              baseUrl: data.baseUrl,
-              apiKey: data.apiKey,
-            },
-          },
+      await callResource("config", {
+        action: "patch",
+        path: "inference",
+        updates: {
+          baseUrl: data.baseUrl,
+          apiKey: data.apiKey,
         },
       });
     } catch (err) {

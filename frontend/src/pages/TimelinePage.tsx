@@ -10,7 +10,6 @@ import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useTimeline } from "@/hooks/useTimeline";
 // import { useTimelineRecalc } from "@/hooks/useTimelineRecalc";
 import type { Model } from "@/types/llm";
-import type { Prompt } from "@/types/config";
 import {
   Tooltip,
   TooltipContent,

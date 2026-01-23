@@ -32,11 +32,12 @@ const SettingsLayout = () => {
       icon: Key,
       description: "Manage API keys and policies",
     },
+
     {
-      name: "Prompts",
-      path: "/settings/prompts",
-      icon: FileText,
-      description: "Manage system prompts",
+      name: "Configuration",
+      path: "/settings/config",
+      icon: Settings,
+      description: "Manage server configuration",
     },
     {
       name: "Workers",
