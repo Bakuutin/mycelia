@@ -118,9 +118,13 @@ class PcmWebSocketSession {
       const errorMessage = error instanceof Error
         ? error.message
         : "Failed to create source file";
-      this.ws.send(
-        JSON.stringify({ type: "error", message: errorMessage }) + "\n",
-      );
+      try {
+        this.ws.send(
+          JSON.stringify({ type: "error", message: errorMessage }) + "\n",
+        );
+      } catch (sendError) {
+        // Ignore errors when sending (client might have disconnected)
+      }
     }
   }
 
@@ -346,7 +350,11 @@ function parseWyomingHeader(line: string): WyomingHeader | null {
 }
 
 function handlePing(ws: WebSocket | any): void {
-  ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  try {
+    ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  } catch (error) {
+    // Ignore errors when sending (client might have disconnected)
+  }
 }
 
 async function createRequestFromUpgrade(
@@ -386,7 +394,11 @@ export async function handlePcmWebSocket(
   const auth = await authenticate(request);
   
   if (!auth) {
-    ws.close(1008, "Unauthorized: Token is missing or invalid");
+    try {
+      ws.close(1008, "Unauthorized: Token is missing or invalid");
+    } catch (closeError) {
+      // Ignore errors when closing
+    }
     throw new Error("Unauthorized");
   }
   
