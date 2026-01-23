@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { callResource } from "@/lib/api";
-import type { Object } from "@/types/objects";
+import type { Object as ObjectModel } from "@/types/objects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +10,8 @@ import {
   ArrowRight,
   Calendar,
   CalendarClock,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Handshake,
   Package,
@@ -28,6 +30,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 
 function escapeRegex(source: string) {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -77,7 +84,7 @@ function formatDate(date: Date | string | undefined) {
 }
 
 function getObjectType(
-  object: Object,
+  object: ObjectModel,
 ): "person" | "event" | "relationship" | "promise" | "other" {
   if (object.isPromise) return "promise";
   if (object.isRelationship) return "relationship";
@@ -120,7 +127,7 @@ const TYPE_CONFIG = {
 };
 
 interface ObjectCardProps {
-  object: Object & { subjectObject?: Object; objectObject?: Object };
+  object: ObjectModel & { subjectObject?: ObjectModel; objectObject?: ObjectModel };
   searchQuery: string;
   showType?: boolean;
 }
@@ -264,14 +271,44 @@ function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonPr
   );
 }
 
+type ObjectWithRelations = ObjectModel & { subjectObject?: ObjectModel; objectObject?: ObjectModel };
+
+const ITEMS_PER_TYPE = 20; // Initial items per type
+const LOAD_MORE_COUNT = 20; // Items to load when clicking "load more"
+
 const ObjectsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [objects, setObjects] = useState<
-    (Object & { subjectObject?: Object; objectObject?: Object })[]
-  >([]);
+  // Objects grouped by type
+  const [objectsByType, setObjectsByType] = useState<Record<ObjectType, ObjectWithRelations[]>>({
+    person: [],
+    event: [],
+    relationship: [],
+    promise: [],
+    other: [],
+  });
   const [loading, setLoading] = useState(true);
+  const [loadingTypes, setLoadingTypes] = useState<Set<ObjectType>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  // Total counts per type from database (independent of current filter)
+  
+  // How many items to show per type
+  const [limits, setLimits] = useState<Record<ObjectType, number>>({
+    person: ITEMS_PER_TYPE,
+    event: ITEMS_PER_TYPE,
+    relationship: ITEMS_PER_TYPE,
+    promise: ITEMS_PER_TYPE,
+    other: ITEMS_PER_TYPE,
+  });
+  
+  // Collapsed state per type
+  const [collapsed, setCollapsed] = useState<Record<ObjectType, boolean>>({
+    person: false,
+    event: false,
+    relationship: false,
+    promise: false,
+    other: false,
+  });
+  
+  // Total counts per type from database
   const [totalCounts, setTotalCounts] = useState<Record<ObjectType, number>>({
     person: 0,
     event: 0,
@@ -292,7 +329,94 @@ const ObjectsPage = () => {
 
   const [localQ, setLocalQ] = useState(q);
 
-  // Fetch total counts per type (only depends on search query, not type filters)
+  // Get sort stage based on current sort option
+  const getSortStage = useCallback(() => {
+    if (q.trim()) {
+      return { $sort: { score: { $meta: "textScore" }, _id: -1 } };
+    }
+    switch (sortBy) {
+      case "name":
+        return { $sort: { name: 1, _id: -1 } };
+      case "createdAt":
+        return { $sort: { createdAt: -1, _id: -1 } };
+      case "updatedAt":
+      default:
+        return { $sort: { updatedAt: -1, _id: -1 } };
+    }
+  }, [q, sortBy]);
+
+  // Get type match condition
+  const getTypeMatch = useCallback((type: ObjectType): Record<string, unknown> => {
+    switch (type) {
+      case "person":
+        return { isPerson: true };
+      case "event":
+        return { isEvent: true };
+      case "relationship":
+        return { isRelationship: true, isPromise: { $ne: true } };
+      case "promise":
+        return { isPromise: true };
+      case "other":
+        return {
+          isPerson: { $ne: true },
+          isEvent: { $ne: true },
+          isRelationship: { $ne: true },
+          isPromise: { $ne: true },
+        };
+    }
+  }, []);
+
+  // Fetch objects for a specific type
+  const fetchTypeObjects = useCallback(async (type: ObjectType, limit: number): Promise<ObjectWithRelations[]> => {
+    const typeMatch = getTypeMatch(type);
+    const searchMatch: Record<string, unknown> = { ...typeMatch };
+    
+    if (q.trim()) {
+      searchMatch.$text = { $search: q.trim() };
+    }
+
+    const pipeline: unknown[] = [
+      { $match: searchMatch },
+      {
+        $lookup: {
+          from: "objects",
+          localField: "relationship.subject",
+          foreignField: "_id",
+          as: "subjectObject",
+        },
+      },
+      {
+        $lookup: {
+          from: "objects",
+          localField: "relationship.object",
+          foreignField: "_id",
+          as: "objectObject",
+        },
+      },
+      {
+        $unwind: {
+          path: "$subjectObject",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $unwind: {
+          path: "$objectObject",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      getSortStage(),
+      { $limit: limit },
+    ];
+
+    return await callResource("mongo", {
+      action: "aggregate",
+      collection: "objects",
+      pipeline,
+    });
+  }, [q, getSortStage, getTypeMatch]);
+
+  // Fetch total counts per type
   useEffect(() => {
     const fetchCounts = async () => {
       setCountsLoading(true);
@@ -379,6 +503,81 @@ const ObjectsPage = () => {
     fetchCounts();
   }, [q]);
 
+  // Fetch all types in parallel
+  useEffect(() => {
+    const fetchAllTypes = async () => {
+      setLoading(true);
+      setError(null);
+      
+      // Reset limits when search/sort changes
+      setLimits({
+        person: ITEMS_PER_TYPE,
+        event: ITEMS_PER_TYPE,
+        relationship: ITEMS_PER_TYPE,
+        promise: ITEMS_PER_TYPE,
+        other: ITEMS_PER_TYPE,
+      });
+      
+      try {
+        const typesToFetch = activeTypes.size > 0 
+          ? Array.from(activeTypes) 
+          : (Object.keys(TYPE_CONFIG) as ObjectType[]);
+        
+        const results = await Promise.all(
+          typesToFetch.map(async (type) => ({
+            type,
+            objects: await fetchTypeObjects(type, ITEMS_PER_TYPE),
+          }))
+        );
+        
+        const newObjectsByType: Record<ObjectType, ObjectWithRelations[]> = {
+          person: [],
+          event: [],
+          relationship: [],
+          promise: [],
+          other: [],
+        };
+        
+        for (const { type, objects } of results) {
+          newObjectsByType[type] = objects;
+        }
+        
+        setObjectsByType(newObjectsByType);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to fetch objects");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAllTypes();
+  }, [q, sortBy, activeTypesParam, fetchTypeObjects]);
+
+  // Load more for a specific type
+  const loadMore = useCallback(async (type: ObjectType) => {
+    const newLimit = limits[type] + LOAD_MORE_COUNT;
+    
+    setLoadingTypes((prev) => new Set(prev).add(type));
+    
+    try {
+      const objects = await fetchTypeObjects(type, newLimit);
+      setObjectsByType((prev) => ({ ...prev, [type]: objects }));
+      setLimits((prev) => ({ ...prev, [type]: newLimit }));
+    } catch (err) {
+      console.error(`Failed to load more ${type}:`, err);
+    } finally {
+      setLoadingTypes((prev) => {
+        const next = new Set(prev);
+        next.delete(type);
+        return next;
+      });
+    }
+  }, [limits, fetchTypeObjects]);
+
+  useEffect(() => {
+    setLocalQ(q);
+  }, [q]);
+
   function updateFilters(
     newQ: string,
     newTypes: Set<ObjectType>,
@@ -411,181 +610,35 @@ const ObjectsPage = () => {
     updateFilters(q, newTypes, sortBy);
   }
 
+  function toggleCollapsed(type: ObjectType) {
+    setCollapsed((prev) => ({ ...prev, [type]: !prev[type] }));
+  }
+
   function clearAllFilters() {
     setLocalQ("");
     setSearchParams(new URLSearchParams());
   }
-
-  useEffect(() => {
-    const buildQuery = () => {
-      const query: Record<string, unknown> = {};
-
-      // Build OR query for types if any are selected
-      if (activeTypes.size > 0) {
-        const typeConditions: Record<string, unknown>[] = [];
-        
-        if (activeTypes.has("person")) {
-          typeConditions.push({ isPerson: true });
-        }
-        if (activeTypes.has("event")) {
-          typeConditions.push({ isEvent: true });
-        }
-        if (activeTypes.has("relationship")) {
-          // Relationships but NOT promises
-          typeConditions.push({ isRelationship: true, isPromise: { $ne: true } });
-        }
-        if (activeTypes.has("promise")) {
-          typeConditions.push({ isPromise: true });
-        }
-        if (activeTypes.has("other")) {
-          typeConditions.push({
-            isPerson: { $ne: true },
-            isEvent: { $ne: true },
-            isRelationship: { $ne: true },
-            isPromise: { $ne: true },
-          });
-        }
-
-        if (typeConditions.length > 0) {
-          query.$or = typeConditions;
-        }
-      }
-
-      const searchQuery = q.trim();
-      if (searchQuery) {
-        query.$text = { $search: searchQuery };
-      }
-
-      return query;
-    };
-
-    const getSortStage = () => {
-      if (q.trim()) {
-        return { $sort: { score: { $meta: "textScore" }, _id: -1 } };
-      }
-      switch (sortBy) {
-        case "name":
-          return { $sort: { name: 1, _id: -1 } };
-        case "createdAt":
-          return { $sort: { createdAt: -1, _id: -1 } };
-        case "updatedAt":
-        default:
-          return { $sort: { updatedAt: -1, _id: -1 } };
-      }
-    };
-
-    const fetchObjects = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const query = buildQuery();
-        const pipeline: unknown[] = [
-          { $match: query },
-          {
-            $lookup: {
-              from: "objects",
-              localField: "relationship.subject",
-              foreignField: "_id",
-              as: "subjectObject",
-            },
-          },
-          {
-            $lookup: {
-              from: "objects",
-              localField: "relationship.object",
-              foreignField: "_id",
-              as: "objectObject",
-            },
-          },
-          {
-            $unwind: {
-              path: "$subjectObject",
-              preserveNullAndEmptyArrays: true,
-            },
-          },
-          {
-            $unwind: {
-              path: "$objectObject",
-              preserveNullAndEmptyArrays: true,
-            },
-          },
-          getSortStage(),
-          { $limit: 100 },
-        ];
-
-        const result = await callResource("mongo", {
-          action: "aggregate",
-          collection: "objects",
-          pipeline,
-        });
-        setObjects(result);
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to fetch objects",
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchObjects();
-  }, [q, activeTypesParam, sortBy]);
-
-  useEffect(() => {
-    setLocalQ(q);
-  }, [q]);
-
-  // Count objects in current results (for showing "X loaded")
-  const loadedCounts = useMemo(() => {
-    const counts: Record<ObjectType, number> = {
-      person: 0,
-      event: 0,
-      relationship: 0,
-      promise: 0,
-      other: 0,
-    };
-    for (const obj of objects) {
-      counts[getObjectType(obj)]++;
-    }
-    return counts;
-  }, [objects]);
 
   // Total count across all types
   const grandTotal = useMemo(() => {
     return Object.values(totalCounts).reduce((sum, c) => sum + c, 0);
   }, [totalCounts]);
 
-  // Group objects by type for display
-  const groupedObjects = useMemo(() => {
-    const groups: Record<ObjectType, typeof objects> = {
-      person: [],
-      event: [],
-      relationship: [],
-      promise: [],
-      other: [],
-    };
-    for (const obj of objects) {
-      groups[getObjectType(obj)].push(obj);
-    }
-    return groups;
-  }, [objects]);
-
   // Determine which types to show based on filters
   const visibleTypes = useMemo(() => {
     if (activeTypes.size === 0) {
-      // Show all non-empty types
+      // Show all types that have items (in database)
       return (Object.keys(TYPE_CONFIG) as ObjectType[]).filter(
-        (type) => groupedObjects[type].length > 0
+        (type) => totalCounts[type] > 0
       );
     }
     // Show only selected types that have results
     return Array.from(activeTypes).filter(
-      (type) => groupedObjects[type].length > 0
+      (type) => totalCounts[type] > 0
     );
-  }, [activeTypes, groupedObjects]);
+  }, [activeTypes, totalCounts]);
 
   const hasActiveFilters = q.trim() || activeTypes.size > 0;
-  const totalResults = objects.length;
 
   if (error) {
     return (
@@ -675,12 +728,11 @@ const ObjectsPage = () => {
             : countsLoading
               ? "Counting..."
               : hasActiveFilters
-                ? `Showing ${totalResults} of ${activeTypes.size > 0
+                ? `${activeTypes.size > 0
                     ? Array.from(activeTypes).reduce((sum, t) => sum + totalCounts[t], 0)
                     : grandTotal
                   } matching objects`
                 : `${grandTotal} objects total`}
-          {!loading && totalResults === 100 && " (limit reached)"}
         </span>
         {hasActiveFilters && (
           <Button
@@ -703,7 +755,7 @@ const ObjectsPage = () => {
       )}
 
       {/* Results */}
-      {!loading && objects.length === 0 && (
+      {!loading && grandTotal === 0 && (
         <Card className="p-8 text-center">
           <Package className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
           <p className="text-muted-foreground">
@@ -723,58 +775,81 @@ const ObjectsPage = () => {
         </Card>
       )}
 
-      {!loading && objects.length > 0 && (
-        <div className="space-y-8">
+      {!loading && grandTotal > 0 && (
+        <div className="space-y-4">
           {visibleTypes.map((type) => {
-            const typeObjects = groupedObjects[type];
-            if (typeObjects.length === 0) return null;
-
+            const typeObjects = objectsByType[type];
             const config = TYPE_CONFIG[type];
             const Icon = config.icon;
-
             const total = totalCounts[type];
             const loaded = typeObjects.length;
             const hasMore = loaded < total;
-            const isFiltered = activeTypes.size > 0;
+            const isCollapsed = collapsed[type];
+            const isLoadingMore = loadingTypes.has(type);
 
             return (
-              <section key={type}>
-                <div className="flex items-center gap-2 mb-4">
-                  <Icon className="w-5 h-5 text-muted-foreground" />
-                  <h2 className="text-lg font-semibold">{config.label}</h2>
-                  <Badge variant="secondary">
-                    {hasMore ? `${loaded} of ${total}` : total}
-                  </Badge>
-                  {hasMore && !isFiltered && (
-                    <Button
-                      variant="link"
-                      size="sm"
-                      className="h-auto p-0 text-xs text-muted-foreground"
-                      onClick={() => toggleType(type)}
-                    >
-                      Show all
-                    </Button>
-                  )}
+              <Collapsible
+                key={type}
+                open={!isCollapsed}
+                onOpenChange={() => toggleCollapsed(type)}
+              >
+                <div className="border rounded-lg">
+                  <CollapsibleTrigger asChild>
+                    <button className="flex items-center gap-2 w-full p-4 hover:bg-muted/50 transition-colors text-left">
+                      {isCollapsed ? (
+                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                      )}
+                      <Icon className="w-5 h-5 text-muted-foreground" />
+                      <h2 className="text-lg font-semibold flex-1">{config.label}</h2>
+                      <Badge variant="secondary">
+                        {loaded < total ? `${loaded} of ${total}` : total}
+                      </Badge>
+                    </button>
+                  </CollapsibleTrigger>
+                  
+                  <CollapsibleContent>
+                    <div className="p-4 pt-0">
+                      {typeObjects.length === 0 ? (
+                        <p className="text-sm text-muted-foreground py-4 text-center">
+                          Loading...
+                        </p>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {typeObjects.map((object) => (
+                              <ObjectCard
+                                key={object._id.toString()}
+                                object={object}
+                                searchQuery={q}
+                                showType={false}
+                              />
+                            ))}
+                          </div>
+                          
+                          {hasMore && (
+                            <div className="mt-4 text-center">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => loadMore(type)}
+                                disabled={isLoadingMore}
+                              >
+                                {isLoadingMore
+                                  ? "Loading..."
+                                  : `Load more (${total - loaded} remaining)`}
+                              </Button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </CollapsibleContent>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {typeObjects.map((object) => (
-                    <ObjectCard
-                      key={object._id.toString()}
-                      object={object}
-                      searchQuery={q}
-                      showType={false}
-                    />
-                  ))}
-                </div>
-              </section>
+              </Collapsible>
             );
           })}
-
-          {objects.length === 100 && grandTotal > 100 && (
-            <div className="text-sm text-muted-foreground text-center py-4 border-t pt-4">
-              Showing first 100 of {grandTotal} objects. Use search or type filters to narrow down results.
-            </div>
-          )}
         </div>
       )}
     </div>
