@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock,
   Handshake,
+  MessageSquare,
   Package,
   Plus,
   Search,
@@ -85,9 +86,10 @@ function formatDate(date: Date | string | undefined) {
 
 function getObjectType(
   object: ObjectModel,
-): "person" | "event" | "relationship" | "promise" | "other" {
+): "person" | "event" | "relationship" | "promise" | "conversation" | "other" {
   if (object.isPromise) return "promise";
   if (object.isRelationship) return "relationship";
+  if (object.isConversation) return "conversation";
   if (object.isPerson) return "person";
   if (object.isEvent) return "event";
   return "other";
@@ -116,6 +118,12 @@ const TYPE_CONFIG = {
     label: "Promises",
     icon: Handshake,
     color: "bg-orange-100 text-orange-800 border-orange-200",
+    badgeVariant: "secondary" as const,
+  },
+  conversation: {
+    label: "Conversations",
+    icon: MessageSquare,
+    color: "bg-cyan-100 text-cyan-800 border-cyan-200",
     badgeVariant: "secondary" as const,
   },
   other: {
@@ -237,7 +245,7 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
   );
 }
 
-type ObjectType = "person" | "event" | "relationship" | "promise" | "other";
+type ObjectType = "person" | "event" | "relationship" | "promise" | "conversation" | "other";
 type SortOption = "name" | "updatedAt" | "createdAt";
 
 interface TypeFilterButtonProps {
@@ -285,6 +293,7 @@ const ObjectsPage = () => {
     event: [],
     relationship: [],
     promise: [],
+    conversation: [],
     other: [],
   });
   const [loading, setLoading] = useState(true);
@@ -297,6 +306,7 @@ const ObjectsPage = () => {
     event: ITEMS_PER_TYPE,
     relationship: ITEMS_PER_TYPE,
     promise: ITEMS_PER_TYPE,
+    conversation: ITEMS_PER_TYPE,
     other: ITEMS_PER_TYPE,
   });
   
@@ -306,6 +316,7 @@ const ObjectsPage = () => {
     event: false,
     relationship: false,
     promise: false,
+    conversation: false,
     other: false,
   });
   
@@ -315,6 +326,7 @@ const ObjectsPage = () => {
     event: 0,
     relationship: 0,
     promise: 0,
+    conversation: 0,
     other: 0,
   });
   const [countsLoading, setCountsLoading] = useState(true);
@@ -357,12 +369,15 @@ const ObjectsPage = () => {
         return { isRelationship: true, isPromise: { $ne: true } };
       case "promise":
         return { isPromise: true };
+      case "conversation":
+        return { isConversation: true };
       case "other":
         return {
           isPerson: { $ne: true },
           isEvent: { $ne: true },
           isRelationship: { $ne: true },
           isPromise: { $ne: true },
+          isConversation: { $ne: true },
         };
     }
   }, []);
@@ -449,6 +464,7 @@ const ObjectsPage = () => {
                   ],
                 },
               },
+              conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
               other: {
                 $sum: {
                   $cond: [
@@ -458,6 +474,7 @@ const ObjectsPage = () => {
                         { $ne: ["$isEvent", true] },
                         { $ne: ["$isRelationship", true] },
                         { $ne: ["$isPromise", true] },
+                        { $ne: ["$isConversation", true] },
                       ],
                     },
                     1,
@@ -483,6 +500,7 @@ const ObjectsPage = () => {
             event: counts.event || 0,
             relationship: counts.relationship || 0,
             promise: counts.promise || 0,
+            conversation: counts.conversation || 0,
             other: counts.other || 0,
           });
         } else {
@@ -491,6 +509,7 @@ const ObjectsPage = () => {
             event: 0,
             relationship: 0,
             promise: 0,
+            conversation: 0,
             other: 0,
           });
         }
@@ -516,6 +535,7 @@ const ObjectsPage = () => {
         event: ITEMS_PER_TYPE,
         relationship: ITEMS_PER_TYPE,
         promise: ITEMS_PER_TYPE,
+        conversation: ITEMS_PER_TYPE,
         other: ITEMS_PER_TYPE,
       });
       
@@ -536,6 +556,7 @@ const ObjectsPage = () => {
           event: [],
           relationship: [],
           promise: [],
+          conversation: [],
           other: [],
         };
         
