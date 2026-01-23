@@ -18,6 +18,8 @@ import {
   Package,
   Plus,
   Search,
+  SortAsc,
+  SortDesc,
   User,
   Users,
   X,
@@ -84,6 +86,42 @@ function formatDate(date: Date | string | undefined) {
   });
 }
 
+function formatDateTime(date: Date | string | undefined) {
+  if (!date) return null;
+  const d = typeof date === "string" ? new Date(date) : date;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
+  const start = typeof startDate === "string" ? new Date(startDate) : startDate;
+  const end = endDate 
+    ? (typeof endDate === "string" ? new Date(endDate) : endDate)
+    : new Date();
+  
+  const diffMs = end.getTime() - start.getTime();
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffMins < 1) return "< 1 min";
+  if (diffMins < 60) return `${diffMins} min`;
+  if (diffHours < 24) {
+    const mins = diffMins % 60;
+    return mins > 0 ? `${diffHours}h ${mins}m` : `${diffHours}h`;
+  }
+  if (diffDays < 7) {
+    const hours = diffHours % 24;
+    return hours > 0 ? `${diffDays}d ${hours}h` : `${diffDays}d`;
+  }
+  return `${diffDays} days`;
+}
+
 function getObjectType(
   object: ObjectModel,
 ): "person" | "event" | "relationship" | "promise" | "conversation" | "other" {
@@ -142,6 +180,7 @@ interface ObjectCardProps {
 
 function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) {
   const isRelationship = object.isRelationship;
+  const isConversation = object.isConversation;
   const hasRelationshipData = object.relationship && object.subjectObject &&
     object.objectObject;
   const objectType = getObjectType(object);
@@ -152,9 +191,14 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
     const first = object.timeRanges[0];
     const hasEnd = !!first.end;
     return {
-      start: formatDate(first.start),
-      end: hasEnd ? formatDate(first.end) : null,
+      start: first.start,
+      end: first.end,
+      startFormatted: formatDate(first.start),
+      startDateTime: formatDateTime(first.start),
+      endFormatted: hasEnd ? formatDate(first.end) : null,
+      duration: formatDuration(first.start, first.end),
       count: object.timeRanges.length,
+      hasEnd,
     };
   }, [object.timeRanges]);
 
@@ -182,8 +226,20 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
                     {objectType === "other" ? "Object" : objectType}
                   </Badge>
                 )}
+                {/* Duration badge for conversations */}
+                {isConversation && timeRangeInfo && (
+                  <Badge variant="secondary" className="text-xs">
+                    {timeRangeInfo.duration}
+                  </Badge>
+                )}
               </div>
-              {object.aliases && object.aliases.length > 0 && (
+              {/* Date/time for conversations */}
+              {isConversation && timeRangeInfo && (
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {timeRangeInfo.startDateTime}
+                </div>
+              )}
+              {object.aliases && object.aliases.length > 0 && !isConversation && (
                 <div className="text-xs text-muted-foreground mt-0.5">
                   aka {object.aliases.slice(0, 2).join(", ")}
                   {object.aliases.length > 2 && ` +${object.aliases.length - 2}`}
@@ -216,29 +272,31 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
             </div>
           )}
 
-          {/* Time range and metadata */}
-          <div className="flex items-center gap-3 text-xs text-muted-foreground pl-11 flex-wrap">
-            {timeRangeInfo && (
-              <div className="flex items-center gap-1">
-                <CalendarClock className="w-3 h-3" />
-                <span>
-                  {timeRangeInfo.start}
-                  {timeRangeInfo.end ? ` - ${timeRangeInfo.end}` : " - ongoing"}
-                </span>
-                {timeRangeInfo.count > 1 && (
-                  <span className="text-muted-foreground/60">
-                    (+{timeRangeInfo.count - 1} more)
+          {/* Time range and metadata - show for non-conversations */}
+          {!isConversation && (
+            <div className="flex items-center gap-3 text-xs text-muted-foreground pl-11 flex-wrap">
+              {timeRangeInfo && (
+                <div className="flex items-center gap-1">
+                  <CalendarClock className="w-3 h-3" />
+                  <span>
+                    {timeRangeInfo.startFormatted}
+                    {timeRangeInfo.endFormatted ? ` - ${timeRangeInfo.endFormatted}` : " - ongoing"}
                   </span>
-                )}
-              </div>
-            )}
-            {object.updatedAt && (
-              <div className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                <span>Updated {formatDate(object.updatedAt)}</span>
-              </div>
-            )}
-          </div>
+                  {timeRangeInfo.count > 1 && (
+                    <span className="text-muted-foreground/60">
+                      (+{timeRangeInfo.count - 1} more)
+                    </span>
+                  )}
+                </div>
+              )}
+              {object.updatedAt && (
+                <div className="flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  <span>Updated {formatDate(object.updatedAt)}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Card>
     </Link>
@@ -318,6 +376,17 @@ const ObjectsPage = () => {
     promise: false,
     conversation: false,
     other: false,
+  });
+  
+  // Section-specific sort (for conversations: chronological vs recent)
+  type SectionSortOption = "default" | "chronological" | "chronological-desc";
+  const [sectionSort, setSectionSort] = useState<Record<ObjectType, SectionSortOption>>({
+    person: "default",
+    event: "default",
+    relationship: "default",
+    promise: "default",
+    conversation: "chronological-desc", // Default to newest first for conversations
+    other: "default",
   });
   
   // Total counts per type from database
@@ -814,6 +883,27 @@ const ObjectsPage = () => {
             const hasMore = loaded < total;
             const isCollapsed = collapsed[type];
             const isLoadingMore = loadingTypes.has(type);
+            const currentSort = sectionSort[type];
+            const showTimeSort = type === "conversation" || type === "event";
+            
+            // Sort objects based on section sort option
+            const sortedObjects = currentSort === "default" 
+              ? typeObjects 
+              : [...typeObjects].sort((a, b) => {
+                  const aTime = a.timeRanges?.[0]?.start;
+                  const bTime = b.timeRanges?.[0]?.start;
+                  
+                  if (!aTime && !bTime) return 0;
+                  if (!aTime) return 1;
+                  if (!bTime) return -1;
+                  
+                  const aDate = typeof aTime === "string" ? new Date(aTime) : aTime;
+                  const bDate = typeof bTime === "string" ? new Date(bTime) : bTime;
+                  
+                  return currentSort === "chronological" 
+                    ? aDate.getTime() - bDate.getTime()  // Oldest first
+                    : bDate.getTime() - aDate.getTime(); // Newest first
+                });
 
             return (
               <Collapsible
@@ -822,20 +912,54 @@ const ObjectsPage = () => {
                 onOpenChange={() => toggleCollapsed(type)}
               >
                 <div className="border rounded-lg">
-                  <CollapsibleTrigger asChild>
-                    <button className="flex items-center gap-2 w-full p-4 hover:bg-muted/50 transition-colors text-left">
-                      {isCollapsed ? (
-                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                      ) : (
-                        <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                      )}
-                      <Icon className="w-5 h-5 text-muted-foreground" />
-                      <h2 className="text-lg font-semibold flex-1">{config.label}</h2>
-                      <Badge variant="secondary">
-                        {loaded < total ? `${loaded} of ${total}` : total}
-                      </Badge>
-                    </button>
-                  </CollapsibleTrigger>
+                  <div className="flex items-center p-4 gap-2">
+                    <CollapsibleTrigger asChild>
+                      <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
+                        {isCollapsed ? (
+                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                        ) : (
+                          <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                        )}
+                        <Icon className="w-5 h-5 text-muted-foreground" />
+                        <h2 className="text-lg font-semibold flex-1">{config.label}</h2>
+                        <Badge variant="secondary">
+                          {loaded < total ? `${loaded} of ${total}` : total}
+                        </Badge>
+                      </button>
+                    </CollapsibleTrigger>
+                    
+                    {/* Time-based sort toggle for conversations/events */}
+                    {showTimeSort && !isCollapsed && (
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant={currentSort === "chronological-desc" ? "secondary" : "ghost"}
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSectionSort(prev => ({ ...prev, [type]: "chronological-desc" }));
+                          }}
+                          title="Newest first"
+                        >
+                          <SortDesc className="w-3 h-3 mr-1" />
+                          Newest
+                        </Button>
+                        <Button
+                          variant={currentSort === "chronological" ? "secondary" : "ghost"}
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSectionSort(prev => ({ ...prev, [type]: "chronological" }));
+                          }}
+                          title="Oldest first"
+                        >
+                          <SortAsc className="w-3 h-3 mr-1" />
+                          Oldest
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                   
                   <CollapsibleContent>
                     <div className="p-4 pt-0">
@@ -846,7 +970,7 @@ const ObjectsPage = () => {
                       ) : (
                         <>
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {typeObjects.map((object) => (
+                            {sortedObjects.map((object) => (
                               <ObjectCard
                                 key={object._id.toString()}
                                 object={object}
