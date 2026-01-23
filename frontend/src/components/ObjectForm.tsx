@@ -10,7 +10,9 @@ import { DateTimePicker } from "@/components/ui/datetime-picker";
 import {
   ArrowRight,
   Calendar,
+  Edit3,
   ExternalLink,
+  Eye,
   Handshake,
   MessageSquare,
   MoveHorizontal,
@@ -21,8 +23,8 @@ import {
   Users,
   X,
   Wand2,
-  Eye,
 } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 import { ObjectId } from "bson";
 import { ObjectSelectionDropdown } from "@/components/ObjectSelectionDropdown";
@@ -40,6 +42,66 @@ import {
 } from "@/components/ui/dialog";
 import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+
+// Details field with edit/preview toggle
+function DetailsField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [isPreview, setIsPreview] = useState(false);
+  
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label htmlFor="details">Details</Label>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant={!isPreview ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setIsPreview(false)}
+          >
+            <Edit3 className="w-3 h-3 mr-1" />
+            Edit
+          </Button>
+          <Button
+            type="button"
+            variant={isPreview ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setIsPreview(true)}
+            disabled={!value}
+          >
+            <Eye className="w-3 h-3 mr-1" />
+            Preview
+          </Button>
+        </div>
+      </div>
+      
+      {isPreview ? (
+        <div className="min-h-[100px] w-full rounded-md border border-input bg-muted/30 px-3 py-2">
+          {value ? (
+            <Markdown>{value}</Markdown>
+          ) : (
+            <p className="text-sm text-muted-foreground">No content to preview</p>
+          )}
+        </div>
+      ) : (
+        <textarea
+          id="details"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Optional details about this object (supports Markdown)"
+          className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+        />
+      )}
+      
+      {!isPreview && value && (
+        <p className="text-xs text-muted-foreground">
+          Supports Markdown: **bold**, *italic*, `code`, [links](url), lists, etc.
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface ObjectFormProps {
   object: ObjectFormData;
@@ -334,16 +396,10 @@ export function ObjectForm(
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="details">Details</Label>
-        <textarea
-          id="details"
-          value={detailsValue}
-          onChange={(e) => setDetailsValue(e.target.value)}
-          placeholder="Optional details about this object"
-          className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      </div>
+      <DetailsField
+        value={detailsValue}
+        onChange={setDetailsValue}
+      />
 
       <SummarizeDialog
         open={isSummarizeOpen}
@@ -437,7 +493,9 @@ export function ObjectForm(
                 key={index}
                 className="border rounded-lg p-4 space-y-3 bg-muted/30"
               >
-                <div className="text-sm whitespace-pre-wrap">{summary.text}</div>
+                <div className="text-sm">
+                  <Markdown>{summary.text}</Markdown>
+                </div>
                 <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                   <div className="flex items-center gap-1">
                     <span className="font-medium">Model:</span>
