@@ -58,9 +58,9 @@ export function RunJobDialog({
   }, [schemas]);
 
   const currentSchema = useMemo(() => {
-    if (!selectedType || !schemas?.[selectedType]) return null;
+    if (!selectedType || !schemas?.[selectedType]?.input) return null;
     
-    const schema = { ...schemas[selectedType] };
+    const schema = { ...schemas[selectedType].input };
     if (schema.properties) {
       const { start, end, ...otherProps } = schema.properties;
       schema.properties = otherProps;

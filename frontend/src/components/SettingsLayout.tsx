@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server } from "lucide-react";
+import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog } from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
@@ -37,6 +37,12 @@ const SettingsLayout = () => {
       path: "/settings/prompts",
       icon: FileText,
       description: "Manage system prompts",
+    },
+    {
+      name: "Workers",
+      path: "/settings/workers",
+      icon: Cog,
+      description: "Configure background job workers",
     },
   ];
 

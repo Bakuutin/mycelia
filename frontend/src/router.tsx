@@ -12,6 +12,8 @@ import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
 import PromptsPage from "./pages/settings/PromptsPage";
 import PromptDetailPage from "./pages/settings/PromptDetailPage";
+import WorkersPage from "./pages/settings/WorkersPage";
+import WorkerDetailPage from "./pages/settings/WorkerDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
 import DiarizationDetailPage from "./pages/DiarizationDetailPage";
@@ -173,6 +175,14 @@ export const router = createBrowserRouter([
           {
             path: "prompts/:id",
             element: <PromptDetailPage />,
+          },
+          {
+            path: "workers",
+            element: <WorkersPage />,
+          },
+          {
+            path: "workers/:workerType",
+            element: <WorkerDetailPage />,
           },
         ],
       },

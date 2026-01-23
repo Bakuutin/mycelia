@@ -124,14 +124,18 @@ export class WorkerDiscoveryManager {
     const registeredSchemas = jobRegistry.getJobSchemas();
     
     console.log(`[worker-discovery] Syncing ${registeredWorkers.length} discovered workers`);
+    console.log(`[worker-discovery] Schema keys:`, Object.keys(registeredSchemas));
     
     // Register all currently discovered workers
     for (const workerName of registeredWorkers) {
       const schema = registeredSchemas[workerName];
+      console.log(`[worker-discovery] Worker ${workerName} schema:`, JSON.stringify(schema).slice(0, 200));
       if (schema) {
+        const inputSchema = schema.input || {};
+        console.log(`[worker-discovery] Worker ${workerName} inputSchema properties:`, Object.keys(inputSchema.properties || {}));
         await this.registerWorker(
           workerName,
-          schema.input || {},
+          inputSchema,
           schema.output || {},
         );
       }

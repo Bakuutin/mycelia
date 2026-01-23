@@ -83,7 +83,7 @@
     "npm:react-hook-form@^7.63.0": "7.67.0_react@18.3.1",
     "npm:react-infinite-scroll-component@6.1.1": "6.1.1_react@18.3.1",
     "npm:react-infinite-scroll-component@^6.1.1": "6.1.1_react@18.3.1",
-    "npm:react-leaflet@5": "5.0.0_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1",
+    "npm:react-leaflet@^4.2.1": "4.2.1_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:react-resizable-panels@^2.1.7": "2.1.9_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:react-router-dom@^7.4.0": "7.10.0_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:react-syntax-highlighter@16": "16.1.0_react@18.3.1",
@@ -1586,8 +1586,8 @@
         "react"
       ]
     },
-    "@react-leaflet/core@3.0.0_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
-      "integrity": "sha512-3EWmekh4Nz+pGcr+xjf0KNyYfC3U2JjnkWsh0zcqaexYqmmB5ZhH37kz41JXGmKzpaMZCnPofBBm64i+YrEvGQ==",
+    "@react-leaflet/core@2.1.0_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
+      "integrity": "sha512-Qk7Pfu8BSarKGqILj4x7bCSZ1pjuAPZ+qmRwH5S7mDS91VSbVVsJSrW4qA+GPrro8t69gFYVMWb1Zc4yFmPiVg==",
       "dependencies": [
         "leaflet",
         "react",
@@ -5466,8 +5466,8 @@
     "react-is@18.3.1": {
       "integrity": "sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg=="
     },
-    "react-leaflet@5.0.0_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
-      "integrity": "sha512-CWbTpr5vcHw5bt9i4zSlPEVQdTVcML390TjeDG0cK59z1ylexpqC6M1PJFjV8jD7CF+ACBFsLIDs6DRMoLEofw==",
+    "react-leaflet@4.2.1_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1": {
+      "integrity": "sha512-p9chkvhcKrWn/H/1FFeVSqLdReGwn2qmiobOQGO3BifX+/vV/39qhY8dGqbdcPh1e6jxh/QHriLXr7a4eLFK4Q==",
       "dependencies": [
         "@react-leaflet/core",
         "leaflet",
@@ -6510,8 +6510,7 @@
       "integrity": "sha512-6qN4hJdMwfYBtE3YBTTHhoeuUrDBPZmbQaxWAqSALV/MeEnR5z1xd8UKud2RAkFoPkmB+hli1TZSnyi84xz1vQ==",
       "dependencies": [
         "iconv-lite"
-      ],
-      "deprecated": true
+      ]
     },
     "whatwg-mimetype@4.0.0": {
       "integrity": "sha512-QaKxh0eNIi2mE9p2vEdzfagOKHCcj1pJ56EEHGQOVxp8r9/iszLUUV7v89x9O1p/T+NlTM5W7jW6+cz4Fq1YVg=="
@@ -6765,7 +6764,7 @@
         "npm:react-dom@^18.3.1",
         "npm:react-hook-form@^7.63.0",
         "npm:react-infinite-scroll-component@^6.1.1",
-        "npm:react-leaflet@5",
+        "npm:react-leaflet@^4.2.1",
         "npm:react-router-dom@^7.4.0",
         "npm:react-syntax-highlighter@16",
         "npm:react@^18.3.1",
