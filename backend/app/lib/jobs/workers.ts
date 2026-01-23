@@ -18,6 +18,10 @@ export async function startWorkers() {
 
   // Discover and register all job workers
   await discoverJobWorkers();
+  
+  // Sync discovered workers with database
+  const { workerDiscovery } = await import("./worker-discovery.ts");
+  await workerDiscovery.syncDiscoveredWorkers();
 
   const jobTypes = jobRegistry.getJobTypes();
 

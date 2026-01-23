@@ -89,6 +89,21 @@ const GetWorkerStatusSchema = z.object({
   action: z.literal("get_worker_status"),
 });
 
+const ListWorkersSchema = z.object({
+  action: z.literal("list_workers"),
+});
+
+const GetWorkerDefaultsSchema = z.object({
+  action: z.literal("get_worker_defaults"),
+  workerType: z.string(),
+});
+
+const UpdateWorkerDefaultsSchema = z.object({
+  action: z.literal("update_worker_defaults"),
+  workerType: z.string(),
+  defaults: z.record(z.string(), z.any()),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
@@ -103,6 +118,9 @@ const RequestSchema = z.union([
   PauseAllSchema,
   ResumeAllSchema,
   GetWorkerStatusSchema,
+  ListWorkersSchema,
+  GetWorkerDefaultsSchema,
+  UpdateWorkerDefaultsSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -145,6 +163,12 @@ export class JobsResource
         return this.resumeAll(auth);
       case "get_worker_status":
         return this.getWorkerStatus(auth);
+      case "list_workers":
+        return this.listWorkers(auth);
+      case "get_worker_defaults":
+        return this.getWorkerDefaults(input, auth);
+      case "update_worker_defaults":
+        return this.updateWorkerDefaults(input, auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -492,6 +516,41 @@ export class JobsResource
     });
   }
 
+  private async listWorkers(_auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    const workers = await workerDiscovery.getAllWorkers();
+    
+    return { workers };
+  }
+
+  private async getWorkerDefaults(input: z.infer<typeof GetWorkerDefaultsSchema>, _auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    const defaults = await workerDiscovery.getDefaultOverrides(input.workerType);
+    
+    return { 
+      workerType: input.workerType,
+      defaults: defaults || {} 
+    };
+  }
+
+  private async updateWorkerDefaults(input: z.infer<typeof UpdateWorkerDefaultsSchema>, _auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    
+    // Verify worker type exists
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+    
+    await workerDiscovery.updateDefaultOverrides(input.workerType, input.defaults);
+    
+    return { 
+      success: true,
+      workerType: input.workerType,
+      defaults: input.defaults
+    };
+  }
+
   extractActions(input: WorkerProgressRequest): {
     path: ResourcePath;
     actions: string[];
@@ -521,6 +580,12 @@ export class JobsResource
         return [{ path: ["jobs", "all"], actions: ["resume"] }];
       case "get_worker_status":
         return [{ path: ["jobs"], actions: ["read"] }];
+      case "list_workers":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "get_worker_defaults":
+        return [{ path: ["jobs", input.workerType], actions: ["read"] }];
+      case "update_worker_defaults":
+        return [{ path: ["jobs", input.workerType], actions: ["configure"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }

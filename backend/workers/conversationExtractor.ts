@@ -52,6 +52,19 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().default(1),
   extractorVersion: z.string().default("v1"),
+  
+  // Prompt overrides (migrated from config.prompts)
+  segmentation_system_prompt: z.string()
+    .default("You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.")
+    .describe("System prompt for finding conversation topics in transcripts"),
+  
+  segmentation_guidance_prompt: z.string()
+    .default("")
+    .describe("Additional guidance for conversation topic segmentation response format"),
+  
+  extraction_guidance_prompt: z.string()
+    .default("")
+    .describe("Guidance for conversation metadata extraction response format"),
 });
 
 export type ConversationExtractorJobData = z.infer<typeof schema>;
@@ -645,18 +658,34 @@ const capability: JobCapability = {
     let chunksProcessed = 0;
     const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
 
-    // Load prompts
+    // Load prompts from job data (populated by default overrides or legacy config fallback)
+    // First try job data (which includes default overrides), then fall back to legacy config
     let prompts: Record<string, string>;
-    try {
-      prompts = await getPrompts(mongo);
-    } catch (error) {
-      console.error("Failed to load prompts:", error);
-      // Use default prompts
+    
+    if (data.segmentation_system_prompt) {
+      // Use prompts from job data (new system with default overrides)
       prompts = {
-        segmentation_system: "You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.",
+        segmentation_system: data.segmentation_system_prompt,
+        segmentation_guidance: data.segmentation_guidance_prompt || "",
         extraction_system: "You are an assistant that extracts metadata from conversations. Output JSON with 'agreed_upon_something' (boolean - true if participants made any agreement, promise, or commitment), 'entities' (array of strings - names of people, places, organizations, or topics mentioned), and 'emoji' (single emoji representing the conversation topic).",
-        extraction_guidance: "",
+        extraction_guidance: data.extraction_guidance_prompt || "",
       };
+      console.log(`[ConvExtractor] Job ${job.id}: using prompts from job data / default overrides`);
+    } else {
+      // Fall back to legacy config system for backward compatibility
+      try {
+        prompts = await getPrompts(mongo);
+        console.log(`[ConvExtractor] Job ${job.id}: using prompts from legacy config (consider migrating)`);
+      } catch (error) {
+        console.error("Failed to load prompts from config:", error);
+        // Use hardcoded default prompts as last resort
+        prompts = {
+          segmentation_system: "You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.",
+          extraction_system: "You are an assistant that extracts metadata from conversations. Output JSON with 'agreed_upon_something' (boolean - true if participants made any agreement, promise, or commitment), 'entities' (array of strings - names of people, places, organizations, or topics mentioned), and 'emoji' (single emoji representing the conversation topic).",
+          extraction_guidance: "",
+        };
+        console.log(`[ConvExtractor] Job ${job.id}: using fallback default prompts`);
+      }
     }
 
     const promptVersion = createHash("sha256")

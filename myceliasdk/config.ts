@@ -70,3 +70,17 @@ export const zPromptForm = z.object({
 
 export type PromptFormData = z.infer<typeof zPromptForm>;
 
+// Worker Discovery Collection
+export const zWorkerEntry = z.object({
+  _id: z.instanceof(ObjectId),
+  name: z.string().describe("Worker name/type (e.g., 'summarization', 'transcription')"),
+  discovered: z.boolean().describe("Whether this worker is currently discovered/available"),
+  inputSchema: z.record(z.any()).describe("JSON Schema for worker input"),
+  outputSchema: z.record(z.any()).describe("JSON Schema for worker output"),
+  defaultOverrides: z.record(z.string(), z.any()).optional().describe("Runtime overrides for schema defaults"),
+  lastSeen: z.date().describe("Last time this worker was discovered"),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export type WorkerEntry = z.infer<typeof zWorkerEntry>;

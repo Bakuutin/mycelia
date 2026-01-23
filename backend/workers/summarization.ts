@@ -19,8 +19,12 @@ export const schema = z.object({
   type: z.literal("summarization"),
   start: zDateOrString(),
   end: zDateOrString(),
-  prompt: z.string().optional(),
-  model: z.string().optional(),
+  prompt: z.string()
+    .default("You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.")
+    .describe("System prompt for the summarization. This guides how the AI analyzes the conversation."),
+  model: z.string()
+    .default("small")
+    .describe("LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')"),
   objectId: zObjectId().nullish(),
 });
 
@@ -117,19 +121,34 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }
   promptText += getTimestampMessage(new Date(lastEnd));
 
-  const modelAlias = userModel || "small";
+  const modelAlias = userModel || jobData.model;
   
-  // Load system prompt: user override > config setting > fallback
+  // Load system prompt with priority: explicit job param > job data (includes default overrides) > legacy config > fallback
   let systemPrompt = userPrompt;
+  let promptSource = "explicit";
+  
   if (!systemPrompt) {
-    const configPrompt = await getSystemPromptFromConfig(jwt, myceliaUrl);
-    systemPrompt = configPrompt || `You are a helpful assistant. Summarize the following conversation transcript.`;
-    if (configPrompt) {
-      console.log(`[summarization] Job ${job.id}: using system prompt from config`);
+    systemPrompt = jobData.prompt;
+    promptSource = "job_data";
+    
+    // If prompt is the default value, try legacy config
+    const defaultPrompt = "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.";
+    
+    if (systemPrompt === defaultPrompt) {
+      // Try legacy config for backward compatibility
+      const configPrompt = await getSystemPromptFromConfig(jwt, myceliaUrl);
+      if (configPrompt) {
+        systemPrompt = configPrompt;
+        promptSource = "legacy_config";
+      } else {
+        promptSource = "schema_default";
+      }
     } else {
-      console.log(`[summarization] Job ${job.id}: using fallback system prompt (no config found)`);
+      promptSource = "default_override";
     }
   }
+  
+  console.log(`[summarization] Job ${job.id}: using system prompt from ${promptSource}`);
 
   console.log(`[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`);
   const completion = await callResource<any, any>("llm", {
