@@ -271,6 +271,15 @@ const ObjectsPage = () => {
   >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Total counts per type from database (independent of current filter)
+  const [totalCounts, setTotalCounts] = useState<Record<ObjectType, number>>({
+    person: 0,
+    event: 0,
+    relationship: 0,
+    promise: 0,
+    other: 0,
+  });
+  const [countsLoading, setCountsLoading] = useState(true);
 
   const q = searchParams.get("q") || "";
   const sortBy = (searchParams.get("sort") as SortOption) || "updatedAt";
@@ -282,6 +291,93 @@ const ObjectsPage = () => {
   }, [activeTypesParam]);
 
   const [localQ, setLocalQ] = useState(q);
+
+  // Fetch total counts per type (only depends on search query, not type filters)
+  useEffect(() => {
+    const fetchCounts = async () => {
+      setCountsLoading(true);
+      try {
+        const searchMatch: Record<string, unknown> = {};
+        if (q.trim()) {
+          searchMatch.$text = { $search: q.trim() };
+        }
+
+        const pipeline = [
+          { $match: searchMatch },
+          {
+            $group: {
+              _id: null,
+              person: { $sum: { $cond: [{ $eq: ["$isPerson", true] }, 1, 0] } },
+              event: { $sum: { $cond: [{ $eq: ["$isEvent", true] }, 1, 0] } },
+              promise: { $sum: { $cond: [{ $eq: ["$isPromise", true] }, 1, 0] } },
+              relationship: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ["$isRelationship", true] },
+                        { $ne: ["$isPromise", true] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              other: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$isPerson", true] },
+                        { $ne: ["$isEvent", true] },
+                        { $ne: ["$isRelationship", true] },
+                        { $ne: ["$isPromise", true] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              total: { $sum: 1 },
+            },
+          },
+        ];
+
+        const result = await callResource("mongo", {
+          action: "aggregate",
+          collection: "objects",
+          pipeline,
+        });
+
+        if (result && result.length > 0) {
+          const counts = result[0];
+          setTotalCounts({
+            person: counts.person || 0,
+            event: counts.event || 0,
+            relationship: counts.relationship || 0,
+            promise: counts.promise || 0,
+            other: counts.other || 0,
+          });
+        } else {
+          setTotalCounts({
+            person: 0,
+            event: 0,
+            relationship: 0,
+            promise: 0,
+            other: 0,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch counts:", err);
+      } finally {
+        setCountsLoading(false);
+      }
+    };
+
+    fetchCounts();
+  }, [q]);
 
   function updateFilters(
     newQ: string,
@@ -439,8 +535,8 @@ const ObjectsPage = () => {
     setLocalQ(q);
   }, [q]);
 
-  // Count objects by type for filter buttons
-  const typeCounts = useMemo(() => {
+  // Count objects in current results (for showing "X loaded")
+  const loadedCounts = useMemo(() => {
     const counts: Record<ObjectType, number> = {
       person: 0,
       event: 0,
@@ -453,6 +549,11 @@ const ObjectsPage = () => {
     }
     return counts;
   }, [objects]);
+
+  // Total count across all types
+  const grandTotal = useMemo(() => {
+    return Object.values(totalCounts).reduce((sum, c) => sum + c, 0);
+  }, [totalCounts]);
 
   // Group objects by type for display
   const groupedObjects = useMemo(() => {
@@ -539,7 +640,7 @@ const ObjectsPage = () => {
             <TypeFilterButton
               key={type}
               type={type}
-              count={typeCounts[type]}
+              count={totalCounts[type]}
               isActive={activeTypes.has(type)}
               onClick={() => toggleType(type)}
             />
@@ -566,12 +667,22 @@ const ObjectsPage = () => {
         </div>
       </div>
 
-      {/* Active filters summary */}
-      {hasActiveFilters && (
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">
-            {loading ? "Searching..." : `${totalResults} results`}
-          </span>
+      {/* Results summary */}
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-muted-foreground">
+          {loading
+            ? "Loading..."
+            : countsLoading
+              ? "Counting..."
+              : hasActiveFilters
+                ? `Showing ${totalResults} of ${activeTypes.size > 0
+                    ? Array.from(activeTypes).reduce((sum, t) => sum + totalCounts[t], 0)
+                    : grandTotal
+                  } matching objects`
+                : `${grandTotal} objects total`}
+          {!loading && totalResults === 100 && " (limit reached)"}
+        </span>
+        {hasActiveFilters && (
           <Button
             variant="ghost"
             size="sm"
@@ -581,8 +692,8 @@ const ObjectsPage = () => {
             <X className="w-3 h-3 mr-1" />
             Clear filters
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Loading state */}
       {loading && (
@@ -621,12 +732,29 @@ const ObjectsPage = () => {
             const config = TYPE_CONFIG[type];
             const Icon = config.icon;
 
+            const total = totalCounts[type];
+            const loaded = typeObjects.length;
+            const hasMore = loaded < total;
+            const isFiltered = activeTypes.size > 0;
+
             return (
               <section key={type}>
                 <div className="flex items-center gap-2 mb-4">
                   <Icon className="w-5 h-5 text-muted-foreground" />
                   <h2 className="text-lg font-semibold">{config.label}</h2>
-                  <Badge variant="secondary">{typeObjects.length}</Badge>
+                  <Badge variant="secondary">
+                    {hasMore ? `${loaded} of ${total}` : total}
+                  </Badge>
+                  {hasMore && !isFiltered && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs text-muted-foreground"
+                      onClick={() => toggleType(type)}
+                    >
+                      Show all
+                    </Button>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {typeObjects.map((object) => (
@@ -642,9 +770,9 @@ const ObjectsPage = () => {
             );
           })}
 
-          {objects.length === 100 && (
-            <div className="text-sm text-muted-foreground text-center py-4">
-              Showing first 100 results. Use search or filters to find more specific objects.
+          {objects.length === 100 && grandTotal > 100 && (
+            <div className="text-sm text-muted-foreground text-center py-4 border-t pt-4">
+              Showing first 100 of {grandTotal} objects. Use search or type filters to narrow down results.
             </div>
           )}
         </div>
