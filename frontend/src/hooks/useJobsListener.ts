@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import type { JobInfo } from "@/types/jobs";
+import { useNotificationStore } from "@/stores/notificationStore";
 
 /** Format job type for display */
 function formatJobType(type: string): string {
@@ -48,6 +49,7 @@ function getResultDescription(result: any): string | null {
 export function useJobsListener() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { addNotification, showPopups } = useNotificationStore();
 
   const { data: jobs = [], isLoading } = useQuery({
     queryKey: ["jobs", "all"],
@@ -148,28 +150,53 @@ export function useJobsListener() {
               })
             : "";
 
-          toast.success("Summarization completed", {
-            description: `"${title}"${dateStr ? ` • ${dateStr}` : ""}`,
-            action: {
-              label: "View",
-              onClick: () => navigate(`/objects/${result.objectId}`),
-            },
-            duration: 10000,
+          const description = `"${title}"${dateStr ? ` • ${dateStr}` : ""}`;
+
+          // Add to notification center
+          addNotification({
+            type: "success",
+            title: "Summarization completed",
+            description,
+            action: { label: "View", path: `/objects/${result.objectId}` },
           });
+
+          // Show popup toast if enabled
+          if (showPopups) {
+            toast.success("Summarization completed", {
+              description,
+              action: {
+                label: "View",
+                onClick: () => navigate(`/objects/${result.objectId}`),
+              },
+              duration: 10000,
+            });
+          }
         } else {
           const job = jobs.find((j) => j.id === jobData.jobId);
           if (job?.trigger?.type === "manual") {
             const jobName = formatJobType(jobData.jobType);
             const resultInfo = getResultDescription(jobData.result);
+            const description = resultInfo || "Finished successfully";
 
-            toast.success(`${jobName} completed`, {
-              description: resultInfo || "Finished successfully",
-              action: {
-                label: "Details",
-                onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
-              },
-              duration: 5000,
+            // Add to notification center
+            addNotification({
+              type: "success",
+              title: `${jobName} completed`,
+              description,
+              action: { label: "Details", path: `/jobs/${jobData.jobId}?type=${jobData.jobType}` },
             });
+
+            // Show popup toast if enabled
+            if (showPopups) {
+              toast.success(`${jobName} completed`, {
+                description,
+                action: {
+                  label: "Details",
+                  onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
+                },
+                duration: 5000,
+              });
+            }
           }
         }
       } else if (event.event === "job.failed" && event.data) {
@@ -181,14 +208,26 @@ export function useJobsListener() {
 
         const jobName = formatJobType(jobData.jobType);
         const reason = jobData.failedReason || "Unknown error";
+        const description = reason.length > 100 ? reason.slice(0, 100) + "..." : reason;
 
-        toast.error(`${jobName} failed`, {
-          description: reason.length > 100 ? reason.slice(0, 100) + "..." : reason,
-          action: {
-            label: "Details",
-            onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
-          },
+        // Add to notification center
+        addNotification({
+          type: "error",
+          title: `${jobName} failed`,
+          description,
+          action: { label: "Details", path: `/jobs/${jobData.jobId}?type=${jobData.jobType}` },
         });
+
+        // Show popup toast if enabled
+        if (showPopups) {
+          toast.error(`${jobName} failed`, {
+            description,
+            action: {
+              label: "Details",
+              onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
+            },
+          });
+        }
       }
     }
   });
