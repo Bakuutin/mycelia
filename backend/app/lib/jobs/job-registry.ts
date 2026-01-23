@@ -57,16 +57,18 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
   }
 
   /**
-   * Get JSON schemas for all registered jobs.
-   * Returns { workerName: { input: inputSchema, output: outputSchema } }
+   * Get JSON schemas and policies for all registered jobs.
+   * Returns { workerName: { input: inputSchema, output: outputSchema, policies: Policy[] } }
    */
-  getJobSchemas(): Record<string, { input: any; output: any }> {
-    const schemas: Record<string, { input: any; output: any }> = {};
+  getJobSchemas(): Record<string, { input: any; output: any; policies: any[] }> {
+    const schemas: Record<string, { input: any; output: any; policies: any[] }> = {};
     for (const capability of this.list()) {
       try {
+        const inputSchema = makeSchemaOptionalAndFilterDefaults(capability.manifest.inputSchema);
         schemas[capability.manifest.name] = {
-          input: capability.manifest.inputSchema,
+          input: inputSchema,
           output: capability.manifest.outputSchema,
+          policies: capability.manifest.policies || [],
         };
       } catch (err: any) {
         console.error(`Failed to convert schema for job type ${capability.manifest.name}:`, err.message);
@@ -130,6 +132,38 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
   async loadAllImplementations(): Promise<void> {
     await Promise.all(this.list().map((c) => this.loadImplementation(c.manifest.name)));
   }
+}
+
+/**
+ * Makes all fields in a JSON schema non-required and filters out fields
+ * that do not have a default value.
+ * @param schema The original JSON schema.
+ * @returns A new JSON schema with all fields optional and filtered.
+ */
+function makeSchemaOptionalAndFilterDefaults(schema: any): any {
+  if (!schema || !schema.properties) {
+    return schema;
+  }
+
+      const newProperties: Record<string, any> = {};
+      const requiredFields = new Set(schema.required || []);
+      for (const key in schema.properties) {
+        const property = schema.properties[key];
+        // Keep if it has a default value, or if it is a required field.
+        // Otherwise, drop it from the schema entirely.
+        if (property.default !== undefined || requiredFields.has(key)) {
+          newProperties[key] = { ...property };
+          delete newProperties[key].optional;
+        }
+      }
+
+      const newSchema = {
+        ...schema,
+        properties: newProperties,
+        required: [], // Explicitly make all fields non-required by default
+      };
+
+  return newSchema;
 }
 
 /** Global job registry instance */
