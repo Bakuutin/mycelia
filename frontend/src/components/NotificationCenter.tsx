@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Popover,
@@ -234,7 +233,7 @@ export function NotificationCenter() {
           </button>
         </div>
 
-        <ScrollArea className="max-h-72">
+        <div className="h-[400px] overflow-y-auto">
           {filteredNotifications.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground">
               {filter === "error" ? (
@@ -267,7 +266,7 @@ export function NotificationCenter() {
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
 
         <Separator />
         <div className="p-3 flex items-center justify-between">
