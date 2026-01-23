@@ -160,6 +160,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   };
 
   let objectId;
+  let title: string;
 
   if (existingObjectId) {
     const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
@@ -171,6 +172,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       throw new Error(`Object ${existingObjectId} not found`);
     }
 
+    title = currentObject.name || "Conversation";
     const currentSummaries = currentObject.summaries || [];
     const newSummaries = [...currentSummaries, summaryEntry];
 
@@ -194,14 +196,14 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       ],
     }, { jwt, myceliaUrl });
 
-    const generatedTitle = titleResponse.choices[0].message.content;
-    console.log(`[summarization] Job ${job.id}: LLM generated title: "${generatedTitle}"`);
+    title = titleResponse.choices[0].message.content;
+    console.log(`[summarization] Job ${job.id}: LLM generated title: "${title}"`);
 
     const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "create",
       object: {
         isConversation: true,
-        name: titleResponse.choices[0].message.content,
+        name: title,
         summaries: [summaryEntry],
         timeRanges: [{
           start: start,
@@ -219,6 +221,9 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   return {
     success: true,
     objectId: objectId,
+    title: title,
+    start: start.toISOString(),
+    end: end.toISOString(),
     description: summary,
   };
 }
@@ -229,6 +234,9 @@ const capability: JobCapability = {
   outputSchema: z.toJSONSchema(z.object({
     success: z.boolean(),
     objectId: z.string(),
+    title: z.string(),
+    start: z.string(),
+    end: z.string(),
     description: z.string(),
   })),
   policies: [

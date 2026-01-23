@@ -98,11 +98,22 @@ export function useJobsListener() {
 
       if (event.event === "job.completed" && event.data) {
         if (jobData.jobType === "summarization" && jobData.result?.objectId) {
+          const result = jobData.result as { objectId: string; title?: string; end?: string };
+          const title = result.title || "Conversation";
+          const dateStr = result.end 
+            ? new Date(result.end).toLocaleDateString(undefined, { 
+                month: "short", 
+                day: "numeric", 
+                hour: "2-digit", 
+                minute: "2-digit" 
+              })
+            : "";
+          
           toast.success("Summarization completed", {
-            description: "Your conversation has been summarized successfully.",
+            description: `"${title}"${dateStr ? ` • ${dateStr}` : ""}`,
             action: {
-              label: "Go to conversation",
-              onClick: () => navigate(`/objects/${jobData.result.objectId}`),
+              label: "View",
+              onClick: () => navigate(`/objects/${result.objectId}`),
             },
             duration: 10000,
           });
