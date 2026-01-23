@@ -273,8 +273,9 @@ function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonPr
 
 type ObjectWithRelations = ObjectModel & { subjectObject?: ObjectModel; objectObject?: ObjectModel };
 
-const ITEMS_PER_TYPE = 20; // Initial items per type
-const LOAD_MORE_COUNT = 20; // Items to load when clicking "load more"
+const ITEMS_PER_TYPE = 25; // Initial items per type
+const LOAD_MORE_COUNT = 50; // Items to load when clicking "load more"
+const MAX_ITEMS_PER_TYPE = 500; // Maximum items per type for "load all"
 
 const ObjectsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -554,8 +555,11 @@ const ObjectsPage = () => {
   }, [q, sortBy, activeTypesParam, fetchTypeObjects]);
 
   // Load more for a specific type
-  const loadMore = useCallback(async (type: ObjectType) => {
-    const newLimit = limits[type] + LOAD_MORE_COUNT;
+  const loadMore = useCallback(async (type: ObjectType, loadAll = false) => {
+    const total = totalCounts[type];
+    const newLimit = loadAll 
+      ? Math.min(total, MAX_ITEMS_PER_TYPE) 
+      : Math.min(limits[type] + LOAD_MORE_COUNT, total);
     
     setLoadingTypes((prev) => new Set(prev).add(type));
     
@@ -572,7 +576,7 @@ const ObjectsPage = () => {
         return next;
       });
     }
-  }, [limits, fetchTypeObjects]);
+  }, [limits, totalCounts, fetchTypeObjects]);
 
   useEffect(() => {
     setLocalQ(q);
@@ -721,7 +725,7 @@ const ObjectsPage = () => {
       </div>
 
       {/* Results summary */}
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-2 text-sm flex-wrap">
         <span className="text-muted-foreground">
           {loading
             ? "Loading..."
@@ -731,8 +735,11 @@ const ObjectsPage = () => {
                 ? `${activeTypes.size > 0
                     ? Array.from(activeTypes).reduce((sum, t) => sum + totalCounts[t], 0)
                     : grandTotal
-                  } matching objects`
-                : `${grandTotal} objects total`}
+                  } objects found`
+                : `${grandTotal} objects in database`}
+        </span>
+        <span className="text-xs text-muted-foreground/60">
+          (expand sections and use "Load more" to see all)
         </span>
         {hasActiveFilters && (
           <Button
@@ -829,17 +836,32 @@ const ObjectsPage = () => {
                           </div>
                           
                           {hasMore && (
-                            <div className="mt-4 text-center">
+                            <div className="mt-4 flex items-center justify-center gap-2">
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => loadMore(type)}
+                                onClick={() => loadMore(type, false)}
                                 disabled={isLoadingMore}
                               >
                                 {isLoadingMore
                                   ? "Loading..."
-                                  : `Load more (${total - loaded} remaining)`}
+                                  : `Load ${Math.min(LOAD_MORE_COUNT, total - loaded)} more`}
                               </Button>
+                              {total - loaded > LOAD_MORE_COUNT && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => loadMore(type, true)}
+                                  disabled={isLoadingMore}
+                                >
+                                  {total <= MAX_ITEMS_PER_TYPE 
+                                    ? `Load all ${total - loaded}`
+                                    : `Load ${MAX_ITEMS_PER_TYPE - loaded} (max)`}
+                                </Button>
+                              )}
+                              <span className="text-xs text-muted-foreground">
+                                {total - loaded} remaining
+                              </span>
                             </div>
                           )}
                         </>
