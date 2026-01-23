@@ -70,12 +70,12 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const { start: startStr, end: endStr, prompt: userPrompt, model: userModel, objectId: existingObjectId } = jobData;
   const start = new Date(startStr);
   const end = new Date(endStr);
-  
+
   console.log(`[summarization] Job ${job.id}: processing time range ${start.toISOString()} to ${end.toISOString()} (${Math.round((end.getTime() - start.getTime()) / 1000 / 60)}min)`);
   if (existingObjectId) {
     console.log(`[summarization] Job ${job.id}: updating existing object ${existingObjectId}`);
   }
-  
+
   const jwt = Deno.env.get("MYCELIA_JWT")!;
   const myceliaUrl = env.MYCELIA_URL;
 
@@ -118,7 +118,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   promptText += getTimestampMessage(new Date(lastEnd));
 
   const modelAlias = userModel || "small";
-  
+
   // Load system prompt: user override > config setting > fallback
   let systemPrompt = userPrompt;
   if (!systemPrompt) {

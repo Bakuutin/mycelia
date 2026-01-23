@@ -1,10 +1,49 @@
-import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWebSocketSubscription } from "./useWebSocket";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import type { JobInfo } from "@/types/jobs";
+
+/** Format job type for display */
+function formatJobType(type: string): string {
+  const names: Record<string, string> = {
+    summarization: "Summarization",
+    transcription: "Transcription",
+    transcription_sequence_creator: "Transcription Queue",
+    conversationExtractor: "Conversation Extraction",
+    conversationChunkCreator: "Conversation Chunking",
+    histRecalculation: "History Recalculation",
+    diarization: "Speaker Diarization",
+    ingestion: "Audio Ingestion",
+    vad: "Voice Activity Detection",
+  };
+  return names[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Get description from job result */
+function getResultDescription(result: any): string | null {
+  if (!result) return null;
+
+  if (result.message) return result.message;
+
+  const parts: string[] = [];
+
+  if (typeof result.conversationsCreated === "number" && result.conversationsCreated > 0) {
+    parts.push(`${result.conversationsCreated} conversation${result.conversationsCreated !== 1 ? "s" : ""}`);
+  }
+  if (typeof result.chunksCreated === "number" && result.chunksCreated > 0) {
+    parts.push(`${result.chunksCreated} chunk${result.chunksCreated !== 1 ? "s" : ""}`);
+  }
+  if (typeof result.processed === "number" && result.processed > 0) {
+    parts.push(`${result.processed} processed`);
+  }
+  if (typeof result.chunksProcessed === "number" && result.chunksProcessed > 0) {
+    parts.push(`${result.chunksProcessed} chunk${result.chunksProcessed !== 1 ? "s" : ""} processed`);
+  }
+
+  return parts.length > 0 ? parts.join(", ") : null;
+}
 
 export function useJobsListener() {
   const queryClient = useQueryClient();
@@ -52,7 +91,7 @@ export function useJobsListener() {
         if (existingIndex >= 0) {
           const updated = [...oldJobs];
           const existing = updated[existingIndex];
-          
+
           // Determine processedOn and finishedOn with fallbacks
           let processedOn = jobData.processedOn ?? existing.processedOn;
           if (!processedOn && (event.event === "job.started" || event.event === "job.active" || event.event === "job.progress" || newState === "active")) {
@@ -100,15 +139,15 @@ export function useJobsListener() {
         if (jobData.jobType === "summarization" && jobData.result?.objectId) {
           const result = jobData.result as { objectId: string; title?: string; end?: string };
           const title = result.title || "Conversation";
-          const dateStr = result.end 
-            ? new Date(result.end).toLocaleDateString(undefined, { 
-                month: "short", 
-                day: "numeric", 
-                hour: "2-digit", 
-                minute: "2-digit" 
+          const dateStr = result.end
+            ? new Date(result.end).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
               })
             : "";
-          
+
           toast.success("Summarization completed", {
             description: `"${title}"${dateStr ? ` • ${dateStr}` : ""}`,
             action: {
@@ -120,10 +159,13 @@ export function useJobsListener() {
         } else {
           const job = jobs.find((j) => j.id === jobData.jobId);
           if (job?.trigger?.type === "manual") {
-            toast.success("Job completed", {
-              description: `${jobData.jobType} job finished successfully.`,
+            const jobName = formatJobType(jobData.jobType);
+            const resultInfo = getResultDescription(jobData.result);
+
+            toast.success(`${jobName} completed`, {
+              description: resultInfo || "Finished successfully",
               action: {
-                label: "View job",
+                label: "Details",
                 onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
               },
               duration: 5000,
@@ -131,17 +173,19 @@ export function useJobsListener() {
           }
         }
       } else if (event.event === "job.failed" && event.data) {
-
-        // check if the job is a manual job
+        // Only show notifications for manual jobs
         const job = jobs.find((j) => j.id === jobData.jobId);
-        if (job?.trigger?.type != "manual") {
+        if (job?.trigger?.type !== "manual") {
           return;
         }
 
-        toast.error("Job failed", {
-          description: `${jobData.jobType}: ${jobData.failedReason || "Unknown error"}`,
+        const jobName = formatJobType(jobData.jobType);
+        const reason = jobData.failedReason || "Unknown error";
+
+        toast.error(`${jobName} failed`, {
+          description: reason.length > 100 ? reason.slice(0, 100) + "..." : reason,
           action: {
-            label: "View job",
+            label: "Details",
             onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
           },
         });
@@ -151,4 +195,3 @@ export function useJobsListener() {
 
   return { jobs, runningCount, getJobById, isLoading };
 }
-
