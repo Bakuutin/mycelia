@@ -371,11 +371,18 @@ export default function JobsPage() {
   };
 
   const handleClearCompleted = async () => {
-    if (
-      !confirm(
-        "Are you sure you want to clear all completed, failed, and cancelled jobs? This will permanently delete them."
-      )
-    ) {
+    const confirmText = "DELETE";
+    const userInput = prompt(
+      `⚠️ DEV ONLY - DESTRUCTIVE ACTION ⚠️\n\n` +
+      `This will permanently delete ALL completed, failed, and cancelled jobs from the database.\n\n` +
+      `This action cannot be undone and the data cannot be recovered.\n\n` +
+      `Type "${confirmText}" to confirm:`
+    );
+
+    if (userInput !== confirmText) {
+      if (userInput !== null) {
+        alert("Deletion cancelled - confirmation text did not match.");
+      }
       return;
     }
 
@@ -432,14 +439,17 @@ export default function JobsPage() {
             <Trash2 className="h-4 w-4 mr-2" />
             Cancel All
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleClearCompleted}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            Clear Completed
-          </Button>
+          {import.meta.env.DEV && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearCompleted}
+              title="Dev only: Permanently delete completed jobs from database"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear Completed (Dev)
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
