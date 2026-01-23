@@ -123,6 +123,12 @@ const listObjectsSchema = z.object({
     searchTerm: z.union([z.string(), z.null()]).optional().describe(
       "Search string to match against name and aliases (case-insensitive)"
     ),
+    timeRangeFilter: z.object({
+      start: z.string().describe("ISO 8601 date string for range start"),
+      end: z.string().describe("ISO 8601 date string for range end"),
+    }).optional().describe(
+      "Filter objects that overlap with the specified time range"
+    ),
   }).optional().describe("Query options for filtering, sorting, and pagination"),
 });
 
@@ -179,6 +185,12 @@ const exploreTimeRangeSchema = z.object({
   }).optional().describe("Query options for sorting and pagination"),
 });
 
+const getTimeRangeSchema = z.object({
+  action: z.literal("getTimeRange").describe(
+    "Get the minimum and maximum dates from all object time ranges"
+  ),
+});
+
 const objectsRequestSchema = z.discriminatedUnion("action", [
   createObjectSchema,
   updateObjectSchema,
@@ -188,6 +200,7 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   getRelationshipsSchema,
   getHistorySchema,
   exploreTimeRangeSchema,
+  getTimeRangeSchema,
 ]);
 
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
@@ -418,6 +431,24 @@ export class ObjectsResource
               { name: searchRegex },
               { aliases: searchRegex },
             ],
+          };
+        }
+
+        if (input.options?.timeRangeFilter) {
+          const filterStart = new Date(input.options.timeRangeFilter.start);
+          const filterEnd = new Date(input.options.timeRangeFilter.end);
+
+          query = {
+            ...query,
+            timeRanges: {
+              $elemMatch: {
+                start: { $lt: filterEnd },
+                $or: [
+                  { end: { $gt: filterStart } },
+                  { end: { $exists: false } },
+                ],
+              },
+            },
           };
         }
 
@@ -809,6 +840,45 @@ export class ObjectsResource
         return { total, objects };
       }
 
+      case "getTimeRange": {
+        const pipeline = [
+          {
+            $match: {
+              timeRanges: { $exists: true, $ne: [] },
+            },
+          },
+          {
+            $unwind: "$timeRanges",
+          },
+          {
+            $group: {
+              _id: null,
+              minStart: { $min: "$timeRanges.start" },
+              maxEnd: {
+                $max: {
+                  $ifNull: ["$timeRanges.end", "$timeRanges.start"],
+                },
+              },
+            },
+          },
+        ];
+
+        const result = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline,
+        });
+
+        if (result && result.length > 0) {
+          return {
+            start: result[0].minStart,
+            end: result[0].maxEnd,
+          };
+        }
+
+        return { start: null, end: null };
+      }
+
       default:
         throw new Error("Unknown action");
     }
@@ -824,6 +894,7 @@ export class ObjectsResource
       getRelationships: ["read"],
       getHistory: ["read"],
       exploreTimeRange: ["read"],
+      getTimeRange: ["read"],
     };
 
     return [

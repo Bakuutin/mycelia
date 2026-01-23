@@ -1,76 +1,33 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, callResource } from "@/lib/api";
 import { TimelineChart } from "@/components/timeline/TimelineChart";
+import { TimelineHeader } from "@/components/timeline/TimelineHeader";
+import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { config } from "@/config";
 import { useObjects } from "@/modules/objects/useObjects";
-import { useTimelineRange } from "@/stores/timelineRange";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
+import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore";
 import { useTimeline } from "@/hooks/useTimeline";
-// import { useTimelineRecalc } from "@/hooks/useTimelineRecalc";
-import type { Model } from "@/types/llm";
-import type { Prompt } from "@/types/config";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
-import {
-  X,
-  Maximize2,
-  CircleOff,
-  CalendarPlus,
-  Minimize2,
-  Wand2,
-  Play,
-} from "lucide-react";
-import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
-import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
-
-// Yes, it's module level
-// We wanted it that way :)
-let hasZoomedToFit = false;
-
-const ToolWrapper = ({ tool }: { tool: any }) => {
-  const Component = tool.component;
-
-  if (!tool.tooltip) {
-    return <Component />;
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {/* Wrap in a span because some components might not forward refs or handle events correctly */}
-        <span className="inline-flex">
-          <Component />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{tool.tooltip}</p>
-      </TooltipContent>
-    </Tooltip>
-  );
-};
+import { api } from "@/lib/api";
 
 const TimelinePage = () => {
   const navigate = useNavigate();
-  const { loading, error, objects } = useObjects();
-  const { setRange } = useTimelineRange();
+  const { error, objects } = useObjects();
   const { clearSelection: clearObjectSelection, selectedIds } =
     useObjectSelectionStore();
   const { selection: timeSelection, clearSelection: clearTimeSelection } =
     useTimelineSelectionStore();
-  const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
-  const [isRunJobOpen, setIsRunJobOpen] = useState(false);
+  const spanningObjects = useSpanningObjectsStore(
+    (state) => state.spanningObjects,
+  );
+  const ongoingObjects = useSpanningObjectsStore(
+    (state) => state.ongoingObjects,
+  );
 
   const timeline = useTimeline();
-  // const { processingRanges } = useTimelineRecalc(); // Moved to ProcessingLayer
   const { zoomTo } = timeline;
-  const hasObjectSelection = selectedIds.size > 0;
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
 
   const isShortRange =
@@ -86,6 +43,22 @@ const TimelinePage = () => {
       clearTimeSelection();
     };
   }, [clearObjectSelection, clearTimeSelection]);
+
+  const selectedObjects = useMemo(() => {
+    if (!objects || selectedIds.size === 0) return [];
+    return objects.filter((object) => selectedIds.has(object._id.toString()));
+  }, [objects, selectedIds]);
+
+  const panelObjects = useMemo(() => {
+    const excludedIds = new Set([
+      ...spanningObjects.map((o) => o._id.toString()),
+      ...ongoingObjects.map((o) => o._id.toString()),
+    ]);
+    const selectedNotExcluded = selectedObjects.filter(
+      (o) => !excludedIds.has(o._id.toString()),
+    );
+    return [...ongoingObjects, ...spanningObjects, ...selectedNotExcluded];
+  }, [spanningObjects, ongoingObjects, selectedObjects]);
 
   const handleZoomToSelection = () => {
     if (timeSelection.start && timeSelection.end) {
@@ -104,61 +77,75 @@ const TimelinePage = () => {
     navigate(`/objects/create?${params.toString()}`);
   };
 
-  const handleZoomToFit = useCallback(() => {
-    if (!objects || objects.length === 0) return;
+  const handleZoomToFit = useCallback(async () => {
+    try {
+      const result = await api.post("/api/resource/objects", {
+        action: "getTimeRange",
+      });
 
-    console.log("Zooming to fit", objects.length, "objects");
+      if (result.data?.start && result.data?.end) {
+        const earliest = new Date(result.data.start);
+        const latest = new Date(result.data.end);
 
-    const allTimes: Date[] = [];
-    for (const object of objects) {
-      if (object.timeRanges && object.timeRanges.length > 0) {
-        for (const range of object.timeRanges) {
-          allTimes.push(range.start);
-          if (range.end) {
-            allTimes.push(range.end);
-          } else {
-            allTimes.push(range.start);
-          }
-        }
+        const duration = latest.getTime() - earliest.getTime();
+        const padding = duration * 0.05;
+        const paddedStart = new Date(earliest.getTime() - padding);
+        const paddedEnd = new Date(latest.getTime() + padding);
+        zoomTo(paddedStart, paddedEnd);
       }
+    } catch (err) {
+      console.error("Failed to get time range:", err);
+    }
+  }, [zoomTo]);
+
+  const handleTimeRangeSelect = (range: string) => {
+    const now = new Date();
+    let start: Date;
+    let end: Date = now;
+
+    switch (range) {
+      case "last5min":
+        start = new Date(now.getTime() - 5 * 60 * 1000);
+        break;
+      case "lastHour":
+        start = new Date(now.getTime() - 60 * 60 * 1000);
+        break;
+      case "today":
+        start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case "yesterday":
+        start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case "thisWeek": {
+        const dayOfWeek = now.getDay();
+        const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+        start = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() + mondayOffset,
+        );
+        break;
+      }
+      case "currentMonth":
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+      case "yearToDate":
+        start = new Date(now.getFullYear(), 0, 1);
+        break;
+      case "pastYear":
+        start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        return;
     }
 
-    if (allTimes.length === 0) return;
-
-    const earliest = new Date(Math.min(...allTimes.map((t) => t.getTime())));
-    const latest = new Date(Math.max(...allTimes.map((t) => t.getTime())));
-
-    const duration = latest.getTime() - earliest.getTime();
-    const padding = duration * 0.05;
-    const paddedStart = new Date(earliest.getTime() - padding);
-    const paddedEnd = new Date(latest.getTime() + padding);
-    zoomTo(paddedStart, paddedEnd);
-  }, [objects, zoomTo]);
-
-  useEffect(() => {
-    if (!loading && objects && objects.length > 0 && !hasZoomedToFit) {
-      setTimeout(() => {
-        handleZoomToFit();
-      }, 500);
-      hasZoomedToFit = true;
-    }
-  }, [loading, objects, handleZoomToFit]);
-
-  if (loading) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-3xl font-bold">Timeline</h1>
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-muted-foreground">Loading objects...</p>
-        </div>
-      </div>
-    );
-  }
+    zoomTo(start, end);
+  };
 
   if (error) {
     return (
       <div className="space-y-6">
-        <h1 className="text-3xl font-bold">Timeline</h1>
         <div className="border rounded-lg p-8 text-center">
           <p className="text-red-500 mb-2">Error loading objects: {error}</p>
           <p className="text-sm text-muted-foreground">
@@ -172,131 +159,27 @@ const TimelinePage = () => {
   return (
     <TooltipProvider>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">Timeline</h1>
-          <div className="flex items-center flex-1 justify-end gap-2 ml-4">
-            {hasTimeSelection && (
-              <div className="flex items-center gap-2 mr-auto">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      onClick={handleZoomToSelection}
-                      variant="outline"
-                      size="icon"
-                    >
-                      <Maximize2 className="w-4 h-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Zoom to selected range</p>
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => setIsRunJobOpen(true)}
-                    >
-                      <Play className="w-4 h-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Run job on range</p>
-                  </TooltipContent>
-                </Tooltip>
-                <RunJobDialog
-                  open={isRunJobOpen}
-                  onOpenChange={setIsRunJobOpen}
-                  startDate={timeSelection.start || new Date()}
-                  endDate={timeSelection.end || new Date()}
-                />
-
-                {isShortRange && (
-                  <>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => setIsSummarizeOpen(true)}
-                        >
-                          <Wand2 className="w-4 h-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Summarize range</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <SummarizeDialog
-                      open={isSummarizeOpen}
-                      onOpenChange={setIsSummarizeOpen}
-                      startDate={timeSelection.start || new Date()}
-                      endDate={timeSelection.end || new Date()}
-                    />
-                  </>
-                )}
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      onClick={handleCreateEvent}
-                      variant="outline"
-                      size="icon"
-                    >
-                      <CalendarPlus className="w-4 h-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Create object from range</p>
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      onClick={clearTimeSelection}
-                      variant="outline"
-                      size="icon"
-                    >
-                      <CircleOff className="w-4 h-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Clear selection</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    onClick={handleZoomToFit}
-                    variant="outline"
-                    size="icon"
-                  >
-                    <Minimize2 className="w-4 h-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Zoom to fit all objects</p>
-                </TooltipContent>
-              </Tooltip>
-              {config.tools.map((tool, i) => (
-                <ToolWrapper key={i} tool={tool} />
-              ))}
-            </div>
-          </div>
-        </div>
+        <TimelineHeader
+          hasTimeSelection={hasTimeSelection}
+          timeSelectionStart={timeSelection.start}
+          timeSelectionEnd={timeSelection.end}
+          isShortRange={isShortRange}
+          onZoomToFit={handleZoomToFit}
+          onTimeRangeSelect={handleTimeRangeSelect}
+          onZoomToSelection={handleZoomToSelection}
+          onCreateEvent={handleCreateEvent}
+          onClearTimeSelection={clearTimeSelection}
+        />
 
         <div className="border rounded-lg p-2">
-          <TimelineChart
-            timeline={timeline}
-            layers={config.layers}
-          />
+          <TimelineChart timeline={timeline} layers={config.layers} />
         </div>
+
+        <SelectedObjectsPanel
+          selectedObjects={panelObjects}
+          onClear={clearObjectSelection}
+          hasSelections={selectedIds.size > 0}
+        />
       </div>
     </TooltipProvider>
   );
