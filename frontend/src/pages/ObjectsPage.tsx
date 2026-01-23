@@ -38,6 +38,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Markdown } from "@/components/Markdown";
 
 function escapeRegex(source: string) {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -265,10 +266,12 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
             </div>
           )}
 
-          {/* Details */}
+          {/* Details with markdown support */}
           {object.details && (
-            <div className="text-sm text-muted-foreground line-clamp-2 pl-11">
-              {object.details}
+            <div className="text-sm text-muted-foreground pl-11 line-clamp-3">
+              <Markdown compact className="text-muted-foreground">
+                {object.details}
+              </Markdown>
             </div>
           )}
 
