@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, Check, CheckCheck, Trash2, X } from "lucide-react";
+import { Bell, Check, CheckCheck, Trash2, X, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -16,8 +16,11 @@ import {
   useNotificationStore,
   selectUnreadCount,
   type Notification,
+  type NotificationType,
 } from "@/stores/notificationStore";
 import { cn } from "@/lib/utils";
+
+type FilterType = "all" | "error" | "success";
 
 function formatTimestamp(timestamp: number): string {
   const now = Date.now();
@@ -121,6 +124,7 @@ function NotificationItem({
 export function NotificationCenter() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState<FilterType>("all");
   const {
     notifications,
     showPopups,
@@ -131,6 +135,16 @@ export function NotificationCenter() {
     setShowPopups,
   } = useNotificationStore();
   const unreadCount = useNotificationStore(selectUnreadCount);
+
+  const errorCount = useMemo(
+    () => notifications.filter((n) => n.type === "error").length,
+    [notifications]
+  );
+
+  const filteredNotifications = useMemo(() => {
+    if (filter === "all") return notifications;
+    return notifications.filter((n) => n.type === filter);
+  }, [notifications, filter]);
 
   const handleAction = (path: string) => {
     navigate(path);
@@ -181,15 +195,68 @@ export function NotificationCenter() {
           </div>
         </div>
 
-        <ScrollArea className="max-h-80">
-          {notifications.length === 0 ? (
+        {/* Filter tabs */}
+        <div className="flex border-b">
+          <button
+            onClick={() => setFilter("all")}
+            className={cn(
+              "flex-1 px-3 py-2 text-xs font-medium transition-colors",
+              filter === "all"
+                ? "border-b-2 border-primary text-primary"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            All ({notifications.length})
+          </button>
+          <button
+            onClick={() => setFilter("error")}
+            className={cn(
+              "flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1",
+              filter === "error"
+                ? "border-b-2 border-red-500 text-red-500"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <AlertCircle className="h-3 w-3" />
+            Errors ({errorCount})
+          </button>
+          <button
+            onClick={() => setFilter("success")}
+            className={cn(
+              "flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1",
+              filter === "success"
+                ? "border-b-2 border-green-500 text-green-500"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <CheckCircle2 className="h-3 w-3" />
+            Success
+          </button>
+        </div>
+
+        <ScrollArea className="max-h-72">
+          {filteredNotifications.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground">
-              <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No notifications</p>
+              {filter === "error" ? (
+                <>
+                  <CheckCircle2 className="h-8 w-8 mx-auto mb-2 opacity-50 text-green-500" />
+                  <p className="text-sm">No failed jobs</p>
+                </>
+              ) : filter === "success" ? (
+                <>
+                  <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No completed jobs</p>
+                </>
+              ) : (
+                <>
+                  <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No notifications</p>
+                </>
+              )}
             </div>
           ) : (
             <div className="p-2 space-y-2">
-              {notifications.map((notification) => (
+              {filteredNotifications.map((notification) => (
                 <NotificationItem
                   key={notification.id}
                   notification={notification}

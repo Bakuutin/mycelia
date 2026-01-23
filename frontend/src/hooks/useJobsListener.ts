@@ -200,17 +200,14 @@ export function useJobsListener() {
           }
         }
       } else if (event.event === "job.failed" && event.data) {
-        // Only show notifications for manual jobs
         const job = jobs.find((j) => j.id === jobData.jobId);
-        if (job?.trigger?.type !== "manual") {
-          return;
-        }
+        const isManualJob = job?.trigger?.type === "manual";
 
         const jobName = formatJobType(jobData.jobType);
         const reason = jobData.failedReason || "Unknown error";
         const description = reason.length > 100 ? reason.slice(0, 100) + "..." : reason;
 
-        // Add to notification center
+        // Always add failed jobs to notification center (important for monitoring)
         addNotification({
           type: "error",
           title: `${jobName} failed`,
@@ -218,8 +215,8 @@ export function useJobsListener() {
           action: { label: "Details", path: `/jobs/${jobData.jobId}?type=${jobData.jobType}` },
         });
 
-        // Show popup toast if enabled
-        if (showPopups) {
+        // Show popup toast only for manual jobs (to avoid spam from automated failures)
+        if (showPopups && isManualJob) {
           toast.error(`${jobName} failed`, {
             description,
             action: {
