@@ -34,6 +34,8 @@ interface SchemaProperty {
   default?: unknown;
   description?: string;
   enum?: unknown[];
+  properties?: Record<string, SchemaProperty>;
+  required?: string[];
 }
 
 interface WorkerEntry {
@@ -57,6 +59,87 @@ interface WorkerDefaults {
   workerType: string;
   defaults: Record<string, unknown>;
 }
+
+const getNestedValue = (obj: any, path: string): any => {
+  const parts = path.split(".");
+  let current = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = current[part];
+  }
+  return current;
+};
+
+const setNestedValue = (obj: any, path: string, value: any): any => {
+  const parts = path.split(".");
+  const result = { ...obj };
+  let current = result;
+
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (
+      !(part in current) ||
+      typeof current[part] !== "object" ||
+      current[part] === null ||
+      Array.isArray(current[part])
+    ) {
+      current[part] = {};
+    } else {
+      current[part] = { ...current[part] };
+    }
+    current = current[part];
+  }
+
+  const lastPart = parts[parts.length - 1];
+  if (value === null || value === undefined) {
+    delete current[lastPart];
+
+    // Clean up empty parent objects
+    for (let i = parts.length - 2; i >= 0; i--) {
+      let parentRef = result;
+      for (let j = 0; j <= i; j++) {
+        if (parentRef === null || parentRef === undefined) break;
+        parentRef = parentRef[parts[j]];
+      }
+      if (parentRef && Object.keys(parentRef).length === 0) {
+        let grandParentRef = result;
+        for (let j = 0; j < i; j++) {
+          grandParentRef = grandParentRef[parts[j]];
+        }
+        delete grandParentRef[parts[i]];
+      } else {
+        break;
+      }
+    }
+  } else {
+    current[lastPart] = value;
+  }
+
+  return result;
+};
+
+const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+  const result: Array<[string, any]> = [];
+
+  for (const [key, value] of Object.entries(obj)) {
+    const fullPath = prefix ? `${prefix}.${key}` : key;
+
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      !(value instanceof Date)
+    ) {
+      const nested = flattenNestedFields(value, fullPath);
+      result.push(...nested);
+    } else {
+      result.push([fullPath, value]);
+    }
+  }
+
+  return result;
+};
 
 const getTypeString = (value: unknown): string => {
   if (value === null || value === undefined) return "unknown";
@@ -156,34 +239,15 @@ const WorkerDetailPage = () => {
   };
 
   const handleFieldChange = (fieldName: string, value: unknown) => {
-    setOverrides((prev) => ({
-      ...prev,
-      [fieldName]: value,
-    }));
+    setOverrides((prev) => setNestedValue(prev, fieldName, value));
   };
 
-  const handleResetToSchemaDefault = (fieldName: string, schemaDefault: unknown) => {
-    if (schemaDefault === undefined) {
-      setOverrides((prev) => {
-        const next = { ...prev };
-        delete next[fieldName];
-        return next;
-      });
-    } else {
-      setOverrides((prev) => {
-        const next = { ...prev };
-        delete next[fieldName];
-        return next;
-      });
-    }
+  const handleResetToSchemaDefault = (fieldName: string, _schemaDefault: unknown) => {
+    setOverrides((prev) => setNestedValue(prev, fieldName, null));
   };
 
   const handleDeleteField = (fieldName: string) => {
-    setOverrides((prev) => {
-      const next = { ...prev };
-      delete next[fieldName];
-      return next;
-    });
+    setOverrides((prev) => setNestedValue(prev, fieldName, null));
   };
 
   const handleAddCustomField = () => {
@@ -211,52 +275,71 @@ const WorkerDetailPage = () => {
     isRequired: boolean;
   }> => {
     if (!worker?.inputSchema) return [];
-    
-    // Handle different JSON Schema structures
-    // Zod's toJSONSchema may produce nested structures
+
+    const flattenSchema = (
+      schema: SchemaProperty,
+      prefix = "",
+      required: string[] = []
+    ): Array<{ name: string; schema: SchemaProperty; isRequired: boolean }> => {
+      const properties = schema.properties;
+      if (!properties) return [];
+
+      const result: Array<{
+        name: string;
+        schema: SchemaProperty;
+        isRequired: boolean;
+      }> = [];
+
+      for (const [key, prop] of Object.entries(properties)) {
+        if (key === "type") continue;
+        const fullPath = prefix ? `${prefix}.${key}` : key;
+        const isPropRequired = required.includes(key);
+
+        if (prop.type === "object" && prop.properties) {
+          result.push(...flattenSchema(prop, fullPath, prop.required || []));
+        } else {
+          result.push({
+            name: fullPath,
+            schema: prop,
+            isRequired: isPropRequired,
+          });
+        }
+      }
+      return result;
+    };
+
     const schema = worker.inputSchema as Record<string, unknown>;
-    
-    // Debug: log the schema structure
-    console.log("[WorkerDetailPage] inputSchema:", JSON.stringify(schema, null, 2));
-    
-    // Try to find properties at various levels
     let properties: Record<string, SchemaProperty> | undefined;
     let required: string[] = [];
-    
+
     if (schema.properties && typeof schema.properties === "object") {
       properties = schema.properties as Record<string, SchemaProperty>;
       required = (schema.required as string[]) || [];
     } else if (schema.$defs || schema.definitions) {
-      // Some JSON Schema generators nest under $defs or definitions
-      const defs = (schema.$defs || schema.definitions) as Record<string, unknown>;
-      const mainDef = Object.values(defs)[0] as Record<string, unknown> | undefined;
+      const defs = (schema.$defs || schema.definitions) as Record<
+        string,
+        unknown
+      >;
+      const mainDef = Object.values(defs)[0] as
+        | Record<string, unknown>
+        | undefined;
       if (mainDef?.properties) {
         properties = mainDef.properties as Record<string, SchemaProperty>;
         required = (mainDef.required as string[]) || [];
       }
     }
-    
-    if (!properties) {
-      console.log("[WorkerDetailPage] No properties found in schema");
-      return [];
-    }
-    
-    console.log("[WorkerDetailPage] Found properties:", Object.keys(properties));
 
-    return Object.entries(properties)
-      .filter(([name]) => name !== "type")
-      .map(([name, schemaProp]) => ({
-        name,
-        schema: schemaProp as SchemaProperty,
-        isRequired: required.includes(name),
-      }));
+    if (!properties) return [];
+
+    return flattenSchema({ properties, required } as SchemaProperty);
   };
 
   const getExtraFields = (): Array<[string, unknown]> => {
     const schemaFields = getSchemaFields();
-    const schemaFieldNames = new Set(schemaFields.map(f => f.name));
-    
-    return Object.entries(overrides).filter(
+    const schemaFieldNames = new Set(schemaFields.map((f) => f.name));
+    const flatOverrides = flattenNestedFields(overrides);
+
+    return flatOverrides.filter(
       ([key]) => !schemaFieldNames.has(key) && key !== "type"
     );
   };
@@ -484,8 +567,8 @@ const WorkerDetailPage = () => {
             <div className="space-y-6">
               {schemaFields.map(({ name, schema, isRequired }) => {
                 const schemaDefault = schema.default;
-                const currentValue = overrides[name];
-                const isOverridden = name in overrides;
+                const currentValue = getNestedValue(overrides, name);
+                const isOverridden = currentValue !== undefined;
                 const isUsingDefault = !isOverridden || valuesEqual(currentValue, schemaDefault);
 
                 return (
@@ -544,19 +627,6 @@ const WorkerDetailPage = () => {
                               ? `${schemaDefault.substring(0, 50)}...`
                               : JSON.stringify(schemaDefault)}
                           </code>
-                        </span>
-                      )}
-                      {!isOverridden ? (
-                        <span className="text-blue-600 dark:text-blue-400 font-medium">
-                          Using schema default
-                        </span>
-                      ) : valuesEqual(currentValue, schemaDefault) ? (
-                        <span className="text-blue-600 dark:text-blue-400 font-medium">
-                          Value matches default
-                        </span>
-                      ) : (
-                        <span className="text-amber-600 dark:text-amber-400 font-medium">
-                          Custom override
                         </span>
                       )}
                     </div>
