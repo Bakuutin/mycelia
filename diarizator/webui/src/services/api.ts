@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { makeSchemaOptionalAndFilterDefaults } from '../utils/schemaUtils'
 
 const api = axios.create({
   baseURL: '/api',
@@ -215,6 +216,18 @@ class ApiService {
       timeout: 300000, // 5 minutes for hybrid processing
     })
     return response.data
+  }
+
+  async getWorkerSchemas(): Promise<Record<string, any>> {
+    const response = await api.get('/workers/schemas');
+    const schemas: Record<string, any> = response.data;
+
+    for (const workerName in schemas) {
+      if (schemas[workerName].input) {
+        schemas[workerName].input = makeSchemaOptionalAndFilterDefaults(schemas[workerName].input);
+      }
+    }
+    return schemas;
   }
 }
 
