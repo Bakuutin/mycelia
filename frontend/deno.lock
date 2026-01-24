@@ -84,6 +84,7 @@
     "npm:react-infinite-scroll-component@6.1.1": "6.1.1_react@18.3.1",
     "npm:react-infinite-scroll-component@^6.1.1": "6.1.1_react@18.3.1",
     "npm:react-leaflet@5": "5.0.0_leaflet@1.9.4_react@18.3.1_react-dom@18.3.1__react@18.3.1",
+    "npm:react-markdown@^9.0.1": "9.1.0_@types+react@18.3.27_react@18.3.1",
     "npm:react-resizable-panels@^2.1.7": "2.1.9_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:react-router-dom@^7.4.0": "7.10.0_react@18.3.1_react-dom@18.3.1__react@18.3.1",
     "npm:react-syntax-highlighter@16": "16.1.0_react@18.3.1",
@@ -5475,6 +5476,24 @@
         "react-dom"
       ]
     },
+    "react-markdown@9.1.0_@types+react@18.3.27_react@18.3.1": {
+      "integrity": "sha512-xaijuJB0kzGiUdG7nc2MOMDUDBWPyGAjZtUrow9XxUeua8IqeP+VlIfAZ3bphpcLTnSZXz6z9jcVC/TCwbfgdw==",
+      "dependencies": [
+        "@types/hast",
+        "@types/mdast",
+        "@types/react",
+        "devlop",
+        "hast-util-to-jsx-runtime",
+        "html-url-attributes",
+        "mdast-util-to-hast",
+        "react",
+        "remark-parse",
+        "remark-rehype",
+        "unified",
+        "unist-util-visit",
+        "vfile"
+      ]
+    },
     "react-refresh@0.17.0": {
       "integrity": "sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ=="
     },
@@ -6681,6 +6700,7 @@
       "npm:lucide-react@0.475",
       "npm:react-dom@^18.3.1",
       "npm:react-hook-form@^7.63.0",
+      "npm:react-markdown@^9.0.1",
       "npm:react-resizable-panels@^2.1.7",
       "npm:react-router-dom@^7.4.0",
       "npm:react@^18.3.1",

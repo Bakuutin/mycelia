@@ -1,22 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
 import { useObjects, useObjectsStore } from "./useObjects.ts";
 import { Button } from "@/components/ui/button.tsx";
 import type { Object } from "@/types/objects.ts";
 import {
-  ArrowLeft,
   ArrowLeftRight,
   ArrowRight,
   PlusIcon,
   RefreshCw,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 import { useTimelineRange } from "../../stores/timelineRange.ts";
 import { useNow } from "@/hooks/useNow.ts";
-import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime.ts";
-import { useSettingsStore } from "@/stores/settingsStore.ts";
-import { getRelationships } from "@/hooks/useObjectQueries.ts";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore.ts";
+import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore.ts";
 
 const laneHeight = 40; // Half the previous height for more compact display
 const topMargin = 4;
@@ -38,7 +35,10 @@ type PlacedObjectRange = {
   startOffScreen: boolean;
   endOffScreen: boolean;
   hasNoEnd: boolean;
+  isSmall: boolean;
 } & ExtractedObjectRange;
+
+const SMALL_OBJECT_THRESHOLD = 50;
 
 function getLeftBoundaryPath(
   x: number,
@@ -96,23 +96,21 @@ function getRightBoundaryPath(
 }
 
 function RangeBox({ range, width }: { range: PlacedObjectRange; width: number }) {
-  const navigate = useNavigate();
-  const { start, end, startX: rawStartX, endX, lane, object, startOffScreen, endOffScreen } = range;
+  const { startX: rawStartX, endX, lane, object, startOffScreen, endOffScreen, isSmall } = range;
   const startX = rawStartX < 0 ? 0 : rawStartX;
-  const { timeFormat } = useSettingsStore();
-  const now = useNow();
-  const { toggleSelection, isSelected } = useObjectSelectionStore();
+  const { toggleSelection, isSelected, addToSelection, clearSelection } =
+    useObjectSelectionStore();
 
   const selected = isSelected(object._id);
 
   const handleClick = (e: React.MouseEvent) => {
-    // Check for command-click (Cmd on Mac, Ctrl on Windows/Linux)
     if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
       e.stopPropagation();
       toggleSelection(object._id);
     } else {
-      navigate(`/objects/${object._id.toString()}`);
+      clearSelection();
+      addToSelection(object._id);
     }
   };
 
@@ -138,10 +136,10 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
   const y = topMargin + lane * laneHeight;
   const cornerRadius = 4;
   const chevronOffset = 8;
-  const actualEndX = endOffScreen ? width : endX;
   const showEndChevron = range.hasNoEnd || endOffScreen;
 
   const clipPathId = `clip-${range.object._id.toString()}-${range.rangeIndex}`;
+  const filterId = `blur-${range.object._id.toString()}-${range.rangeIndex}`;
   
   const leftBoundaryPath = getLeftBoundaryPath(x, y, rangeWidth, height, startOffScreen, cornerRadius, chevronOffset);
   const rightBoundaryPath = getRightBoundaryPath(x, y, rangeWidth, height, showEndChevron, cornerRadius, chevronOffset);
@@ -158,6 +156,11 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
         <clipPath id={clipPathId}>
           <path d={rightBoundaryPath} clipPath={`url(#${clipPathId}-left)`} />
         </clipPath>
+        {isSmall && (
+          <filter id={filterId}>
+            <feGaussianBlur stdDeviation="1.5" />
+          </filter>
+        )}
       </defs>
 
       {/* Background rectangle */}
@@ -170,67 +173,71 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
         stroke={selected ? "#2563eb" : "none"}
         strokeWidth={selected ? 3 : 0}
         clipPath={`url(#${clipPathId})`}
+        filter={isSmall ? `url(#${filterId})` : undefined}
+        opacity={isSmall ? 0.7 : 1}
       />
 
-      {/* Content container */}
-      <foreignObject
-        width={rangeWidth}
-        height={laneHeight - 2}
-        x={startX}
-        y={topMargin + lane * laneHeight}
-        className="p-2"
-        clipPath={`url(#${clipPathId})`}
-      >
-        <div className="h-full flex flex-col justify-center items-start text-white">
-          {isRelationship && hasRelationshipData
-            ? (
-              // Relationship display
-              <div className="space-y-0.5 w-full">
-                {/* Relationship name and icon */}
-                <div className="flex items-center gap-1 text-xs font-medium justify-start">
-                  <span className="text-sm">{renderIcon(object.icon)}</span>
-                  <span className="truncate">{object.name}</span>
-                </div>
-
-                {/* Subject and Object with arrow - keep them close together */}
-                <div className="flex items-center gap-1 text-xs justify-start min-w-0 w-full">
-                  <div className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden justify-start">
-                    <span className="text-sm flex-shrink-0">
-                      {renderIcon(object.subjectObject?.icon)}
-                    </span>
-                    <span className="font-medium truncate min-w-0">
-                      {object.subjectObject?.name}
-                    </span>
+      {/* Content container - only show for non-small objects */}
+      {!isSmall && (
+        <foreignObject
+          width={rangeWidth}
+          height={laneHeight - 2}
+          x={startX}
+          y={topMargin + lane * laneHeight}
+          className="p-2"
+          clipPath={`url(#${clipPathId})`}
+        >
+          <div className="h-full flex flex-col justify-center items-start text-white">
+            {isRelationship && hasRelationshipData
+              ? (
+                // Relationship display
+                <div className="space-y-0.5 w-full">
+                  {/* Relationship name and icon */}
+                  <div className="flex items-center gap-1 text-xs font-medium justify-start">
+                    <span className="text-sm">{renderIcon(object.icon)}</span>
+                    <span className="truncate">{object.name}</span>
                   </div>
 
-                  <div className="flex-shrink-0">
-                    {object.relationship?.symmetrical
-                      ? <ArrowLeftRight className="w-2.5 h-2.5" />
-                      : <ArrowRight className="w-2.5 h-2.5" />}
-                  </div>
+                  {/* Subject and Object with arrow - keep them close together */}
+                  <div className="flex items-center gap-1 text-xs justify-start min-w-0 w-full">
+                    <div className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden justify-start">
+                      <span className="text-sm flex-shrink-0">
+                        {renderIcon(object.subjectObject?.icon)}
+                      </span>
+                      <span className="font-medium truncate min-w-0">
+                        {object.subjectObject?.name}
+                      </span>
+                    </div>
 
-                  <div className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden justify-start">
-                    <span className="text-sm flex-shrink-0">
-                      {renderIcon(object.objectObject?.icon)}
-                    </span>
-                    <span className="font-medium truncate min-w-0">
-                      {object.objectObject?.name}
-                    </span>
+                    <div className="flex-shrink-0">
+                      {object.relationship?.symmetrical
+                        ? <ArrowLeftRight className="w-2.5 h-2.5" />
+                        : <ArrowRight className="w-2.5 h-2.5" />}
+                    </div>
+
+                    <div className="flex items-center gap-0.5 min-w-0 max-w-full overflow-hidden justify-start">
+                      <span className="text-sm flex-shrink-0">
+                        {renderIcon(object.objectObject?.icon)}
+                      </span>
+                      <span className="font-medium truncate min-w-0">
+                        {object.objectObject?.name}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-            : (
-              // Regular object display
-              <div className="space-y-0.5 w-full">
-                <div className="flex items-center gap-1 text-xs font-medium justify-start">
-                  <span className="text-sm">{renderIcon(object.icon)}</span>
-                  <span className="truncate">{object.name}</span>
+              )
+              : (
+                // Regular object display
+                <div className="space-y-0.5 w-full">
+                  <div className="flex items-center gap-1 text-xs font-medium justify-start">
+                    <span className="text-sm">{renderIcon(object.icon)}</span>
+                    <span className="truncate">{object.name}</span>
+                  </div>
                 </div>
-              </div>
-            )}
-        </div>
-      </foreignObject>
+              )}
+          </div>
+        </foreignObject>
+      )}
     </g>
   );
 }
@@ -258,39 +265,64 @@ function useLaneLayout(
   ranges: ExtractedObjectRange[],
   xFor: (d: Date) => number,
   width: number,
+  visibleStart: Date,
+  visibleEnd: Date,
 ) {
   const now = useNow(100);
 
   return useMemo(() => {
-    const conversationRanges: ExtractedObjectRange[] = [];
-    const regularRanges: ExtractedObjectRange[] = [];
+    const bigRanges: ExtractedObjectRange[] = [];
+    const smallRanges: ExtractedObjectRange[] = [];
+    const spanningObjects: Object[] = [];
+    const ongoingObjects: Object[] = [];
+
+    const nowIsVisible = now >= visibleStart && now <= visibleEnd;
 
     for (const range of ranges) {
       const originalStartX = xFor(range.start);
-      const endX = xFor(range.end ?? now);
+      const originalEndX = xFor(range.end ?? now);
       const startX = originalStartX < 0 ? 0 : originalStartX;
+      const endX = originalEndX > width ? width : originalEndX;
+      const rangeWidth = endX - startX;
 
-      if (endX - startX < 0.5) continue;
+      if (rangeWidth < 0.5) continue;
 
-      if (range.object.isConversation) {
-        conversationRanges.push(range);
+      const startOffScreen = originalStartX < 0;
+      const endOffScreen = originalEndX > width;
+      const isOngoing = range.end === null || range.end === undefined;
+
+      if (nowIsVisible && isOngoing) {
+        if (!ongoingObjects.some((o) => o._id === range.object._id)) {
+          ongoingObjects.push(range.object);
+        }
+        continue;
+      }
+
+      if (startOffScreen && endOffScreen) {
+        if (!spanningObjects.some((o) => o._id === range.object._id)) {
+          spanningObjects.push(range.object);
+        }
+        continue;
+      }
+
+      if (rangeWidth <= SMALL_OBJECT_THRESHOLD) {
+        smallRanges.push(range);
       } else {
-        regularRanges.push(range);
+        bigRanges.push(range);
       }
     }
 
-    const sortedRegular = [...regularRanges].sort((a, b) =>
+    const sortedBig = [...bigRanges].sort((a, b) =>
       a.start.getTime() - b.start.getTime()
     );
-    const sortedConversations = [...conversationRanges].sort((a, b) =>
+    const sortedSmall = [...smallRanges].sort((a, b) =>
       a.start.getTime() - b.start.getTime()
     );
 
-    const regularLaneEnds: number[] = [];
-    const conversationLaneEnds: number[] = [];
+    const bigLaneEnds: number[] = [];
     const placed: PlacedObjectRange[] = [];
 
-    for (const range of sortedRegular) {
+    for (const range of sortedBig) {
       const originalStartX = xFor(range.start);
       const originalEndX = xFor(range.end ?? now);
       const startOffScreen = originalStartX < 0;
@@ -299,12 +331,12 @@ function useLaneLayout(
       const endX = endOffScreen ? width : originalEndX;
 
       let lane = 0;
-      while (lane < regularLaneEnds.length && regularLaneEnds[lane] > startX) {
+      while (lane < bigLaneEnds.length && bigLaneEnds[lane] > startX) {
         lane++;
       }
 
-      if (lane === regularLaneEnds.length) regularLaneEnds.push(endX);
-      else regularLaneEnds[lane] = endX;
+      if (lane === bigLaneEnds.length) bigLaneEnds.push(endX);
+      else bigLaneEnds[lane] = endX;
 
       placed.push({
         startX,
@@ -313,13 +345,15 @@ function useLaneLayout(
         startOffScreen,
         endOffScreen,
         hasNoEnd: range.end === null,
+        isSmall: false,
         ...range,
       });
     }
 
-    const regularLaneCount = regularLaneEnds.length;
+    const bigLaneCount = bigLaneEnds.length;
+    const smallLane = bigLaneCount;
 
-    for (const range of sortedConversations) {
+    for (const range of sortedSmall) {
       const originalStartX = xFor(range.start);
       const originalEndX = xFor(range.end ?? now);
       const startOffScreen = originalStartX < 0;
@@ -327,41 +361,39 @@ function useLaneLayout(
       const startX = startOffScreen ? 0 : originalStartX;
       const endX = endOffScreen ? width : originalEndX;
 
-      let lane = 0;
-      while (
-        lane < conversationLaneEnds.length && conversationLaneEnds[lane] > startX
-      ) lane++;
-
-      if (lane === conversationLaneEnds.length) {
-        conversationLaneEnds.push(endX);
-      } else conversationLaneEnds[lane] = endX;
-
       placed.push({
         startX,
         endX,
-        lane: lane + regularLaneCount,
+        lane: smallLane,
         startOffScreen,
         endOffScreen,
         hasNoEnd: range.end === null,
+        isSmall: true,
         ...range,
       });
     }
 
-    return { placed, lanes: regularLaneCount + conversationLaneEnds.length };
-  }, [ranges, xFor, width, now]);
-}
+    const hasSmallLane = smallRanges.length > 0;
 
-const renderIcon = (icon: any) => {
-  if (!icon) return;
-  if ("text" in icon) return icon.text;
-  if ("base64" in icon) return "📷";
-};
+    return {
+      placed,
+      lanes: bigLaneCount + (hasSmallLane ? 1 : 0),
+      spanningObjects,
+      ongoingObjects,
+    };
+  }, [ranges, xFor, width, now, visibleStart, visibleEnd]);
+}
 
 export const ObjectsLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { objects } = useObjects();
-      const { timeFormat } = useSettingsStore();
+      const { objects, loading } = useObjects();
+      const setSpanningObjects = useSpanningObjectsStore(
+        (state) => state.setSpanningObjects,
+      );
+      const setOngoingObjects = useSpanningObjectsStore(
+        (state) => state.setOngoingObjects,
+      );
 
       const ranges = useMemo(() => flattenObjectsToRanges(objects), [objects]);
       const { start, end } = useTimelineRange();
@@ -370,17 +402,15 @@ export const ObjectsLayer: () => Layer = () => {
         return (d: Date) => transform.applyX(scale(d));
       }, [scale, transform]);
 
-      const visibleItems = useMemo(() => {
-        return ranges.filter((range) => {
-          if (range.end) {
-            return range.start < end && range.end > start;
-          } else {
-            return range.start < end;
-          }
-        });
-      }, [ranges, start, end]);
+      const layout = useLaneLayout(ranges, xFor, width, start, end);
 
-      const layout = useLaneLayout(visibleItems, xFor, width);
+      useEffect(() => {
+        setSpanningObjects(layout.spanningObjects);
+      }, [layout.spanningObjects, setSpanningObjects]);
+
+      useEffect(() => {
+        setOngoingObjects(layout.ongoingObjects);
+      }, [layout.ongoingObjects, setOngoingObjects]);
 
       const height = topMargin + layout.lanes * laneHeight + 10;
 
@@ -394,6 +424,19 @@ export const ObjectsLayer: () => Layer = () => {
                 width={width}
               />
             ),
+          )}
+          {loading && (
+            <g className="loading-indicator" opacity={0.6}>
+              <rect
+                x={xFor(start)}
+                y={4}
+                width={Math.max(2, xFor(end) - xFor(start))}
+                height={3}
+                fill="currentColor"
+                className="text-primary animate-pulse"
+                rx={1}
+              />
+            </g>
           )}
         </svg>
       );
@@ -416,12 +459,13 @@ export const CreateObjectTool: Tool = {
 export const RefreshObjectsTool: Tool = {
   component: () => {
     const [isRefreshing, setIsRefreshing] = useState(false);
-    const refresh = useObjectsStore((state) => state.refresh);
+    const fetchForRange = useObjectsStore((state) => state.fetchForRange);
+    const { start, end } = useTimelineRange();
 
     const handleRefresh = async () => {
       setIsRefreshing(true);
       try {
-        await refresh();
+        await fetchForRange(start, end);
       } finally {
         setIsRefreshing(false);
       }

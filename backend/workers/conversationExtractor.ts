@@ -187,6 +187,7 @@ async function callLLMStructured<T>(
   model: string,
   messages: Array<{ role: string; content: string }>,
   parseResponse: (content: string) => T,
+  logContext?: string,
 ): Promise<T> {
   const response = await llm({
     action: "completions",
@@ -197,12 +198,18 @@ async function callLLMStructured<T>(
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
+    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: EMPTY response from LLM`);
     throw new Error("Empty response from LLM");
   }
+
+  // Log raw LLM response (truncated for sanity)
+  const truncatedContent = content.length > 500 ? content.slice(0, 500) + '...[truncated]' : content;
+  console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: raw response (${content.length} chars): ${truncatedContent}`);
 
   try {
     return parseResponse(content);
   } catch (error) {
+    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: parse failed, retrying with fix prompt`);
     // Retry once with a fix prompt
     const retryResponse = await llm({
       action: "completions",
@@ -218,6 +225,7 @@ async function callLLMStructured<T>(
       throw new Error("Empty retry response from LLM");
     }
 
+    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: retry response: ${retryContent.slice(0, 300)}`);
     return parseResponse(retryContent);
   }
 }
@@ -237,28 +245,200 @@ function stripMarkdownCodeBlock(content: string): string {
   return cleaned.trim();
 }
 
-function parseSegmentationResponse(content: string): Segment[] {
-  const parsed = JSON.parse(stripMarkdownCodeBlock(content));
-  const segments = parsed.segments || [];
-  return segments.map((s: any, index: number) => {
-    // Handle null, undefined, non-string, or empty string titles
-    let title = `Segment ${index + 1}`;
-    if (s.title != null && typeof s.title === 'string') {
-      const trimmed = s.title.trim();
-      if (trimmed.length > 0) {
-        title = trimmed;
+/**
+ * Robustly extract and parse JSON from LLM response that may contain extra text.
+ * Handles cases where LLM adds explanatory text before or after the JSON.
+ */
+function extractJsonFromText(content: string): any {
+  const cleaned = stripMarkdownCodeBlock(content);
+  
+  // First, try to parse as-is (for clean JSON responses)
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // Continue to more robust extraction
+  }
+  
+  // Try to find JSON object {} or array []
+  // Look for the first { or [ and find its matching closing bracket
+  const jsonStart = Math.min(
+    cleaned.indexOf('{') >= 0 ? cleaned.indexOf('{') : Infinity,
+    cleaned.indexOf('[') >= 0 ? cleaned.indexOf('[') : Infinity
+  );
+  
+  if (jsonStart === Infinity) {
+    throw new Error("No JSON object or array found in response");
+  }
+  
+  // Find the matching closing bracket
+  const startChar = cleaned[jsonStart];
+  const endChar = startChar === '{' ? '}' : ']';
+  let depth = 0;
+  let jsonEnd = -1;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = jsonStart; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !escapeNext) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === startChar) {
+        depth++;
+      } else if (char === endChar) {
+        depth--;
+        if (depth === 0) {
+          jsonEnd = i + 1;
+          break;
+        }
       }
     }
-    return {
-      title,
-      start: new Date(s.start),
-      end: new Date(s.end),
-    };
-  });
+  }
+  
+  if (jsonEnd === -1) {
+    throw new Error("Could not find complete JSON object/array in response");
+  }
+  
+  const jsonStr = cleaned.substring(jsonStart, jsonEnd);
+  return JSON.parse(jsonStr);
+}
+
+/**
+ * Parses prompt lines to extract time markers with their line indices.
+ * Time markers are in the format: [time: ISO8601]
+ */
+function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: number; time: Date }> {
+  const markers: Array<{ lineIdx: number; time: Date }> = [];
+  const timeRegex = /^\[time:\s*(.+)\]$/;
+  
+  for (let i = 0; i < promptLines.length; i++) {
+    const match = promptLines[i].match(timeRegex);
+    if (match) {
+      const time = new Date(match[1]);
+      if (!isNaN(time.getTime())) {
+        markers.push({ lineIdx: i, time });
+      }
+    }
+  }
+  
+  return markers;
+}
+
+/**
+ * Finds the time at or before a given line index using time markers.
+ * Returns undefined if no suitable marker is found.
+ */
+function findTimeAtOrBeforeLine(markers: Array<{ lineIdx: number; time: Date }>, lineIdx: number): Date | undefined {
+  // Find the last marker at or before the given line
+  let result: Date | undefined;
+  for (const marker of markers) {
+    if (marker.lineIdx <= lineIdx) {
+      result = marker.time;
+    } else {
+      break;
+    }
+  }
+  return result;
+}
+
+/**
+ * Finds the time at or after a given line index using time markers.
+ * Returns undefined if no suitable marker is found.
+ */
+function findTimeAtOrAfterLine(markers: Array<{ lineIdx: number; time: Date }>, lineIdx: number): Date | undefined {
+  for (const marker of markers) {
+    if (marker.lineIdx >= lineIdx) {
+      return marker.time;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Finds attribute value by prefix (case-insensitive).
+ * Returns the value of the first key starting with the prefix, or undefined.
+ */
+function findAttrStartingWith(obj: Record<string, any>, prefix: string): any {
+  const lowerPrefix = prefix.toLowerCase();
+  for (const key of Object.keys(obj)) {
+    if (key.toLowerCase().startsWith(lowerPrefix)) {
+      return obj[key];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Creates a segment parser that can handle various LLM response formats.
+ * Finds any key containing "start" and "end", then parses both as either:
+ * - Dates (if both are valid date strings)
+ * - Line indices (if both are numbers)
+ */
+function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: Date) {
+  const timeMarkers = extractTimeMarkersFromPrompt(promptLines);
+  
+  return function parseSegmentationResponse(content: string): Segment[] {
+    const parsed = extractJsonFromText(content);
+    const segments = parsed.segments || [];
+    return segments.map((s: any, index: number) => {
+      // Handle null, undefined, non-string, or empty string titles
+      let title = `Segment ${index + 1}`;
+      if (s.title != null && typeof s.title === 'string') {
+        const trimmed = s.title.trim();
+        if (trimmed.length > 0) {
+          title = trimmed;
+        }
+      }
+      
+      // Find any key starting with "start" and "end" (case-insensitive)
+      const startVal = findAttrStartingWith(s, 'start');
+      const endVal = findAttrStartingWith(s, 'end');
+      
+      if (startVal != null && endVal != null) {
+        // Both numbers → line indices
+        if (typeof startVal === 'number' && typeof endVal === 'number') {
+          const start = findTimeAtOrBeforeLine(timeMarkers, startVal) 
+            ?? findTimeAtOrAfterLine(timeMarkers, startVal) 
+            ?? chunkStart;
+          const end = findTimeAtOrAfterLine(timeMarkers, endVal) 
+            ?? findTimeAtOrBeforeLine(timeMarkers, endVal) 
+            ?? chunkEnd;
+          return { title, start, end };
+        }
+        
+        // Both strings → try as dates
+        if (typeof startVal === 'string' && typeof endVal === 'string') {
+          const start = new Date(startVal);
+          const end = new Date(endVal);
+          if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+            return { title, start, end };
+          }
+        }
+      }
+      
+      // Fallback: use chunk boundaries
+      console.warn(`[ConvExtractor] Segment "${title}" has no valid time info (start=${JSON.stringify(startVal)}, end=${JSON.stringify(endVal)}), using chunk boundaries`);
+      return { title, start: chunkStart, end: chunkEnd };
+    });
+  };
 }
 
 function parseMetadataResponse(content: string): ConversationMetadata {
-  const parsed = JSON.parse(stripMarkdownCodeBlock(content));
+  const parsed = extractJsonFromText(content);
   // Only set emoji if valid, otherwise leave undefined (no icon)
   let emoji: string | undefined = undefined;
   if (parsed.emoji != null && typeof parsed.emoji === 'string') {
@@ -456,6 +636,11 @@ const capability: JobCapability = {
     const hasMore = chunks.length > data.limit;
     const chunksToProcess = chunks.slice(0, data.limit);
 
+    console.log(`[ConvExtractor] Job ${job.id}: found ${chunks.length} chunks, processing ${chunksToProcess.length}, hasMore=${hasMore}`);
+    for (const c of chunksToProcess) {
+      console.log(`[ConvExtractor]   - Chunk ${c._id}: state=${c.state}, transcriptionIds=${c.transcriptionIds?.length ?? 0}, start=${c.start?.toISOString?.() ?? 'N/A'}`);
+    }
+
     let conversationsCreated = 0;
     let chunksProcessed = 0;
     const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
@@ -536,6 +721,7 @@ const capability: JobCapability = {
         }>;
 
         if (!transcriptions || transcriptions.length === 0) {
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: NO transcriptions found for IDs: ${chunk.transcriptionIds.map(id => id.toString()).join(', ')}`);
           await mongo({
             action: "updateOne",
             collection: "conversation_chunks",
@@ -553,6 +739,13 @@ const capability: JobCapability = {
           text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
         }));
 
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`);
+        const totalTextLen = utterances.reduce((sum, u) => sum + u.text.length, 0);
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: total text length = ${totalTextLen} chars`);
+        if (utterances.length > 0) {
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: time range ${utterances[0].start.toISOString()} to ${utterances[utterances.length - 1].end.toISOString()}`);
+        }
+
         // Delete existing if force
         if (chunk.params.force) {
           await deleteConversationsInRange(objects, mongo, chunk.start, chunk.end);
@@ -560,6 +753,7 @@ const capability: JobCapability = {
 
         // Format prompt
         const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(utterances);
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: prompt length = ${prompt.length} chars`);
 
         await job.updateProgress({
           stage: "segmenting",
@@ -567,6 +761,8 @@ const capability: JobCapability = {
         });
 
         // LLM Call #1: Segmentation
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
+        const promptLines = prompt.split('\n');
         const segments = await callLLMStructured(
           llm,
           chunk.params.model,
@@ -574,14 +770,21 @@ const capability: JobCapability = {
             { role: "system", content: prompts.segmentation_system },
             { role: "user", content: prompt },
           ],
-          parseSegmentationResponse,
+          createSegmentParser(promptLines, chunkStart, chunkEnd),
+          `Chunk ${chunk._id} segmentation`,
         );
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`);
+        for (const seg of segments) {
+          console.log(`[ConvExtractor]   - "${seg.title}" ${seg.start.toISOString()} to ${seg.end.toISOString()}`);
+        }
 
         // Clip and filter segments
         const clippedSegments = segments.map(s => clipSegmentTimes(s, chunkStart, chunkEnd));
         const segmentsWithUtterances = filterSegmentsWithUtterances(clippedSegments, utterances);
+        console.log(`[ConvExtractor] Chunk ${chunk._id}: after filtering, ${segmentsWithUtterances.length} segments have utterances`);
 
         if (segmentsWithUtterances.length === 0) {
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: NO segments with utterances - marking as empty`);
           await mongo({
             action: "updateOne",
             collection: "conversation_chunks",
@@ -632,7 +835,9 @@ const capability: JobCapability = {
             chunk.params.model,
             messages,
             parseMetadataResponse,
+            `Chunk ${chunk._id} segment ${i + 1}/${segmentsWithUtterances.length} metadata`,
           );
+          console.log(`[ConvExtractor] Chunk ${chunk._id} segment ${i + 1}: metadata extracted - entities=${metadata.entities.length}, emoji=${metadata.emoji ?? 'none'}, agreed=${metadata.agreed_upon_something}`);
 
           // Create conversation object (without summary - will be generated separately)
           // Validate required fields before creating
@@ -669,6 +874,7 @@ const capability: JobCapability = {
           }) as { insertedId: ObjectId };
 
           const conversationId = convResult.insertedId;
+          console.log(`[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`);
 
           // Create entity relationships
           for (const entityName of metadata.entities) {

@@ -1,15 +1,55 @@
 import type { Request, Response } from "express";
 import { streamText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
-import { authenticateOr401 } from "@/lib/auth/core.server.ts";
+import { authenticateOr401, type Auth } from "@/lib/auth/core.server.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { ObjectId } from "mongodb";
+import type { Db } from "mongodb";
 
-const RESOURCES_FOR_AI = ["mongo", "timeline", "objects"];
+const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
+
+async function generateChatTitle(
+  db: Db,
+  chatId: string,
+  userMessage: string,
+  auth: Auth
+): Promise<void> {
+  try {
+    const llm = await auth.getResource("llm");
+
+    const completion = await llm({
+      action: "completions",
+      model: "small",
+      messages: [
+        { role: "system", content: "Generate a very short title (3-6 words) for a chat conversation based on the user's first message. Return ONLY the title, no quotes, no formatting, no explanation." },
+        { role: "user", content: userMessage },
+      ],
+    });
+
+    const title = completion.choices[0]?.message?.content?.trim();
+    if (title && title.length > 0 && title.length < 100) {
+      await db.collection("chats").updateOne(
+        { _id: new ObjectId(chatId) },
+        { $set: { name: title, title: title } }
+      );
+      console.log(`[generateChatTitle] Generated title for chat ${chatId}: "${title}"`);
+    }
+  } catch (error) {
+    console.error("[generateChatTitle] Failed to generate chat title:", error);
+  }
+}
+
+// Tools that require user confirmation before execution
+// These can modify or delete user data
+const TOOLS_REQUIRING_APPROVAL = [
+  "objects_create",  // Can create arbitrary objects
+  "objects_update",  // Can modify existing data
+  "objects_delete",  // Can permanently delete data
+];
 
 export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);
@@ -19,7 +59,11 @@ export async function apiChatHandler(req: Request, res: Response) {
   
   let { messages, chatId } = req.body;
   
+  // Debug: Log incoming messages to understand the structure
+  console.log("[apiChatHandler] Incoming messages:", JSON.stringify(messages, null, 2));
+  
   // Normalize messages for AI SDK v6 compatibility
+  // Claude requires that each tool_result has a matching tool_use in the previous message
   if (Array.isArray(messages)) {
     const normalizedMessages: any[] = [];
     
@@ -28,48 +72,77 @@ export async function apiChatHandler(req: Request, res: Response) {
       const content = msg.content ?? msg.parts;
       
       if (msg.role === "assistant" && Array.isArray(content)) {
-        // Extract tool-result parts and create separate tool messages
+        // Extract tool-call and tool-result/tool-error parts
+        const toolCalls: any[] = [];
         const toolResults: any[] = [];
-        const cleanedContent: any[] = [];
+        const otherContent: any[] = [];
         
         for (const part of content) {
           if (part.type === "tool-result") {
-            // Create a separate tool message for each tool-result
             toolResults.push({
               type: "tool-result",
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               output: part.output,
             });
+          } else if (part.type === "tool-error") {
+            // Handle tool errors the same as tool results - they are responses to tool calls
+            // Use 'error-text' output type for AI SDK compatibility
+            const errorMessage = part.error?.errmsg || part.error?.message || JSON.stringify(part.error) || "Tool execution failed";
+            toolResults.push({
+              type: "tool-result",
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              output: { type: "error-text", value: errorMessage },
+            });
           } else if (part.type === "tool-call") {
-            // Clean null values from tool-call parts
-            cleanedContent.push({
+            toolCalls.push({
               type: "tool-call",
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               input: part.input,
             });
           } else if (part.type === "text") {
-            cleanedContent.push({ type: "text", text: part.text });
+            otherContent.push({ type: "text", text: part.text });
           }
           // Skip internal SDK markers like "step-start" - they shouldn't be sent back
         }
         
-        // Add assistant message with cleaned content
+        // Build cleaned content: text + tool-calls only
+        const cleanedContent = [...otherContent, ...toolCalls];
+        
+        // Get the set of tool-call IDs in this message
+        const toolCallIds = new Set(toolCalls.map(tc => tc.toolCallId));
+        
+        // Only include tool-results that have matching tool-calls in THIS message
+        const matchingToolResults = toolResults.filter(tr => toolCallIds.has(tr.toolCallId));
+        const orphanedToolResults = toolResults.filter(tr => !toolCallIds.has(tr.toolCallId));
+        
+        if (orphanedToolResults.length > 0) {
+          console.warn(`[apiChatHandler] Dropping ${orphanedToolResults.length} orphaned tool-results without matching tool-calls:`, 
+            orphanedToolResults.map(tr => tr.toolCallId));
+        }
+        
+        // Add assistant message with cleaned content (only if it has content)
         if (cleanedContent.length > 0) {
           normalizedMessages.push({
             role: "assistant",
             content: cleanedContent,
           });
+          
+          // Only add tool message if we have matching tool-results
+          if (matchingToolResults.length > 0) {
+            normalizedMessages.push({
+              role: "tool",
+              content: matchingToolResults,
+            });
+          }
         }
-        
-        // Add tool message with all tool results
-        if (toolResults.length > 0) {
-          normalizedMessages.push({
-            role: "tool",
-            content: toolResults,
-          });
-        }
+      } else if (msg.role === "tool" && Array.isArray(content)) {
+        // Skip tool messages coming from the client - they should be reconstructed from assistant messages
+        // This prevents orphaned tool-result messages
+        console.warn("[apiChatHandler] Skipping orphaned tool message from client");
+        continue;
       } else if (msg.role === "user" && Array.isArray(content)) {
         // Clean user message content parts
         const cleanedContent = content.map((part: any) => {
@@ -87,12 +160,16 @@ export async function apiChatHandler(req: Request, res: Response) {
     
     messages = normalizedMessages;
   }
+  
+  // Debug: Log normalized messages
+  console.log("[apiChatHandler] Normalized messages:", JSON.stringify(messages, null, 2));
 
   let activeChatId: string | undefined = chatId;
   let chatModel = "medium";
-
+  let isNewChat = false;
 
   if (!activeChatId) {
+    isNewChat = true;
     const newChatId = new ObjectId();
     const chatResult = await db.collection("chats").insertOne({
       _id: newChatId,
@@ -148,9 +225,11 @@ export async function apiChatHandler(req: Request, res: Response) {
     raw: { role: "user", content: lastMessage.content }
   });
 
-  // Setup tools
+  // Setup tools with approval requirements for destructive operations
   const resources = defaultResourceManager.listResources().filter(resource => RESOURCES_FOR_AI.includes(resource.code));
-  const tools = createAiSdkToolsFromResources(resources, auth);
+  const tools = createAiSdkToolsFromResources(resources, auth, {
+    toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
+  });
 
   // Fetch System Prompt
   let systemPrompt = "You are Mycelia, an intelligent AI assistant.";
@@ -256,12 +335,29 @@ export async function apiChatHandler(req: Request, res: Response) {
         // Update chat timestamp
         await db.collection("chats").updateOne(
             { _id: new ObjectId(activeChatId) },
-            { 
-              $set: { 
+            {
+              $set: {
                 lastMessageDate: new Date()
-              } 
+              }
             }
         );
+
+        // Generate title for new chats after first assistant response
+        if (isNewChat) {
+          isNewChat = false; // Only generate once
+          const firstUserMessage = messages.find((m: any) => m.role === "user");
+          if (firstUserMessage) {
+            const userContent = typeof firstUserMessage.content === "string"
+              ? firstUserMessage.content
+              : Array.isArray(firstUserMessage.content)
+                ? firstUserMessage.content.map((p: any) => p.text || "").join(" ")
+                : "";
+            if (userContent.trim()) {
+              // Run title generation in background (don't await)
+              void generateChatTitle(db, activeChatId!, userContent.trim(), auth);
+            }
+          }
+        }
       },
     });
 

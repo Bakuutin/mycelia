@@ -47,6 +47,12 @@ export const zProviderConfig = z.object({
 // Deprecated: use llm and transcription instead
 export const zInferenceProviderConfig = zProviderConfig;
 
+export const zWorkerConfig = z.object({
+  paused: z.boolean().optional().default(false).describe("Whether this worker is paused and won't process new jobs."),
+});
+
+export type WorkerConfig = z.infer<typeof zWorkerConfig>;
+
 export const zServerConfig = z.object({
   prompts: zServerConfigPrompts,
   llm: zProviderConfig.optional().nullable(),
@@ -56,6 +62,7 @@ export const zServerConfig = z.object({
   features: z.object({
     enable_experimental_processing: z.boolean().describe("Enable experimental processing of conversations. This feature is currently in development and may not work as expected."),
   }),
+  workers: z.record(z.string(), zWorkerConfig).optional().default({}).describe("Per-worker configuration. Key is worker code/type."),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

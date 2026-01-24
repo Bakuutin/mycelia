@@ -1,6 +1,10 @@
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { redis } from "@/lib/redis.ts";
 
+// Quiet logging by default - enable with DEBUG_ACCESS_LOG=true
+const DEBUG = Deno.env.get("DEBUG_ACCESS_LOG") === "true";
+const log = (msg: string) => DEBUG && console.log(msg);
+
 let accessLogWorker: { stop: () => Promise<void> } | null = null;
 let workerRunning = false;
 let workerLoopPromise: Promise<void> | null = null;
@@ -24,10 +28,10 @@ interface AccessLogMessage {
 async function ensureConsumerGroup(): Promise<void> {
   try {
     await redis.call("XGROUP", "CREATE", STREAM_NAME, CONSUMER_GROUP, "0", "MKSTREAM");
-    console.log(`[AccessLog] Created consumer group ${CONSUMER_GROUP} on stream ${STREAM_NAME}`);
+    log(`[AccessLog] Created consumer group ${CONSUMER_GROUP} on stream ${STREAM_NAME}`);
   } catch (error: any) {
     if (error.message && (error.message.includes("BUSYGROUP") || error.message.includes("already exists"))) {
-      console.log(`[AccessLog] Consumer group ${CONSUMER_GROUP} already exists`);
+      log(`[AccessLog] Consumer group ${CONSUMER_GROUP} already exists`);
     } else {
       throw error;
     }
@@ -40,7 +44,7 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
   }
 
   const startTime = Date.now();
-  console.log(`[AccessLog] Processing batch of ${messages.length} messages`);
+  log(`[AccessLog] Processing batch of ${messages.length} messages`);
 
   const documents: AccessLogMessage[] = [];
   const failedMessages: Array<{ messageId: string; rawData: Record<string, string>; error: string }> = [];
@@ -94,7 +98,7 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
       }));
 
       await collection.insertMany(insertDocs);
-      console.log(`[AccessLog] Successfully inserted ${documents.length} documents`);
+      log(`[AccessLog] Successfully inserted ${documents.length} documents`);
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -129,7 +133,7 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
       }));
 
       await failedCollection.insertMany(failedDocs);
-      console.log(`[AccessLog] Saved ${failedMessages.length} failed messages to access_logs_failed`);
+      log(`[AccessLog] Saved ${failedMessages.length} failed messages to access_logs_failed`);
     } catch (error) {
       console.error(`[AccessLog] Failed to save failed messages:`, error);
     }
@@ -137,11 +141,11 @@ async function processBatch(messages: Array<[string, string[]]>): Promise<void> 
 
   if (messageIds.length > 0) {
     await redis.xack(STREAM_NAME, CONSUMER_GROUP, ...messageIds);
-    console.log(`[AccessLog] Acknowledged ${messageIds.length} messages (${documents.length} successful, ${failedMessages.length} failed)`);
+    log(`[AccessLog] Acknowledged ${messageIds.length} messages (${documents.length} successful, ${failedMessages.length} failed)`);
   }
 
   const duration = Date.now() - startTime;
-  console.log(
+  log(
     `[AccessLog] Processed batch in ${duration}ms: ${documents.length} successful, ${failedMessages.length} failed`,
   );
 }
@@ -201,7 +205,7 @@ async function workerLoop(): Promise<void> {
       lastIterationTime = Date.now();
     } catch (error: any) {
       if (error.message && error.message.includes("NOGROUP")) {
-        console.log(`[AccessLog] Consumer group ${CONSUMER_GROUP} not found, recreating...`);
+        log(`[AccessLog] Consumer group ${CONSUMER_GROUP} not found, recreating...`);
         await ensureConsumerGroup();
       } else {
         console.error(`[AccessLog] Error reading from stream:`, error);
@@ -214,11 +218,11 @@ async function workerLoop(): Promise<void> {
 
 export async function startAccessLogWorker(): Promise<void> {
   if (accessLogWorker) {
-    console.log("[AccessLog] Worker already started");
+    log("[AccessLog] Worker already started");
     return;
   }
 
-  console.log("[AccessLog] Starting access log worker...");
+  log("[AccessLog] Starting access log worker...");
 
   try {
     await ensureConsumerGroup();
@@ -234,18 +238,18 @@ export async function startAccessLogWorker(): Promise<void> {
 
     accessLogWorker = {
       stop: async () => {
-        console.log("[AccessLog] Stopping access log worker...");
+        log("[AccessLog] Stopping access log worker...");
         workerRunning = false;
         if (workerLoopPromise) {
           await workerLoopPromise;
           workerLoopPromise = null;
         }
         accessLogWorker = null;
-        console.log("[AccessLog] Access log worker stopped");
+        log("[AccessLog] Access log worker stopped");
       },
     };
 
-    console.log("[AccessLog] Access log worker started");
+    log("[AccessLog] Access log worker started");
   } catch (error) {
     console.error("[AccessLog] Failed to start worker:", error);
     throw error;

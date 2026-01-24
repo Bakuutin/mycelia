@@ -2,7 +2,7 @@ import type { Platform } from "../core/types.ts";
 import { defaultPlatform } from "./default.tsx";
 import { User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useFormattedTime } from "@/lib/formatTime";
+import { formatRelativeTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { Response } from "@/components/ai-elements/response";
 import {
@@ -104,7 +104,7 @@ function ToolCallDisplay({ toolCall }: { toolCall: ParsedMessageContent['toolCal
 
 function MyceliaMessageBubble({ message }: MyceliaMessageProps) {
   const navigate = useNavigate();
-  const formattedDate = useFormattedTime(new Date(message.timestamp));
+  const formattedDate = formatRelativeTime(new Date(message.timestamp));
   const raw = message.raw;
   
   const { role, content, toolCalls } = parseMessageContent(raw);

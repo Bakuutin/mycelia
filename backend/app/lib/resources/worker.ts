@@ -6,6 +6,9 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
+import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
+
+const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -36,6 +39,10 @@ const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
 });
 
+const ClearCompletedJobsSchema = z.object({
+  action: z.literal("clear_completed"),
+});
+
 const CancelJobSchema = z.object({
   action: z.literal("cancel"),
   id: z.string(),
@@ -60,14 +67,42 @@ const SchemasSchema = z.object({
   action: z.literal("schemas"),
 });
 
+const PauseWorkerSchema = z.object({
+  action: z.literal("pause_worker"),
+  workerType: z.string(),
+});
+
+const ResumeWorkerSchema = z.object({
+  action: z.literal("resume_worker"),
+  workerType: z.string(),
+});
+
+const PauseAllSchema = z.object({
+  action: z.literal("pause_all"),
+});
+
+const ResumeAllSchema = z.object({
+  action: z.literal("resume_all"),
+});
+
+const GetWorkerStatusSchema = z.object({
+  action: z.literal("get_worker_status"),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
   CancelAllJobsSchema,
+  ClearCompletedJobsSchema,
   CancelJobSchema,
   GetJobSchema,
   EnqueueJobSchema,
   SchemasSchema,
+  PauseWorkerSchema,
+  ResumeWorkerSchema,
+  PauseAllSchema,
+  ResumeAllSchema,
+  GetWorkerStatusSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -92,12 +127,24 @@ export class JobsResource
         return this.cancel(input, auth);
       case "cancel_all":
         return this.cancelAll(input, auth);
+      case "clear_completed":
+        return this.clearCompleted(input, auth);
       case "list":
         return this.list(input, auth);
       case "progressUpdate":
         return this.progressUpdate(input, auth);
       case "schemas":
         return this.schemasAction();
+      case "pause_worker":
+        return this.pauseWorker(input, auth);
+      case "resume_worker":
+        return this.resumeWorker(input, auth);
+      case "pause_all":
+        return this.pauseAll(auth);
+      case "resume_all":
+        return this.resumeAll(auth);
+      case "get_worker_status":
+        return this.getWorkerStatus(auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -207,7 +254,7 @@ export class JobsResource
 
   private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
-    
+
     const types = jobRegistry.getJobTypes();
     for (const type of types) {
       const queue = getQueue(type);
@@ -228,6 +275,22 @@ export class JobsResource
     });
 
     return { success: true };
+  }
+
+  private async clearCompleted(_input: z.infer<typeof ClearCompletedJobsSchema>, auth: Auth) {
+    const mongo = await getMongoResource(auth);
+
+    // Delete all completed, failed, and cancelled jobs from MongoDB
+    const result = await mongo({
+      action: "deleteMany",
+      collection: "jobs",
+      query: { state: { $in: ["completed", "failed", "cancelled"] } },
+    });
+
+    return {
+      success: true,
+      deletedCount: result.deletedCount || 0,
+    };
   }
 
   private async list(input: z.infer<typeof ListJobsSchema>, auth: Auth) {
@@ -344,6 +407,91 @@ export class JobsResource
     return { success: true };
   }
 
+  private async pauseWorker(input: z.infer<typeof PauseWorkerSchema>, auth: Auth) {
+    const { workerType } = input;
+    
+    // Verify worker type exists
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(workerType)) {
+      throw new Error(`Unknown worker type: ${workerType}`);
+    }
+
+    await workerPauseManager.pauseWorker(workerType);
+    await this.persistWorkerConfig(workerType, { paused: true }, auth);
+
+    return { success: true, workerType, paused: true };
+  }
+
+  private async resumeWorker(input: z.infer<typeof ResumeWorkerSchema>, auth: Auth) {
+    const { workerType } = input;
+    
+    // Verify worker type exists
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(workerType)) {
+      throw new Error(`Unknown worker type: ${workerType}`);
+    }
+
+    await workerPauseManager.resumeWorker(workerType);
+    await this.persistWorkerConfig(workerType, { paused: false }, auth);
+
+    return { success: true, workerType, paused: false };
+  }
+
+  private async pauseAll(auth: Auth) {
+    const types = jobRegistry.getJobTypes();
+    
+    for (const workerType of types) {
+      await workerPauseManager.pauseWorker(workerType);
+      await this.persistWorkerConfig(workerType, { paused: true }, auth);
+    }
+
+    return { success: true, pausedWorkers: types };
+  }
+
+  private async resumeAll(auth: Auth) {
+    const types = jobRegistry.getJobTypes();
+    
+    for (const workerType of types) {
+      await workerPauseManager.resumeWorker(workerType);
+      await this.persistWorkerConfig(workerType, { paused: false }, auth);
+    }
+
+    return { success: true, resumedWorkers: types };
+  }
+
+  private async getWorkerStatus(_auth: Auth) {
+    const types = jobRegistry.getJobTypes();
+    const status: Record<string, { paused: boolean }> = {};
+
+    for (const workerType of types) {
+      status[workerType] = {
+        paused: workerPauseManager.isPaused(workerType),
+      };
+    }
+
+    return { workers: status };
+  }
+
+  private async persistWorkerConfig(
+    workerType: string,
+    config: { paused: boolean },
+    auth: Auth
+  ) {
+    const mongo = await getMongoResource(auth);
+    
+    await mongo({
+      action: "updateOne",
+      collection: "configs",
+      query: { _id: SERVER_CONFIG_ID },
+      update: {
+        $set: {
+          [`workers.${workerType}`]: config,
+          updatedAt: new Date(),
+        },
+      },
+    });
+  }
+
   extractActions(input: WorkerProgressRequest): {
     path: ResourcePath;
     actions: string[];
@@ -355,12 +503,24 @@ export class JobsResource
         return [{ path: ["jobs"], actions: ["schemas"] }];
       case "cancel_all":
         return [{ path: ["jobs", "all"], actions: ["cancel"] }];
+      case "clear_completed":
+        return [{ path: ["jobs", "completed"], actions: ["delete"] }];
       case "cancel":
         return [{ path: ["jobs", input.id], actions: ["cancel"] }];
       case "enqueue":
         return [{ path: ["jobs", input.data.type], actions: ["enqueue"] }];
       case "progressUpdate":
         return [{ path: ["jobs", input.jobId], actions: ["progressUpdate"] }];
+      case "pause_worker":
+        return [{ path: ["jobs", input.workerType], actions: ["pause"] }];
+      case "resume_worker":
+        return [{ path: ["jobs", input.workerType], actions: ["resume"] }];
+      case "pause_all":
+        return [{ path: ["jobs", "all"], actions: ["pause"] }];
+      case "resume_all":
+        return [{ path: ["jobs", "all"], actions: ["resume"] }];
+      case "get_worker_status":
+        return [{ path: ["jobs"], actions: ["read"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }

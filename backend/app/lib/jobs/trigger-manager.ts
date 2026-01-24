@@ -7,6 +7,13 @@ import { EnqueueJobOptions } from "./types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, sift } from "@/lib/mongo/core.server.ts";
 
+// Logging helper for consistent format
+const log = (level: string, msg: string, data?: Record<string, unknown>) => {
+  const timestamp = new Date().toISOString();
+  const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+  console.log(`[TRIGGER-MGR] ${timestamp} ${level}: ${msg}${dataStr}`);
+};
+
 export class TriggerManager {
   private isRunning = false;
   private subscribers = new Map<string, any>();
@@ -19,13 +26,18 @@ export class TriggerManager {
     if (this.isRunning) return;
     this.isRunning = true;
 
-    console.log("[TriggerManager] Starting trigger manager...");
+    log("INFO", `Starting trigger manager`);
 
-    const capabilities = this.registry.list() ;
-    for (const cap of capabilities) {
-      if (cap.manifest.triggers) {
-        await this.setupTriggers(cap);
-      }
+    const capabilities = this.registry.list();
+    const triggeredCapabilities = capabilities.filter(cap => cap.manifest.triggers);
+    log("INFO", `Found capabilities with triggers`, {
+      total: capabilities.length,
+      withTriggers: triggeredCapabilities.length,
+      names: triggeredCapabilities.map(c => c.manifest.name)
+    });
+
+    for (const cap of triggeredCapabilities) {
+      await this.setupTriggers(cap);
     }
   }
 
@@ -34,26 +46,38 @@ export class TriggerManager {
     const { name } = cap.manifest;
     if (!triggers) return;
 
-    console.log(`[TriggerManager] Setting up triggers for ${name}...`);
-
     const isTest = Deno.env.get("DENO_ENV") === "test";
     const debounceMs = isTest ? 10 : (triggers.debounceMs || 5000);
 
+    log("INFO", `Setting up triggers`, {
+      jobName: name,
+      sourceCount: triggers.sources?.length || 0,
+      debounceMs,
+      intervalSeconds: triggers.interval,
+      sources: triggers.sources?.map(s => s.name)
+    });
+
     const handleTrigger = debounce(async (reason: string) => {
+      log("DEBUG", `Debounced trigger fired`, { jobName: name, reason });
       await this.checkAndTrigger(cap, reason);
     }, debounceMs);
 
     this.debouncers.set(name, handleTrigger);
 
     for (const source of triggers.sources) {
-      await this.setupRedisTrigger(cap, source, (_payload) => 
+      await this.setupRedisTrigger(cap, source, (_payload) =>
         handleTrigger(source.name));
     }
 
     if (!isTest && triggers.interval && triggers.interval > 0) {
       if (!this.intervals.has(name)) {
         const intervalMs = triggers.interval * 1000;
+        log("INFO", `Setting up interval trigger`, {
+          jobName: name,
+          intervalSeconds: triggers.interval
+        });
         const intervalId = setInterval(() => {
+          log("DEBUG", `Interval trigger fired`, { jobName: name, intervalSeconds: triggers.interval });
           this.checkAndTrigger(
             cap,
             `interval:${triggers.interval}s`,
@@ -63,9 +87,10 @@ export class TriggerManager {
         this.intervals.set(name, intervalId);
       }
     }
-    
+
     // Initial check on startup (skipped in tests to avoid interference)
     if (!isTest) {
+      log("INFO", `Running startup check`, { jobName: name });
       await this.checkAndTrigger(cap, "TriggerManager startup check");
     }
   }
@@ -73,7 +98,7 @@ export class TriggerManager {
   private async setupRedisTrigger(cap: JobRegistryEntry, source: TriggerSource, onTrigger: (payload: any) => void) {
     const channel = source.channel;
     if (!channel) {
-      console.warn(`[TriggerManager] Missing channel for trigger in ${cap.manifest.name}`);
+      log("WARN", `Missing channel for trigger`, { jobName: cap.manifest.name });
       return;
     }
 
@@ -82,8 +107,8 @@ export class TriggerManager {
       subscriber = redis.duplicate();
       await subscriber.connect();
       this.subscribers.set(channel, subscriber);
-      
-      console.log(`[TriggerManager] Subscribing to Redis channel: ${channel}`);
+
+      log("INFO", `Subscribing to Redis channel`, { channel, jobName: cap.manifest.name });
       await subscriber.subscribe(channel);
     }
 
@@ -94,11 +119,29 @@ export class TriggerManager {
         // Use sift to evaluate the filter if it exists
         const matches = !source.filter || sift(source.filter)(payload);
         if (matches) {
-          console.log(`[TriggerManager] Redis event on ${channel} for ${cap.manifest.name} (trigger: ${source.name})`);
+          log("INFO", `Redis event received`, {
+            channel,
+            jobName: cap.manifest.name,
+            triggerName: source.name,
+            eventType: payload?.event,
+            documentState: payload?.data?.document?.state
+          });
           onTrigger(payload);
+        } else {
+          log("DEBUG", `Redis event filtered out`, {
+            channel,
+            jobName: cap.manifest.name,
+            triggerName: source.name,
+            eventType: payload?.event
+          });
         }
       } catch (error) {
-        console.error(`[TriggerManager] Error in Redis trigger for ${cap.manifest.name}:`, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        log("ERROR", `Error in Redis trigger`, {
+          jobName: cap.manifest.name,
+          channel,
+          error: errorMsg
+        });
       }
     });
   }
@@ -108,6 +151,7 @@ export class TriggerManager {
     reason: string,
     triggerOptions: { requireIdle?: boolean } | undefined = undefined,
   ) {
+    const jobName = cap.manifest.name;
     try {
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
@@ -117,13 +161,17 @@ export class TriggerManager {
           action: "count",
           collection: "jobs",
           query: {
-            type: cap.manifest.name,
+            type: jobName,
             state: { $in: ["waiting", "active"] },
           },
         }) as number;
 
         if (activeJobs > 0) {
-          console.log(`[TriggerManager] ${cap.manifest.name} already running, skipping interval trigger.`);
+          log("DEBUG", `Skipping trigger - job already running`, {
+            jobName,
+            reason,
+            activeJobs
+          });
           return;
         }
       }
@@ -134,19 +182,24 @@ export class TriggerManager {
           action: "count",
           collection: "jobs",
           query: {
-            type: cap.manifest.name,
+            type: jobName,
             state: { $in: ["waiting", "active"] },
           },
         }) as number;
 
         if (activeJobs >= cap.manifest.maxConcurrency) {
-          console.log(`[TriggerManager] Max concurrency (${cap.manifest.maxConcurrency}) reached for ${cap.manifest.name}, skipping trigger.`);
+          log("DEBUG", `Skipping trigger - max concurrency reached`, {
+            jobName,
+            reason,
+            activeJobs,
+            maxConcurrency: cap.manifest.maxConcurrency
+          });
           return;
         }
       }
 
       // 2. Enqueue job
-      console.log(`[TriggerManager] Triggering ${cap.manifest.name} job (reason: ${reason})...`);
+      log("INFO", `Enqueuing job`, { jobName, reason });
       const enqueueOptions: EnqueueJobOptions = {
         trigger: {
           type: "auto",
@@ -154,36 +207,49 @@ export class TriggerManager {
         }
       };
       await enqueueJob({
-        type: cap.manifest.name,
+        type: jobName,
       } as any, enqueueOptions);
+      log("INFO", `Job enqueued successfully`, { jobName, reason });
     } catch (error) {
-      console.error(`[TriggerManager] Error triggering ${cap.manifest.name}:`, error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      log("ERROR", `Error triggering job`, {
+        jobName,
+        reason,
+        error: errorMsg
+      });
     }
   }
 
   async stop() {
-    console.log("[TriggerManager] Stopping trigger manager...");
+    log("INFO", `Stopping trigger manager`, {
+      debouncers: this.debouncers.size,
+      intervals: this.intervals.size,
+      subscribers: this.subscribers.size
+    });
     this.isRunning = false;
-    
-    for (const [_, debouncer] of this.debouncers) {
+
+    for (const [name, debouncer] of this.debouncers) {
       debouncer.clear();
     }
     this.debouncers.clear();
 
-    for (const [_, intervalId] of this.intervals) {
+    for (const [name, intervalId] of this.intervals) {
       clearInterval(intervalId);
     }
     this.intervals.clear();
 
-    for (const [_, subscriber] of this.subscribers) {
+    for (const [channel, subscriber] of this.subscribers) {
       try {
         await subscriber.unsubscribe();
         await subscriber.quit();
+        log("DEBUG", `Closed Redis subscriber`, { channel });
       } catch (err) {
-        console.error("[TriggerManager] Error closing Redis subscriber:", err);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        log("ERROR", `Error closing Redis subscriber`, { channel, error: errorMsg });
       }
     }
     this.subscribers.clear();
+    log("INFO", `Trigger manager stopped`);
   }
 }
 

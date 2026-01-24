@@ -27,7 +27,7 @@ import { asyncHandler } from "@/middleware/asyncHandler.ts";
 export function registerRoutes(app: Express): void {
   app.get("/", rootHandler);
   app.get("/health", healthHandler);
-  app.post("/setup", asyncHandler(setupHandler));
+  app.post("/api/setup", asyncHandler(setupHandler));
   app.get("/data/audio", dataAudioHandler);
   app.get("/data/audio/items", dataAudioItemsHandler);
   app.post("/api/resource/:name", asyncHandler(apiResourceHandler));

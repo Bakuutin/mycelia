@@ -21,7 +21,7 @@ server {
     ssl_session_timeout 10m;
 
     # Backend routes
-    location ~ ^/(ws|api|data|oauth|llm|v1|mcp|health|setup|\.well-known) {
+    location ~ ^/(ws|api|data|oauth|llm|v1|mcp|health|\.well-known) {
         proxy_pass http://backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

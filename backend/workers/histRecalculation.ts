@@ -453,7 +453,10 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const start = jobData.start ? new Date(jobData.start) : undefined;
   const end = jobData.end ? new Date(jobData.end) : undefined;
 
+  console.log(`[histRecalculation] Job ${job.id}: processing time range ${start?.toISOString() ?? 'N/A'} to ${end?.toISOString() ?? 'N/A'}`);
+
   if (!start || !end) {
+    console.log(`[histRecalculation] Job ${job.id}: missing start or end date`);
     return { success: false, message: "Start or end date is required" };
   }
 
