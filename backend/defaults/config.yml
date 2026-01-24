@@ -1,9 +1,7 @@
 prompts:
   segmentation_system: "Find Conversation Topics"
   segmentation_guidance: "Topic Finder Response Format"
-  summarization_system: "Analyze Conversation Details"
-  summarization_guidance: "Analysis Response Format"
+  summarization_system: "2-3 Paragraph Summary"
 
 features:
   enable_experimental_processing: false
-

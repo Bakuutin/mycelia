@@ -135,6 +135,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       const { lines, rest } = splitLines(stdoutBuffer, chunk);
       stdoutBuffer = rest;
       for (const line of lines) {
+        // Print worker logs to server stdout (skip the final JSON result line)
+        if (!line.startsWith("{") || !line.endsWith("}")) {
+          console.log(`[${jobType}:${job.id}] ${line}`);
+        }
         enqueueLog("stdout", line);
       }
     }
@@ -163,8 +167,8 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
             // Ignore parse errors for progress
           }
         } else {
-          // Print worker logs to console for visibility
-          console.error(line);
+          // Print worker stderr to server stderr (except progress updates)
+          console.error(`[${jobType}:${job.id}] ${line}`);
         }
         enqueueLog("stderr", line);
       }

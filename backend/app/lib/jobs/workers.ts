@@ -6,7 +6,10 @@ import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
+
+const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 const workers: Worker[] = [];
 
@@ -108,6 +111,7 @@ export async function startWorkers() {
 
     worker.on("completed", (job) => {
       console.log(`[${jobType}] Local worker completed job ${job.id}`);
+      console.log(`[${jobType}] Job ${job.id} result:`, JSON.stringify(job.returnvalue));
 
       if (job.returnvalue?.hasMore === true) {
         console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);
@@ -152,6 +156,28 @@ export async function startWorkers() {
 
   console.log(`Started ${workers.length} worker(s) for ${jobTypes.length} job types`);
   console.log(`Python worker expected at: ${env.PYTHON_WORKER_URL}`);
+
+  // Restore paused workers from config
+  await restorePausedWorkers();
+}
+
+async function restorePausedWorkers() {
+  try {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    
+    const config = await mongo({
+      action: "findOne",
+      collection: "configs",
+      query: { _id: SERVER_CONFIG_ID },
+    });
+
+    if (config?.workers) {
+      await workerPauseManager.initFromConfig(config.workers);
+    }
+  } catch (err) {
+    console.error("[workers] Failed to restore paused workers from config:", err);
+  }
 }
 
 export async function stopWorkers() {

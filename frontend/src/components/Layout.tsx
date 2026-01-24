@@ -8,6 +8,7 @@ import { AudioWaveform } from "@/components/AudioWaveform";
 import { Button } from "@/components/ui/button.tsx";
 import { useJobsListener } from "@/hooks/useJobsListener";
 import { Badge } from "@/components/ui/badge";
+import { NotificationCenter } from "@/components/NotificationCenter";
 
 const Layout = () => {
   useTheme();
@@ -103,16 +104,19 @@ const Layout = () => {
                   </Link>
                 </div>
               </div>
-              {isPlaying && (
-                <Link to="/audio">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                  >
-                    <AudioWaveform size={20} />
-                  </Button>
-                </Link>
-              )}
+              <div className="flex items-center gap-2">
+                <NotificationCenter />
+                {isPlaying && (
+                  <Link to="/audio">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                    >
+                      <AudioWaveform size={20} />
+                    </Button>
+                  </Link>
+                )}
+              </div>
             </div>
           </div>
         </nav>

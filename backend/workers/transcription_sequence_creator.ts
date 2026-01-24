@@ -250,6 +250,8 @@ const capability: JobCapability = {
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
 
+    console.log(`[transcription_sequence_creator] Job ${job.id}: starting`);
+
     let processedCount = 0;
     let sequencesCreated = 0;
     let hasMore = false;
@@ -260,6 +262,12 @@ const capability: JobCapability = {
         hasMore = true;
         break;
       }
+      
+      const seqStart = getSequenceStart(seq);
+      const firstChunk = seq.chunks[0];
+      const lastChunk = getLastChunk(seq);
+      console.log(`[transcription_sequence_creator] Job ${job.id}: creating sequence for original ${seq.originalId} - ${seq.chunks.length} chunks (idx ${lastChunk.index}-${firstChunk.index}), start: ${seqStart.toISOString()}`);
+      
       processedCount += await persistSequence(mongo, seq);
       sequencesCreated++;
 

@@ -123,6 +123,12 @@ const listObjectsSchema = z.object({
     searchTerm: z.union([z.string(), z.null()]).optional().describe(
       "Search string to match against name and aliases (case-insensitive)"
     ),
+    timeRangeFilter: z.object({
+      start: z.string().describe("ISO 8601 date string for range start"),
+      end: z.string().describe("ISO 8601 date string for range end"),
+    }).optional().describe(
+      "Filter objects that overlap with the specified time range"
+    ),
   }).optional().describe("Query options for filtering, sorting, and pagination"),
 });
 
@@ -179,6 +185,12 @@ const exploreTimeRangeSchema = z.object({
   }).optional().describe("Query options for sorting and pagination"),
 });
 
+const getTimeRangeSchema = z.object({
+  action: z.literal("getTimeRange").describe(
+    "Get the minimum and maximum dates from all object time ranges"
+  ),
+});
+
 const objectsRequestSchema = z.discriminatedUnion("action", [
   createObjectSchema,
   updateObjectSchema,
@@ -188,6 +200,7 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   getRelationshipsSchema,
   getHistorySchema,
   exploreTimeRangeSchema,
+  getTimeRangeSchema,
 ]);
 
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
@@ -421,6 +434,24 @@ export class ObjectsResource
           };
         }
 
+        if (input.options?.timeRangeFilter) {
+          const filterStart = new Date(input.options.timeRangeFilter.start);
+          const filterEnd = new Date(input.options.timeRangeFilter.end);
+
+          query = {
+            ...query,
+            timeRanges: {
+              $elemMatch: {
+                start: { $lt: filterEnd },
+                $or: [
+                  { end: { $gt: filterStart } },
+                  { end: { $exists: false } },
+                ],
+              },
+            },
+          };
+        }
+
         if (input.options?.includeRelationships) {
           const pipeline: any[] = [
             {
@@ -646,6 +677,15 @@ export class ObjectsResource
       }
 
       case "exploreTimeRange": {
+        console.log("[exploreTimeRange] Input:", JSON.stringify({
+          start: input.start,
+          end: input.end,
+          filters: input.filters,
+          options: input.options,
+          startType: typeof input.start,
+          endType: typeof input.end,
+        }, null, 2));
+
         const timeRangeQuery = {
           timeRanges: {
             $elemMatch: {
@@ -661,6 +701,8 @@ export class ObjectsResource
         const query = input.filters
           ? { ...input.filters, ...timeRangeQuery }
           : timeRangeQuery;
+
+        console.log("[exploreTimeRange] Constructed query:", JSON.stringify(query, null, 2));
 
         if (input.options?.includeRelationships) {
           const pipeline: any[] = [
@@ -695,9 +737,15 @@ export class ObjectsResource
             },
           ];
 
-          if (input.options?.sort) {
-            pipeline.push({ $sort: input.options.sort });
-          }
+          // Add computed field for sorting by min timeRanges.start
+          pipeline.push({
+            $addFields: {
+              _minTimeRangeStart: { $min: "$timeRanges.start" },
+            },
+          });
+
+          // Sort by min timeRanges.start (default) or user-specified sort
+          pipeline.push({ $sort: input.options?.sort || { _minTimeRangeStart: 1 } });
 
           if (input.options?.skip) {
             pipeline.push({ $skip: input.options.skip });
@@ -707,30 +755,128 @@ export class ObjectsResource
             pipeline.push({ $limit: input.options.limit });
           }
 
-          return await mongo({
+          // Default projection for aggregation - include joined objects (excludes _minTimeRangeStart)
+          pipeline.push({ $project: {
+            _id: 1,
+            name: 1,
+            icon: 1,
+            timeRanges: 1,
+            summaries: { $map: { input: "$summaries", as: "s", in: "$$s.text" } },
+            isEvent: 1,
+            isPerson: 1,
+            isRelationship: 1,
+            isConversation: 1,
+            isPromise: 1,
+            subjectObject: { _id: 1, name: 1, icon: 1 },
+            objectObject: { _id: 1, name: 1, icon: 1 },
+          }});
+
+          // Get total count first
+          const countResult = await mongo({
+            action: "aggregate",
+            collection: "objects",
+            pipeline: [{ $match: query }, { $count: "total" }],
+          });
+          const total = countResult?.[0]?.total || 0;
+
+          const objects = await mongo({
             action: "aggregate",
             collection: "objects",
             pipeline,
           });
+
+          console.log("[exploreTimeRange] Aggregate result - total:", total, "returned:", objects?.length);
+          return { total, objects };
         }
 
-        const findOptions: any = {};
-        if (input.options?.sort) {
-          findOptions.sort = input.options.sort;
-        }
+        // Use aggregation for proper sorting by min timeRanges.start
+        const pipeline: any[] = [
+          { $match: query },
+          { $addFields: { _minTimeRangeStart: { $min: "$timeRanges.start" } } },
+          { $sort: input.options?.sort || { _minTimeRangeStart: 1 } },
+        ];
+
         if (input.options?.skip) {
-          findOptions.skip = input.options.skip;
+          pipeline.push({ $skip: input.options.skip });
         }
         if (input.options?.limit) {
-          findOptions.limit = input.options.limit;
+          pipeline.push({ $limit: input.options.limit });
         }
 
-        return await mongo({
-          action: "find",
-          collection: "objects",
-          query,
-          options: findOptions,
+        // Default projection - excludes _minTimeRangeStart
+        pipeline.push({
+          $project: {
+            _id: 1,
+            name: 1,
+            icon: 1,
+            timeRanges: 1,
+            summaries: { $map: { input: "$summaries", as: "s", in: "$$s.text" } },
+            isEvent: 1,
+            isPerson: 1,
+            isRelationship: 1,
+            isConversation: 1,
+            isPromise: 1,
+          },
         });
+
+        console.log("[exploreTimeRange] Pipeline:", JSON.stringify(pipeline, null, 2));
+
+        // Get total count first
+        const countResult = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline: [{ $match: query }, { $count: "total" }],
+        });
+        const total = countResult?.[0]?.total || 0;
+
+        const objects = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline,
+        });
+
+        console.log("[exploreTimeRange] Result - total:", total, "returned:", objects?.length);
+
+        return { total, objects };
+      }
+
+      case "getTimeRange": {
+        const pipeline = [
+          {
+            $match: {
+              timeRanges: { $exists: true, $ne: [] },
+            },
+          },
+          {
+            $unwind: "$timeRanges",
+          },
+          {
+            $group: {
+              _id: null,
+              minStart: { $min: "$timeRanges.start" },
+              maxEnd: {
+                $max: {
+                  $ifNull: ["$timeRanges.end", "$timeRanges.start"],
+                },
+              },
+            },
+          },
+        ];
+
+        const result = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline,
+        });
+
+        if (result && result.length > 0) {
+          return {
+            start: result[0].minStart,
+            end: result[0].maxEnd,
+          };
+        }
+
+        return { start: null, end: null };
       }
 
       default:
@@ -748,6 +894,7 @@ export class ObjectsResource
       getRelationships: ["read"],
       getHistory: ["read"],
       exploreTimeRange: ["read"],
+      getTimeRange: ["read"],
     };
 
     return [

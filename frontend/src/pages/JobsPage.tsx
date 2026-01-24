@@ -13,21 +13,26 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, Pause, PlayCircle, PauseCircle } from "lucide-react";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import type { JobInfo } from "@/types/jobs";
+
+type WorkerStatus = {
+  workers: Record<string, { paused: boolean }>;
+};
 
 type VadJobFormData = {
   limit: number;
@@ -44,6 +49,8 @@ export default function JobsPage() {
   const [allTypesSelected, setAllTypesSelected] = useState(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
+  const [sortColumn, setSortColumn] = useState<string>("timestamp");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const queryClient = useQueryClient();
 
   const { jobs, isLoading } = useJobsListener();
@@ -58,7 +65,89 @@ export default function JobsPage() {
     },
   });
 
+  const { data: workerStatus, refetch: refetchWorkerStatus } = useQuery({
+    queryKey: ["worker-status"],
+    queryFn: async () => {
+      const response = await api.callResource("jobs", {
+        action: "get_worker_status",
+      });
+      return response as WorkerStatus;
+    },
+  });
+
+  const pauseWorkerMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      await api.callResource("jobs", {
+        action: "pause_worker",
+        workerType,
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
+  const resumeWorkerMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      await api.callResource("jobs", {
+        action: "resume_worker",
+        workerType,
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
+  const pauseAllMutation = useMutation({
+    mutationFn: async () => {
+      await api.callResource("jobs", {
+        action: "pause_all",
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
+  const resumeAllMutation = useMutation({
+    mutationFn: async () => {
+      await api.callResource("jobs", {
+        action: "resume_all",
+      });
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+    },
+  });
+
   const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
+
+  const allPaused = useMemo(() => {
+    if (!workerStatus?.workers || allTypes.length === 0) return false;
+    return allTypes.every(type => workerStatus.workers[type]?.paused);
+  }, [workerStatus, allTypes]);
+
+  const somePaused = useMemo(() => {
+    if (!workerStatus?.workers) return false;
+    return Object.values(workerStatus.workers).some(w => w.paused);
+  }, [workerStatus]);
+
+  const handleToggleWorker = (workerType: string, currentlyPaused: boolean) => {
+    if (currentlyPaused) {
+      resumeWorkerMutation.mutate(workerType);
+    } else {
+      pauseWorkerMutation.mutate(workerType);
+    }
+  };
+
+  const handleToggleAll = () => {
+    if (allPaused) {
+      resumeAllMutation.mutate();
+    } else {
+      pauseAllMutation.mutate();
+    }
+  };
 
   const filteredJobs = useMemo(() => {
     let result = jobs;
@@ -81,11 +170,65 @@ export default function JobsPage() {
         j.type.toLowerCase().includes(query)
       );
     }
-    return result.slice(0, limit);
-  }, [jobs, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit]);
+
+    // Sort the results
+    const sortedResult = [...result].sort((a, b) => {
+      let aVal: any;
+      let bVal: any;
+
+      switch (sortColumn) {
+        case "state":
+          aVal = a.state;
+          bVal = b.state;
+          break;
+        case "type":
+          aVal = a.type;
+          bVal = b.type;
+          break;
+        case "id":
+          aVal = a.id;
+          bVal = b.id;
+          break;
+        case "timestamp":
+          aVal = a.timestamp || 0;
+          bVal = b.timestamp || 0;
+          break;
+        case "duration":
+          aVal = a.processedOn ? ((a.finishedOn || Date.now()) - a.processedOn) : 0;
+          bVal = b.processedOn ? ((b.finishedOn || Date.now()) - b.processedOn) : 0;
+          break;
+        default:
+          return 0;
+      }
+
+      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
+      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return sortedResult.slice(0, limit);
+  }, [jobs, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+  };
+
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("desc");
+    }
+  };
+
+  const SortIcon = ({ column }: { column: string }) => {
+    if (sortColumn !== column) {
+      return <ArrowUpDown className="ml-1 h-3 w-3 opacity-50" />;
+    }
+    return sortDirection === "asc"
+      ? <ArrowUp className="ml-1 h-3 w-3" />
+      : <ArrowDown className="ml-1 h-3 w-3" />;
   };
 
   const toggleStatus = (status: string) => {
@@ -135,6 +278,15 @@ export default function JobsPage() {
   const selectNoTypes = () => {
     setAllTypesSelected(false);
     setFilterTypes(new Set());
+  };
+
+  const selectOnlyType = (type: string) => {
+    setAllTypesSelected(false);
+    setFilterTypes(new Set([type]));
+  };
+
+  const selectOnlyStatus = (status: string) => {
+    setFilterStatuses(new Set([status]));
   };
 
   const getTypesLabel = () => {
@@ -218,6 +370,34 @@ export default function JobsPage() {
     }
   };
 
+  const handleClearCompleted = async () => {
+    const confirmText = "DELETE";
+    const userInput = prompt(
+      `⚠️ DEV ONLY - DESTRUCTIVE ACTION ⚠️\n\n` +
+      `This will permanently delete ALL completed, failed, and cancelled jobs from the database.\n\n` +
+      `This action cannot be undone and the data cannot be recovered.\n\n` +
+      `Type "${confirmText}" to confirm:`
+    );
+
+    if (userInput !== confirmText) {
+      if (userInput !== null) {
+        alert("Deletion cancelled - confirmation text did not match.");
+      }
+      return;
+    }
+
+    try {
+      const result = await api.callResource("jobs", {
+        action: "clear_completed",
+      });
+      console.log(`Deleted ${result.deletedCount} jobs`);
+      refetch();
+    } catch (error) {
+      console.error("Failed to clear completed jobs:", error);
+      alert("Failed to clear completed jobs");
+    }
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -234,6 +414,24 @@ export default function JobsPage() {
             </Link>
           </Button>
           <Button
+            variant={allPaused ? "default" : "secondary"}
+            size="sm"
+            onClick={handleToggleAll}
+            disabled={pauseAllMutation.isPending || resumeAllMutation.isPending}
+          >
+            {allPaused ? (
+              <>
+                <PlayCircle className="h-4 w-4 mr-2" />
+                Resume All
+              </>
+            ) : (
+              <>
+                <PauseCircle className="h-4 w-4 mr-2" />
+                Pause All
+              </>
+            )}
+          </Button>
+          <Button
             variant="destructive"
             size="sm"
             onClick={handleCancelAll}
@@ -241,6 +439,17 @@ export default function JobsPage() {
             <Trash2 className="h-4 w-4 mr-2" />
             Cancel All
           </Button>
+          {import.meta.env.DEV && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearCompleted}
+              title="Dev only: Permanently delete completed jobs from database"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear Completed (Dev)
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -254,6 +463,59 @@ export default function JobsPage() {
         </div>
       </div>
 
+      {/* Worker Status Card */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Worker Status</CardTitle>
+          <CardDescription>
+            Pause workers to stop them from processing new jobs. Active jobs will complete.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {isLoadingSchemas ? (
+              <div className="col-span-full text-muted-foreground text-sm">Loading workers...</div>
+            ) : (
+              allTypes.map((type) => {
+                const isPaused = workerStatus?.workers[type]?.paused ?? false;
+                const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
+                return (
+                  <div
+                    key={type}
+                    className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                      isPaused
+                        ? "bg-amber-500/5 border-amber-500/20"
+                        : "bg-green-500/5 border-green-500/20"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isPaused ? (
+                        <Pause className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                      ) : (
+                        <Play className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                      )}
+                      <span className="text-sm font-medium truncate" title={type}>
+                        {type}
+                      </span>
+                    </div>
+                    <Switch
+                      checked={!isPaused}
+                      onCheckedChange={() => handleToggleWorker(type, isPaused)}
+                      disabled={isMutating}
+                      className="shrink-0 ml-2"
+                    />
+                  </div>
+                );
+              })
+            )}
+          </div>
+          {somePaused && (
+            <p className="text-xs text-amber-600 mt-3">
+              ⚠️ Some workers are paused. New jobs of those types will queue but not process.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-4 mt-6">
@@ -276,24 +538,34 @@ export default function JobsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[200px]">
-              <DropdownMenuItem onClick={selectAllTypes}>
-                Select All
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={selectNoTypes}>
-                Select None
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={selectAllTypes}>
+                <Checkbox
+                  checked={allTypesSelected}
+                  className="mr-2"
+                  onClick={(e) => e.stopPropagation()}
+                  onCheckedChange={(checked) => checked ? selectAllTypes() : selectNoTypes()}
+                />
+                All Types
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {isLoadingSchemas ? (
                 <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
               ) : (
                 allTypes.map((type) => (
-                  <DropdownMenuCheckboxItem
+                  <DropdownMenuItem
                     key={type}
-                    checked={allTypesSelected || filterTypes.has(type)}
-                    onCheckedChange={() => toggleType(type)}
+                    onSelect={(e) => e.preventDefault()}
+                    onClick={() => selectOnlyType(type)}
+                    className="cursor-pointer"
                   >
+                    <Checkbox
+                      checked={allTypesSelected || filterTypes.has(type)}
+                      className="mr-2"
+                      onClick={(e) => e.stopPropagation()}
+                      onCheckedChange={() => toggleType(type)}
+                    />
                     {type}
-                  </DropdownMenuCheckboxItem>
+                  </DropdownMenuItem>
                 ))
               )}
             </DropdownMenuContent>
@@ -307,22 +579,31 @@ export default function JobsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[200px]">
-              <DropdownMenuItem onClick={selectAllStatuses}>
-                Select All
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={selectNoStatuses}>
-                Select None
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={selectAllStatuses}>
+                <Checkbox
+                  checked={filterStatuses.size === ALL_STATUSES.length}
+                  className="mr-2"
+                  onClick={(e) => e.stopPropagation()}
+                  onCheckedChange={(checked) => checked ? selectAllStatuses() : selectNoStatuses()}
+                />
+                All Statuses
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {ALL_STATUSES.map((status) => (
-                <DropdownMenuCheckboxItem
+                <DropdownMenuItem
                   key={status}
-                  checked={filterStatuses.has(status)}
-                  onCheckedChange={() => toggleStatus(status)}
-                  className="capitalize"
+                  onSelect={(e) => e.preventDefault()}
+                  onClick={() => selectOnlyStatus(status)}
+                  className="cursor-pointer capitalize"
                 >
+                  <Checkbox
+                    checked={filterStatuses.has(status)}
+                    className="mr-2"
+                    onClick={(e) => e.stopPropagation()}
+                    onCheckedChange={() => toggleStatus(status)}
+                  />
                   {status}
-                </DropdownMenuCheckboxItem>
+                </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -348,11 +629,51 @@ export default function JobsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Status</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Job ID</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Duration</TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("state")}
+                >
+                  <div className="flex items-center">
+                    Status
+                    <SortIcon column="state" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("type")}
+                >
+                  <div className="flex items-center">
+                    Type
+                    <SortIcon column="type" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("id")}
+                >
+                  <div className="flex items-center">
+                    Job ID
+                    <SortIcon column="id" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("timestamp")}
+                >
+                  <div className="flex items-center">
+                    Created
+                    <SortIcon column="timestamp" />
+                  </div>
+                </TableHead>
+                <TableHead
+                  className="cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("duration")}
+                >
+                  <div className="flex items-center">
+                    Duration
+                    <SortIcon column="duration" />
+                  </div>
+                </TableHead>
                 <TableHead>Progress</TableHead>
               </TableRow>
             </TableHeader>
@@ -442,4 +763,3 @@ export default function JobsPage() {
     </div>
   );
 }
-

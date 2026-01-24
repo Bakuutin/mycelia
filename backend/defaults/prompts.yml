@@ -44,3 +44,6 @@
   text: |
     I will give you the result as a JSON object in English.
 
+- name: "2-3 Paragraph Summary"
+  text: |
+    Provide a brief 2-3 paragraph summary of the main topics discussed in this conversation. Focus on the key things mentioned. Be concise and clear.
