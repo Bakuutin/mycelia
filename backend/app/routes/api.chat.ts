@@ -232,7 +232,7 @@ export async function apiChatHandler(req: Request, res: Response) {
   });
 
   // Fetch System Prompt
-  let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
+  let systemPrompt = "You are Mycelia, an intelligent AI assistant.";
 
   // throw new Error("Not implemented 112");
   const config = await getServerConfig();
@@ -248,18 +248,23 @@ export async function apiChatHandler(req: Request, res: Response) {
       console.warn("Failed to load system prompt from config, using default.", e);
   }
 
-  const inference = config.inference;
+  // Get inference provider using stateless env vars first, MongoDB fallback
+  const llmResource = new LLMResource();
+  const inference = await llmResource.getInferenceProvider();
   if (!inference?.baseUrl || !inference?.apiKey) {
     res.status(500).json({ error: "Inference provider not configured. Please configure it in server settings." });
     return;
   }
+
+  // Use model from inference provider (env var), fallback to DB model or default
+  const actualModel = inference.model || chatModel || "gpt-4o-mini";
 
   try {
     const stream = streamText({
       model: createOpenAI({
         baseURL: inference.baseUrl,
         apiKey: inference.apiKey,
-      }).chat(chatModel),
+      }).chat(actualModel),
       tools,
       stopWhen: stepCountIs(5),
       messages: [

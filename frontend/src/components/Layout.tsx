@@ -1,5 +1,5 @@
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
-import { Clock, Home, Package, Settings, MessageSquare, Activity } from "lucide-react";
+import { Clock, Home, Package, Settings, MessageSquare, Activity, Mic } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -80,6 +80,17 @@ const Layout = () => {
                         {runningCount}
                       </Badge>
                     )}
+                  </Link>
+                  <Link
+                    to="/audio/pipeline"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/audio/pipeline"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      }`}
+                    data-testid="nav-pipeline"
+                  >
+                    <Mic className="w-4 h-4" />
+                    Pipeline
                   </Link>
                   <Link
                     to="/settings"

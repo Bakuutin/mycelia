@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NetworkJobCapability } from "./python.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
+import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
 /** Schema for VAD job data */
 export const schema = z.object({
@@ -36,7 +37,6 @@ export default new NetworkJobCapability({
         },
       },
     ],
-    debounceMs: 1000,
-    interval: 300,
+    ...getTriggerTiming("vad"),
   },
 });

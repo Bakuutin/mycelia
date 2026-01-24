@@ -5,6 +5,7 @@ import { callResource } from "@myceliasdk/resources.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { mongoCursor } from "@/lib/mongo/cursor.ts";
 import { createHash } from "node:crypto";
+import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
 // ============================================================================
 // Constants
@@ -788,7 +789,10 @@ const capability: JobCapability = {
     const gapThresholds = data.gapThresholds ?? { sparse: 45 * 60 * 1000, normal: 5 * 60 * 1000, dense: 40 * 1000 };
     const charThresholds = data.charThresholds ?? { sparseMax: 500, normalMax: 20000 };
     const policyVersion = data.policyVersion ?? "v1";
-    const model = data.model ?? "medium";
+    const model = data.model ?? Deno.env.get("OPENAI_MODEL");
+    if (!model) {
+      throw new Error("OPENAI_MODEL environment variable is required but not set");
+    }
     const mode = data.mode ?? "auto";
     const force = data.force ?? false;
 
@@ -905,8 +909,7 @@ const capability: JobCapability = {
         },
       },
     ],
-    debounceMs: 2000,   // Quick response for streaming (2s)
-    interval: 30,       // Also check every 30s for stale chunks & backfill
+    ...getTriggerTiming("conversation_chunk_creator"),
   },
 };
 
