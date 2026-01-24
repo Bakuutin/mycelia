@@ -256,8 +256,35 @@ export async function apiChatHandler(req: Request, res: Response) {
     return;
   }
 
+  // Resolve model aliases (small/medium/large) to actual model names
+  // Priority: BASE_MODEL env var > inference.mycelia.tech aliases > MODEL_* env vars > defaults
+  function resolveModelAlias(modelName: string): string {
+    // Highest priority: explicit BASE_MODEL override
+    const baseModelOverride = Deno.env.get('BASE_MODEL');
+    if (baseModelOverride) {
+      return baseModelOverride;
+    }
+
+    // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
+    if (inference.baseUrl.includes('inference.mycelia.tech')) {
+      return modelName;
+    }
+
+    // Resolve aliases to actual model names for direct providers
+    // Use BASE_MODEL as fallback for individual aliases, then default to gpt-4o-mini (cheap)
+    const baseModel = Deno.env.get('BASE_MODEL');
+    const aliases: Record<string, string> = {
+      small: Deno.env.get('MODEL_SMALL') || baseModel || 'gpt-4o-mini',
+      medium: Deno.env.get('MODEL_MEDIUM') || baseModel || 'gpt-4o-mini',
+      large: Deno.env.get('MODEL_LARGE') || baseModel || 'gpt-4o-mini',
+    };
+
+    return aliases[modelName] || modelName;
+  }
+
   // Use model from inference provider (env var), fallback to DB model or default
-  const actualModel = inference.model || chatModel || "gpt-4o-mini";
+  const requestedModel = inference.model || chatModel || "gpt-4o-mini";
+  const actualModel = resolveModelAlias(requestedModel);
 
   try {
     const stream = streamText({

@@ -112,16 +112,29 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           const fileName = input.fileName || "audio.mp3";
           const file = new File([blob], fileName, { type: input.fileType || "audio/mpeg" });
           formData.append("file", file);
+          // Request verbose_json to get segments with timestamps
+          formData.append("response_format", "verbose_json");
           if (input.language) {
             formData.append("language", input.language);
           }
           if (input.prompt) {
             formData.append("prompt", input.prompt);
           }
-          formData.append("model", "whisper");
+          // Use configured model, or let server use default
+          if (provider.model) {
+            formData.append("model", provider.model);
+          }
+
+          // Expect standard format: https://api.openai.com/v1
+          const baseUrl = provider.baseUrl.replace(/\/$/, "");
+          if (!baseUrl.endsWith("/v1")) {
+            throw new Error(
+              `Invalid TRANSCRIPTION_BASE_URL format. Expected URL ending with /v1 (e.g., https://api.openai.com/v1). Got: ${baseUrl}`
+            );
+          }
 
           const proxyResponse = await fetch(
-            provider.baseUrl.replace(/\/$/, "") + "/v1/audio/transcriptions",
+            `${baseUrl}/audio/transcriptions`,
             {
               method: "POST",
               headers: {
