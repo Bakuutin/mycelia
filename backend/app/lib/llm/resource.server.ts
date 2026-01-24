@@ -94,7 +94,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     // Stateless config: read from env vars first (ushadow pattern)
     const envBaseUrl = Deno.env.get("OPENAI_BASE_URL");
     const envApiKey = Deno.env.get("OPENAI_API_KEY");
-    const envModel = Deno.env.get("OPENAI_MODEL");
+    // Model resolution: OPENAI_MODEL (for override) > BASE_MODEL (primary config)
+    const envModel = Deno.env.get("OPENAI_MODEL") || Deno.env.get("BASE_MODEL");
 
     if (envBaseUrl && envApiKey) {
       return {
@@ -157,8 +158,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             model: input.model,
           };
 
+          // Expect standard format: https://api.openai.com/v1
+          const baseUrl = provider.baseUrl.replace(/\/$/, "");
+          if (!baseUrl.endsWith("/v1")) {
+            throw new Error(
+              `Invalid OPENAI_BASE_URL format. Expected URL ending with /v1 (e.g., https://api.openai.com/v1). Got: ${baseUrl}`
+            );
+          }
+
           const proxyResponse = await fetch(
-            provider.baseUrl.replace(/\/$/, "") + "/v1/chat/completions",
+            `${baseUrl}/chat/completions`,
             {
               method: "POST",
               headers: {

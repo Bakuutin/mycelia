@@ -31,8 +31,8 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   });
 
   // Get URLs from env vars
-  const backendUrl = Deno.env.get("MYCELIA_BACKEND_INTERNAL_URL") || "http://mycelia-backend:5173";
-  const pythonWorkerUrl = Deno.env.get("PYTHON_WORKER_URL") || "http://mycelia-python-worker:8000";
+  const backendUrl = Deno.env.get("MYCELIA_BACKEND_INTERNAL_URL") || "http://backend:5173";
+  const pythonWorkerUrl = Deno.env.get("PYTHON_WORKER_URL") || "http://python-worker:8000";
 
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
