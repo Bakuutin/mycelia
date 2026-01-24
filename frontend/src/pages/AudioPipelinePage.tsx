@@ -1,16 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { format, formatDistanceToNow } from "date-fns";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,7 +12,6 @@ import {
   Mic,
   AudioWaveform,
   FileText,
-  CheckCircle2,
   Clock,
   AlertCircle,
   ChevronRight,
@@ -508,255 +499,178 @@ export default function AudioPipelinePage() {
                   </CollapsibleTrigger>
 
                   <CollapsibleContent>
-                    <div className="px-4 pb-4 pt-2 bg-muted/30 space-y-4">
-                      {/* Chunk details */}
-                      <div className="grid grid-cols-3 gap-4">
-                        <div className="bg-background rounded-lg p-3">
-                          <div className="text-xs text-muted-foreground mb-1">Total Chunks</div>
-                          <div className="text-lg font-semibold">{session.chunks.total}</div>
-                        </div>
-                        <div className="bg-background rounded-lg p-3">
-                          <div className="text-xs text-muted-foreground mb-1">VAD Processed</div>
-                          <div className="text-lg font-semibold">
-                            {session.chunks.vadProcessed}
-                            {session.chunks.total > 0 && (
-                              <span className="text-sm font-normal text-muted-foreground ml-1">
-                                ({Math.round((session.chunks.vadProcessed / session.chunks.total) * 100)}%)
-                              </span>
-                            )}
-                          </div>
+                    <div className="px-4 pb-3 pt-2 bg-muted/30 space-y-3">
+                      {/* Compact stats row */}
+                      <div className="flex items-center gap-4 text-xs">
+                        <span className="text-muted-foreground">
+                          Chunks: <span className="font-medium text-foreground">{session.chunks.total}</span>
+                        </span>
+                        <span className="text-muted-foreground">
+                          VAD: <span className="font-medium text-foreground">{session.chunks.vadProcessed}</span>
                           {session.chunks.total > 0 && (
-                            <Progress
-                              value={(session.chunks.vadProcessed / session.chunks.total) * 100}
-                              className="h-1 mt-2"
-                            />
+                            <span className="text-muted-foreground ml-1">
+                              ({Math.round((session.chunks.vadProcessed / session.chunks.total) * 100)}%)
+                            </span>
                           )}
-                        </div>
-                        <div className="bg-background rounded-lg p-3">
-                          <div className="text-xs text-muted-foreground mb-1">With Speech</div>
-                          <div className="text-lg font-semibold">{session.chunks.withSpeech}</div>
-                        </div>
+                        </span>
+                        <span className="text-muted-foreground">
+                          Speech: <span className="font-medium text-foreground">{session.chunks.withSpeech}</span>
+                        </span>
+                        {session.chunks.total > 0 && (
+                          <Progress
+                            value={(session.chunks.vadProcessed / session.chunks.total) * 100}
+                            className="h-1 w-24"
+                          />
+                        )}
                       </div>
 
-                      {/* Sequences */}
-                      {session.sequences.length > 0 ? (
-                        <div>
-                          <div className="text-sm font-medium mb-2">Transcription Sequences</div>
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>State</TableHead>
-                                <TableHead>Chunks</TableHead>
-                                <TableHead>Range</TableHead>
-                                <TableHead>Updated</TableHead>
-                                <TableHead>Actions</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {session.sequences.map((seq) => (
-                                <TableRow key={seq._id}>
-                                  <TableCell>
-                                    <Badge className={getStateColor(seq.state)}>
-                                      {seq.state}
-                                    </Badge>
-                                  </TableCell>
-                                  <TableCell>{seq.chunk_count}</TableCell>
-                                  <TableCell className="font-mono text-xs">
-                                    [{seq.fromIndex} - {seq.toIndex}]
-                                  </TableCell>
-                                  <TableCell className="text-sm text-muted-foreground">
-                                    {seq.updatedAt
-                                      ? formatDistanceToNow(seq.updatedAt, { addSuffix: true })
-                                      : "-"}
-                                  </TableCell>
-                                  <TableCell>
-                                    {(seq.state === "error" || seq.state === "processing") && (
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => resetSequence(seq._id)}
-                                        data-testid={`reset-sequence-${seq._id}`}
-                                      >
-                                        Reset
-                                      </Button>
-                                    )}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                          {session.sequences.some((s) => s.error) && (
-                            <div className="mt-2 p-2 bg-red-500/10 rounded text-sm text-red-600">
-                              Error: {session.sequences.find((s) => s.error)?.error}
+                      {/* Sequences - compact inline */}
+                      {session.sequences.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="text-muted-foreground font-medium">Sequences:</span>
+                          {session.sequences.map((seq) => (
+                            <div key={seq._id} className="flex items-center gap-1">
+                              <Badge className={`${getStateColor(seq.state)} text-xs py-0 px-1.5`}>
+                                {seq.state}
+                              </Badge>
+                              <span className="font-mono text-muted-foreground">[{seq.fromIndex}-{seq.toIndex}]</span>
+                              {(seq.state === "error" || seq.state === "processing") && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-5 px-1 text-xs"
+                                  onClick={() => resetSequence(seq._id)}
+                                >
+                                  ↻
+                                </Button>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-muted-foreground">
-                          No sequences created yet
-                          {session.chunks.withSpeech === 0 && session.chunks.vadProcessed > 0 && (
-                            <span> (no speech detected)</span>
+                          ))}
+                          {session.sequences.some((s) => s.error) && (
+                            <span className="text-red-500 text-xs">
+                              Error: {session.sequences.find((s) => s.error)?.error?.slice(0, 50)}...
+                            </span>
                           )}
                         </div>
                       )}
 
-                      {/* Transcriptions */}
-                      {session.transcriptionDetails.length > 0 ? (
-                        <div>
-                          <div className="text-sm font-medium mb-2 flex items-center gap-2">
-                            <FileText className="h-4 w-4 text-muted-foreground" />
+                      {/* Transcriptions - compact list */}
+                      {session.transcriptionDetails.length > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                            <FileText className="h-3 w-3" />
                             Transcriptions ({session.transcriptions})
                           </div>
-                          <div className="space-y-2">
+                          <div className="space-y-1 max-h-32 overflow-y-auto">
                             {session.transcriptionDetails.map((t) => (
-                              <div key={t._id} className="bg-background rounded-lg p-3 text-sm">
+                              <div key={t._id} className="flex gap-2 text-xs bg-background rounded px-2 py-1">
                                 <Link
                                   to={`/timeline?start=${t.start.getTime()}&end=${t.end.getTime()}`}
-                                  className="text-xs text-muted-foreground hover:underline mb-1 block"
+                                  className="text-muted-foreground hover:underline whitespace-nowrap shrink-0"
                                 >
-                                  {format(t.start, "MMM d, HH:mm:ss")} - {format(t.end, "HH:mm:ss")}
+                                  {format(t.start, "HH:mm:ss")}
                                 </Link>
-                                <div className="text-foreground">
+                                <span className="text-foreground truncate">
                                   {t.text || <span className="italic text-muted-foreground">(no text)</span>}
-                                </div>
+                                </span>
                               </div>
                             ))}
                           </div>
                         </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm text-muted-foreground">No transcriptions yet</span>
+                      )}
+
+                      {/* Conversation Chunks - compact inline */}
+                      {session.conversationChunks.length > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                            <Layers className="h-3 w-3 text-purple-500" />
+                            Conv Chunks ({session.conversationChunks.length})
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {session.conversationChunks.map((chunk) => (
+                              <div key={chunk._id} className="flex items-center gap-1 bg-background rounded px-2 py-0.5 text-xs">
+                                <Badge className={`${getStateColor(chunk.state)} text-xs py-0 px-1`}>
+                                  {chunk.state}
+                                </Badge>
+                                {chunk.start && chunk.end && (
+                                  <Link
+                                    to={`/timeline?start=${chunk.start.getTime()}&end=${chunk.end.getTime()}`}
+                                    className="hover:underline text-primary"
+                                  >
+                                    {format(chunk.start, "HH:mm")}
+                                  </Link>
+                                )}
+                                {chunk.conversationsCreated !== undefined && chunk.conversationsCreated > 0 && (
+                                  <span className="text-green-500">→{chunk.conversationsCreated}</span>
+                                )}
+                                {chunk.error && <span className="text-red-500" title={chunk.error}>⚠</span>}
+                                {chunk.emptyReason && <span className="text-yellow-500" title={chunk.emptyReason}>∅</span>}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
 
-                      {/* Conversation Chunks */}
-                      {session.conversationChunks.length > 0 ? (
-                        <div>
-                          <div className="text-sm font-medium mb-2 flex items-center gap-2">
-                            <Layers className="h-4 w-4 text-purple-500" />
-                            Conversation Chunks ({session.conversationChunks.length})
-                          </div>
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>State</TableHead>
-                                <TableHead>Time Range</TableHead>
-                                <TableHead>Text</TableHead>
-                                <TableHead>Segments</TableHead>
-                                <TableHead>Result</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {session.conversationChunks.map((chunk) => (
-                                <TableRow key={chunk._id}>
-                                  <TableCell>
-                                    <div className="flex flex-col gap-1">
-                                      <Badge className={getStateColor(chunk.state)}>
-                                        {chunk.state}
-                                      </Badge>
-                                      {chunk.mode && (
-                                        <span className="text-xs text-muted-foreground">{chunk.mode}</span>
-                                      )}
-                                    </div>
-                                  </TableCell>
-                                  <TableCell className="text-xs">
-                                    {chunk.start && chunk.end ? (
-                                      <Link
-                                        to={`/timeline?start=${chunk.start.getTime()}&end=${chunk.end.getTime()}`}
-                                        className="hover:underline text-primary"
-                                      >
-                                        {format(chunk.start, "MMM d, HH:mm:ss")} - {format(chunk.end, "HH:mm:ss")}
-                                      </Link>
-                                    ) : "-"}
-                                  </TableCell>
-                                  <TableCell>
-                                    <div className="text-sm">
-                                      {chunk.totalTextLength} chars
-                                      <span className="text-muted-foreground text-xs ml-1">
-                                        ({chunk.transcriptionCount} trans)
-                                      </span>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>
-                                    {chunk.segmentsFound !== undefined ? (
-                                      <span className={chunk.segmentsFound === 0 ? "text-yellow-500" : "text-green-500"}>
-                                        {chunk.segmentsFound} found
-                                      </span>
-                                    ) : "-"}
-                                  </TableCell>
-                                  <TableCell className="text-sm max-w-[200px]">
-                                    {chunk.error && (
-                                      <span className="text-red-500">{chunk.error}</span>
-                                    )}
-                                    {chunk.emptyReason && (
-                                      <span className="text-yellow-600">{chunk.emptyReason}</span>
-                                    )}
-                                    {chunk.conversationsCreated !== undefined && chunk.conversationsCreated > 0 && (
-                                      <span className="text-green-500">{chunk.conversationsCreated} conversations</span>
-                                    )}
-                                    {chunk.state === "open" && (
-                                      <span className="text-blue-500">Accumulating...</span>
-                                    )}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      ) : session.transcriptions > 0 ? (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Layers className="h-4 w-4" />
-                          <span>Awaiting conversation chunking...</span>
-                        </div>
-                      ) : null}
-
-                      {/* Conversations */}
-                      {session.conversations.length > 0 ? (
-                        <div>
-                          <div className="text-sm font-medium mb-2 flex items-center gap-2">
-                            <MessageSquare className="h-4 w-4 text-green-500" />
+                      {/* Conversations - 2 column grid */}
+                      {session.conversations.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                            <MessageSquare className="h-3 w-3 text-green-500" />
                             Conversations ({session.conversations.length})
                           </div>
-                          <div className="space-y-2">
-                            {session.conversations.map((conv) => (
-                              <div key={conv._id} className="bg-background rounded-lg p-3 flex items-center gap-3">
-                                {conv.icon?.text && (
-                                  <span className="text-2xl">{conv.icon.text}</span>
-                                )}
-                                <div>
-                                  <Link
-                                    to={`/objects/${conv._id}`}
-                                    className="font-medium hover:underline text-primary"
-                                  >
-                                    {conv.name}
-                                  </Link>
-                                  {conv.timeRanges?.[0] && (
-                                    <Link
-                                      to={`/timeline?start=${new Date(conv.timeRanges[0].start).getTime()}&end=${new Date(conv.timeRanges[0].end).getTime()}`}
-                                      className="text-xs text-muted-foreground hover:underline block"
-                                    >
-                                      {format(new Date(conv.timeRanges[0].start), "MMM d, HH:mm:ss")} - {format(new Date(conv.timeRanges[0].end), "HH:mm:ss")}
-                                    </Link>
+                          <div className="grid grid-cols-2 gap-2">
+                            {session.conversations.map((conv) => {
+                              const start = conv.timeRanges?.[0]?.start ? new Date(conv.timeRanges[0].start) : null;
+                              const end = conv.timeRanges?.[0]?.end ? new Date(conv.timeRanges[0].end) : null;
+                              const durationMs = start && end ? end.getTime() - start.getTime() : 0;
+                              const durationMins = Math.round(durationMs / 60000);
+                              
+                              return (
+                                <div
+                                  key={conv._id}
+                                  className="flex items-start gap-2 bg-background rounded-lg p-2 hover:bg-muted transition-colors"
+                                >
+                                  {conv.icon?.text && (
+                                    <span className="text-lg shrink-0">{conv.icon.text}</span>
                                   )}
+                                  <div className="flex-1 min-w-0">
+                                    <Link
+                                      to={`/objects/${conv._id}`}
+                                      className="text-sm font-medium text-primary hover:underline block truncate"
+                                    >
+                                      {conv.name}
+                                    </Link>
+                                    {start && (
+                                      <Link
+                                        to={`/timeline?start=${start.getTime()}&end=${end?.getTime() || start.getTime()}`}
+                                        className="text-xs text-muted-foreground hover:underline flex items-center gap-1"
+                                      >
+                                        <span>{format(start, "MMM d, HH:mm")}</span>
+                                        {durationMins > 0 && (
+                                          <span className="text-muted-foreground">• {durationMins}m</span>
+                                        )}
+                                      </Link>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm text-muted-foreground">
-                            No conversations extracted
-                            {session.conversationChunks.some(c => c.state === "empty") && " (chunks marked empty by LLM)"}
-                          </span>
                         </div>
                       )}
 
-                      {/* Session ID for debugging */}
-                      <div className="text-xs text-muted-foreground font-mono">
-                        Session ID: {session._id}
+                      {/* Empty states - inline */}
+                      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                        {session.sequences.length === 0 && (
+                          <span>No sequences{session.chunks.withSpeech === 0 && session.chunks.vadProcessed > 0 && " (no speech)"}</span>
+                        )}
+                        {session.transcriptionDetails.length === 0 && session.sequences.length > 0 && (
+                          <span>No transcriptions</span>
+                        )}
+                        {session.conversations.length === 0 && session.transcriptions > 0 && (
+                          <span>No conversations{session.conversationChunks.some(c => c.state === "empty") && " (empty chunks)"}</span>
+                        )}
+                        <span className="font-mono text-[10px] ml-auto">{session._id}</span>
                       </div>
                     </div>
                   </CollapsibleContent>
