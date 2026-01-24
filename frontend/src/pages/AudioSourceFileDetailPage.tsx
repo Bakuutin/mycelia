@@ -2,22 +2,24 @@ import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
+import { ObjectId } from "bson";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { 
-  ArrowLeft, 
-  FileCode, 
-  RefreshCw, 
-  Layers, 
-  Calendar, 
-  HardDrive, 
-  Activity, 
-  Monitor, 
+import {
+  ArrowLeft,
+  FileCode,
+  RefreshCw,
+  Layers,
+  Calendar,
+  HardDrive,
+  Activity,
+  Monitor,
   Globe,
   ChevronDown,
   ChevronUp,
   Clock,
-  AlertCircle
+  AlertCircle,
+  RotateCcw
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -27,7 +29,6 @@ import {
   CollapsibleTrigger 
 } from "@/components/ui/collapsible";
 import { useState } from "react";
-import { ObjectId } from "bson";
 import { cn } from "@/lib/utils";
 
 function formatBytes(bytes: number, decimals = 2) {
@@ -42,6 +43,7 @@ function formatBytes(bytes: number, decimals = 2) {
 export default function AudioSourceFileDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [isRawOpen, setIsRawOpen] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const { data: file, isLoading: isLoadingFile, error: fileError, refetch: refetchFile } = useQuery({
     queryKey: ["source-file", id],
@@ -208,7 +210,7 @@ export default function AudioSourceFileDetailPage() {
             </div>
 
             {file?.ingestion?.error && (
-              <div className="p-4 bg-destructive/5 rounded-lg border border-destructive/10 space-y-2">
+              <div className="p-4 bg-destructive/5 rounded-lg border border-destructive/10 space-y-3">
                 <div className="flex items-center gap-2 text-destructive">
                   <AlertCircle className="w-4 h-4" />
                   <p className="text-xs font-bold uppercase tracking-tight">Last Ingestion Error</p>
@@ -221,6 +223,35 @@ export default function AudioSourceFileDetailPage() {
                     Attempted: {format(new Date(file.ingestion.last_attempt), "PPPpp")}
                   </p>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-orange-600 border-orange-200 hover:bg-orange-50"
+                  disabled={isRetrying}
+                  onClick={async () => {
+                    if (!id) return;
+                    setIsRetrying(true);
+                    try {
+                      await api.callResource("mongo", {
+                        action: "updateOne",
+                        collection: "source_files",
+                        query: { _id: new ObjectId(id) },
+                        update: {
+                          $set: { ingested: false },
+                          $unset: { ingestion: "" }
+                        }
+                      });
+                      refetchFile();
+                    } catch (err) {
+                      console.error("Failed to retry:", err);
+                    } finally {
+                      setIsRetrying(false);
+                    }
+                  }}
+                >
+                  <RotateCcw className={cn("w-3 h-3 mr-1", isRetrying && "animate-spin")} />
+                  {isRetrying ? "Retrying..." : "Retry Ingestion"}
+                </Button>
               </div>
             )}
           </CardContent>
