@@ -271,19 +271,24 @@ export async function apiChatHandler(req: Request, res: Response) {
     }
 
     // Resolve aliases to actual model names for direct providers
-    // Use BASE_MODEL as fallback for individual aliases, then default to gpt-4o-mini (cheap)
+    // Priority: MODEL_* env vars > BASE_MODEL > "medium" alias (requires BASE_MODEL to be set)
     const baseModel = Deno.env.get('BASE_MODEL');
+    if (!baseModel) {
+      // If no BASE_MODEL set, pass through the alias/model name as-is
+      return modelName;
+    }
     const aliases: Record<string, string> = {
-      small: Deno.env.get('MODEL_SMALL') || baseModel || 'gpt-4o-mini',
-      medium: Deno.env.get('MODEL_MEDIUM') || baseModel || 'gpt-4o-mini',
-      large: Deno.env.get('MODEL_LARGE') || baseModel || 'gpt-4o-mini',
+      small: Deno.env.get('MODEL_SMALL') || baseModel,
+      medium: Deno.env.get('MODEL_MEDIUM') || baseModel,
+      large: Deno.env.get('MODEL_LARGE') || baseModel,
     };
 
     return aliases[modelName] || modelName;
   }
 
-  // Use model from inference provider (env var), fallback to DB model or default
-  const requestedModel = inference.model || chatModel || "gpt-4o-mini";
+  // Use model from inference provider (env var), fallback to DB model or BASE_MODEL
+  const baseModel = Deno.env.get('BASE_MODEL');
+  const requestedModel = inference.model || chatModel || baseModel || "medium";
   const actualModel = resolveModelAlias(requestedModel);
 
   try {

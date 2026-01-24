@@ -789,10 +789,8 @@ const capability: JobCapability = {
     const gapThresholds = data.gapThresholds ?? { sparse: 45 * 60 * 1000, normal: 5 * 60 * 1000, dense: 40 * 1000 };
     const charThresholds = data.charThresholds ?? { sparseMax: 500, normalMax: 20000 };
     const policyVersion = data.policyVersion ?? "v1";
-    const model = data.model ?? Deno.env.get("OPENAI_MODEL");
-    if (!model) {
-      throw new Error("OPENAI_MODEL environment variable is required but not set");
-    }
+    // Model resolution: job data > BASE_MODEL > "medium" alias
+    const model = data.model ?? Deno.env.get("BASE_MODEL") ?? "medium";
     const mode = data.mode ?? "auto";
     const force = data.force ?? false;
 

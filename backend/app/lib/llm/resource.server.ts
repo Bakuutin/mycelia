@@ -94,7 +94,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     // Stateless config: read from env vars first (ushadow pattern)
     const envBaseUrl = Deno.env.get("OPENAI_BASE_URL");
     const envApiKey = Deno.env.get("OPENAI_API_KEY");
-    const envModel = Deno.env.get("OPENAI_MODEL");
+    // Model resolution: OPENAI_MODEL (for override) > BASE_MODEL (primary config)
+    const envModel = Deno.env.get("OPENAI_MODEL") || Deno.env.get("BASE_MODEL");
 
     if (envBaseUrl && envApiKey) {
       return {
