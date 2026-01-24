@@ -596,9 +596,12 @@ export default function AudioPipelinePage() {
                           <div className="space-y-2">
                             {session.transcriptionDetails.map((t) => (
                               <div key={t._id} className="bg-background rounded-lg p-3 text-sm">
-                                <div className="text-xs text-muted-foreground mb-1">
-                                  {format(t.start, "HH:mm:ss")} - {format(t.end, "HH:mm:ss")}
-                                </div>
+                                <Link
+                                  to={`/timeline?start=${t.start.getTime()}&end=${t.end.getTime()}`}
+                                  className="text-xs text-muted-foreground hover:underline mb-1 block"
+                                >
+                                  {format(t.start, "MMM d, HH:mm:ss")} - {format(t.end, "HH:mm:ss")}
+                                </Link>
                                 <div className="text-foreground">
                                   {t.text || <span className="italic text-muted-foreground">(no text)</span>}
                                 </div>
@@ -645,9 +648,12 @@ export default function AudioPipelinePage() {
                                   </TableCell>
                                   <TableCell className="text-xs">
                                     {chunk.start && chunk.end ? (
-                                      <>
-                                        {format(chunk.start, "HH:mm:ss")} - {format(chunk.end, "HH:mm:ss")}
-                                      </>
+                                      <Link
+                                        to={`/timeline?start=${chunk.start.getTime()}&end=${chunk.end.getTime()}`}
+                                        className="hover:underline text-primary"
+                                      >
+                                        {format(chunk.start, "MMM d, HH:mm:ss")} - {format(chunk.end, "HH:mm:ss")}
+                                      </Link>
                                     ) : "-"}
                                   </TableCell>
                                   <TableCell>
@@ -705,11 +711,19 @@ export default function AudioPipelinePage() {
                                   <span className="text-2xl">{conv.icon.text}</span>
                                 )}
                                 <div>
-                                  <div className="font-medium">{conv.name}</div>
+                                  <Link
+                                    to={`/objects/${conv._id}`}
+                                    className="font-medium hover:underline text-primary"
+                                  >
+                                    {conv.name}
+                                  </Link>
                                   {conv.timeRanges?.[0] && (
-                                    <div className="text-xs text-muted-foreground">
-                                      {format(new Date(conv.timeRanges[0].start), "HH:mm:ss")} - {format(new Date(conv.timeRanges[0].end), "HH:mm:ss")}
-                                    </div>
+                                    <Link
+                                      to={`/timeline?start=${new Date(conv.timeRanges[0].start).getTime()}&end=${new Date(conv.timeRanges[0].end).getTime()}`}
+                                      className="text-xs text-muted-foreground hover:underline block"
+                                    >
+                                      {format(new Date(conv.timeRanges[0].start), "MMM d, HH:mm:ss")} - {format(new Date(conv.timeRanges[0].end), "HH:mm:ss")}
+                                    </Link>
                                   )}
                                 </div>
                               </div>
