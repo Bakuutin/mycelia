@@ -100,24 +100,31 @@ interface PipelineStats {
   totalConversations: number;
 }
 
+const DEFAULT_SESSION_LIMIT = 10;
+const LOAD_MORE_INCREMENT = 10;
+
 export default function AudioPipelinePage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  const [sessionLimit, setSessionLimit] = useState(DEFAULT_SESSION_LIMIT);
 
-  const { data: sessions, isLoading, refetch } = useQuery({
-    queryKey: ["audio-pipeline-sessions"],
+  const { data: sessionsData, isLoading, refetch } = useQuery({
+    queryKey: ["audio-pipeline-sessions", sessionLimit],
     queryFn: async () => {
       // Fetch recent source files with aggregated pipeline data
       const sourceFiles = await api.callResource("mongo", {
         action: "find",
         collection: "source_files",
         query: { "metadata.source": "websocket" },
-        options: { sort: { start: -1 }, limit: 20 },
+        options: { sort: { start: -1 }, limit: sessionLimit + 1 }, // +1 to check if there's more
       }) as any[];
+
+      const hasMore = sourceFiles.length > sessionLimit;
+      const filesToProcess = sourceFiles.slice(0, sessionLimit);
 
       // For each source file, get pipeline status
       const sessionsWithStatus = await Promise.all(
-        sourceFiles.map(async (sf) => {
+        filesToProcess.map(async (sf) => {
           const sourceFileId = sf._id;
 
           // Get chunk stats
@@ -225,10 +232,17 @@ export default function AudioPipelinePage() {
         })
       );
 
-      return sessionsWithStatus;
+      return { sessions: sessionsWithStatus, hasMore };
     },
     refetchInterval: autoRefresh ? 5000 : false,
   });
+
+  const sessions = sessionsData?.sessions;
+  const hasMoreSessions = sessionsData?.hasMore ?? false;
+
+  const loadMoreSessions = () => {
+    setSessionLimit((prev) => prev + LOAD_MORE_INCREMENT);
+  };
 
   const { data: stats } = useQuery({
     queryKey: ["audio-pipeline-stats"],
@@ -449,7 +463,7 @@ export default function AudioPipelinePage() {
             <div className="p-8 text-center text-muted-foreground">No audio sessions found</div>
           ) : (
             <div className="divide-y">
-              {sessions.map((session) => (
+              {sessions?.map((session) => (
                 <Collapsible
                   key={session._id}
                   open={expandedSessions.has(session._id)}
@@ -748,6 +762,18 @@ export default function AudioPipelinePage() {
                   </CollapsibleContent>
                 </Collapsible>
               ))}
+              {hasMoreSessions && (
+                <div className="p-4 border-t">
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={loadMoreSessions}
+                    data-testid="load-more-sessions"
+                  >
+                    Load More Sessions
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
