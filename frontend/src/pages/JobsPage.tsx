@@ -13,11 +13,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, Pause, PlayCircle, PauseCircle } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
 import type { JobInfo } from "@/types/jobs";
 
 type WorkerStatus = {
@@ -42,15 +41,41 @@ type VadJobFormData = {
   end?: Date;
 };
 
+/**
+ * Worker pipeline configuration with display order and descriptions.
+ * Used for displaying workers in logical pipeline order in the UI.
+ */
+const WORKER_PIPELINE = [
+  { type: "ingestion", order: 1, description: "Processes audio files into chunks" },
+  { type: "vad", order: 2, description: "Voice Activity Detection on audio chunks" },
+  { type: "transcription_sequence_creator", order: 3, description: "Groups speech chunks into sequences" },
+  { type: "transcription", order: 4, description: "Transcribes sequences to text using LLM" },
+  { type: "conversation_chunk_creator", order: 5, description: "Groups transcriptions into conversation chunks" },
+  { type: "conversation_extractor", order: 6, description: "Extracts conversations and entities using LLM" },
+  { type: "summarization", order: 7, description: "Generates summaries for conversations" },
+  { type: "diarization", order: 8, description: "Speaker identification/diarization" },
+  { type: "histRecalculation", order: 9, description: "Recalculates timeline histograms" },
+] as const;
+
+/** Status priority for sorting - lower number = higher priority (shown first) */
+const STATUS_PRIORITY: Record<string, number> = {
+  active: 0,
+  waiting: 1,
+  failed: 2,
+  delayed: 3,
+  completed: 4,
+};
+
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
+  const [quickFilter, setQuickFilter] = useState<string>("all");
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set(ALL_STATUSES));
   const [filterTypes, setFilterTypes] = useState<Set<string>>(new Set());
   const [allTypesSelected, setAllTypesSelected] = useState(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
-  const [sortColumn, setSortColumn] = useState<string>("timestamp");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [sortColumn, setSortColumn] = useState<string>("priority");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const queryClient = useQueryClient();
 
   const { jobs, isLoading } = useJobsListener();
@@ -133,6 +158,48 @@ export default function JobsPage() {
     return Object.values(workerStatus.workers).some(w => w.paused);
   }, [workerStatus]);
 
+  // Job counts by status
+  const jobCounts = useMemo(() => {
+    const counts = { active: 0, waiting: 0, failed: 0, completed: 0, delayed: 0, total: 0 };
+    for (const job of jobs) {
+      counts.total++;
+      if (job.state in counts) {
+        counts[job.state as keyof typeof counts]++;
+      }
+    }
+    return counts;
+  }, [jobs]);
+
+  // Job counts per worker type
+  const workerJobCounts = useMemo(() => {
+    const counts: Record<string, { active: number; waiting: number; failed: number }> = {};
+    for (const job of jobs) {
+      if (!counts[job.type]) {
+        counts[job.type] = { active: 0, waiting: 0, failed: 0 };
+      }
+      if (job.state === "active") counts[job.type].active++;
+      else if (job.state === "waiting") counts[job.type].waiting++;
+      else if (job.state === "failed") counts[job.type].failed++;
+    }
+    return counts;
+  }, [jobs]);
+
+  // Get workers sorted by pipeline order, with unknown workers at the end
+  const sortedWorkers = useMemo(() => {
+    const pipelineOrder = new Map(WORKER_PIPELINE.map((w, i) => [w.type, i]));
+    const pipelineDescriptions = new Map(WORKER_PIPELINE.map(w => [w.type, w.description]));
+    
+    return [...allTypes].sort((a, b) => {
+      const orderA = pipelineOrder.get(a) ?? 999;
+      const orderB = pipelineOrder.get(b) ?? 999;
+      return orderA - orderB;
+    }).map(type => ({
+      type,
+      description: pipelineDescriptions.get(type) || "Worker process",
+      order: pipelineOrder.get(type) ?? 999,
+    }));
+  }, [allTypes]);
+
   const handleToggleWorker = (workerType: string, currentlyPaused: boolean) => {
     if (currentlyPaused) {
       resumeWorkerMutation.mutate(workerType);
@@ -151,6 +218,20 @@ export default function JobsPage() {
 
   const filteredJobs = useMemo(() => {
     let result = jobs;
+    
+    // Apply quick filter first
+    if (quickFilter !== "all") {
+      result = result.filter(j => j.state === quickFilter);
+    } else {
+      // Apply multi-select status filter only when quick filter is "all"
+      if (filterStatuses.size > 0 && filterStatuses.size < ALL_STATUSES.length) {
+        result = result.filter(j => filterStatuses.has(j.state));
+      } else if (filterStatuses.size === 0) {
+        result = [];
+      }
+    }
+    
+    // Apply type filter
     if (!allTypesSelected) {
       if (filterTypes.size === 0) {
         result = [];
@@ -158,11 +239,8 @@ export default function JobsPage() {
         result = result.filter(j => filterTypes.has(j.type));
       }
     }
-    if (filterStatuses.size > 0 && filterStatuses.size < ALL_STATUSES.length) {
-      result = result.filter(j => filterStatuses.has(j.state));
-    } else if (filterStatuses.size === 0) {
-      result = [];
-    }
+    
+    // Apply search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       result = result.filter(j =>
@@ -177,6 +255,15 @@ export default function JobsPage() {
       let bVal: any;
 
       switch (sortColumn) {
+        case "priority":
+          // Primary: status priority, Secondary: timestamp (desc)
+          const priorityA = STATUS_PRIORITY[a.state] ?? 999;
+          const priorityB = STATUS_PRIORITY[b.state] ?? 999;
+          if (priorityA !== priorityB) {
+            return sortDirection === "asc" ? priorityA - priorityB : priorityB - priorityA;
+          }
+          // Secondary sort by timestamp (most recent first)
+          return (b.timestamp || 0) - (a.timestamp || 0);
         case "state":
           aVal = a.state;
           bVal = b.state;
@@ -207,7 +294,7 @@ export default function JobsPage() {
     });
 
     return sortedResult.slice(0, limit);
-  }, [jobs, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection]);
+  }, [jobs, quickFilter, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
@@ -401,7 +488,16 @@ export default function JobsPage() {
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">System Jobs</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">System Jobs</h1>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </span>
+            Live
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <Button
             variant="default"
@@ -463,59 +559,136 @@ export default function JobsPage() {
         </div>
       </div>
 
-      {/* Worker Status Card */}
+      {/* Worker Console */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-lg">Worker Status</CardTitle>
-          <CardDescription>
-            Pause workers to stop them from processing new jobs. Active jobs will complete.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {isLoadingSchemas ? (
-              <div className="col-span-full text-muted-foreground text-sm">Loading workers...</div>
-            ) : (
-              allTypes.map((type) => {
-                const isPaused = workerStatus?.workers[type]?.paused ?? false;
-                const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
-                return (
-                  <div
-                    key={type}
-                    className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
-                      isPaused
-                        ? "bg-amber-500/5 border-amber-500/20"
-                        : "bg-green-500/5 border-green-500/20"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {isPaused ? (
-                        <Pause className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                      ) : (
-                        <Play className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                      )}
-                      <span className="text-sm font-medium truncate" title={type}>
-                        {type}
-                      </span>
-                    </div>
-                    <Switch
-                      checked={!isPaused}
-                      onCheckedChange={() => handleToggleWorker(type, isPaused)}
-                      disabled={isMutating}
-                      className="shrink-0 ml-2"
-                    />
-                  </div>
-                );
-              })
+        <CardHeader className="py-3 px-4">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Workers</CardTitle>
+            {somePaused && (
+              <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
+                {sortedWorkers.filter(w => workerStatus?.workers[w.type]?.paused).length} paused
+              </Badge>
             )}
           </div>
-          {somePaused && (
-            <p className="text-xs text-amber-600 mt-3">
-              ⚠️ Some workers are paused. New jobs of those types will queue but not process.
-            </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoadingSchemas ? (
+            <div className="p-4 text-muted-foreground text-sm">Loading workers...</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="h-8">
+                  <TableHead className="w-[40px] pl-4">On</TableHead>
+                  <TableHead>Worker</TableHead>
+                  <TableHead className="hidden lg:table-cell">Description</TableHead>
+                  <TableHead className="text-center w-[60px]">Run</TableHead>
+                  <TableHead className="text-center w-[60px]">Queue</TableHead>
+                  <TableHead className="text-center w-[60px]">Err</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedWorkers.map((worker) => {
+                  const isPaused = workerStatus?.workers[worker.type]?.paused ?? false;
+                  const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
+                  const counts = workerJobCounts[worker.type] || { active: 0, waiting: 0, failed: 0 };
+                  return (
+                    <TableRow 
+                      key={worker.type}
+                      className={`h-9 ${isPaused ? "bg-amber-500/5" : ""}`}
+                    >
+                      <TableCell className="pl-4 py-1">
+                        <Checkbox
+                          checked={!isPaused}
+                          onCheckedChange={() => handleToggleWorker(worker.type, isPaused)}
+                          disabled={isMutating}
+                          className="cursor-pointer"
+                        />
+                      </TableCell>
+                      <TableCell className="py-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-muted-foreground w-4">{worker.order < 999 ? worker.order : ""}</span>
+                          <span className={`text-sm ${isPaused ? "text-muted-foreground" : ""}`}>{worker.type}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-muted-foreground text-xs py-1">
+                        {worker.description}
+                      </TableCell>
+                      <TableCell className="text-center py-1">
+                        {counts.active > 0 ? (
+                          <span className="text-blue-500 text-sm font-medium">{counts.active}</span>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center py-1">
+                        {counts.waiting > 0 ? (
+                          <span className="text-yellow-500 text-sm font-medium">{counts.waiting}</span>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center py-1">
+                        {counts.failed > 0 ? (
+                          <span className="text-red-500 text-sm font-medium">{counts.failed}</span>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
+
+      {/* Quick Filter Tabs */}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant={quickFilter === "all" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setQuickFilter("all")}
+        >
+          All ({jobCounts.total})
+        </Button>
+        <Button
+          variant={quickFilter === "active" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setQuickFilter("active")}
+          className={quickFilter !== "active" ? "text-blue-500 hover:text-blue-600" : ""}
+        >
+          <Activity className="h-3.5 w-3.5 mr-1" />
+          Active ({jobCounts.active})
+        </Button>
+        <Button
+          variant={quickFilter === "waiting" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setQuickFilter("waiting")}
+          className={quickFilter !== "waiting" ? "text-yellow-500 hover:text-yellow-600" : ""}
+        >
+          <Clock className="h-3.5 w-3.5 mr-1" />
+          Waiting ({jobCounts.waiting})
+        </Button>
+        <Button
+          variant={quickFilter === "failed" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setQuickFilter("failed")}
+          className={quickFilter !== "failed" ? "text-red-500 hover:text-red-600 border-red-500/30" : ""}
+        >
+          <AlertCircle className="h-3.5 w-3.5 mr-1" />
+          Errors ({jobCounts.failed})
+        </Button>
+        <Button
+          variant={quickFilter === "completed" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setQuickFilter("completed")}
+          className={quickFilter !== "completed" ? "text-green-500 hover:text-green-600" : ""}
+        >
+          <CheckCircle className="h-3.5 w-3.5 mr-1" />
+          Completed ({jobCounts.completed})
+        </Button>
+      </div>
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-4 mt-6">
@@ -692,7 +865,10 @@ export default function JobsPage() {
                 </TableRow>
               ) : (
                 filteredJobs.map((job) => (
-                  <TableRow key={job.id}>
+                  <TableRow 
+                    key={job.id}
+                    className={job.state === "failed" ? "bg-red-500/5 border-l-2 border-l-red-500" : ""}
+                  >
                     <TableCell>
                       <Link
                         to={`/jobs/${job.id}`}
