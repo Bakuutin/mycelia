@@ -472,12 +472,13 @@ export const RefreshObjectsTool: Tool = {
     };
 
     return (
-      <Button onClick={handleRefresh} disabled={isRefreshing} variant="outline">
+      <Button onClick={handleRefresh} disabled={isRefreshing} variant="outline" size="icon">
         <RefreshCw
           className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`}
         />
       </Button>
     );
   },
-  tooltip: "Refresh objects",
+  tooltip: "Refresh objects for current time range",
+  label: "Refresh",
 };

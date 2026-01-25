@@ -184,29 +184,105 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
         const x2 = rescaledScale(selection.end);
         
         const left = Math.min(x1, x2);
-        const width = Math.abs(x2 - x1);
+        const rectWidth = Math.abs(x2 - x1);
 
-        if (Number.isNaN(width)) return null;
+        if (Number.isNaN(rectWidth)) return null;
 
-        return { left, width };
+        return { left, width: rectWidth, start: selection.start, end: selection.end };
       }, [selection, scale, transform]);
+
+      const formatSelectionDate = (date: Date) => {
+        const now = new Date();
+        const isToday = date.toDateString() === now.toDateString();
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const isYesterday = date.toDateString() === yesterday.toDateString();
+        
+        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        
+        if (isToday) {
+          return timeStr;
+        } else if (isYesterday) {
+          return `Yesterday ${timeStr}`;
+        } else {
+          const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          return `${dateStr} ${timeStr}`;
+        }
+      };
+
+      const formatDuration = (start: Date, end: Date) => {
+        const diffMs = end.getTime() - start.getTime();
+        const diffSeconds = Math.floor(diffMs / 1000);
+        const diffMinutes = Math.floor(diffSeconds / 60);
+        const diffHours = Math.floor(diffMinutes / 60);
+        const diffDays = Math.floor(diffHours / 24);
+        
+        if (diffDays > 0) {
+          const remainingHours = diffHours % 24;
+          if (remainingHours > 0) {
+            return `${diffDays}d ${remainingHours}h`;
+          }
+          return `${diffDays} day${diffDays !== 1 ? 's' : ''}`;
+        } else if (diffHours > 0) {
+          const remainingMinutes = diffMinutes % 60;
+          if (remainingMinutes > 0) {
+            return `${diffHours}h ${remainingMinutes}m`;
+          }
+          return `${diffHours} hour${diffHours !== 1 ? 's' : ''}`;
+        } else if (diffMinutes > 0) {
+          return `${diffMinutes} min${diffMinutes !== 1 ? 's' : ''}`;
+        } else {
+          return `${diffSeconds} sec${diffSeconds !== 1 ? 's' : ''}`;
+        }
+      };
 
       return (
         <svg
           ref={svgRef}
           width={width}
           height={40}
-          className="overflow-visible"
+          className="overflow-visible rounded-md"
           style={{ cursor: "crosshair" }}
         >
+          {/* Selection area background - indicates where users can drag to select */}
+          <rect
+            x={0}
+            y={0}
+            width={width}
+            height={40}
+            fill="rgba(128, 128, 128, 0.1)"
+            stroke="rgba(128, 128, 128, 0.3)"
+            strokeWidth={1}
+            rx={6}
+            ry={6}
+            pointerEvents="none"
+          />
           {selectionRect && (
             <>
+              {/* Dim overlay for non-selected area BEFORE selection */}
+              <rect
+                x={0}
+                y={0}
+                width={selectionRect.left}
+                height={40}
+                fill="rgba(255, 255, 255, 0.5)"
+                pointerEvents="none"
+              />
+              {/* Dim overlay for non-selected area AFTER selection */}
+              <rect
+                x={selectionRect.left + selectionRect.width}
+                y={0}
+                width={width - (selectionRect.left + selectionRect.width)}
+                height={40}
+                fill="rgba(255, 255, 255, 0.5)"
+                pointerEvents="none"
+              />
               <rect
                 x={selectionRect.left}
                 y={0}
                 width={selectionRect.width}
                 height={40}
-                fill="rgba(59, 130, 246, 0.2)"
+                fill="transparent"
                 stroke="rgba(59, 130, 246, 0.5)"
                 strokeWidth={1}
                 pointerEvents="none"
@@ -233,6 +309,53 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
                 strokeWidth={1}
                 pointerEvents="none"
               />
+              
+              {/* Start date/time label */}
+              <foreignObject
+                x={selectionRect.left - 60}
+                y={42}
+                width={120}
+                height={20}
+                style={{ pointerEvents: "none" }}
+              >
+                <div className="flex justify-center">
+                  <span className="text-xs bg-blue-500 text-white px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap">
+                    {formatSelectionDate(selectionRect.start)}
+                  </span>
+                </div>
+              </foreignObject>
+              
+              {/* End date/time label */}
+              <foreignObject
+                x={selectionRect.left + selectionRect.width - 60}
+                y={42}
+                width={120}
+                height={20}
+                style={{ pointerEvents: "none" }}
+              >
+                <div className="flex justify-center">
+                  <span className="text-xs bg-blue-500 text-white px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap">
+                    {formatSelectionDate(selectionRect.end)}
+                  </span>
+                </div>
+              </foreignObject>
+              
+              {/* Duration label in center */}
+              {selectionRect.width > 60 && (
+                <foreignObject
+                  x={selectionRect.left + selectionRect.width / 2 - 50}
+                  y={10}
+                  width={100}
+                  height={20}
+                  style={{ pointerEvents: "none" }}
+                >
+                  <div className="flex justify-center">
+                    <span className="text-xs bg-blue-600/90 text-white px-2 py-0.5 rounded-full shadow-sm whitespace-nowrap font-medium">
+                      {formatDuration(selectionRect.start, selectionRect.end)}
+                    </span>
+                  </div>
+                </foreignObject>
+              )}
             </>
           )}
         <TimelineAxis
