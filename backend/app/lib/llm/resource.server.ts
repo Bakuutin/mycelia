@@ -123,10 +123,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
    * Priority: BASE_MODEL env var > inference.mycelia.tech passthrough > MODEL_* env vars
    */
   resolveModelAlias(modelName: string, baseUrl: string): string {
-    // Highest priority: explicit BASE_MODEL override
-    const baseModelOverride = Deno.env.get('BASE_MODEL');
-    if (baseModelOverride) {
-      return baseModelOverride;
+    const baseModel = Deno.env.get('BASE_MODEL');
+
+    // Highest priority: explicit BASE_MODEL override applies to all requests
+    if (baseModel) {
+      return baseModel;
     }
 
     // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
@@ -135,15 +136,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     }
 
     // Resolve aliases to actual model names for direct providers
-    const baseModel = Deno.env.get('BASE_MODEL');
-    if (!baseModel) {
-      // If no BASE_MODEL set, pass through the alias/model name as-is
-      return modelName;
-    }
     const aliases: Record<string, string> = {
-      small: Deno.env.get('MODEL_SMALL') || baseModel,
-      medium: Deno.env.get('MODEL_MEDIUM') || baseModel,
-      large: Deno.env.get('MODEL_LARGE') || baseModel,
+      small: Deno.env.get('MODEL_SMALL') || modelName,
+      medium: Deno.env.get('MODEL_MEDIUM') || modelName,
+      large: Deno.env.get('MODEL_LARGE') || modelName,
     };
 
     return aliases[modelName] || modelName;
@@ -151,16 +147,17 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {
     const startTime = performance.now();
+    // Track the resolved model for consistent metrics (set after resolution)
+    let resolvedModel = input.model;
+    
     const span = tracer.startSpan("llm_resource_use", {
       attributes: {
         "llm.action": input.action,
-        "llm.model": input.model,
+        "llm.model_requested": input.model,
       },
     });
 
     try {
-      llmRequestCounter.add(1, { action: input.action, model: input.model });
-
       switch (input.action) {
         case "completions": {
           const { action, ...body } = input;
@@ -185,11 +182,14 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           }
 
           // Resolve model aliases (small/medium/large) to actual model names
-          const resolvedModel = this.resolveModelAlias(input.model, baseUrl);
+          resolvedModel = this.resolveModelAlias(input.model, baseUrl);
+
+          // Record request with resolved model
+          llmRequestCounter.add(1, { action: input.action, model: resolvedModel });
 
           span.setAttributes({
             "llm.model": resolvedModel,
-            "llm.model_requested": input.model,
+            "llm.base_url": baseUrl,
             "llm.has_api_key": !!provider.apiKey,
           });
 
@@ -219,14 +219,14 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             const errorBody = await proxyResponse.text();
             llmErrorsCounter.add(1, {
               error_type: "api_error",
-              model: input.model,
+              model: resolvedModel,
               status_code: proxyResponse.status.toString(),
             });
             span.setStatus({
               code: 2,
               message: `API error: ${proxyResponse.status}`,
             });
-            throw new Error(`Failed to get model ${input.model}: ${errorBody}`);
+            throw new Error(`LLM API error (${proxyResponse.status}) for model "${resolvedModel}" at ${baseUrl}: ${errorBody.slice(0, 500)}`);
           }
 
           // Check if streaming is requested
@@ -250,7 +250,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           } catch (parseError) {
             llmErrorsCounter.add(1, {
               error_type: "json_parse_error",
-              model: input.model,
+              model: resolvedModel,
             });
             const errorMessage = parseError instanceof Error
               ? parseError.message
@@ -259,8 +259,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               code: 2,
               message: `JSON parse error: ${errorMessage}`,
             });
+            const preview = responseText.length > 200 ? responseText.slice(0, 200) + '...' : responseText;
             throw new Error(
-              `Invalid JSON response from model: ${errorMessage}`,
+              `Invalid JSON response from model "${resolvedModel}": ${errorMessage}. Response: ${preview}`,
             );
           }
         }
@@ -279,7 +280,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
       const duration = (performance.now() - startTime) / 1000;
       llmRequestDuration.record(duration, {
         action: input.action,
-        model: input.model,
+        model: resolvedModel,
       });
       span.setAttributes({ "llm.duration_seconds": duration });
       span.end();
