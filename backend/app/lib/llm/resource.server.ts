@@ -118,6 +118,36 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     };
   }
 
+  /**
+   * Resolve model aliases (small/medium/large) to actual model names.
+   * Priority: BASE_MODEL env var > inference.mycelia.tech passthrough > MODEL_* env vars
+   */
+  resolveModelAlias(modelName: string, baseUrl: string): string {
+    // Highest priority: explicit BASE_MODEL override
+    const baseModelOverride = Deno.env.get('BASE_MODEL');
+    if (baseModelOverride) {
+      return baseModelOverride;
+    }
+
+    // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
+    if (baseUrl.includes('inference.mycelia.tech')) {
+      return modelName;
+    }
+
+    // Resolve aliases to actual model names for direct providers
+    const baseModel = Deno.env.get('BASE_MODEL');
+    if (!baseModel) {
+      // If no BASE_MODEL set, pass through the alias/model name as-is
+      return modelName;
+    }
+    const aliases: Record<string, string> = {
+      small: Deno.env.get('MODEL_SMALL') || baseModel,
+      medium: Deno.env.get('MODEL_MEDIUM') || baseModel,
+      large: Deno.env.get('MODEL_LARGE') || baseModel,
+    };
+
+    return aliases[modelName] || modelName;
+  }
 
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {
     const startTime = performance.now();
@@ -148,21 +178,25 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             throw new Error("Inference provider not configured. Please configure it in server settings.");
           }
 
-          span.setAttributes({
-            "llm.model": input.model,
-            "llm.has_api_key": !!provider.apiKey,
-          });
-
-          const requestBody = {
-            ...body,
-            model: input.model,
-          };
-
           // Normalize base URL: remove trailing slash, ensure /v1 suffix
           let baseUrl = provider.baseUrl.replace(/\/$/, "");
           if (!baseUrl.endsWith("/v1")) {
             baseUrl = `${baseUrl}/v1`;
           }
+
+          // Resolve model aliases (small/medium/large) to actual model names
+          const resolvedModel = this.resolveModelAlias(input.model, baseUrl);
+
+          span.setAttributes({
+            "llm.model": resolvedModel,
+            "llm.model_requested": input.model,
+            "llm.has_api_key": !!provider.apiKey,
+          });
+
+          const requestBody = {
+            ...body,
+            model: resolvedModel,
+          };
 
           const proxyResponse = await fetch(
             `${baseUrl}/chat/completions`,
