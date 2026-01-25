@@ -79,13 +79,13 @@ const TimelinePage = () => {
 
   const handleZoomToFit = useCallback(async () => {
     try {
-      const result = await api.post("/api/resource/objects", {
+      const result = await api.callResource("objects", {
         action: "getTimeRange",
       });
 
-      if (result.data?.start && result.data?.end) {
-        const earliest = new Date(result.data.start);
-        const latest = new Date(result.data.end);
+      if (result.start && result.end) {
+        const earliest = result.start instanceof Date ? result.start : new Date(result.start);
+        const latest = result.end instanceof Date ? result.end : new Date(result.end);
 
         const duration = latest.getTime() - earliest.getTime();
         const padding = duration * 0.05;
