@@ -158,12 +158,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             model: input.model,
           };
 
-          // Expect standard format: https://api.openai.com/v1
-          const baseUrl = provider.baseUrl.replace(/\/$/, "");
+          // Normalize base URL: remove trailing slash, ensure /v1 suffix
+          let baseUrl = provider.baseUrl.replace(/\/$/, "");
           if (!baseUrl.endsWith("/v1")) {
-            throw new Error(
-              `Invalid OPENAI_BASE_URL format. Expected URL ending with /v1 (e.g., https://api.openai.com/v1). Got: ${baseUrl}`
-            );
+            baseUrl = `${baseUrl}/v1`;
           }
 
           const proxyResponse = await fetch(
