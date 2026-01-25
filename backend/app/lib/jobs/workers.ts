@@ -8,8 +8,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
-import { getConfigResource } from "@/lib/config/resource.server.ts";
-import type { ServerConfig } from "@myceliasdk/config.ts";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 
 const workers: Worker[] = [];
 
@@ -167,12 +166,7 @@ export async function startWorkers() {
 
 async function restorePausedWorkers() {
   try {
-    const auth = await getServerAuth();
-    const configResource = await getConfigResource(auth);
-    
-    const config = await configResource({
-      action: "get",
-    }) as ServerConfig;
+    const config = await getServerConfig();
 
     if (config?.workers) {
       await workerPauseManager.initFromConfig(config.workers);
