@@ -13,6 +13,31 @@ const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 const workers: Worker[] = [];
 
+/**
+ * Detect if an error is network-related (offline mode)
+ */
+function isNetworkError(reason: string | undefined): boolean {
+  if (!reason) return false;
+  const networkErrorPatterns = [
+    "dns error",
+    "client error (Connect)",
+    "Name or service not known",
+    "network error",
+    "ENOTFOUND",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "getaddrinfo",
+    "unable to connect",
+    "connection refused",
+  ];
+  const lowerReason = reason.toLowerCase();
+  return networkErrorPatterns.some(pattern => 
+    lowerReason.includes(pattern.toLowerCase())
+  );
+}
+
 export async function startWorkers() {
   console.log("Starting job workers...");
 
@@ -84,6 +109,13 @@ export async function startWorkers() {
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const finishedAt = new Date();
+      
+      // Detect if this is a network/offline error
+      const failedType = isNetworkError(failedReason) ? "offline" : undefined;
+      if (failedType === "offline") {
+        console.log(`[${jobType}] Job ${jobId} failed due to network error (offline)`);
+      }
+      
       await mongo({
         action: "updateOne",
         collection: "jobs",
@@ -93,6 +125,7 @@ export async function startWorkers() {
             state: "failed", 
             finishedAt,
             failedReason: failedReason,
+            ...(failedType && { failedType }),
             updatedAt: new Date() 
           } 
         },
@@ -102,6 +135,7 @@ export async function startWorkers() {
         state: "failed",
         finishedOn: finishedAt.getTime(),
         failedReason: failedReason,
+        failedType,
       });
     });
 

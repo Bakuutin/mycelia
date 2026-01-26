@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, WifiOff } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -146,6 +146,29 @@ export default function JobsPage() {
     },
   });
 
+  const retryAllOfflineMutation = useMutation({
+    mutationFn: async () => {
+      return await api.callResource("jobs", {
+        action: "retry_all_offline",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+    },
+  });
+
+  const retryJobMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      return await api.callResource("jobs", {
+        action: "retry",
+        id: jobId,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+    },
+  });
+
   const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
 
   const allPaused = useMemo(() => {
@@ -160,11 +183,14 @@ export default function JobsPage() {
 
   // Job counts by status
   const jobCounts = useMemo(() => {
-    const counts = { active: 0, waiting: 0, failed: 0, completed: 0, delayed: 0, total: 0 };
+    const counts = { active: 0, waiting: 0, failed: 0, completed: 0, delayed: 0, total: 0, offlineFailures: 0 };
     for (const job of jobs) {
       counts.total++;
       if (job.state in counts) {
         counts[job.state as keyof typeof counts]++;
+      }
+      if (job.state === "failed" && job.failedType === "offline") {
+        counts.offlineFailures++;
       }
     }
     return counts;
@@ -679,6 +705,21 @@ export default function JobsPage() {
           <AlertCircle className="h-3.5 w-3.5 mr-1" />
           Errors ({jobCounts.failed})
         </Button>
+        {jobCounts.offlineFailures > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => retryAllOfflineMutation.mutate()}
+            disabled={retryAllOfflineMutation.isPending}
+            className="text-yellow-600 hover:text-yellow-700 border-yellow-500/30"
+          >
+            <WifiOff className="h-3.5 w-3.5 mr-1" />
+            Retry {jobCounts.offlineFailures} Offline
+            {retryAllOfflineMutation.isPending && (
+              <RefreshCw className="h-3 w-3 ml-1 animate-spin" />
+            )}
+          </Button>
+        )}
         <Button
           variant={quickFilter === "completed" ? "default" : "outline"}
           size="sm"
@@ -848,18 +889,19 @@ export default function JobsPage() {
                   </div>
                 </TableHead>
                 <TableHead>Progress</TableHead>
+                <TableHead className="w-[80px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
+                  <TableCell colSpan={8} className="text-center py-8">
                     Loading jobs...
                   </TableCell>
                 </TableRow>
               ) : filteredJobs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
+                  <TableCell colSpan={8} className="text-center py-8">
                     No jobs found
                   </TableCell>
                 </TableRow>
@@ -872,6 +914,7 @@ export default function JobsPage() {
                     <TableCell>
                       <Link
                         to={`/jobs/${job.id}`}
+                        className="flex items-center gap-1.5"
                       >
                         <Badge
                           variant="secondary"
@@ -879,6 +922,11 @@ export default function JobsPage() {
                         >
                           {job.state}
                         </Badge>
+                        {job.failedType === "offline" && (
+                          <span title="Network/Offline Error">
+                            <WifiOff className="h-3.5 w-3.5 text-yellow-500" />
+                          </span>
+                        )}
                       </Link>
                     </TableCell>
                     <TableCell className="font-medium">{job.type}</TableCell>
@@ -927,6 +975,19 @@ export default function JobsPage() {
                         </div>
                       ) : (
                         "-"
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {["failed", "cancelled"].includes(job.state) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => retryJobMutation.mutate(job.id)}
+                          disabled={retryJobMutation.isPending}
+                          className="h-7 px-2"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${retryJobMutation.isPending ? 'animate-spin' : ''}`} />
+                        </Button>
                       )}
                     </TableCell>
                   </TableRow>

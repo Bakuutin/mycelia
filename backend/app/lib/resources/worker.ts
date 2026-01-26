@@ -89,6 +89,15 @@ const GetWorkerStatusSchema = z.object({
   action: z.literal("get_worker_status"),
 });
 
+const RetryJobSchema = z.object({
+  action: z.literal("retry"),
+  id: z.string(),
+});
+
+const RetryAllOfflineSchema = z.object({
+  action: z.literal("retry_all_offline"),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
@@ -103,6 +112,8 @@ const RequestSchema = z.union([
   PauseAllSchema,
   ResumeAllSchema,
   GetWorkerStatusSchema,
+  RetryJobSchema,
+  RetryAllOfflineSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -145,6 +156,10 @@ export class JobsResource
         return this.resumeAll(auth);
       case "get_worker_status":
         return this.getWorkerStatus(auth);
+      case "retry":
+        return this.retry(input, auth);
+      case "retry_all_offline":
+        return this.retryAllOffline(auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -181,6 +196,7 @@ export class JobsResource
       finishedOn: job.finishedAt?.getTime(),
       processedOn: job.startedAt?.getTime(),
       failedReason: job.failedReason,
+      failedType: job.failedType,
     };
   }
 
@@ -327,6 +343,7 @@ export class JobsResource
       finishedOn: job.finishedAt?.getTime(),
       processedOn: job.startedAt?.getTime(),
       failedReason: job.failedReason,
+      failedType: job.failedType,
     }));
   }
 
@@ -492,6 +509,100 @@ export class JobsResource
     });
   }
 
+  private async retry(input: z.infer<typeof RetryJobSchema>, auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const { id } = input;
+
+    // Find the failed job
+    const jobDocs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(id) },
+      options: { limit: 1 },
+    });
+
+    const jobDoc = jobDocs[0];
+    if (!jobDoc) {
+      throw new Error(`Job ${id} not found`);
+    }
+
+    if (jobDoc.state !== "failed" && jobDoc.state !== "cancelled") {
+      throw new Error(`Job ${id} is not in a failed or cancelled state (current: ${jobDoc.state})`);
+    }
+
+    // Re-enqueue with the same data
+    const serverAuth = await getServerAuth();
+    const newJob = await enqueueJob(
+      { type: jobDoc.type, ...jobDoc.data },
+      {
+        trigger: {
+          type: "manual",
+          reason: `Retry of failed job ${id}`,
+        },
+      },
+      serverAuth
+    );
+
+    return {
+      success: true,
+      originalJobId: id,
+      newJobId: newJob.id,
+    };
+  }
+
+  private async retryAllOffline(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+
+    // Find all jobs that failed due to offline/network errors
+    const failedJobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        state: "failed",
+        failedType: "offline",
+      },
+      options: { limit: 100 },
+    });
+
+    if (failedJobs.length === 0) {
+      return {
+        success: true,
+        retriedCount: 0,
+        message: "No offline failures found to retry",
+      };
+    }
+
+    const serverAuth = await getServerAuth();
+    const retriedJobs: { originalId: string; newId: string }[] = [];
+
+    for (const jobDoc of failedJobs) {
+      try {
+        const newJob = await enqueueJob(
+          { type: jobDoc.type, ...jobDoc.data },
+          {
+            trigger: {
+              type: "manual",
+              reason: `Retry of offline failure ${jobDoc._id.toString()}`,
+            },
+          },
+          serverAuth
+        );
+        retriedJobs.push({
+          originalId: jobDoc._id.toString(),
+          newId: newJob.id,
+        });
+      } catch (err) {
+        console.error(`[jobs] Failed to retry job ${jobDoc._id}: ${err}`);
+      }
+    }
+
+    return {
+      success: true,
+      retriedCount: retriedJobs.length,
+      retriedJobs,
+    };
+  }
+
   extractActions(input: WorkerProgressRequest): {
     path: ResourcePath;
     actions: string[];
@@ -521,6 +632,10 @@ export class JobsResource
         return [{ path: ["jobs", "all"], actions: ["resume"] }];
       case "get_worker_status":
         return [{ path: ["jobs"], actions: ["read"] }];
+      case "retry":
+        return [{ path: ["jobs", input.id], actions: ["retry"] }];
+      case "retry_all_offline":
+        return [{ path: ["jobs", "all"], actions: ["retry"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }

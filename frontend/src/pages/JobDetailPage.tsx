@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban } from "lucide-react";
+import { ArrowLeft, Ban, RefreshCw, WifiOff } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
 
@@ -178,9 +178,31 @@ export default function JobDetailPage() {
         },
     });
 
+    const retryJobMutation = useMutation({
+        mutationFn: async () => {
+            if (!id) return;
+            return await api.callResource("jobs", {
+                action: "retry",
+                id: id,
+            });
+        },
+        onSuccess: (data: any) => {
+            queryClient.invalidateQueries({ queryKey: ["job", id] });
+            queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+            // Navigate to the new job if created
+            if (data?.newJobId) {
+                window.location.href = `/jobs/${data.newJobId}`;
+            }
+        },
+    });
+
     const handleCancel = async () => {
         if (!confirm("Are you sure you want to cancel this job?")) return;
         cancelJobMutation.mutate();
+    };
+
+    const handleRetry = async () => {
+        retryJobMutation.mutate();
     };
 
     const job = cachedJob || fetchedJob;
@@ -254,17 +276,30 @@ export default function JobDetailPage() {
                         </p>
                     </div>
                 </div>
-                {["active", "waiting", "delayed"].includes(job.state) && (
-                    <Button 
-                        variant="destructive" 
-                        size="sm"
-                        onClick={handleCancel}
-                        disabled={cancelJobMutation.isPending}
-                    >
-                        <Ban className="h-4 w-4 mr-2" />
-                        Cancel Job
-                    </Button>
-                )}
+                <div className="flex gap-2">
+                    {["failed", "cancelled"].includes(job.state) && (
+                        <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={handleRetry}
+                            disabled={retryJobMutation.isPending}
+                        >
+                            <RefreshCw className={`h-4 w-4 mr-2 ${retryJobMutation.isPending ? 'animate-spin' : ''}`} />
+                            Retry Job
+                        </Button>
+                    )}
+                    {["active", "waiting", "delayed"].includes(job.state) && (
+                        <Button 
+                            variant="destructive" 
+                            size="sm"
+                            onClick={handleCancel}
+                            disabled={cancelJobMutation.isPending}
+                        >
+                            <Ban className="h-4 w-4 mr-2" />
+                            Cancel Job
+                        </Button>
+                    )}
+                </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
@@ -318,8 +353,16 @@ export default function JobDetailPage() {
                             )}
 
                         {job.failedReason && (
-                            <div className="text-sm text-red-500">{job.failedReason}</div>
-
+                            <div>
+                                <div className="text-sm text-muted-foreground mb-1">Failed Reason</div>
+                                {job.failedType === "offline" && (
+                                    <div className="flex items-center gap-2 mb-2 text-yellow-600">
+                                        <WifiOff className="h-4 w-4" />
+                                        <span className="text-sm font-medium">Network/Offline Error</span>
+                                    </div>
+                                )}
+                                <div className="text-sm text-red-500">{job.failedReason}</div>
+                            </div>
                         )}
 
 <div>

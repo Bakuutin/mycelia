@@ -15,6 +15,7 @@ export type JobInfo = {
   finishedOn?: number;
   processedOn?: number;
   failedReason?: string;
+  failedType?: "offline";
   attemptsMade?: number;
 };
 

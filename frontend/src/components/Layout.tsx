@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { useJobsListener } from "@/hooks/useJobsListener";
 import { Badge } from "@/components/ui/badge";
 import { NotificationCenter } from "@/components/NotificationCenter";
+import { ConnectivityStatus } from "@/components/ConnectivityStatus";
 
 const Layout = () => {
   useTheme();
@@ -25,6 +26,7 @@ const Layout = () => {
   return (
     <TooltipProvider>
       <div className="min-h-screen bg-background">
+        <ConnectivityStatus />
         <nav className="border-b">
           <div className="mx-auto px-4 md:container">
             <div className="flex h-16 items-center justify-between">
