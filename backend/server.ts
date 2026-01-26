@@ -162,6 +162,7 @@ async function startServer(
       skip: (req) =>
         req.url === "/health" ||
         req.url === "/readiness" ||
+        req.url?.startsWith("/api/audio/pipeline") ||
         req.url?.startsWith("/api/resource/"),
     }));
   }
