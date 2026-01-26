@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, callResource } from "@/lib/api";
+import { callResource } from "@/lib/api";
 import { subscribeToJob } from "@/lib/jobs";
+import { z } from "zod";
+import { zServerConfig, zPrompt } from "@myceliasdk/config.ts";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +23,10 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { toast } from "sonner";
 import type { Prompt } from "@/types/config";
+
+const SERVER_CONFIG_ID = "000000000000000000000000";
 
 interface SummarizeDialogProps {
   open: boolean;
@@ -43,7 +47,6 @@ export function SummarizeDialog({
   title = "Summarize Range",
   description = "Create a summary of all conversations within the selected time range.",
 }: SummarizeDialogProps) {
-  const navigate = useNavigate();
   const [summarizePrompt, setSummarizePrompt] = useState("");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("medium");
@@ -56,20 +59,38 @@ export function SummarizeDialog({
     if (open) {
       const fetchData = async () => {
         try {
-          const promptsData = await callResource("mongo", {
-            action: "find",
-            collection: "prompts",
-            query: {},
-            options: { sort: { name: 1 } },
-          });
+          const [configData, promptsData] = await Promise.all([
+            callResource("mongo", {
+              action: "findOne",
+              collection: "configs",
+              query: { _id: { $oid: SERVER_CONFIG_ID } },
+            }),
+            callResource("mongo", {
+              action: "find",
+              collection: "prompts",
+              query: {},
+              options: { sort: { name: 1 } },
+            }),
+          ]);
 
-          setPrompts(promptsData);
+          const config = configData ? zServerConfig.parse(configData) : null;
+          const parsedPrompts = z.array(zPrompt).parse(promptsData);
+          setPrompts(parsedPrompts);
+
+          const defaultId = config?.prompts?.summarization_system?.toString();
+          if (defaultId) {
+            const defaultPrompt = parsedPrompts.find((p) => p._id.toString() === defaultId);
+            if (defaultPrompt) {
+              setSelectedPromptId(defaultId);
+              setSummarizePrompt(defaultPrompt.text);
+            }
+          }
 
           if (!selectedModel) {
             setSelectedModel("medium");
           }
         } catch (e) {
-          console.error("Failed to fetch prompts", e);
+          console.error("Failed to fetch prompts or config", e);
           setError("Failed to load prompts");
         }
       };
@@ -133,13 +154,16 @@ export function SummarizeDialog({
       unsubscribeRef.current = subscribeToJob(jobId, (update) => {
         setJobStatus(update.state);
 
-        if (update.state === "completed") {
-          setTimeout(() => {
-            onOpenChange(false);
-            if (objectId) {
-              navigate(`/objects/${objectId}`);
-            }
-          }, 1500);
+        if (update.state === "active" || update.state === "started") {
+          toast.success("Summarization started", {
+            description: "Check Jobs or the timeline when it's done.",
+            duration: 5000,
+          });
+          if (unsubscribeRef.current) {
+            unsubscribeRef.current();
+            unsubscribeRef.current = null;
+          }
+          onOpenChange(false);
         } else if (update.state === "failed") {
           setError(update.failedReason || "Summarization job failed");
         }
@@ -195,13 +219,6 @@ export function SummarizeDialog({
             <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               <XCircle className="h-4 w-4" />
               {error}
-            </div>
-          )}
-
-          {isJobComplete && (
-            <div className="flex items-center gap-2 rounded-md bg-green-500/10 p-3 text-sm text-green-600 dark:text-green-400">
-              <CheckCircle2 className="h-4 w-4" />
-              Summary completed successfully
             </div>
           )}
 
