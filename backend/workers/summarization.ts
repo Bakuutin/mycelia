@@ -23,6 +23,9 @@ export const schema = z.object({
     .default("small")
     .describe("LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')"),
   objectId: zObjectId().nullish(),
+  minDurationForLlm: z.number()
+    .default(10)
+    .describe("Minimum duration in seconds to use LLM. Shorter periods use transcript directly."),
 });
 
 export type SummarizationJobData = z.infer<typeof schema>;
@@ -92,7 +95,75 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   promptText += getTimestampMessage(new Date(lastEnd));
 
   const modelAlias = userModel || jobData.model;
-  
+  const minDurationForLlm = jobData.minDurationForLlm ?? 10;
+  const durationSeconds = (end.getTime() - start.getTime()) / 1000;
+
+  // Short duration optimization: skip LLM for very short periods
+  if (durationSeconds < minDurationForLlm) {
+    console.log(`[summarization] Job ${job.id}: duration ${durationSeconds}s < ${minDurationForLlm}s threshold, using transcript directly`);
+
+    const summaryEntry = {
+      text: promptText.trim(),
+      model: "passthrough",
+      modelName: "transcript-only",
+      date: new Date(),
+      prompt: "Short duration - transcript used directly",
+      jobId: job.id,
+    };
+
+    let objectId;
+
+    if (existingObjectId) {
+      const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "get",
+        id: existingObjectId.toString(),
+      }, { jwt, myceliaUrl });
+
+      if (!currentObject) {
+        throw new Error(`Object ${existingObjectId} not found`);
+      }
+
+      const currentSummaries = currentObject.summaries || [];
+      const newSummaries = [...currentSummaries, summaryEntry];
+
+      await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "update",
+        id: existingObjectId.toString(),
+        version: currentObject.version ?? 0,
+        field: "summaries",
+        value: newSummaries,
+      }, { jwt, myceliaUrl });
+
+      objectId = existingObjectId;
+    } else {
+      // For new objects with short duration, use first line as title or generic
+      const firstLine = promptText.split('\n').find(line => !line.startsWith('[') && line.trim()) || "Brief conversation";
+      const generatedTitle = firstLine.slice(0, 100).trim();
+
+      const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "create",
+        object: {
+          isConversation: true,
+          name: generatedTitle,
+          summaries: [summaryEntry],
+          timeRanges: [{ start, end }],
+          metadata: {
+            source: "summarization_job",
+            jobId: job.id,
+            shortDuration: true,
+          },
+        },
+      }, { jwt, myceliaUrl });
+      objectId = resultObject.insertedId.toString();
+    }
+
+    return {
+      success: true,
+      objectId,
+      description: promptText.trim(),
+    };
+  }
+
   // Load system prompt with priority: explicit job param > job data (includes default overrides) > schema default
   const systemPrompt = userPrompt || jobData.prompt;
   const promptSource = userPrompt ? "explicit" : "job_data";

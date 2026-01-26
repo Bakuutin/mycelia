@@ -5,6 +5,27 @@ import { callResource } from "@myceliasdk/resources.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { createHash } from "node:crypto";
 
+
+/**
+ * Conversation Extractor
+ * 
+ *  okay so what we have we have like a timeline of (overlapping) transcriptions 
+ * and then then when one person said something, and the other person said something and I want you to use ASCII art to represent it on a timeline.
+ * 
+ * 
+ *  10:00:00 - 10:00:09 - Person 1: "Hello"
+ *  10:00:09 - 10:00:11 - Person 2: "Hello"
+ *  10:00:20 - 10:00:30 - Person 1: "How are you?"
+ *  10:00:30 - 10:00:40 - Person 2: "I'm good, thank you!"
+ *  10:00:40 - 10:00:50 - Person 1: "What are you doing?"
+ *  10:00:50 - 10:01:00 - Person 2: "I'm writing this docstring."
+ * 
+ * 
+ * This worker is responsible for extracting conversations from transcriptions and creating conversation objects.
+ * It uses a LLM to segment the transcriptions into conversations and then extracts metadata from each conversation.
+ * It then creates a conversation object for each conversation and enqueues a summarization job for each conversation.
+ */
+
 // ============================================================================
 // Types
 // ============================================================================
