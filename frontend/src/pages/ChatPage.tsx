@@ -23,7 +23,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare, Pencil } from "lucide-react";
+import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare, Pencil, AlertCircle, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
@@ -373,10 +373,18 @@ export default function ChatPage() {
     fetchChats();
   }, []);
 
+  const [chatError, setChatError] = useState<string | null>(null);
+
   const chat = useChat({
     id: chatId,
     // Auto-submit after tool approval responses
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
+    onError: (error) => {
+      console.error("[ChatPage] Chat error:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setChatError(errorMessage || "Failed to send message. Please try again.");
+      setPendingMessage(null);
+    },
     onFinish: () => {
       if (!chatId && newChatIdRef.current) {
         const newId = newChatIdRef.current;
@@ -411,6 +419,7 @@ export default function ChatPage() {
   useEffect(() => {
     console.log("chatId changed", chatId);
     setPendingMessage(null);
+    setChatError(null); // Clear error when switching chats
     if (chatId) {
        fetchMessages(chatId).then(msgs => chat.setMessages(msgs));
     } else {
@@ -425,10 +434,15 @@ export default function ChatPage() {
 
   const handleInputSubmit = (value: { text?: string; files?: any[] }, _event: React.FormEvent<HTMLFormElement>) => {
     if (value.text) {
+      setChatError(null); // Clear any previous error
       setPendingMessage(value.text);
       chat.sendMessage({ text: value.text });
       setInput("");
     }
+  };
+
+  const handleRetry = () => {
+    setChatError(null);
   };
 
   // Clear pending message when chat messages update with a user message
@@ -446,6 +460,7 @@ export default function ChatPage() {
     navigate('/chat');
     chat.setMessages([]);
     setPendingMessage(null);
+    setChatError(null);
   };
 
   const handleRenameChat = (chatId: string, newName: string) => {
@@ -543,6 +558,33 @@ export default function ChatPage() {
                         <div className="flex items-center gap-2">
                           <Loader />
                           <span className="text-sm text-muted-foreground">Thinking...</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Error message */}
+                  {chatError && (
+                    <div className="flex w-full py-2">
+                      <div className="flex gap-3 w-full">
+                        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-red-500/20">
+                          <AlertCircle className="w-4 h-4 text-red-500" />
+                        </div>
+                        <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+                          <div className="font-medium text-red-700 dark:text-red-400 mb-1">
+                            Message failed to send
+                          </div>
+                          <div className="text-sm text-muted-foreground mb-3">
+                            {chatError}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleRetry}
+                            className="border-red-500/50 text-red-600 hover:bg-red-500/10"
+                          >
+                            <RefreshCw className="w-4 h-4 mr-1" />
+                            Dismiss
+                          </Button>
                         </div>
                       </div>
                     </div>

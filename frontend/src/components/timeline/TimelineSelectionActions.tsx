@@ -36,36 +36,42 @@ export function TimelineSelectionActions({
   const [isRunJobOpen, setIsRunJobOpen] = useState(false);
 
   return (
-    <div className="flex items-center gap-2 mr-auto">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            onClick={onZoomToSelection}
-            variant="outline"
-            size="icon"
-          >
-            <Maximize2 className="w-4 h-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p>Zoom to selected range</p>
-        </TooltipContent>
-      </Tooltip>
+    <div className="flex items-start gap-3 mr-auto">
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={onZoomToSelection}
+              variant="outline"
+              size="icon"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Zoom to selected range</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Zoom</span>
+      </div>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => setIsRunJobOpen(true)}
-          >
-            <Play className="w-4 h-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p>Run job on range</p>
-        </TooltipContent>
-      </Tooltip>
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setIsRunJobOpen(true)}
+            >
+              <Play className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Run job on selected range</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Run Job</span>
+      </div>
       <RunJobDialog
         open={isRunJobOpen}
         onOpenChange={setIsRunJobOpen}
@@ -75,20 +81,23 @@ export function TimelineSelectionActions({
 
       {isShortRange && (
         <>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setIsSummarizeOpen(true)}
-              >
-                <Wand2 className="w-4 h-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Summarize range</p>
-            </TooltipContent>
-          </Tooltip>
+          <div className="flex flex-col items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setIsSummarizeOpen(true)}
+                >
+                  <Wand2 className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Generate AI summary for range</p>
+              </TooltipContent>
+            </Tooltip>
+            <span className="text-xs text-muted-foreground">Summarize</span>
+          </div>
           <SummarizeDialog
             open={isSummarizeOpen}
             onOpenChange={setIsSummarizeOpen}
@@ -98,35 +107,41 @@ export function TimelineSelectionActions({
         </>
       )}
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            onClick={onCreateEvent}
-            variant="outline"
-            size="icon"
-          >
-            <CalendarPlus className="w-4 h-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p>Create object from range</p>
-        </TooltipContent>
-      </Tooltip>
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={onCreateEvent}
+              variant="outline"
+              size="icon"
+            >
+              <CalendarPlus className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Create new object from selected range</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Create</span>
+      </div>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            onClick={onClearSelection}
-            variant="outline"
-            size="icon"
-          >
-            <CircleOff className="w-4 h-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p>Clear selection</p>
-        </TooltipContent>
-      </Tooltip>
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={onClearSelection}
+              variant="outline"
+              size="icon"
+            >
+              <CircleOff className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Clear time selection</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Clear</span>
+      </div>
     </div>
   );
 }

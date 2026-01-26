@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { TimelineChart } from "@/components/timeline/TimelineChart";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
@@ -10,9 +10,11 @@ import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore";
 import { useTimeline } from "@/hooks/useTimeline";
+import { useTimelineRange } from "@/stores/timelineRange";
 import { api } from "@/lib/api";
 
 const TimelinePage = () => {
+  const location = useLocation();
   const navigate = useNavigate();
   const { error, objects } = useObjects();
   const { clearSelection: clearObjectSelection, selectedIds } =
@@ -28,7 +30,22 @@ const TimelinePage = () => {
 
   const timeline = useTimeline();
   const { zoomTo } = timeline;
+  const setRange = useTimelineRange((s) => s.setRange);
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
+
+  // Apply start/end from URL when navigating to timeline with ?start=&end= (e.g. "View on timeline" from object)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const startParam = params.get("start");
+    const endParam = params.get("end");
+    if (!startParam) return;
+    const startMs = parseInt(startParam, 10);
+    if (Number.isNaN(startMs)) return;
+    const start = new Date(startMs);
+    const end = endParam ? new Date(parseInt(endParam, 10)) : new Date();
+    if (endParam && Number.isNaN(end.getTime())) return;
+    setRange(start, end);
+  }, [location.search, setRange]);
 
   const isShortRange =
     timeSelection.start &&
@@ -79,13 +96,13 @@ const TimelinePage = () => {
 
   const handleZoomToFit = useCallback(async () => {
     try {
-      const result = await api.post("/api/resource/objects", {
+      const result = await api.callResource("objects", {
         action: "getTimeRange",
       });
 
-      if (result.data?.start && result.data?.end) {
-        const earliest = new Date(result.data.start);
-        const latest = new Date(result.data.end);
+      if (result.start && result.end) {
+        const earliest = result.start instanceof Date ? result.start : new Date(result.start);
+        const latest = result.end instanceof Date ? result.end : new Date(result.end);
 
         const duration = latest.getTime() - earliest.getTime();
         const padding = duration * 0.05;

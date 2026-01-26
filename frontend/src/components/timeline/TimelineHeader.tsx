@@ -25,7 +25,7 @@ export function TimelineHeader({
   onClearTimeSelection,
 }: TimelineHeaderProps) {
   return (
-    <div className="flex items-center justify-end gap-2">
+    <div className="flex items-start justify-end gap-2">
       {hasTimeSelection && timeSelectionStart && timeSelectionEnd && (
         <TimelineSelectionActions
           startDate={timeSelectionStart}
