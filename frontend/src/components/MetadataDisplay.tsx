@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { Object } from "@/types/objects";
@@ -12,6 +13,7 @@ import {
   Timer,
   User,
   Users,
+  LineChart,
 } from "lucide-react";
 
 interface MetadataDisplayProps {
@@ -137,6 +139,20 @@ export function MetadataDisplay({ object }: MetadataDisplayProps) {
                   {formatDuration(firstRange.start, firstRange.end)}
                 </dd>
               </div>
+            </div>
+
+            <div className="pt-2 border-t">
+              <Link
+                to={
+                  firstRange.end
+                    ? `/timeline?start=${new Date(firstRange.start).getTime()}&end=${new Date(firstRange.end).getTime()}`
+                    : `/timeline?start=${new Date(firstRange.start).getTime()}`
+                }
+                className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+              >
+                <LineChart className="w-4 h-4" />
+                View on timeline
+              </Link>
             </div>
 
             {timeRanges.length > 1 && (
