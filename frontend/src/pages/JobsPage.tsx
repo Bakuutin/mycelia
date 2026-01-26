@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useState, useEffect, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useJobsListener } from "@/hooks/useJobsListener";
 import {
@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
 
 type WorkerStatus = {
@@ -66,6 +68,61 @@ const STATUS_PRIORITY: Record<string, number> = {
   completed: 4,
 };
 
+/**
+ * Determines if a completed job produced no meaningful output.
+ * Different job types have different "empty" indicators.
+ */
+function isEmptyJobResult(job: JobInfo): boolean {
+  if (job.state !== "completed") return false;
+
+  const progress = job.progress || {};
+  const result = job.result || {};
+
+  switch (job.type) {
+    case "vad":
+      return (
+        (progress.hasSpeech === 0 || result.hasSpeech === 0) &&
+        (progress.processed === 0 || result.processed === 0)
+      );
+    case "conversation_chunk_creator":
+      return (
+        (result.finalized ?? 0) === 0 &&
+        (result.streamed ?? 0) === 0 &&
+        (result.chunksCreated ?? 0) === 0
+      );
+    case "conversation_extractor":
+      return (
+        (result.conversationsCreated ?? 0) === 0 &&
+        (result.chunksProcessed ?? 0) === 0
+      );
+    case "transcription_sequence_creator":
+      return (result.processed ?? 0) === 0;
+    case "transcription":
+      return (
+        (result.processed ?? 0) === 0 ||
+        (progress.processed === 0 && progress.total === 0)
+      );
+    default:
+      const processed = progress.processed ?? result.processed ?? -1;
+      const total = progress.total ?? result.total ?? -1;
+      return processed === 0 && total === 0;
+  }
+}
+
+/** Calculate average frequency string from timestamps */
+function calculateFrequency(timestamps: number[]): string {
+  if (timestamps.length < 2) return "-";
+  const sorted = [...timestamps].sort((a, b) => b - a).slice(0, 10);
+  let totalGap = 0;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    totalGap += sorted[i] - sorted[i + 1];
+  }
+  const avgMs = totalGap / (sorted.length - 1);
+  if (avgMs < 60000) return `~${Math.round(avgMs / 1000)}s`;
+  if (avgMs < 3600000) return `~${Math.round(avgMs / 60000)}m`;
+  return `~${(avgMs / 3600000).toFixed(1)}h`;
+}
+
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
   const [quickFilter, setQuickFilter] = useState<string>("all");
@@ -77,6 +134,18 @@ export default function JobsPage() {
   const [sortColumn, setSortColumn] = useState<string>("priority");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const hideEmpty = searchParams.get("hideEmpty") === "true";
+
+  const toggleHideEmpty = () => {
+    const newParams = new URLSearchParams(searchParams);
+    if (hideEmpty) {
+      newParams.delete("hideEmpty");
+    } else {
+      newParams.set("hideEmpty", "true");
+    }
+    setSearchParams(newParams);
+  };
 
   const { jobs, isLoading } = useJobsListener();
 
@@ -186,8 +255,8 @@ export default function JobsPage() {
 
   // Get workers sorted by pipeline order, with unknown workers at the end
   const sortedWorkers = useMemo(() => {
-    const pipelineOrder = new Map(WORKER_PIPELINE.map((w, i) => [w.type, i]));
-    const pipelineDescriptions = new Map(WORKER_PIPELINE.map(w => [w.type, w.description]));
+    const pipelineOrder = new Map<string, number>(WORKER_PIPELINE.map((w, i) => [w.type, i]));
+    const pipelineDescriptions = new Map<string, string>(WORKER_PIPELINE.map(w => [w.type, w.description]));
     
     return [...allTypes].sort((a, b) => {
       const orderA = pipelineOrder.get(a) ?? 999;
@@ -199,6 +268,47 @@ export default function JobsPage() {
       order: pipelineOrder.get(type) ?? 999,
     }));
   }, [allTypes]);
+
+  // Job type statistics for recurring tasks dashboard
+  const jobTypeStats = useMemo(() => {
+    const statsByType = new Map<string, {
+      type: string;
+      total: number;
+      completed: number;
+      empty: number;
+      timestamps: number[];
+    }>();
+
+    for (const job of jobs) {
+      if (job.state !== "completed" && job.state !== "failed") continue;
+
+      let stats = statsByType.get(job.type);
+      if (!stats) {
+        stats = { type: job.type, total: 0, completed: 0, empty: 0, timestamps: [] };
+        statsByType.set(job.type, stats);
+      }
+
+      stats.total++;
+      if (job.state === "completed") {
+        stats.completed++;
+        if (job.timestamp) stats.timestamps.push(job.timestamp);
+        if (isEmptyJobResult(job)) stats.empty++;
+      }
+    }
+
+    const pipelineOrder = new Map<string, number>(WORKER_PIPELINE.map((w, i) => [w.type, i]));
+    return Array.from(statsByType.values()).map(s => ({
+      type: s.type,
+      totalRuns: s.total,
+      successRate: s.total > 0 ? (s.completed / s.total) * 100 : 0,
+      emptyRuns: s.empty,
+      avgFrequency: calculateFrequency(s.timestamps),
+    })).sort((a, b) => {
+      const orderA = pipelineOrder.get(a.type) ?? 999;
+      const orderB = pipelineOrder.get(b.type) ?? 999;
+      return orderA - orderB;
+    });
+  }, [jobs]);
 
   const handleToggleWorker = (workerType: string, currentlyPaused: boolean) => {
     if (currentlyPaused) {
@@ -249,6 +359,15 @@ export default function JobsPage() {
       );
     }
 
+    // Apply hide empty filter
+    if (hideEmpty) {
+      result = result.filter(job => {
+        // Only filter completed jobs - keep active/waiting/failed visible
+        if (job.state !== "completed") return true;
+        return !isEmptyJobResult(job);
+      });
+    }
+
     // Sort the results
     const sortedResult = [...result].sort((a, b) => {
       let aVal: any;
@@ -294,7 +413,7 @@ export default function JobsPage() {
     });
 
     return sortedResult.slice(0, limit);
-  }, [jobs, quickFilter, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection]);
+  }, [jobs, quickFilter, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection, hideEmpty]);
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
@@ -643,6 +762,51 @@ export default function JobsPage() {
         </CardContent>
       </Card>
 
+      {/* Job Statistics */}
+      {jobTypeStats.length > 0 && (
+        <Card>
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-base">Job Statistics</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow className="h-8">
+                  <TableHead>Type</TableHead>
+                  <TableHead className="text-center w-[80px]">Runs</TableHead>
+                  <TableHead className="text-center w-[80px]">Success</TableHead>
+                  <TableHead className="text-center w-[80px]">Empty</TableHead>
+                  <TableHead className="w-[100px]">Frequency</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {jobTypeStats.map((stats) => (
+                  <TableRow key={stats.type} className="h-9">
+                    <TableCell className="text-sm font-mono">{stats.type}</TableCell>
+                    <TableCell className="text-center text-sm">{stats.totalRuns}</TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="secondary" className={
+                        stats.successRate >= 95 ? "bg-green-500/10 text-green-600" :
+                        stats.successRate >= 80 ? "bg-yellow-500/10 text-yellow-600" :
+                        "bg-red-500/10 text-red-600"
+                      }>
+                        {stats.successRate.toFixed(0)}%
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-center text-sm text-muted-foreground">
+                      {stats.emptyRuns > 0 ? stats.emptyRuns : "-"}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {stats.avgFrequency}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Quick Filter Tabs */}
       <div className="flex flex-wrap gap-2">
         <Button
@@ -780,6 +944,18 @@ export default function JobsPage() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Hide Empty Toggle */}
+          <div className="flex items-center gap-2">
+            <Switch
+              id="hide-empty"
+              checked={hideEmpty}
+              onCheckedChange={toggleHideEmpty}
+            />
+            <Label htmlFor="hide-empty" className="text-sm cursor-pointer">
+              Hide empty
+            </Label>
+          </div>
 
           <div className="w-[120px]">
             <Select value={limit.toString()} onValueChange={(v) => setLimit(parseInt(v))}>
