@@ -18,6 +18,7 @@ export const objectKeys = {
   related: (id: string) => [...objectKeys.all, "related", id] as const,
   selection: () => [...objectKeys.all, "selection"] as const,
   history: (id: string) => [...objectKeys.all, "history", id] as const,
+  referenceCounts: (id: string) => [...objectKeys.all, "referenceCounts", id] as const,
 };
 
 // Fetch a single object by ID
@@ -204,6 +205,55 @@ export function useObjectHistory(
         body.skip = options.skip;
       }
       return await callResource("objects", body);
+    },
+    enabled: !!idString,
+    staleTime: 30 * 1000, // 30 sec
+  });
+}
+
+// Fetch reference counts (TO and FROM) for an object
+export function useObjectReferenceCounts(
+  objectId: string | ObjectId | undefined,
+): UseQueryResult<{ referencesTo: number; referencesFrom: number; total: number }, Error> {
+  const idString = objectId
+    ? (objectId instanceof ObjectId ? objectId.toString() : objectId)
+    : undefined;
+
+  return useQuery({
+    queryKey: objectKeys.referenceCounts(idString!),
+    queryFn: async () => {
+      if (!idString) throw new Error("Object ID is required");
+      
+      const objectIdObj = new ObjectId(idString);
+
+      // Count references TO this object (where it's the target)
+      const referencesTo = await callResource("mongo", {
+        action: "count",
+        collection: "objects",
+        query: {
+          isRelationship: true,
+          "relationship.object": objectIdObj,
+        },
+      });
+
+      // Count references FROM this object (where it's the source)
+      const referencesFrom = await callResource("mongo", {
+        action: "count",
+        collection: "objects",
+        query: {
+          isRelationship: true,
+          "relationship.subject": objectIdObj,
+        },
+      });
+
+      const toCount = typeof referencesTo === "number" ? referencesTo : (referencesTo?.count ?? 0);
+      const fromCount = typeof referencesFrom === "number" ? referencesFrom : (referencesFrom?.count ?? 0);
+
+      return {
+        referencesTo: toCount,
+        referencesFrom: fromCount,
+        total: toCount + fromCount,
+      };
     },
     enabled: !!idString,
     staleTime: 30 * 1000, // 30 sec
