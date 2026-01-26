@@ -7,6 +7,7 @@ import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
+import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { ObjectId } from "mongodb";
 import type { Db } from "mongodb";
 
