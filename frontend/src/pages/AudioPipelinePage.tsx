@@ -162,15 +162,21 @@ export default function AudioPipelinePage() {
             options: { sort: { createdAt: -1 } },
           }) as any[];
 
-          // Get conversations for this session
-          const conversationsData = await api.callResource("mongo", {
-            action: "find",
-            collection: "objects",
-            query: {
-              isConversation: true,
-            },
-            options: { sort: { createdAt: -1 }, limit: 50 },
-          }) as any[];
+          // Get conversations for this session via conversation chunks
+          // Conversations link to chunks via metadata.extractedWith.chunkId
+          const chunkIds = conversationChunks.map((c: any) => c._id.toString());
+
+          const conversationsData = chunkIds.length > 0
+            ? await api.callResource("mongo", {
+                action: "find",
+                collection: "objects",
+                query: {
+                  isConversation: true,
+                  "metadata.extractedWith.chunkId": { $in: chunkIds },
+                },
+                options: { sort: { createdAt: -1 } },
+              }) as any[]
+            : [];
 
           return {
             _id: sf._id.toString(),
