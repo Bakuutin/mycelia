@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { EJSON } from "bson";
 import {
   RefreshCw,
   Mic,
@@ -28,12 +29,15 @@ import {
 interface AudioSession {
   _id: string;
   start: Date;
+  client_id?: string;
+  device?: string;
   metadata?: {
     format?: string;
     rate?: number;
     width?: number;
     channels?: number;
     source?: string;
+    codec?: string;
   };
   processing_status?: string;
   chunks: {
@@ -102,134 +106,55 @@ export default function AudioPipelinePage() {
   const { data: sessionsData, isLoading, refetch } = useQuery({
     queryKey: ["audio-pipeline-sessions", sessionLimit],
     queryFn: async () => {
-      // Fetch recent source files with aggregated pipeline data
-      const sourceFiles = await api.callResource("mongo", {
-        action: "find",
-        collection: "source_files",
-        query: { "metadata.source": "websocket" },
-        options: { sort: { start: -1 }, limit: sessionLimit + 1 }, // +1 to check if there's more
-      }) as any[];
-
-      const hasMore = sourceFiles.length > sessionLimit;
-      const filesToProcess = sourceFiles.slice(0, sessionLimit);
-
-      // For each source file, get pipeline status
-      const sessionsWithStatus = await Promise.all(
-        filesToProcess.map(async (sf) => {
-          const sourceFileId = sf._id;
-
-          // Get chunk stats
-          const [totalChunks, vadProcessed, withSpeech] = await Promise.all([
-            api.callResource("mongo", {
-              action: "count",
-              collection: "audio_chunks",
-              query: { original_id: sourceFileId },
-            }),
-            api.callResource("mongo", {
-              action: "count",
-              collection: "audio_chunks",
-              query: { original_id: sourceFileId, "vad.ran_at": { $exists: true } },
-            }),
-            api.callResource("mongo", {
-              action: "count",
-              collection: "audio_chunks",
-              query: { original_id: sourceFileId, "vad.has_speech": true },
-            }),
-          ]);
-
-          // Get sequences
-          const sequences = await api.callResource("mongo", {
-            action: "find",
-            collection: "transcription_sequences",
-            query: { original_id: sourceFileId },
-            options: { sort: { start: -1 } },
-          }) as any[];
-
-          // Get transcription count and details (oldest first)
-          const transcriptionDocs = await api.callResource("mongo", {
-            action: "find",
-            collection: "transcriptions",
-            query: { original: sourceFileId },
-            options: { sort: { start: 1 }, limit: 20 },
-          }) as any[];
-          const transcriptions = transcriptionDocs.length;
-
-          // Get conversation chunks for this session (try both ObjectId and string)
-          const conversationChunks = await api.callResource("mongo", {
-            action: "find",
-            collection: "conversation_chunks",
-            query: { original_id: { $oid: sf._id.toString() } },
-            options: { sort: { createdAt: -1 } },
-          }) as any[];
-
-          // Get conversations for this session via conversation chunks
-          // Conversations link to chunks via metadata.extractedWith.chunkId
-          const chunkIds = conversationChunks.map((c: any) => c._id.toString());
-
-          const conversationsData = chunkIds.length > 0
-            ? await api.callResource("mongo", {
-                action: "find",
-                collection: "objects",
-                query: {
-                  isConversation: true,
-                  "metadata.extractedWith.chunkId": { $in: chunkIds },
-                },
-                options: { sort: { createdAt: -1 } },
-              }) as any[]
-            : [];
-
-          return {
-            _id: sf._id.toString(),
-            start: new Date(sf.start),
-            metadata: sf.metadata,
-            processing_status: sf.processing_status,
-            chunks: {
-              total: totalChunks as number,
-              vadProcessed: vadProcessed as number,
-              withSpeech: withSpeech as number,
-            },
-            sequences: sequences.map((s: any) => ({
-              _id: s._id.toString(),
-              state: s.state,
-              chunk_count: s.chunk_count,
-              fromIndex: s.fromIndex,
-              toIndex: s.toIndex,
-              updatedAt: s.updatedAt ? new Date(s.updatedAt) : undefined,
-              error: s.error,
-            })),
-            transcriptions: transcriptions as number,
-            conversationChunks: conversationChunks.map((c: any) => ({
-              _id: c._id.toString(),
-              state: c.state,
-              mode: c.mode,
-              transcriptionCount: c.transcriptionCount || 0,
-              totalTextLength: c.totalTextLength || 0,
-              start: c.start ? new Date(c.start) : undefined,
-              end: c.end ? new Date(c.end) : undefined,
-              updatedAt: c.updatedAt ? new Date(c.updatedAt) : undefined,
-              error: c.error,
-              emptyReason: c.emptyReason,
-              segmentsFound: c.segmentsFound,
-              conversationsCreated: c.conversationsCreated,
-            })),
-            transcriptionDetails: transcriptionDocs.map((t: any) => ({
-              _id: t._id.toString(),
-              start: new Date(t.start),
-              end: new Date(t.end),
-              text: t.segments?.map((s: any) => s.text).join("") || t.text || "",
-            })),
-            conversations: conversationsData.map((c: any) => ({
-              _id: c._id.toString(),
-              name: c.name,
-              icon: c.icon,
-              timeRanges: c.timeRanges,
-              createdAt: c.createdAt ? new Date(c.createdAt) : undefined,
-            })),
-          } as AudioSession;
-        })
+      // Use the new aggregated pipeline endpoint
+      const response = await fetch(
+        `${api.baseURL}/api/audio/pipeline?limit=${sessionLimit}`,
+        {
+          headers: {
+            "Authorization": `Bearer ${await api.getJWT()}`,
+          },
+        }
       );
 
-      return { sessions: sessionsWithStatus, hasMore };
+      if (!response.ok) {
+        throw new Error("Failed to fetch pipeline data");
+      }
+
+      const data = await response.json();
+
+      // Deserialize EJSON (handles BSON date format { $date: "..." })
+      const deserialized = EJSON.deserialize(data);
+
+      // Convert any remaining date strings to Date objects
+      const sessions = deserialized.sessions.map((s: any) => ({
+        ...s,
+        start: s.start instanceof Date ? s.start : new Date(s.start),
+        sequences: s.sequences.map((seq: any) => ({
+          ...seq,
+          updatedAt: seq.updatedAt ? (seq.updatedAt instanceof Date ? seq.updatedAt : new Date(seq.updatedAt)) : undefined,
+        })),
+        conversationChunks: s.conversationChunks.map((c: any) => ({
+          ...c,
+          start: c.start ? (c.start instanceof Date ? c.start : new Date(c.start)) : undefined,
+          end: c.end ? (c.end instanceof Date ? c.end : new Date(c.end)) : undefined,
+          updatedAt: c.updatedAt ? (c.updatedAt instanceof Date ? c.updatedAt : new Date(c.updatedAt)) : undefined,
+        })),
+        transcriptionDetails: s.transcriptionDetails.map((t: any) => ({
+          ...t,
+          start: t.start instanceof Date ? t.start : new Date(t.start),
+          end: t.end instanceof Date ? t.end : new Date(t.end),
+        })),
+        conversations: s.conversations.map((c: any) => ({
+          ...c,
+          createdAt: c.createdAt ? (c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt)) : undefined,
+        })),
+      }));
+
+      return {
+        sessions,
+        hasMore: deserialized.hasMore,
+        stats: deserialized.stats
+      };
     },
     refetchInterval: autoRefresh ? 5000 : false,
   });
@@ -241,68 +166,8 @@ export default function AudioPipelinePage() {
     setSessionLimit((prev) => prev + LOAD_MORE_INCREMENT);
   };
 
-  const { data: stats } = useQuery({
-    queryKey: ["audio-pipeline-stats"],
-    queryFn: async () => {
-      const [
-        chunksAwaitingVad,
-        sequencesReady,
-        sequencesProcessing,
-        sequencesError,
-        convChunksReady,
-        convChunksProcessing,
-        totalConversations,
-      ] = await Promise.all([
-        api.callResource("mongo", {
-          action: "count",
-          collection: "audio_chunks",
-          query: { vad: null },
-        }),
-        api.callResource("mongo", {
-          action: "count",
-          collection: "transcription_sequences",
-          query: { state: "ready" },
-        }),
-        api.callResource("mongo", {
-          action: "count",
-          collection: "transcription_sequences",
-          query: { state: "processing" },
-        }),
-        api.callResource("mongo", {
-          action: "count",
-          collection: "transcription_sequences",
-          query: { state: "error" },
-        }),
-        api.callResource("mongo", {
-          action: "count",
-          collection: "conversation_chunks",
-          query: { state: "ready" },
-        }),
-        api.callResource("mongo", {
-          action: "count",
-          collection: "conversation_chunks",
-          query: { state: "processing" },
-        }),
-        api.callResource("mongo", {
-          action: "count",
-          collection: "objects",
-          query: { isConversation: true },
-        }),
-      ]);
-
-      return {
-        totalSessions: sessions?.length || 0,
-        chunksAwaitingVad: chunksAwaitingVad as number,
-        sequencesReady: sequencesReady as number,
-        sequencesProcessing: sequencesProcessing as number,
-        sequencesError: sequencesError as number,
-        convChunksReady: convChunksReady as number,
-        convChunksProcessing: convChunksProcessing as number,
-        totalConversations: totalConversations as number,
-      } as PipelineStats;
-    },
-    refetchInterval: autoRefresh ? 5000 : false,
-  });
+  // Stats are now included in the sessions data
+  const stats = sessionsData?.stats;
 
   const toggleSession = (id: string) => {
     setExpandedSessions((prev) => {
@@ -474,13 +339,20 @@ export default function AudioPipelinePage() {
                       <div className="flex items-center gap-4">
                         <Mic className="h-5 w-5 text-muted-foreground" />
                         <div>
-                          <div className="font-medium">
+                          <div className="font-medium flex items-center gap-2">
                             {format(session.start, "MMM d, HH:mm:ss")}
+                            {session.client_id && (
+                              <span className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">
+                                {session.device || session.client_id}
+                              </span>
+                            )}
                           </div>
                           <div className="text-sm text-muted-foreground">
-                            {session.metadata?.format} {session.metadata?.rate}Hz
+                            {session.metadata?.codec || session.metadata?.format || 'unknown'} {session.metadata?.rate}Hz
                             {" "}&middot;{" "}
                             {formatDistanceToNow(session.start, { addSuffix: true })}
+                            {" "}&middot;{" "}
+                            <span className="font-mono text-xs">{session._id.substring(0, 8)}</span>
                           </div>
                         </div>
                       </div>
