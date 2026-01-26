@@ -109,20 +109,6 @@ function isEmptyJobResult(job: JobInfo): boolean {
   }
 }
 
-/** Calculate average frequency string from timestamps */
-function calculateFrequency(timestamps: number[]): string {
-  if (timestamps.length < 2) return "-";
-  const sorted = [...timestamps].sort((a, b) => b - a).slice(0, 10);
-  let totalGap = 0;
-  for (let i = 0; i < sorted.length - 1; i++) {
-    totalGap += sorted[i] - sorted[i + 1];
-  }
-  const avgMs = totalGap / (sorted.length - 1);
-  if (avgMs < 60000) return `~${Math.round(avgMs / 1000)}s`;
-  if (avgMs < 3600000) return `~${Math.round(avgMs / 60000)}m`;
-  return `~${(avgMs / 3600000).toFixed(1)}h`;
-}
-
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
   const [quickFilter, setQuickFilter] = useState<string>("all");
@@ -167,6 +153,28 @@ export default function JobsPage() {
       });
       return response as WorkerStatus;
     },
+  });
+
+  // Fetch job statistics from backend (aggregates ALL jobs, not just the 1000 loaded in frontend)
+  const { data: jobStatsResponse } = useQuery({
+    queryKey: ["job-stats"],
+    queryFn: async () => {
+      const response = await api.callResource("jobs", {
+        action: "stats",
+      });
+      return response as {
+        stats: Array<{
+          type: string;
+          totalRuns: number;
+          completed: number;
+          failed: number;
+          emptyRuns: number;
+          successRate: number;
+          avgFrequency: string;
+        }>;
+      };
+    },
+    staleTime: 30000, // Refresh every 30 seconds
   });
 
   const pauseWorkerMutation = useMutation({
@@ -269,46 +277,17 @@ export default function JobsPage() {
     }));
   }, [allTypes]);
 
-  // Job type statistics for recurring tasks dashboard
+  // Job type statistics from backend (aggregates ALL jobs in database)
   const jobTypeStats = useMemo(() => {
-    const statsByType = new Map<string, {
-      type: string;
-      total: number;
-      completed: number;
-      empty: number;
-      timestamps: number[];
-    }>();
-
-    for (const job of jobs) {
-      if (job.state !== "completed" && job.state !== "failed") continue;
-
-      let stats = statsByType.get(job.type);
-      if (!stats) {
-        stats = { type: job.type, total: 0, completed: 0, empty: 0, timestamps: [] };
-        statsByType.set(job.type, stats);
-      }
-
-      stats.total++;
-      if (job.state === "completed") {
-        stats.completed++;
-        if (job.timestamp) stats.timestamps.push(job.timestamp);
-        if (isEmptyJobResult(job)) stats.empty++;
-      }
-    }
+    if (!jobStatsResponse?.stats) return [];
 
     const pipelineOrder = new Map<string, number>(WORKER_PIPELINE.map((w, i) => [w.type, i]));
-    return Array.from(statsByType.values()).map(s => ({
-      type: s.type,
-      totalRuns: s.total,
-      successRate: s.total > 0 ? (s.completed / s.total) * 100 : 0,
-      emptyRuns: s.empty,
-      avgFrequency: calculateFrequency(s.timestamps),
-    })).sort((a, b) => {
+    return [...jobStatsResponse.stats].sort((a, b) => {
       const orderA = pipelineOrder.get(a.type) ?? 999;
       const orderB = pipelineOrder.get(b.type) ?? 999;
       return orderA - orderB;
     });
-  }, [jobs]);
+  }, [jobStatsResponse]);
 
   const handleToggleWorker = (workerType: string, currentlyPaused: boolean) => {
     if (currentlyPaused) {
