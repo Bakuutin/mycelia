@@ -1,6 +1,6 @@
 # Database Documentation
 
-This document describes the database structure, collections, relationships, and usage patterns for the Mycelia system.
+This document describes the database structure, collections, fields, and relationships for the Mycelia system.
 
 ## Overview
 
@@ -25,7 +25,7 @@ The Mycelia system uses multiple databases:
 ##### `audio_chunks`
 Stores processed audio chunks from recordings and uploads.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique chunk identifier
 - `original_id`: ObjectId - Reference to `source_files._id` (the recording session)
 - `index`: Number - Sequential index within the recording (0, 1, 2, ...)
@@ -54,7 +54,7 @@ Stores processed audio chunks from recordings and uploads.
 ##### `source_files`
 Represents an original audio file or recording session.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique source file identifier
 - `start`: Date - When recording started
 - `size`: Number - File size in bytes
@@ -70,7 +70,7 @@ Represents an original audio file or recording session.
 ##### `transcription_sequences`
 Groups audio chunks into sequences for transcription processing.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique sequence identifier
 - `original_id`: ObjectId - Reference to `source_files._id`
 - `fromIndex`: Number - Starting chunk index
@@ -95,7 +95,7 @@ Groups audio chunks into sequences for transcription processing.
 ##### `transcriptions`
 Stores transcribed text segments from audio.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique transcription identifier
 - `transcription_sequence_id`: ObjectId - Reference to `transcription_sequences._id`
 - `chunk_id`: ObjectId - Reference to `conversation_chunks._id` (if assigned to a conversation)
@@ -120,7 +120,7 @@ Stores transcribed text segments from audio.
 ##### `diarizations`
 Stores speaker diarization results (who spoke when).
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique diarization identifier
 - `transcription_id`: ObjectId - Reference to `transcriptions._id`
 - `speakers`: Array - Speaker information
@@ -135,7 +135,7 @@ Stores speaker diarization results (who spoke when).
 ##### `conversation_chunks`
 Groups transcriptions into logical conversation chunks for summarization and processing.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique chunk identifier
 - `original_id`: ObjectId - Reference to `source_files._id`
 - `chunkKey`: String - Unique key for the chunk
@@ -163,15 +163,34 @@ Groups transcriptions into logical conversation chunks for summarization and pro
 #### Knowledge Graph Collections
 
 ##### `objects`
-Stores entities in the knowledge graph (people, events, places, relationships, etc.).
+Stores entities in the knowledge graph (people, events, places, relationships, promises, etc.).
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique object identifier
 - `name`: String - Object name
-- `type`: String - Object type ("person", "event", "place", "relationship", "promise", etc.)
 - `aliases`: Array[String] - Alternative names
 - `details`: String - Description/details
+- `icon`: Object - Visual icon (text emoji or base64 image)
+- `color`: String - Color code for visual representation
+- `isPerson`: Boolean - True if this is a person
+- `isEvent`: Boolean - True if this is an event
+- `isRelationship`: Boolean - True if this is a relationship between two objects
+- `isPromise`: Boolean - True if this is a promise/commitment
+- `isConversation`: Boolean - True if this represents a conversation
+- `relationship`: Object - Relationship structure (only when `isRelationship: true`)
+  - `subject`: ObjectId - The "from" entity (source of relationship)
+  - `object`: ObjectId - The "to" entity (target of relationship)
+  - `symmetrical`: Boolean - True if relationship goes both ways
+- `location`: Object - Geographic coordinates (for places/events)
+  - `latitude`: Number
+  - `longitude`: Number
+- `timeRanges`: Array[Object] - Time periods when object/relationship was active
+  - `start`: Date - Start date/time
+  - `end`: Date - End date/time (optional, null for ongoing)
+  - `name`: String - Optional label for the time period
+- `summaries`: Array[Object] - Generated summaries
 - `metadata`: Object - Additional structured data
+- `version`: Number - Version number for optimistic locking
 - `createdAt`: Date
 - `updatedAt`: Date
 
@@ -180,16 +199,25 @@ Stores entities in the knowledge graph (people, events, places, relationships, e
 
 **Relationships:**
 - One `objects` → Many `object_history` (via `object_history.objectId`)
+- Relationships connect objects via `relationship.subject` and `relationship.object` fields
+
+**Object References:**
+- **References TO an object**: Count of relationships where `relationship.object` = objectId (where this object is the target)
+- **References FROM an object**: Count of relationships where `relationship.subject` = objectId (where this object is the source)
 
 ##### `object_history`
 Tracks changes to objects over time.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique history entry identifier
 - `objectId`: ObjectId - Reference to `objects._id`
 - `timestamp`: Date - When change occurred
-- `changes`: Object - Description of changes
-- `source`: String - Source of the change
+- `action`: String - Action type ("create", "update", "delete")
+- `userId`: String - User who made the change
+- `version`: Number - Object version at time of change
+- `field`: String - Field that was changed (null for create/delete)
+- `oldValue`: Any - Previous value
+- `newValue`: Any - New value
 
 **Indexes:**
 - `object_id`: Composite index on `objectId` and `timestamp`
@@ -202,7 +230,7 @@ Tracks changes to objects over time.
 ##### `chats`
 Represents chat conversations from various platforms.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique chat identifier
 - `platform`: String - Platform name ("mycelia", "telegram", etc.)
 - `externalId`: String - Platform-specific chat ID
@@ -223,7 +251,7 @@ Represents chat conversations from various platforms.
 ##### `messages`
 Stores individual chat messages.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique message identifier
 - `platform`: String - Platform name
 - `chatId`: ObjectId - Reference to `chats._id`
@@ -248,7 +276,7 @@ Stores individual chat messages.
 ##### `prompts`
 Stores prompt templates for LLM operations.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique prompt identifier
 - `name`: String - Prompt name (unique)
 - `text`: String - Prompt text
@@ -263,7 +291,7 @@ Stores prompt templates for LLM operations.
 ##### `configs`
 Stores server configuration.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Server config ID (fixed: `000000000000000000000000`)
 - `prompts`: Object - Map of task keys to prompt ObjectIds
 - `features`: Object - Feature flags (boolean values)
@@ -275,7 +303,7 @@ Stores server configuration.
 ##### `jobs`
 Tracks background processing jobs.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique job identifier
 - `type`: String - Job type ("transcription", "summarization", "diarization", etc.)
 - `state`: String - Job state ("pending", "running", "completed", "failed")
@@ -297,7 +325,7 @@ Tracks background processing jobs.
 ##### `api_keys`
 Stores API keys for authentication.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique key identifier
 - `key`: String - API key hash
 - `name`: String - Key name/description
@@ -310,7 +338,7 @@ Stores API keys for authentication.
 ##### `histogram_5min`, `histogram_1hour`, `histogram_1day`, `histogram_1week`
 Time-series data for different resolutions.
 
-**Key Fields:**
+**Fields:**
 - `_id`: ObjectId - Unique entry identifier
 - `timestamp`: Date - Time bucket
 - `count`: Number - Count for this bucket
@@ -325,37 +353,7 @@ Stores large audio files that don't fit in regular documents.
 - Audio chunk data is stored here when chunks are created
 - Referenced by `audio_chunks.data` field
 
-### Data Flow
-
-#### Audio Processing Pipeline
-
-1. **Ingestion**:
-   - Audio uploaded or streamed → `source_files` record created
-   - Audio split into chunks → `audio_chunks` records created
-   - Chunks stored in GridFS `audio-files` bucket
-
-2. **Voice Activity Detection (VAD)**:
-   - Chunks analyzed for speech
-   - `audio_chunks.vad.has_speech` set to true/false
-
-3. **Transcription Sequence Creation**:
-   - Chunks with speech grouped into `transcription_sequences`
-   - `audio_chunks.transcription_sequence_id` set
-
-4. **Transcription**:
-   - Sequences transcribed → `transcriptions` records created
-   - `transcription_sequences.state` updated to "completed"
-
-5. **Conversation Chunking**:
-   - Transcriptions grouped into `conversation_chunks`
-   - `transcriptions.chunk_id` set
-
-6. **Summarization**:
-   - Conversation chunks summarized
-   - `conversation_chunks.summary` populated
-   - `conversation_chunks.state` set to "completed"
-
-#### Relationship Diagram
+### Data Flow Relationships
 
 ```
 source_files (1)
@@ -472,7 +470,7 @@ Audio segment annotations for training/validation.
 - `speaker_id`: String(100) (Foreign Key → `speakers.id`, Nullable)
 - `speaker_label`: String(100) - For unknown speakers
 - `deepgram_speaker_label`: String(50) - Original Deepgram label
-- `label`: String(20) (Not Null) - 'CORRECT', 'INCERTAIN', 'UNCERTAIN'
+- `label`: String(20) (Not Null) - 'CORRECT', 'INCORRECT', 'UNCERTAIN'
 - `confidence`: Float (0.0 to 1.0)
 - `transcription`: Text
 - `user_id`: Integer (Foreign Key → `users.id`)
@@ -525,178 +523,4 @@ users (1)
   │     ├── speaker_audio_segments (many)
   │     └── annotations (many)
   └── annotations (many)
-```
-
-## Usage
-
-### MongoDB Access
-
-#### Connection
-```typescript
-import { getRootDB } from "@/lib/mongo/core.server.ts";
-
-const db = await getRootDB();
-const collection = db.collection("audio_chunks");
-```
-
-#### Common Queries
-
-**Find unprocessed audio chunks with speech:**
-```typescript
-const chunks = await db.collection("audio_chunks").find({
-  transcribed_at: null,
-  processing_by: null,
-  "vad.has_speech": true
-}).toArray();
-```
-
-**Find all chunks for a recording:**
-```typescript
-const chunks = await db.collection("audio_chunks").find({
-  original_id: sourceFileId
-}).sort({ index: 1 }).toArray();
-```
-
-**Find transcriptions for a conversation chunk:**
-```typescript
-const transcriptions = await db.collection("transcriptions").find({
-  chunk_id: conversationChunkId
-}).sort({ start: 1 }).toArray();
-```
-
-**Search objects by text:**
-```typescript
-const objects = await db.collection("objects").find({
-  $text: { $search: "search term" }
-}).toArray();
-```
-
-**Find messages in a chat:**
-```typescript
-const messages = await db.collection("messages").find({
-  chatId: chatId
-}).sort({ timestamp: 1 }).toArray();
-```
-
-### SQLite Access (Diarizator)
-
-#### Connection
-```python
-from simple_speaker_recognition.database import SessionLocal, get_db
-
-db = SessionLocal()
-```
-
-#### Common Queries
-
-**Get all speakers for a user:**
-```python
-speakers = db.query(Speaker).filter(Speaker.user_id == user_id).all()
-```
-
-**Get speaker with audio segments:**
-```python
-speaker = db.query(Speaker).filter(Speaker.id == speaker_id).first()
-segments = speaker.audio_segments
-```
-
-**Find annotations for a speaker:**
-```python
-annotations = db.query(Annotation).filter(
-    Annotation.speaker_id == speaker_id
-).all()
-```
-
-## Migrations
-
-### MongoDB Migrations
-
-Migrations are located in `backend/migrations/` and run automatically on startup.
-
-**Migration Files:**
-- `0001_init.ts` - Initial collections and indexes
-- `0002_messengers_setup.ts` - Messenger platform support
-- `0003_add_summarization_prompts.ts` - Summarization prompts
-- `0004_inference_provider.ts` - Inference provider configuration
-- `0005_vad_pending_work_index.ts` - VAD index optimization
-- `0006_add_jobs_storage.ts` - Job queue storage
-- `0007_transcription_sequences.ts` - Transcription sequence support
-- `0008_update_transcription_sequences_range.ts` - Sequence range updates
-- `0009_audio_chunks_original_index.ts` - Original ID index
-- `0010_transcription_chunk_tracking.ts` - Chunk tracking for conversations
-- `0011_add_chat_system_prompt.ts` - Chat system prompt
-- `0012_fix_inverted_chunk_timestamps.ts` - Timestamp fixes
-- `0012_update_chat_system_prompt.ts` - Chat prompt updates
-- `0013_add_summaries_to_text_index.ts` - Summary text search
-- `0014_change_default_summarization_prompt.ts` - Default prompt changes
-
-**Running Migrations:**
-Migrations run automatically on backend startup via `backend/app/lib/mongo/collections.ts`.
-
-### SQLite Migrations
-
-SQLite database is initialized automatically when the diarizator service starts. Tables are created via SQLAlchemy's `Base.metadata.create_all()`.
-
-## Indexes
-
-### MongoDB Indexes
-
-All indexes are created automatically via migrations. Key indexes:
-
-- **audio_chunks**: `audio_chunks_pending_work` (partial index for unprocessed chunks)
-- **transcriptions**: `segments.text_text` (text search)
-- **objects**: `text_search_index` (text search on name, aliases, details)
-- **messages**: `by_chat_time` (chat history queries)
-- **chats**: `platform_external_id_unique` (unique platform chat IDs)
-
-### SQLite Indexes
-
-SQLite indexes are created automatically via SQLAlchemy model definitions. Primary relationships are indexed via foreign keys.
-
-## Best Practices
-
-1. **Always use indexes** for queries - check migration files for available indexes
-2. **Use ObjectId references** for relationships between MongoDB collections
-3. **Store large binary data** in GridFS, not in regular documents
-4. **Update timestamps** (`createdAt`, `updatedAt`) consistently
-5. **Use transactions** for multi-document operations when needed
-6. **Query efficiently** - use projection to limit returned fields
-7. **Handle nulls** - many relationship fields are nullable (e.g., `transcriptions.chunk_id`)
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Missing indexes**: Run migrations to ensure all indexes exist
-2. **Orphaned references**: Check for documents with invalid ObjectId references
-3. **GridFS files**: Use MongoDB tools to inspect GridFS buckets
-4. **SQLite locks**: Ensure proper session management in diarizator
-
-### Useful Commands
-
-**MongoDB:**
-```bash
-# Connect to MongoDB
-mongosh "mongodb://localhost:27017" -d DATABASE_NAME
-
-# List collections
-show collections
-
-# Count documents
-db.audio_chunks.countDocuments()
-
-# Check indexes
-db.audio_chunks.getIndexes()
-```
-
-**SQLite:**
-```bash
-# Connect to SQLite
-sqlite3 diarizator/src/simple_speaker_recognition/data/speakers.db
-
-# List tables
-.tables
-
-# View schema
-.schema speakers
 ```
