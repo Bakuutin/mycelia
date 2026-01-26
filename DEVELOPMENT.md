@@ -156,6 +156,26 @@ docker compose up -d --build
 
 See [docs/LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md) for hardware recommendations and model setup.
 
+## Job Management (CLI)
+
+Manage jobs directly from the command line:
+
+```bash
+cd backend
+
+# Clear completed jobs (⚠️ destructive - deletes completed/failed/cancelled jobs)
+deno run -A server.ts jobs-clear
+
+# Cancel all active and waiting jobs
+deno run -A server.ts jobs-cancel-all
+
+# Pause all workers
+deno run -A server.ts jobs-pause
+
+# Resume all workers
+deno run -A server.ts jobs-resume
+```
+
 ## Troubleshooting
 
 ### FFmpeg Import Errors
