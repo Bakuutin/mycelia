@@ -14,9 +14,12 @@ import {
   ChevronRight,
   Clock,
   Handshake,
+  Link2,
+  Link2Off,
   MessageSquare,
   Package,
   Plus,
+  RefreshCw,
   Search,
   SortAsc,
   SortDesc,
@@ -174,7 +177,12 @@ const TYPE_CONFIG = {
 };
 
 interface ObjectCardProps {
-  object: ObjectModel & { subjectObject?: ObjectModel; objectObject?: ObjectModel };
+  object: ObjectModel & { 
+    subjectObject?: ObjectModel; 
+    objectObject?: ObjectModel;
+    referencesToCount?: number;
+    referencesFromCount?: number;
+  };
   searchQuery: string;
   showType?: boolean;
 }
@@ -186,6 +194,11 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
     object.objectObject;
   const objectType = getObjectType(object);
   const typeConfig = TYPE_CONFIG[objectType];
+  
+  // Reference counts (not shown for relationship objects)
+  const referencesToCount = object.referencesToCount ?? 0;
+  const referencesFromCount = object.referencesFromCount ?? 0;
+  const hasReferences = referencesToCount > 0 || referencesFromCount > 0;
 
   const timeRangeInfo = useMemo(() => {
     if (!object.timeRanges || object.timeRanges.length === 0) return null;
@@ -300,6 +313,20 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
               )}
             </div>
           )}
+          
+          {/* Reference counts - not shown for relationships */}
+          {!isRelationship && hasReferences && (
+            <div className="flex items-center gap-3 text-xs text-muted-foreground pl-11">
+              <div className="flex items-center gap-1" title="References TO this object (as target)">
+                <ArrowRight className="w-3 h-3" />
+                <span>{referencesToCount} to</span>
+              </div>
+              <div className="flex items-center gap-1" title="References FROM this object (as source)">
+                <ArrowLeftRight className="w-3 h-3" />
+                <span>{referencesFromCount} from</span>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
     </Link>
@@ -340,7 +367,12 @@ function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonPr
   );
 }
 
-type ObjectWithRelations = ObjectModel & { subjectObject?: ObjectModel; objectObject?: ObjectModel };
+type ObjectWithRelations = ObjectModel & { 
+  subjectObject?: ObjectModel; 
+  objectObject?: ObjectModel;
+  referencesToCount?: number;
+  referencesFromCount?: number;
+};
 
 const ITEMS_PER_TYPE = 25; // Initial items per type
 const LOAD_MORE_COUNT = 50; // Items to load when clicking "load more"
@@ -402,6 +434,8 @@ const ObjectsPage = () => {
     other: 0,
   });
   const [countsLoading, setCountsLoading] = useState(true);
+  const [orphanedCount, setOrphanedCount] = useState<number | null>(null);
+  const [orphanedCountLoading, setOrphanedCountLoading] = useState(false);
 
   const q = searchParams.get("q") || "";
   const sortBy = (searchParams.get("sort") as SortOption) || "updatedAt";
@@ -411,6 +445,8 @@ const ObjectsPage = () => {
     if (!activeTypesParam) return new Set<ObjectType>();
     return new Set(activeTypesParam.split(",").filter(Boolean) as ObjectType[]);
   }, [activeTypesParam]);
+  // Get orphaned filter from URL
+  const showOrphanedOnly = searchParams.get("orphaned") === "true";
 
   const [localQ, setLocalQ] = useState(q);
 
@@ -465,44 +501,161 @@ const ObjectsPage = () => {
 
     const pipeline: unknown[] = [
       { $match: searchMatch },
-      {
-        $lookup: {
-          from: "objects",
-          localField: "relationship.subject",
-          foreignField: "_id",
-          as: "subjectObject",
-        },
-      },
-      {
-        $lookup: {
-          from: "objects",
-          localField: "relationship.object",
-          foreignField: "_id",
-          as: "objectObject",
-        },
-      },
-      {
-        $unwind: {
-          path: "$subjectObject",
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $unwind: {
-          path: "$objectObject",
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      getSortStage(),
-      { $limit: limit },
     ];
+
+    // Only do expensive orphaned checks when the filter is active
+    if (showOrphanedOnly) {
+      // First, exclude relationship objects themselves (they're not "orphaned")
+      pipeline.push({
+        $match: {
+          isRelationship: { $ne: true },
+        },
+      });
+      
+      // Check if this object is referenced as subject in any relationship
+      pipeline.push({
+        $lookup: {
+          from: "objects",
+          let: { objectId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                isRelationship: true,
+                $expr: { $eq: ["$relationship.subject", "$$objectId"] },
+              },
+            },
+            { $limit: 1 }, // Only need to know if any exist, not all of them
+          ],
+          as: "referencedAsSubject",
+        },
+      });
+      // Check if this object is referenced as object in any relationship
+      pipeline.push({
+        $lookup: {
+          from: "objects",
+          let: { objectId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                isRelationship: true,
+                $expr: { $eq: ["$relationship.object", "$$objectId"] },
+              },
+            },
+            { $limit: 1 }, // Only need to know if any exist, not all of them
+          ],
+          as: "referencedAsObject",
+        },
+      });
+      // Filter for orphaned objects (not referenced anywhere)
+      // An object is orphaned if it has no references as subject AND no references as object
+      pipeline.push({
+        $match: {
+          $expr: {
+            $and: [
+              { $eq: [{ $size: { $ifNull: ["$referencedAsSubject", []] } }, 0] },
+              { $eq: [{ $size: { $ifNull: ["$referencedAsObject", []] } }, 0] },
+            ],
+          },
+        },
+      });
+    } else {
+      // Only add relationship lookups when not filtering for orphaned (they're expensive)
+      // These are needed to display relationship information in the UI
+      if (type === "relationship") {
+        pipeline.push({
+          $lookup: {
+            from: "objects",
+            localField: "relationship.subject",
+            foreignField: "_id",
+            as: "subjectObject",
+          },
+        });
+        pipeline.push({
+          $lookup: {
+            from: "objects",
+            localField: "relationship.object",
+            foreignField: "_id",
+            as: "objectObject",
+          },
+        });
+        pipeline.push({
+          $unwind: {
+            path: "$subjectObject",
+            preserveNullAndEmptyArrays: true,
+          },
+        });
+        pipeline.push({
+          $unwind: {
+            path: "$objectObject",
+            preserveNullAndEmptyArrays: true,
+          },
+        });
+      } else {
+        // Add reference counts for non-relationship types
+        // Count references TO this object (where it's the target)
+        pipeline.push({
+          $lookup: {
+            from: "objects",
+            let: { objectId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  isRelationship: true,
+                  $expr: { $eq: ["$relationship.object", "$$objectId"] },
+                },
+              },
+              { $count: "count" },
+            ],
+            as: "referencesToArr",
+          },
+        });
+        // Count references FROM this object (where it's the source)
+        pipeline.push({
+          $lookup: {
+            from: "objects",
+            let: { objectId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  isRelationship: true,
+                  $expr: { $eq: ["$relationship.subject", "$$objectId"] },
+                },
+              },
+              { $count: "count" },
+            ],
+            as: "referencesFromArr",
+          },
+        });
+        // Extract counts from arrays
+        pipeline.push({
+          $addFields: {
+            referencesToCount: {
+              $ifNull: [{ $arrayElemAt: ["$referencesToArr.count", 0] }, 0],
+            },
+            referencesFromCount: {
+              $ifNull: [{ $arrayElemAt: ["$referencesFromArr.count", 0] }, 0],
+            },
+          },
+        });
+        // Clean up temporary arrays
+        pipeline.push({
+          $project: {
+            referencesToArr: 0,
+            referencesFromArr: 0,
+          },
+        });
+      }
+    }
+
+    pipeline.push(getSortStage());
+    pipeline.push({ $limit: limit });
 
     return await callResource("mongo", {
       action: "aggregate",
       collection: "objects",
       pipeline,
     });
-  }, [q, getSortStage, getTypeMatch]);
+  }, [q, getSortStage, getTypeMatch, showOrphanedOnly]);
 
   // Fetch total counts per type
   useEffect(() => {
@@ -595,6 +748,93 @@ const ObjectsPage = () => {
     fetchCounts();
   }, [q]);
 
+  // Fetch orphaned objects count
+  const fetchOrphanedCount = useCallback(async () => {
+    setOrphanedCountLoading(true);
+    try {
+      const searchMatch: Record<string, unknown> = {
+        isRelationship: { $ne: true },
+      };
+      
+      if (q.trim()) {
+        searchMatch.$text = { $search: q.trim() };
+      }
+
+      const pipeline = [
+        { $match: searchMatch },
+        // Check if this object is referenced as subject in any relationship
+        {
+          $lookup: {
+            from: "objects",
+            let: { objectId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  isRelationship: true,
+                  $expr: { $eq: ["$relationship.subject", "$$objectId"] },
+                },
+              },
+              { $limit: 1 },
+            ],
+            as: "referencedAsSubject",
+          },
+        },
+        // Check if this object is referenced as object in any relationship
+        {
+          $lookup: {
+            from: "objects",
+            let: { objectId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  isRelationship: true,
+                  $expr: { $eq: ["$relationship.object", "$$objectId"] },
+                },
+              },
+              { $limit: 1 },
+            ],
+            as: "referencedAsObject",
+          },
+        },
+        // Filter for orphaned objects (not referenced anywhere)
+        {
+          $match: {
+            $expr: {
+              $and: [
+                { $eq: [{ $size: { $ifNull: ["$referencedAsSubject", []] } }, 0] },
+                { $eq: [{ $size: { $ifNull: ["$referencedAsObject", []] } }, 0] },
+              ],
+            },
+          },
+        },
+        { $count: "total" },
+      ];
+
+      const result = await callResource("mongo", {
+        action: "aggregate",
+        collection: "objects",
+        pipeline,
+      });
+
+      // $count returns [] if no matches, or [{ total: number }] if matches found
+      if (result && Array.isArray(result) && result.length > 0 && typeof result[0] === 'object' && 'total' in result[0]) {
+        setOrphanedCount(result[0].total as number);
+      } else {
+        // If no results (empty array), count is 0
+        setOrphanedCount(0);
+      }
+    } catch (err) {
+      console.error("Failed to fetch orphaned count:", err);
+      setOrphanedCount(0); // Set to 0 on error
+    } finally {
+      setOrphanedCountLoading(false);
+    }
+  }, [q]);
+
+  useEffect(() => {
+    fetchOrphanedCount();
+  }, [fetchOrphanedCount]);
+
   // Fetch all types in parallel
   useEffect(() => {
     const fetchAllTypes = async () => {
@@ -645,7 +885,7 @@ const ObjectsPage = () => {
     };
 
     fetchAllTypes();
-  }, [q, sortBy, activeTypesParam, fetchTypeObjects]);
+  }, [q, sortBy, activeTypesParam, showOrphanedOnly, fetchTypeObjects]);
 
   // Load more for a specific type
   const loadMore = useCallback(async (type: ObjectType, loadAll = false) => {
@@ -679,6 +919,7 @@ const ObjectsPage = () => {
     newQ: string,
     newTypes: Set<ObjectType>,
     newSort: SortOption,
+    orphaned?: boolean,
   ) {
     const newSearchParams = new URLSearchParams();
 
@@ -694,6 +935,16 @@ const ObjectsPage = () => {
       newSearchParams.set("sort", newSort);
     }
 
+    if (orphaned !== undefined) {
+      if (orphaned) {
+        newSearchParams.set("orphaned", "true");
+      } else {
+        newSearchParams.delete("orphaned");
+      }
+    } else if (showOrphanedOnly) {
+      newSearchParams.set("orphaned", "true");
+    }
+
     setSearchParams(newSearchParams);
   }
 
@@ -704,7 +955,11 @@ const ObjectsPage = () => {
     } else {
       newTypes.add(type);
     }
-    updateFilters(q, newTypes, sortBy);
+    updateFilters(q, newTypes, sortBy, showOrphanedOnly);
+  }
+
+  function toggleOrphaned() {
+    updateFilters(q, activeTypes, sortBy, !showOrphanedOnly);
   }
 
   function toggleCollapsed(type: ObjectType) {
@@ -735,7 +990,7 @@ const ObjectsPage = () => {
     );
   }, [activeTypes, totalCounts]);
 
-  const hasActiveFilters = q.trim() || activeTypes.size > 0;
+  const hasActiveFilters = q.trim() || activeTypes.size > 0 || showOrphanedOnly;
 
   if (error) {
     return (
@@ -765,7 +1020,7 @@ const ObjectsPage = () => {
         className="flex gap-2"
         onSubmit={(e) => {
           e.preventDefault();
-          updateFilters(localQ, activeTypes, sortBy);
+          updateFilters(localQ, activeTypes, sortBy, showOrphanedOnly);
         }}
       >
         <div className="relative flex-1">
@@ -797,12 +1052,53 @@ const ObjectsPage = () => {
           ))}
         </div>
 
+        {/* Orphaned filter */}
+        <Button
+          variant={showOrphanedOnly ? "secondary" : "outline"}
+          size="sm"
+          onClick={toggleOrphaned}
+          className="flex items-center gap-2"
+        >
+          {showOrphanedOnly ? (
+            <>
+              <Link2Off className="w-4 h-4" />
+              Orphaned Only
+            </>
+          ) : (
+            <>
+              <Link2 className="w-4 h-4" />
+              Show Orphaned
+            </>
+          )}
+          {orphanedCountLoading ? (
+            <Badge variant="secondary" className="text-xs ml-1">
+              ...
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="text-xs ml-1">
+              {orphanedCount ?? 0}
+            </Badge>
+          )}
+        </Button>
+        
+        {/* Refresh counts button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => fetchOrphanedCount()}
+          disabled={orphanedCountLoading}
+          className="flex items-center gap-1"
+          title="Refresh orphaned count"
+        >
+          <RefreshCw className={`w-4 h-4 ${orphanedCountLoading ? 'animate-spin' : ''}`} />
+        </Button>
+
         <div className="flex items-center gap-2 ml-auto">
           <Label className="text-sm text-muted-foreground">Sort:</Label>
           <Select
             value={sortBy}
             onValueChange={(value: SortOption) =>
-              updateFilters(q, activeTypes, value)
+              updateFilters(q, activeTypes, value, showOrphanedOnly)
             }
           >
             <SelectTrigger className="w-40">
