@@ -13,29 +13,59 @@ const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 const workers: Worker[] = [];
 
+type FailedType = "offline" | "internal" | undefined;
+
 /**
- * Detect if an error is network-related (offline mode)
+ * Classify error type to distinguish between:
+ * - "offline": External/internet errors (DNS, external API unreachable)
+ * - "internal": Internal service errors (backend/mongo connection refused)
+ * - undefined: Other errors
  */
-function isNetworkError(reason: string | undefined): boolean {
-  if (!reason) return false;
-  const networkErrorPatterns = [
-    "dns error",
-    "client error (Connect)",
-    "Name or service not known",
-    "network error",
-    "ENOTFOUND",
-    "ECONNREFUSED",
-    "ETIMEDOUT",
-    "ENETUNREACH",
-    "EHOSTUNREACH",
-    "getaddrinfo",
-    "unable to connect",
-    "connection refused",
+function classifyError(reason: string | undefined): FailedType {
+  if (!reason) return undefined;
+  const lower = reason.toLowerCase();
+
+  // Internal service patterns (Docker internal network)
+  const internalPatterns = [
+    "backend:5173",
+    "localhost:",
+    "mongo:",
+    "redis:",
+    "127.0.0.1",
+    "python-worker:",
   ];
-  const lowerReason = reason.toLowerCase();
-  return networkErrorPatterns.some(pattern => 
-    lowerReason.includes(pattern.toLowerCase())
-  );
+  const isInternal = internalPatterns.some(p => lower.includes(p));
+
+  // Connection error patterns
+  const connectionPatterns = [
+    "connection refused",
+    "econnrefused",
+  ];
+  const isConnectionError = connectionPatterns.some(p => lower.includes(p));
+
+  // If connection refused to internal service, it's an internal error
+  if (isConnectionError && isInternal) {
+    return "internal";
+  }
+
+  // External/offline error patterns
+  const offlinePatterns = [
+    "dns error",
+    "name or service not known",
+    "enetunreach",
+    "ehostunreach",
+    "getaddrinfo",
+  ];
+  if (offlinePatterns.some(p => lower.includes(p))) {
+    return "offline";
+  }
+
+  // Connection refused to external service = offline
+  if (isConnectionError && !isInternal) {
+    return "offline";
+  }
+
+  return undefined;
 }
 
 export async function startWorkers() {
@@ -110,10 +140,10 @@ export async function startWorkers() {
       const mongo = await getMongoResource(auth);
       const finishedAt = new Date();
       
-      // Detect if this is a network/offline error
-      const failedType = isNetworkError(failedReason) ? "offline" : undefined;
-      if (failedType === "offline") {
-        console.log(`[${jobType}] Job ${jobId} failed due to network error (offline)`);
+      // Classify error type (offline, internal, or undefined)
+      const failedType = classifyError(failedReason);
+      if (failedType) {
+        console.log(`[${jobType}] Job ${jobId} failed with type: ${failedType}`);
       }
       
       await mongo({

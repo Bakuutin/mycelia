@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, WifiOff } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, WifiOff, Server } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -925,6 +925,11 @@ export default function JobsPage() {
                         {job.failedType === "offline" && (
                           <span title="Network/Offline Error">
                             <WifiOff className="h-3.5 w-3.5 text-yellow-500" />
+                          </span>
+                        )}
+                        {job.failedType === "internal" && (
+                          <span title="Internal Service Error">
+                            <Server className="h-3.5 w-3.5 text-orange-500" />
                           </span>
                         )}
                       </Link>

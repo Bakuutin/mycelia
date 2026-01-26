@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban, RefreshCw, WifiOff } from "lucide-react";
+import { ArrowLeft, Ban, RefreshCw, WifiOff, Server } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
 
@@ -359,6 +359,12 @@ export default function JobDetailPage() {
                                     <div className="flex items-center gap-2 mb-2 text-yellow-600">
                                         <WifiOff className="h-4 w-4" />
                                         <span className="text-sm font-medium">Network/Offline Error</span>
+                                    </div>
+                                )}
+                                {job.failedType === "internal" && (
+                                    <div className="flex items-center gap-2 mb-2 text-orange-600">
+                                        <Server className="h-4 w-4" />
+                                        <span className="text-sm font-medium">Internal Service Error</span>
                                     </div>
                                 )}
                                 <div className="text-sm text-red-500">{job.failedReason}</div>
