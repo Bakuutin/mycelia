@@ -481,6 +481,7 @@ export class JobsResource
 
   private async stats(auth: Auth) {
     const mongo = await getMongoResource(auth);
+    // TODO: worker specific logic should belong to the worker file
 
     // Aggregate job statistics by type
     const pipeline = [

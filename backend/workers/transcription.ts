@@ -102,9 +102,9 @@ const capability: JobCapability = {
 
         await job.updateProgress({ stage: "transcribing", audioSize: combinedAudio.length });
         // 5. Call transcription API
-        // Language can be configured via TRANSCRIPTION_LANGUAGE env var (default: "en")
+        // Language can be configured via TRANSCRIPTION_LANGUAGE env var (default: "auto")
         // This prevents faster-whisper from failing on language detection with short audio
-        const language = env.TRANSCRIPTION_LANGUAGE || "en";
+        const language = env.TRANSCRIPTION_LANGUAGE;
         log("INFO", `Calling transcription API`, {
           sequenceId: seqId,
           audioBytes: combinedAudio.length,
