@@ -45,6 +45,7 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
     const ffmpegArgs = [
       "-f", "concat",
       "-safe", "0",
+      "-fflags", "+genpts",
       "-i", concatFilePath,
       "-acodec", "pcm_s16le",
       "-ar", "16000",
@@ -62,6 +63,9 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
     });
 
     const { success, stderr } = await teeOutput(process, (stream, line) => {
+      if (stream === "stderr" && line.includes("invalid dropping")) {
+        return;
+      }
       console.log(`[ffmpeg:${stream}] ${line}`);
     });
 

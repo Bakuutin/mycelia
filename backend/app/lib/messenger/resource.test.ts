@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getMessengerResource } from "@/lib/messenger/resource.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 
 async function getMessengerResourceHelper(auth: Auth) {

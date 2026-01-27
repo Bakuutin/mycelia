@@ -1,4 +1,4 @@
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { jobRegistry } from "./job-registry.ts";

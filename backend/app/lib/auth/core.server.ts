@@ -1,6 +1,6 @@
 import { jwtVerify } from "jose";
 import { permissionDenied } from "./utils.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import type { Request, Response } from "express";
 
 import {

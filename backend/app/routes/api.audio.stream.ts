@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { authenticateOr401 } from "../lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { teeOutput } from "@/lib/subprocess.ts";

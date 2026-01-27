@@ -8,7 +8,7 @@ import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import type { Db } from "mongodb";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];

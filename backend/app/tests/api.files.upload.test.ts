@@ -1,6 +1,6 @@
 import { expect, fn } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getFileExtension, uploadToGridFS } from "@/lib/mongo/fs.server.ts";
 

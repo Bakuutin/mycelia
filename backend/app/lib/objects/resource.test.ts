@@ -7,7 +7,7 @@ import {
   ObjectsResource,
   type ObjectsResponse,
 } from "@/lib/objects/resource.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 
 async function getObjectsResource(auth: Auth) {
   return getObjectsResourceFn(auth);

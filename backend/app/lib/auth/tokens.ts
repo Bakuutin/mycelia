@@ -5,7 +5,7 @@ import { APIKey, Auth, getServerAuth } from "./core.server.ts";
 import { Policy } from "./resources.ts";
 import { z } from "zod";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { env } from "#/env.ts";
 
 const OPEN_PREFIX_LENGTH = 16;

@@ -1,4 +1,4 @@
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
 import { teeOutput } from "@/lib/subprocess.ts";
