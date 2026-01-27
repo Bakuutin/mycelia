@@ -91,6 +91,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   };
 
   async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string; model?: string } | null> {
+    // TODO: move env vars logic to getServerConfig,
+    // also to allow setting any config value as flattened nested env vars
+    // (e.g. MYCELIA__INFERENCE__API_KEY, MYCELIA__INFERENCE__MODEL)
+
     // Stateless config: read from env vars first (ushadow pattern)
     const envBaseUrl = Deno.env.get("OPENAI_BASE_URL");
     const envApiKey = Deno.env.get("OPENAI_API_KEY");

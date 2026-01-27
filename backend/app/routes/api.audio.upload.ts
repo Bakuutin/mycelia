@@ -62,6 +62,7 @@ export const apiAudioUploadHandler = asyncHandler(
         const { audioData, actualDurationMs } = await processAudioFile(audioFile);
 
         // Store as a single audio chunk
+        // TODO: split into multiple chunks, respect max chunk size (CRITICAL)
         await createAudioChunk(
           audioData,
           new Date(),

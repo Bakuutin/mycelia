@@ -28,12 +28,13 @@ export const zDateOrString = () =>
     { type: "string", format: "date-time", description: "ISO 8601 date string or Date object" }
   );
 
-function parseDateOrRelativeTime(expr: string | Date): Date {
+export const parseDateOrRelativeTime = (expr: string | Date): Date | undefined => {
   if (expr instanceof Date) {
     return expr;
   }
 
   try {
+    // @ts-ignore
     const relativeMs = ms(expr);
     if (relativeMs) {
       return new Date(Date.now() - relativeMs);

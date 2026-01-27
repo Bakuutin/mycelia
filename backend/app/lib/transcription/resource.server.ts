@@ -2,13 +2,8 @@ import { z } from "zod";
 import { Buffer } from "node:buffer";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
-import { meter, tracer } from "@/lib/telemetry.ts";
-import { zServerConfig } from "@myceliasdk/config.ts";
-import { ObjectId, Binary } from "bson";
-import { Binary as MongoBinary } from "mongodb";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { tracer } from "@/lib/telemetry.ts";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 
 const transcriptionRequestSchema = z.object({
   action: z.literal("transcribe"),
@@ -34,7 +29,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
   };
 
   async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string; model?: string } | null> {
-    // Stateless config: read from env vars first (ushadow pattern)
+    // Stateless config: read from env vars first
     const envBaseUrl = Deno.env.get("TRANSCRIPTION_BASE_URL");
     const envApiKey = Deno.env.get("TRANSCRIPTION_API_KEY");
     const envModel = Deno.env.get("TRANSCRIPTION_MODEL");
@@ -48,12 +43,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     }
 
     // Fallback to MongoDB config for backward compatibility
-    const rootDb = await getRootDB();
-    const configDoc = await rootDb.collection("configs").findOne({ _id: SERVER_CONFIG_ID });
-    if (!configDoc) {
-      return null;
-    }
-    const config = zServerConfig.parse(configDoc);
+    const config = await getServerConfig();
     const provider = config.transcription || config.inference;
     if (!provider?.baseUrl || !provider?.apiKey) {
       return null;

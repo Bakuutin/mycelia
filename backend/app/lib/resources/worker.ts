@@ -7,8 +7,7 @@ import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { getConfigResource } from "@/lib/config/resource.server.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -89,6 +88,21 @@ const GetWorkerStatusSchema = z.object({
   action: z.literal("get_worker_status"),
 });
 
+const ListWorkersSchema = z.object({
+  action: z.literal("list_workers"),
+});
+
+const GetWorkerDefaultsSchema = z.object({
+  action: z.literal("get_worker_defaults"),
+  workerType: z.string(),
+});
+
+const UpdateWorkerDefaultsSchema = z.object({
+  action: z.literal("update_worker_defaults"),
+  workerType: z.string(),
+  defaults: z.record(z.string(), z.any()),
+});
+
 const StatsSchema = z.object({
   action: z.literal("stats"),
 });
@@ -107,6 +121,9 @@ const RequestSchema = z.union([
   PauseAllSchema,
   ResumeAllSchema,
   GetWorkerStatusSchema,
+  ListWorkersSchema,
+  GetWorkerDefaultsSchema,
+  UpdateWorkerDefaultsSchema,
   StatsSchema,
 ]);
 
@@ -150,6 +167,12 @@ export class JobsResource
         return this.resumeAll(auth);
       case "get_worker_status":
         return this.getWorkerStatus(auth);
+      case "list_workers":
+        return this.listWorkers(auth);
+      case "get_worker_defaults":
+        return this.getWorkerDefaults(input, auth);
+      case "update_worker_defaults":
+        return this.updateWorkerDefaults(input, auth);
       case "stats":
         return this.stats(auth);
       default:
@@ -481,6 +504,7 @@ export class JobsResource
 
   private async stats(auth: Auth) {
     const mongo = await getMongoResource(auth);
+    // TODO: worker specific logic should belong to the worker file
 
     // Aggregate job statistics by type
     const pipeline = [
@@ -640,19 +664,48 @@ export class JobsResource
     config: { paused: boolean },
     auth: Auth
   ) {
-    const mongo = await getMongoResource(auth);
+    const configResource = await getConfigResource(auth);
     
-    await mongo({
-      action: "updateOne",
-      collection: "configs",
-      query: { _id: SERVER_CONFIG_ID },
-      update: {
-        $set: {
-          [`workers.${workerType}`]: config,
-          updatedAt: new Date(),
-        },
-      },
+    await configResource({
+      action: "patch",
+      path: `workers.${workerType}`,
+      updates: config,
     });
+  }
+
+  private async listWorkers(_auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    const workers = await workerDiscovery.getAllWorkers();
+    
+    return { workers };
+  }
+
+  private async getWorkerDefaults(input: z.infer<typeof GetWorkerDefaultsSchema>, _auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    const defaults = await workerDiscovery.getDefaultOverrides(input.workerType);
+    
+    return { 
+      workerType: input.workerType,
+      defaults: defaults || {} 
+    };
+  }
+
+  private async updateWorkerDefaults(input: z.infer<typeof UpdateWorkerDefaultsSchema>, _auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    
+    // Verify worker type exists
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+    
+    await workerDiscovery.updateDefaultOverrides(input.workerType, input.defaults);
+    
+    return { 
+      success: true,
+      workerType: input.workerType,
+      defaults: input.defaults
+    };
   }
 
   extractActions(input: WorkerProgressRequest): {
@@ -684,6 +737,12 @@ export class JobsResource
         return [{ path: ["jobs", "all"], actions: ["resume"] }];
       case "get_worker_status":
         return [{ path: ["jobs"], actions: ["read"] }];
+      case "list_workers":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "get_worker_defaults":
+        return [{ path: ["jobs", input.workerType], actions: ["read"] }];
+      case "update_worker_defaults":
+        return [{ path: ["jobs", input.workerType], actions: ["configure"] }];
       case "stats":
         return [{ path: ["jobs"], actions: ["read"] }];
     }
