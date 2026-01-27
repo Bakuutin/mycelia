@@ -19,6 +19,7 @@ export interface Notification {
 interface NotificationState {
   notifications: Notification[];
   showPopups: boolean;
+  hideEmptyJobs: boolean;
   maxNotifications: number;
 }
 
@@ -29,6 +30,7 @@ interface NotificationActions {
   removeNotification: (id: string) => void;
   clearAll: () => void;
   setShowPopups: (show: boolean) => void;
+  setHideEmptyJobs: (hide: boolean) => void;
 }
 
 type NotificationStore = NotificationState & NotificationActions;
@@ -36,6 +38,7 @@ type NotificationStore = NotificationState & NotificationActions;
 const initialState: NotificationState = {
   notifications: [],
   showPopups: true,
+  hideEmptyJobs: true,
   maxNotifications: 100,
 };
 
@@ -85,12 +88,17 @@ export const useNotificationStore = create<NotificationStore>()(
       setShowPopups: (show) => {
         set({ showPopups: show });
       },
+
+      setHideEmptyJobs: (hide) => {
+        set({ hideEmptyJobs: hide });
+      },
     }),
     {
       name: "mycelia-notifications",
       partialize: (state) => ({
         notifications: state.notifications.slice(0, 50), // Persist only last 50
         showPopups: state.showPopups,
+        hideEmptyJobs: state.hideEmptyJobs,
       }),
     }
   )

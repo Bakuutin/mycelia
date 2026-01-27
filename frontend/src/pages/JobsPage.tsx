@@ -30,6 +30,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
+import { isEmptyJobResult } from "@/lib/jobUtils";
 
 type WorkerStatus = {
   workers: Record<string, { paused: boolean }>;
@@ -67,47 +68,6 @@ const STATUS_PRIORITY: Record<string, number> = {
   delayed: 3,
   completed: 4,
 };
-
-/**
- * Determines if a completed job produced no meaningful output.
- * Different job types have different "empty" indicators.
- */
-function isEmptyJobResult(job: JobInfo): boolean {
-  if (job.state !== "completed") return false;
-
-  const progress = job.progress || {};
-  const result = job.result || {};
-
-  switch (job.type) {
-    case "vad":
-      return (
-        (progress.hasSpeech === 0 || result.hasSpeech === 0) &&
-        (progress.processed === 0 || result.processed === 0)
-      );
-    case "conversation_chunk_creator":
-      return (
-        (result.finalized ?? 0) === 0 &&
-        (result.streamed ?? 0) === 0 &&
-        (result.chunksCreated ?? 0) === 0
-      );
-    case "conversation_extractor":
-      return (
-        (result.conversationsCreated ?? 0) === 0 &&
-        (result.chunksProcessed ?? 0) === 0
-      );
-    case "transcription_sequence_creator":
-      return (result.processed ?? 0) === 0;
-    case "transcription":
-      return (
-        (result.processed ?? 0) === 0 ||
-        (progress.processed === 0 && progress.total === 0)
-      );
-    default:
-      const processed = progress.processed ?? result.processed ?? -1;
-      const total = progress.total ?? result.total ?? -1;
-      return processed === 0 && total === 0;
-  }
-}
 
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
@@ -343,7 +303,7 @@ export default function JobsPage() {
       result = result.filter(job => {
         // Only filter completed jobs - keep active/waiting/failed visible
         if (job.state !== "completed") return true;
-        return !isEmptyJobResult(job);
+        return !isEmptyJobResult(job.type, job.state, job.progress, job.result);
       });
     }
 
