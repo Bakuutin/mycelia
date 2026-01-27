@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams, useLocation } from "react-router-dom";
 import { callResource } from "@/lib/api";
 import type { Object as ObjectModel } from "@/types/objects";
 import { Button } from "@/components/ui/button";
@@ -658,95 +658,95 @@ const ObjectsPage = () => {
   }, [q, getSortStage, getTypeMatch, showOrphanedOnly]);
 
   // Fetch total counts per type
-  useEffect(() => {
-    const fetchCounts = async () => {
-      setCountsLoading(true);
-      try {
-        const searchMatch: Record<string, unknown> = {};
-        if (q.trim()) {
-          searchMatch.$text = { $search: q.trim() };
-        }
-
-        const pipeline = [
-          { $match: searchMatch },
-          {
-            $group: {
-              _id: null,
-              person: { $sum: { $cond: [{ $eq: ["$isPerson", true] }, 1, 0] } },
-              event: { $sum: { $cond: [{ $eq: ["$isEvent", true] }, 1, 0] } },
-              promise: { $sum: { $cond: [{ $eq: ["$isPromise", true] }, 1, 0] } },
-              relationship: {
-                $sum: {
-                  $cond: [
-                    {
-                      $and: [
-                        { $eq: ["$isRelationship", true] },
-                        { $ne: ["$isPromise", true] },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-              },
-              conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
-              other: {
-                $sum: {
-                  $cond: [
-                    {
-                      $and: [
-                        { $ne: ["$isPerson", true] },
-                        { $ne: ["$isEvent", true] },
-                        { $ne: ["$isRelationship", true] },
-                        { $ne: ["$isPromise", true] },
-                        { $ne: ["$isConversation", true] },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
-              },
-              total: { $sum: 1 },
-            },
-          },
-        ];
-
-        const result = await callResource("mongo", {
-          action: "aggregate",
-          collection: "objects",
-          pipeline,
-        });
-
-        if (result && result.length > 0) {
-          const counts = result[0];
-          setTotalCounts({
-            person: counts.person || 0,
-            event: counts.event || 0,
-            relationship: counts.relationship || 0,
-            promise: counts.promise || 0,
-            conversation: counts.conversation || 0,
-            other: counts.other || 0,
-          });
-        } else {
-          setTotalCounts({
-            person: 0,
-            event: 0,
-            relationship: 0,
-            promise: 0,
-            conversation: 0,
-            other: 0,
-          });
-        }
-      } catch (err) {
-        console.error("Failed to fetch counts:", err);
-      } finally {
-        setCountsLoading(false);
+  const fetchCounts = useCallback(async () => {
+    setCountsLoading(true);
+    try {
+      const searchMatch: Record<string, unknown> = {};
+      if (q.trim()) {
+        searchMatch.$text = { $search: q.trim() };
       }
-    };
 
-    fetchCounts();
+      const pipeline = [
+        { $match: searchMatch },
+        {
+          $group: {
+            _id: null,
+            person: { $sum: { $cond: [{ $eq: ["$isPerson", true] }, 1, 0] } },
+            event: { $sum: { $cond: [{ $eq: ["$isEvent", true] }, 1, 0] } },
+            promise: { $sum: { $cond: [{ $eq: ["$isPromise", true] }, 1, 0] } },
+            relationship: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$isRelationship", true] },
+                      { $ne: ["$isPromise", true] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+            conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
+            other: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ["$isPerson", true] },
+                      { $ne: ["$isEvent", true] },
+                      { $ne: ["$isRelationship", true] },
+                      { $ne: ["$isPromise", true] },
+                      { $ne: ["$isConversation", true] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+            total: { $sum: 1 },
+          },
+        },
+      ];
+
+      const result = await callResource("mongo", {
+        action: "aggregate",
+        collection: "objects",
+        pipeline,
+      });
+
+      if (result && result.length > 0) {
+        const counts = result[0];
+        setTotalCounts({
+          person: counts.person || 0,
+          event: counts.event || 0,
+          relationship: counts.relationship || 0,
+          promise: counts.promise || 0,
+          conversation: counts.conversation || 0,
+          other: counts.other || 0,
+        });
+      } else {
+        setTotalCounts({
+          person: 0,
+          event: 0,
+          relationship: 0,
+          promise: 0,
+          conversation: 0,
+          other: 0,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch counts:", err);
+    } finally {
+      setCountsLoading(false);
+    }
   }, [q]);
+
+  useEffect(() => {
+    fetchCounts();
+  }, [fetchCounts]);
 
   // Fetch orphaned objects count
   const fetchOrphanedCount = useCallback(async () => {
@@ -835,6 +835,9 @@ const ObjectsPage = () => {
     fetchOrphanedCount();
   }, [fetchOrphanedCount]);
 
+  // Track if we should refetch on focus (only after initial load)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
   // Fetch all types in parallel
   useEffect(() => {
     const fetchAllTypes = async () => {
@@ -877,6 +880,7 @@ const ObjectsPage = () => {
         }
         
         setObjectsByType(newObjectsByType);
+        setHasLoadedOnce(true);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to fetch objects");
       } finally {
@@ -886,6 +890,89 @@ const ObjectsPage = () => {
 
     fetchAllTypes();
   }, [q, sortBy, activeTypesParam, showOrphanedOnly, fetchTypeObjects]);
+
+  // Ref to track if a refetch is in progress (to avoid overlapping fetches)
+  const isRefetchingRef = useRef(false);
+
+  // Refetch data when page regains focus (e.g., navigating back from detail page)
+  const refetchCurrentData = useCallback(async () => {
+    // Avoid overlapping refetches, but don't skip if main loading is true
+    if (isRefetchingRef.current) return;
+    isRefetchingRef.current = true;
+    
+    try {
+      const typesToFetch = activeTypes.size > 0 
+        ? Array.from(activeTypes) 
+        : (Object.keys(TYPE_CONFIG) as ObjectType[]);
+      
+      const results = await Promise.all(
+        typesToFetch.map(async (type) => ({
+          type,
+          objects: await fetchTypeObjects(type, limits[type] || ITEMS_PER_TYPE),
+        }))
+      );
+      
+      const newObjectsByType: Record<ObjectType, ObjectWithRelations[]> = {
+        person: [],
+        event: [],
+        relationship: [],
+        promise: [],
+        conversation: [],
+        other: [],
+      };
+      
+      for (const { type, objects } of results) {
+        newObjectsByType[type] = objects;
+      }
+      
+      setObjectsByType(newObjectsByType);
+    } catch (err) {
+      console.error("Failed to refetch objects:", err);
+    } finally {
+      isRefetchingRef.current = false;
+    }
+  }, [activeTypes, limits, fetchTypeObjects]);
+
+  // Track navigation to refetch when coming back to this page
+  const location = useLocation();
+  const lastLocationKeyRef = useRef<string | null>(null);
+  
+  // Refetch when navigating back to this page (location.key changes)
+  useEffect(() => {
+    // Skip if we haven't loaded once yet
+    if (!hasLoadedOnce) {
+      lastLocationKeyRef.current = location.key;
+      return;
+    }
+    
+    // If the location key changed, we navigated (could be back from detail page)
+    if (lastLocationKeyRef.current !== null && lastLocationKeyRef.current !== location.key) {
+      refetchCurrentData();
+      fetchCounts();
+      fetchOrphanedCount();
+    }
+    
+    lastLocationKeyRef.current = location.key;
+  }, [location.key, hasLoadedOnce, refetchCurrentData, fetchCounts, fetchOrphanedCount]);
+
+  // Also refetch when browser tab regains visibility
+  useEffect(() => {
+    if (!hasLoadedOnce) return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refetchCurrentData();
+        fetchCounts();
+        fetchOrphanedCount();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [hasLoadedOnce, refetchCurrentData, fetchCounts, fetchOrphanedCount]);
 
   // Load more for a specific type
   const loadMore = useCallback(async (type: ObjectType, loadAll = false) => {
