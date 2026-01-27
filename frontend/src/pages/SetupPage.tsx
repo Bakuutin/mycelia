@@ -99,7 +99,7 @@ export default function SetupPage() {
     setApiEndpoint(localEndpoint);
 
     try {
-      const response = await fetch(`${localEndpoint}/setup`, {
+      const response = await fetch(`${localEndpoint}/api/setup`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

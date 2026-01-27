@@ -103,6 +103,10 @@ const UpdateWorkerDefaultsSchema = z.object({
   defaults: z.record(z.string(), z.any()),
 });
 
+const StatsSchema = z.object({
+  action: z.literal("stats"),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
@@ -120,6 +124,7 @@ const RequestSchema = z.union([
   ListWorkersSchema,
   GetWorkerDefaultsSchema,
   UpdateWorkerDefaultsSchema,
+  StatsSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -168,6 +173,8 @@ export class JobsResource
         return this.getWorkerDefaults(input, auth);
       case "update_worker_defaults":
         return this.updateWorkerDefaults(input, auth);
+      case "stats":
+        return this.stats(auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -495,6 +502,163 @@ export class JobsResource
     return { workers: status };
   }
 
+  private async stats(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    // TODO: worker specific logic should belong to the worker file
+
+    // Aggregate job statistics by type
+    const pipeline = [
+      {
+        $group: {
+          _id: "$type",
+          totalRuns: { $sum: 1 },
+          completed: {
+            $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] }
+          },
+          failed: {
+            $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] }
+          },
+          // Calculate empty jobs based on result fields
+          emptyRuns: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$state", "completed"] },
+                    {
+                      $or: [
+                        // VAD: hasSpeech=0 and processed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "vad"] },
+                            { $eq: [{ $ifNull: ["$result.hasSpeech", { $ifNull: ["$progress.hasSpeech", -1] }] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] }
+                          ]
+                        },
+                        // conversation_chunk_creator: finalized=0 and streamed=0 and chunksCreated=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "conversation_chunk_creator"] },
+                            { $eq: [{ $ifNull: ["$result.finalized", 0] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.streamed", 0] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.chunksCreated", 0] }, 0] }
+                          ]
+                        },
+                        // conversation_extractor: conversationsCreated=0 and chunksProcessed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "conversation_extractor"] },
+                            { $eq: [{ $ifNull: ["$result.conversationsCreated", 0] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.chunksProcessed", 0] }, 0] }
+                          ]
+                        },
+                        // transcription_sequence_creator: processed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "transcription_sequence_creator"] },
+                            { $eq: [{ $ifNull: ["$result.processed", 0] }, 0] }
+                          ]
+                        },
+                        // transcription: processed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "transcription"] },
+                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] }
+                          ]
+                        },
+                        // Generic: processed=0 and total=0 for other types
+                        {
+                          $and: [
+                            { $not: { $in: ["$type", ["vad", "conversation_chunk_creator", "conversation_extractor", "transcription_sequence_creator", "transcription", "summarization"]] } },
+                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.total", { $ifNull: ["$progress.total", -1] }] }, 0] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          // Get timestamps for frequency calculation (last 20)
+          recentTimestamps: {
+            $push: {
+              $cond: [
+                { $eq: ["$state", "completed"] },
+                { $toLong: "$createdAt" },
+                null
+              ]
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          type: "$_id",
+          totalRuns: 1,
+          completed: 1,
+          failed: 1,
+          emptyRuns: 1,
+          successRate: {
+            $cond: [
+              { $eq: ["$totalRuns", 0] },
+              0,
+              { $multiply: [{ $divide: ["$completed", "$totalRuns"] }, 100] }
+            ]
+          },
+          // Filter out nulls and get last 20 timestamps
+          recentTimestamps: {
+            $slice: [
+              { $filter: { input: "$recentTimestamps", as: "ts", cond: { $ne: ["$$ts", null] } } },
+              -20
+            ]
+          }
+        }
+      }
+    ];
+
+    const stats = await mongo({
+      action: "aggregate",
+      collection: "jobs",
+      pipeline,
+    });
+
+    // Calculate frequency from timestamps
+    const result = stats.map((stat: any) => {
+      const timestamps = stat.recentTimestamps || [];
+      let avgFrequency = "-";
+
+      if (timestamps.length >= 2) {
+        const sorted = [...timestamps].sort((a: number, b: number) => b - a);
+        let totalGap = 0;
+        for (let i = 0; i < sorted.length - 1; i++) {
+          totalGap += sorted[i] - sorted[i + 1];
+        }
+        const avgMs = totalGap / (sorted.length - 1);
+
+        if (avgMs < 60000) avgFrequency = `~${Math.round(avgMs / 1000)}s`;
+        else if (avgMs < 3600000) avgFrequency = `~${Math.round(avgMs / 60000)}m`;
+        else avgFrequency = `~${(avgMs / 3600000).toFixed(1)}h`;
+      }
+
+      return {
+        type: stat.type,
+        totalRuns: stat.totalRuns,
+        completed: stat.completed,
+        failed: stat.failed,
+        emptyRuns: stat.emptyRuns,
+        successRate: stat.successRate,
+        avgFrequency,
+      };
+    });
+
+    return { stats: result };
+  }
+
   private async persistWorkerConfig(
     workerType: string,
     config: { paused: boolean },
@@ -579,6 +743,8 @@ export class JobsResource
         return [{ path: ["jobs", input.workerType], actions: ["read"] }];
       case "update_worker_defaults":
         return [{ path: ["jobs", input.workerType], actions: ["configure"] }];
+      case "stats":
+        return [{ path: ["jobs"], actions: ["read"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }

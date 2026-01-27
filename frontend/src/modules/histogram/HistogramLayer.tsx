@@ -54,7 +54,6 @@ export const HistogramBars = ({
   height = 60,
 }: HistogramBarsProps) => {
   const newScale = transform.rescaleX(scale);
-  console.log("57 HistogramBars", items.length);
 
   const maxCount = items.length > 0
     ? Math.max(

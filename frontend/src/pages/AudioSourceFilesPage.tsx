@@ -1,24 +1,28 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useWebSocketSubscription } from "@/hooks/useWebSocket";
 import { api } from "@/lib/api";
+import { ObjectId } from "bson";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { 
-  ChevronRight, 
-  ChevronDown, 
-  Folder, 
-  FileAudio, 
-  AlertCircle, 
+import {
+  ChevronRight,
+  ChevronDown,
+  Folder,
+  FileAudio,
+  AlertCircle,
   CheckCircle2,
   RefreshCw,
   Download,
   Search,
-  Clock
+  Clock,
+  Upload,
+  RotateCcw,
+  X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +30,7 @@ interface SourceFile {
   _id: any;
   path: string;
   ingested: boolean;
+  start?: any;
   ingestion?: {
     error?: any;
     last_attempt?: any;
@@ -41,6 +46,19 @@ interface TreeNode {
   errorCount: number;
   type: 'folder' | 'file';
   id?: string;
+  start?: any;
+  hasError?: boolean;
+}
+
+function formatDate(date: any): string {
+  if (!date) return "";
+  try {
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return "";
+  }
 }
 
 function buildTree(files: SourceFile[]): TreeNode {
@@ -59,7 +77,7 @@ function buildTree(files: SourceFile[]): TreeNode {
     // Split by / or \ for cross-platform compatibility
     const parts = path.split(/[/\\]/).filter(Boolean);
     let current = root;
-    
+
     current.totalCount++;
     if (file.ingested) current.ingestedCount++;
     if (file.ingestion?.error) current.errorCount++;
@@ -79,15 +97,17 @@ function buildTree(files: SourceFile[]): TreeNode {
           ingestedCount: 0,
           errorCount: 0,
           type: isFile ? 'file' : 'folder',
-          id: isFile ? file._id?.toString() : undefined
+          id: isFile ? file._id?.toString() : undefined,
+          start: isFile ? file.start : undefined,
+          hasError: isFile ? !!file.ingestion?.error : undefined
         };
       }
-      
+
       const node = current.children[part];
       node.totalCount++;
       if (file.ingested) node.ingestedCount++;
       if (file.ingestion?.error) node.errorCount++;
-      
+
       current = node;
     }
   }
@@ -97,7 +117,7 @@ function buildTree(files: SourceFile[]): TreeNode {
 
 function collapseTree(node: TreeNode): TreeNode {
   const childrenKeys = Object.keys(node.children);
-  
+
   // Recursively collapse children first
   for (const key of childrenKeys) {
     node.children[key] = collapseTree(node.children[key]);
@@ -107,16 +127,15 @@ function collapseTree(node: TreeNode): TreeNode {
   if (childrenKeys.length === 1) {
     const singleChildKey = childrenKeys[0];
     const child = node.children[singleChildKey];
-    
+
     if (child.type === 'folder') {
       return {
         ...child,
         name: `${node.name}/${child.name}`,
-        // Keep the node's original counts if they differ (though they shouldn't for single-child folders)
         totalCount: node.totalCount,
         ingestedCount: node.ingestedCount,
         errorCount: node.errorCount,
-        id: child.id // Ensure ID is carried over if it's a file (though folders shouldn't have IDs here)
+        id: child.id
       };
     }
   }
@@ -124,10 +143,10 @@ function collapseTree(node: TreeNode): TreeNode {
   return node;
 }
 
-const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
+const TreeItem = ({ node, level = 0, onRetry }: { node: TreeNode; level?: number; onRetry?: (id: string) => void }) => {
   const [isExpanded, setIsExpanded] = useState(level === 0);
   const hasChildren = Object.keys(node.children).length > 0;
-  
+
   const sortedChildren = useMemo(() => {
     return Object.values(node.children).sort((a, b) => {
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
@@ -137,9 +156,10 @@ const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
 
   const allIngested = node.ingestedCount === node.totalCount;
   const someIngested = node.ingestedCount > 0;
+  const dateStr = node.type === 'file' ? formatDate(node.start) : "";
 
   const content = (
-    <div 
+    <div
       className={cn(
         "flex items-center py-1 px-2 hover:bg-accent rounded-sm cursor-pointer text-sm group",
         level === 0 && "font-semibold bg-muted/50"
@@ -152,7 +172,7 @@ const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
           isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />
         ) : null}
       </span>
-      
+
       <span className="mr-2 text-muted-foreground">
         {node.type === 'folder' ? (
           <Folder className={cn("w-4 h-4", isExpanded && "fill-current opacity-20")} />
@@ -160,14 +180,36 @@ const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
           <FileAudio className="w-4 h-4" />
         )}
       </span>
-      
+
       <span className="flex-1 truncate">{node.name}</span>
-      
+
       <div className="flex items-center gap-4 ml-4 opacity-70 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+        {dateStr && (
+          <span className="text-xs text-muted-foreground font-mono">
+            {dateStr}
+          </span>
+        )}
+
+        {node.type === 'file' && node.hasError && node.id && onRetry && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 px-1.5 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRetry(node.id!);
+            }}
+          >
+            <RotateCcw className="w-3 h-3 mr-1" />
+            Retry
+          </Button>
+        )}
+
         <div className="flex items-center gap-1.5 min-w-[60px] justify-end">
           <span className="text-[10px] text-muted-foreground uppercase font-medium">Ingested</span>
           <CheckCircle2 className={cn(
-            "w-3.5 h-3.5", 
+            "w-3.5 h-3.5",
             allIngested ? "text-green-500" : someIngested ? "text-yellow-500" : "text-muted-foreground"
           )} />
           <span className={cn(
@@ -177,11 +219,11 @@ const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
             {node.ingestedCount}/{node.totalCount}
           </span>
         </div>
-        
+
         <div className="flex items-center gap-1.5 min-w-[40px] justify-end">
           <span className="text-[10px] text-muted-foreground uppercase font-medium">Errors</span>
           <AlertCircle className={cn(
-            "w-3.5 h-3.5", 
+            "w-3.5 h-3.5",
             node.errorCount > 0 ? "text-destructive" : "text-muted-foreground opacity-30"
           )} />
           <span className={cn(
@@ -202,11 +244,11 @@ const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
           {content}
         </Link>
       ) : content}
-      
+
       {isExpanded && hasChildren && (
         <div className="mt-0.5">
           {sortedChildren.map(child => (
-            <TreeItem key={child.fullPath} node={child} level={level + 1} />
+            <TreeItem key={child.fullPath} node={child} level={level + 1} onRetry={onRetry} />
           ))}
         </div>
       )}
@@ -214,9 +256,20 @@ const TreeItem = ({ node, level = 0 }: { node: TreeNode; level?: number }) => {
   );
 };
 
+interface UploadingFile {
+  file: File;
+  progress: 'pending' | 'uploading' | 'done' | 'error';
+  error?: string;
+}
+
 export default function AudioSourceFilesPage() {
   const queryClient = useQueryClient();
-  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+
   // Use React Query cache to persist files across detail page navigation
   const { data: fetchedFiles = [] } = useQuery<SourceFile[]>({
     queryKey: ["source-files-list"],
@@ -239,20 +292,20 @@ export default function AudioSourceFilesPage() {
     setIsDownloading(true);
     setError(null);
     setFetchedFiles(() => []);
-    
+
     try {
       const count = await api.callResource("mongo", {
         action: "count",
         collection: "source_files",
         query: {}
       });
-      
+
       const total = typeof count === 'number' ? count : (count?.count ?? 0);
       setTotalCount(total);
-      
+
       const batchSize = 1000;
       const all: SourceFile[] = [];
-      
+
       for (let skip = 0; skip < total; skip += batchSize) {
         const batch = await api.callResource("mongo", {
           action: "find",
@@ -265,11 +318,12 @@ export default function AudioSourceFilesPage() {
               _id: 1,
               path: 1,
               ingested: 1,
+              start: 1,
               "ingestion.error": 1
             }
           }
         });
-        
+
         all.push(...batch);
         setFetchedFiles(() => [...all]);
       }
@@ -310,7 +364,7 @@ export default function AudioSourceFilesPage() {
 
       setFetchedFiles((prev) => {
         const existingIndex = prev.findIndex(f => f._id?.toString() === docId);
-        
+
         if (operationType === "insert" && document) {
           if (existingIndex === -1) {
             return [...prev, document];
@@ -339,11 +393,133 @@ export default function AudioSourceFilesPage() {
     }
   });
 
+  // Upload handling
+  const handleFiles = useCallback((files: FileList | File[]) => {
+    const audioFiles = Array.from(files).filter(f =>
+      f.type.startsWith("audio/") ||
+      /\.(wav|mp3|m4a|flac|opus|ogg|aac|wma)$/i.test(f.name)
+    );
+    if (audioFiles.length === 0) return;
+    setUploadingFiles(prev => [
+      ...prev,
+      ...audioFiles.map(file => ({ file, progress: 'pending' as const }))
+    ]);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
+  }, [handleFiles]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  const removeUploadFile = (index: number) => {
+    setUploadingFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const startUpload = async () => {
+    if (uploadingFiles.length === 0) return;
+    setIsUploading(true);
+
+    const formData = new FormData();
+    for (const uf of uploadingFiles) {
+      if (uf.progress === 'pending') {
+        formData.append("files", uf.file);
+      }
+    }
+
+    setUploadingFiles(prev => prev.map(uf =>
+      uf.progress === 'pending' ? { ...uf, progress: 'uploading' as const } : uf
+    ));
+
+    try {
+      const authHeaders = await api.getAuthHeaders();
+      const response = await fetch(`${api.baseURL}/api/audio/upload`, {
+        method: "POST",
+        body: formData,
+        headers: authHeaders, // No Content-Type - let browser set multipart boundary
+      });
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+      }
+      const result = await response.json();
+
+      setUploadingFiles(prev => prev.map((uf, i) => {
+        const fileResult = result.results?.find((r: any) => r.filename === uf.file.name);
+        if (fileResult?.error) {
+          return { ...uf, progress: 'error' as const, error: fileResult.error };
+        }
+        return { ...uf, progress: 'done' as const };
+      }));
+
+      // Refresh the file list after upload
+      setTimeout(() => fetchInBatches(), 1000);
+    } catch (err: any) {
+      setUploadingFiles(prev => prev.map(uf =>
+        uf.progress === 'uploading' ? { ...uf, progress: 'error' as const, error: err.message } : uf
+      ));
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const clearCompletedUploads = () => {
+    setUploadingFiles(prev => prev.filter(uf => uf.progress !== 'done'));
+  };
+
+  // Retry handling
+  const handleRetry = async (fileId: string) => {
+    setRetryingIds(prev => new Set([...prev, fileId]));
+    try {
+      await api.callResource("mongo", {
+        action: "updateOne",
+        collection: "source_files",
+        query: { _id: new ObjectId(fileId) },
+        update: {
+          $set: { ingested: false },
+          $unset: { ingestion: "" }
+        }
+      });
+      // Update local state
+      setFetchedFiles(prev => prev.map(f =>
+        f._id?.toString() === fileId
+          ? { ...f, ingested: false, ingestion: undefined }
+          : f
+      ));
+    } catch (err) {
+      console.error("Failed to retry file:", err);
+    } finally {
+      setRetryingIds(prev => {
+        const next = new Set(prev);
+        next.delete(fileId);
+        return next;
+      });
+    }
+  };
+
+  const handleRetryAll = async () => {
+    const errorFiles = fetchedFiles.filter(f => f.ingestion?.error);
+    for (const file of errorFiles) {
+      await handleRetry(file._id?.toString());
+    }
+  };
+
   const tree = useMemo(() => {
     if (fetchedFiles.length === 0) return null;
-    
+
     let filteredFiles = fetchedFiles;
-    
+
     // Apply status filter
     if (statusFilter === 'ingested') {
       filteredFiles = filteredFiles.filter(f => f.ingested);
@@ -358,15 +534,15 @@ export default function AudioSourceFilesPage() {
       const query = searchQuery.toLowerCase();
       filteredFiles = filteredFiles.filter(f => f.path.toLowerCase().includes(query));
     }
-    
+
     const fullTree = buildTree(filteredFiles);
-    
+
     // Collapse all children of root, but don't collapse root itself into its children
     const childrenKeys = Object.keys(fullTree.children);
     for (const key of childrenKeys) {
       fullTree.children[key] = collapseTree(fullTree.children[key]);
     }
-    
+
     return fullTree;
   }, [fetchedFiles, searchQuery, statusFilter]);
 
@@ -395,16 +571,122 @@ export default function AudioSourceFilesPage() {
             Hierarchy of discovered audio files and their ingestion status.
           </p>
         </div>
-        <Button 
-          variant="outline" 
-          size="sm" 
-          onClick={() => fetchInBatches()}
-          disabled={isDownloading}
-        >
-          <RefreshCw className={cn("h-4 w-4 mr-2", isDownloading && "animate-spin")} />
-          {isDownloading ? "Downloading..." : "Refresh"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {baseStats.error > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRetryAll}
+              className="text-orange-600 border-orange-200 hover:bg-orange-50"
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Retry All Errors ({baseStats.error})
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchInBatches()}
+            disabled={isDownloading}
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", isDownloading && "animate-spin")} />
+            {isDownloading ? "Downloading..." : "Refresh"}
+          </Button>
+        </div>
       </div>
+
+      {/* Upload Area */}
+      <Card
+        className={cn(
+          "border-2 border-dashed transition-colors",
+          isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/20"
+        )}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+      >
+        <CardContent className="pt-6 pb-6">
+          <div className="flex flex-col items-center justify-center text-center space-y-3">
+            <Upload className={cn("w-8 h-8", isDragging ? "text-primary" : "text-muted-foreground")} />
+            <div>
+              <p className="text-sm font-medium">
+                {isDragging ? "Drop audio files here" : "Drag & drop audio files to upload"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                WAV, MP3, M4A, FLAC, OPUS, OGG supported
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Browse Files
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="audio/*,.wav,.mp3,.m4a,.flac,.opus,.ogg,.aac,.wma"
+              className="hidden"
+              onChange={(e) => e.target.files && handleFiles(e.target.files)}
+            />
+          </div>
+
+          {uploadingFiles.length > 0 && (
+            <div className="mt-4 space-y-2 border-t pt-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">{uploadingFiles.length} file(s) selected</span>
+                <div className="flex gap-2">
+                  {uploadingFiles.some(uf => uf.progress === 'done') && (
+                    <Button variant="ghost" size="sm" onClick={clearCompletedUploads}>
+                      Clear completed
+                    </Button>
+                  )}
+                  {uploadingFiles.some(uf => uf.progress === 'pending') && (
+                    <Button size="sm" onClick={startUpload} disabled={isUploading}>
+                      {isUploading ? (
+                        <>
+                          <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3 h-3 mr-1" />
+                          Upload
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {uploadingFiles.map((uf, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs py-1 px-2 rounded bg-muted/50">
+                    <FileAudio className="w-3 h-3 text-muted-foreground shrink-0" />
+                    <span className="flex-1 truncate">{uf.file.name}</span>
+                    <span className="text-muted-foreground shrink-0">
+                      {(uf.file.size / 1024 / 1024).toFixed(1)} MB
+                    </span>
+                    {uf.progress === 'done' && <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />}
+                    {uf.progress === 'error' && (
+                      <span className="text-destructive" title={uf.error}>
+                        <AlertCircle className="w-3 h-3" />
+                      </span>
+                    )}
+                    {uf.progress === 'uploading' && <RefreshCw className="w-3 h-3 animate-spin text-primary shrink-0" />}
+                    {uf.progress === 'pending' && (
+                      <button onClick={() => removeUploadFile(i)} className="text-muted-foreground hover:text-foreground">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {isDownloading && (
         <Card className="border-primary/20 bg-primary/5">
@@ -442,7 +724,7 @@ export default function AudioSourceFilesPage() {
         <CardHeader className="pb-3 border-b">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <CardTitle className="text-lg font-medium whitespace-nowrap">Source File Hierarchy</CardTitle>
-            
+
             <div className="flex flex-1 items-center gap-3 md:gap-4 max-w-2xl">
               <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -454,17 +736,17 @@ export default function AudioSourceFilesPage() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-              
+
               <div className="flex items-center gap-2">
-                <Badge 
+                <Badge
                   variant={statusFilter === 'all' ? 'default' : 'outline'}
                   className="cursor-pointer hover:bg-primary/90 whitespace-nowrap"
                   onClick={() => setStatusFilter('all')}
                 >
                   Total: {baseStats.total}
                 </Badge>
-                
-                <Badge 
+
+                <Badge
                   variant={statusFilter === 'ingested' ? 'default' : 'outline'}
                   className={cn(
                     "cursor-pointer whitespace-nowrap transition-colors",
@@ -476,7 +758,7 @@ export default function AudioSourceFilesPage() {
                   Ingested: {baseStats.ingested}
                 </Badge>
 
-                <Badge 
+                <Badge
                   variant={statusFilter === 'error' ? 'default' : 'outline'}
                   className={cn(
                     "cursor-pointer whitespace-nowrap transition-colors",
@@ -488,7 +770,7 @@ export default function AudioSourceFilesPage() {
                   Errors: {baseStats.error}
                 </Badge>
 
-                <Badge 
+                <Badge
                   variant={statusFilter === 'pending' ? 'default' : 'outline'}
                   className={cn(
                     "cursor-pointer whitespace-nowrap transition-colors",
@@ -518,9 +800,9 @@ export default function AudioSourceFilesPage() {
                         if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
                         return a.name.localeCompare(b.name);
                       })
-                      .map(node => <TreeItem key={node.fullPath} node={node} />)
+                      .map(node => <TreeItem key={node.fullPath} node={node} onRetry={handleRetry} />)
                   ) : (
-                    <TreeItem node={tree} />
+                    <TreeItem node={tree} onRetry={handleRetry} />
                   )}
                </div>
             </div>
@@ -531,8 +813,8 @@ export default function AudioSourceFilesPage() {
               </div>
               <h3 className="text-lg font-medium">No source files found</h3>
               <p className="text-muted-foreground max-w-xs mx-auto mt-2">
-                We couldn't find any source files in the database. 
-                Make sure the discovery process is running.
+                We couldn't find any source files in the database.
+                Upload audio files above or make sure the discovery process is running.
               </p>
               <Button variant="outline" className="mt-6" onClick={() => fetchInBatches()}>
                 <RefreshCw className="h-4 w-4 mr-2" />

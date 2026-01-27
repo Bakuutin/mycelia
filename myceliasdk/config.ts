@@ -4,10 +4,14 @@ import { zObjectId, zDateOrString } from "./zod-json-schema.ts";
 
 
 
-export const zInferenceProviderConfig = z.object({
+export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
+  model: z.string().optional(),
 });
+
+// Deprecated: use llm and transcription instead
+export const zInferenceProviderConfig = zProviderConfig;
 
 export const zWorkerConfig = z.object({
   paused: z.boolean().optional().default(false).describe("Whether this worker is paused and won't process new jobs."),
@@ -15,7 +19,16 @@ export const zWorkerConfig = z.object({
 
 export type WorkerConfig = z.infer<typeof zWorkerConfig>;
 
+export const zServerConfigPrompts = z.object({
+  chat_system: zObjectId().optional().nullable(),
+  summarization_system: zObjectId().optional().nullable(),
+}).optional();
+
 export const zServerConfig = z.object({
+  prompts: zServerConfigPrompts,
+  llm: zProviderConfig.optional().nullable(),
+  transcription: zProviderConfig.optional().nullable(),
+  // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({
     enable_experimental_processing: z.boolean().describe("Enable experimental processing of conversations. This feature is currently in development and may not work as expected."),
@@ -34,6 +47,15 @@ export const zPromptForm = z.object({
 });
 
 export type PromptFormData = z.infer<typeof zPromptForm>;
+
+export const zPrompt = z.object({
+  _id: zObjectId(),
+  name: z.string(),
+  text: z.string(),
+  description: z.string().optional(),
+});
+
+export type Prompt = z.infer<typeof zPrompt>;
 
 export const zWorkerEntry = z.object({
   _id: zObjectId(),

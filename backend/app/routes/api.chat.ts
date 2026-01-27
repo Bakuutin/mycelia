@@ -7,6 +7,7 @@ import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
+import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { ObjectId } from "mongodb";
 import type { Db } from "mongodb";
 
@@ -231,21 +232,70 @@ export async function apiChatHandler(req: Request, res: Response) {
     toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
   });
 
-  const systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
+  // Fetch System Prompt
+  let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
 
   const config = await getServerConfig();
-  const inference = config.inference;
+  try {
+    if (config.prompts?.chat_system) {
+        const promptDoc = await db.collection("prompts").findOne({ _id: config.prompts.chat_system });
+        if (promptDoc && promptDoc.text) {
+            systemPrompt = promptDoc.text;
+        }
+    }
+  } catch (e) {
+      console.warn("Failed to load system prompt from config, using default.", e);
+  }
+
+  // Get inference provider using stateless env vars first, MongoDB fallback
+  const llmResource = new LLMResource();
+  const inference = await llmResource.getInferenceProvider();
   if (!inference?.baseUrl || !inference?.apiKey) {
     res.status(500).json({ error: "Inference provider not configured. Please configure it in server settings." });
     return;
   }
+
+  // Resolve model aliases (small/medium/large) to actual model names
+  // Priority: BASE_MODEL env var > inference.mycelia.tech aliases > MODEL_* env vars > defaults
+  function resolveModelAlias(modelName: string): string {
+    // Highest priority: explicit BASE_MODEL override
+    const baseModelOverride = Deno.env.get('BASE_MODEL');
+    if (baseModelOverride) {
+      return baseModelOverride;
+    }
+
+    // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
+    if (inference.baseUrl.includes('inference.mycelia.tech')) {
+      return modelName;
+    }
+
+    // Resolve aliases to actual model names for direct providers
+    // Priority: MODEL_* env vars > BASE_MODEL > "medium" alias (requires BASE_MODEL to be set)
+    const baseModel = Deno.env.get('BASE_MODEL');
+    if (!baseModel) {
+      // If no BASE_MODEL set, pass through the alias/model name as-is
+      return modelName;
+    }
+    const aliases: Record<string, string> = {
+      small: Deno.env.get('MODEL_SMALL') || baseModel,
+      medium: Deno.env.get('MODEL_MEDIUM') || baseModel,
+      large: Deno.env.get('MODEL_LARGE') || baseModel,
+    };
+
+    return aliases[modelName] || modelName;
+  }
+
+  // Use model from inference provider (env var), fallback to DB model or BASE_MODEL
+  const baseModel = Deno.env.get('BASE_MODEL');
+  const requestedModel = inference.model || chatModel || baseModel || "medium";
+  const actualModel = resolveModelAlias(requestedModel);
 
   try {
     const stream = streamText({
       model: createOpenAI({
         baseURL: inference.baseUrl,
         apiKey: inference.apiKey,
-      }).chat(chatModel),
+      }).chat(actualModel),
       tools,
       stopWhen: stepCountIs(5),
       messages: [

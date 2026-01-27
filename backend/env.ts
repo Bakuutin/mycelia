@@ -41,4 +41,12 @@ export const env = {
   MYCELIA_URL: Deno.env.get("MYCELIA_URL") || "http://backend:5173",
   MYCELIA_TOKEN: Deno.env.get("MYCELIA_TOKEN"),
   MYCELIA_CLIENT_ID: Deno.env.get("MYCELIA_CLIENT_ID"),
+
+  // Job Queue Configuration
+  JOB_TRIGGERS_FAST: Deno.env.get("JOB_TRIGGERS_FAST") === "true",
+  JOB_DEBOUNCE_MS: Deno.env.get("JOB_DEBOUNCE_MS") ? parseInt(Deno.env.get("JOB_DEBOUNCE_MS")!) : undefined,
+  JOB_INTERVAL_SECONDS: Deno.env.get("JOB_INTERVAL_SECONDS") ? parseInt(Deno.env.get("JOB_INTERVAL_SECONDS")!) : undefined,
+
+  // Transcription Configuration
+  TRANSCRIPTION_LANGUAGE: Deno.env.get("TRANSCRIPTION_LANGUAGE") || "auto",
 };

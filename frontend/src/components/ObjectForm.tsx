@@ -9,15 +9,22 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
 import {
   ArrowRight,
+  Calendar,
+  Edit3,
   ExternalLink,
+  Eye,
+  Handshake,
+  MessageSquare,
   MoveHorizontal,
   Plus,
   RefreshCcw,
   Trash2,
+  User,
+  Users,
   X,
   Wand2,
-  Eye,
 } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 import { ObjectId } from "bson";
 import { ObjectSelectionDropdown } from "@/components/ObjectSelectionDropdown";
@@ -35,6 +42,66 @@ import {
 } from "@/components/ui/dialog";
 import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+
+// Details field with edit/preview toggle
+function DetailsField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [isPreview, setIsPreview] = useState(false);
+  
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label htmlFor="details">Details</Label>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant={!isPreview ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setIsPreview(false)}
+          >
+            <Edit3 className="w-3 h-3 mr-1" />
+            Edit
+          </Button>
+          <Button
+            type="button"
+            variant={isPreview ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setIsPreview(true)}
+            disabled={!value}
+          >
+            <Eye className="w-3 h-3 mr-1" />
+            Preview
+          </Button>
+        </div>
+      </div>
+      
+      {isPreview ? (
+        <div className="min-h-[100px] w-full rounded-md border border-input bg-muted/30 px-3 py-2">
+          {value ? (
+            <Markdown>{value}</Markdown>
+          ) : (
+            <p className="text-sm text-muted-foreground">No content to preview</p>
+          )}
+        </div>
+      ) : (
+        <textarea
+          id="details"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Optional details about this object (supports Markdown)"
+          className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+        />
+      )}
+      
+      {!isPreview && value && (
+        <p className="text-xs text-muted-foreground">
+          Supports Markdown: **bold**, *italic*, `code`, [links](url), lists, etc.
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface ObjectFormProps {
   object: ObjectFormData;
@@ -329,16 +396,10 @@ export function ObjectForm(
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="details">Details</Label>
-        <textarea
-          id="details"
-          value={detailsValue}
-          onChange={(e) => setDetailsValue(e.target.value)}
-          placeholder="Optional details about this object"
-          className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      </div>
+      <DetailsField
+        value={detailsValue}
+        onChange={setDetailsValue}
+      />
 
       <SummarizeDialog
         open={isSummarizeOpen}
@@ -432,7 +493,9 @@ export function ObjectForm(
                 key={index}
                 className="border rounded-lg p-4 space-y-3 bg-muted/30"
               >
-                <div className="text-sm whitespace-pre-wrap">{summary.text}</div>
+                <div className="text-sm">
+                  <Markdown>{summary.text}</Markdown>
+                </div>
                 <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                   <div className="flex items-center gap-1">
                     <span className="font-medium">Model:</span>
@@ -469,110 +532,108 @@ export function ObjectForm(
         </div>
       )}
 
-      <div className="flex gap-6">
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="isEvent"
-            checked={object.isEvent || false}
-            onCheckedChange={(checked) =>
-              updateField("isEvent", checked as boolean)}
-          />
-          <Label
-            htmlFor="isEvent"
-            className="text-sm font-medium cursor-pointer"
+      {/* Object Type Toggle Buttons */}
+      <div className="space-y-2">
+        <Label className="text-sm text-muted-foreground">Object Type</Label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => updateField("isPerson", !object.isPerson)}
+            className={`
+              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              ${object.isPerson
+                ? "bg-blue-100 text-blue-800 border-blue-200"
+                : "bg-background border-border hover:bg-muted"
+              }
+            `}
           >
-            Is Event
-          </Label>
-        </div>
+            <User className="w-4 h-4" />
+            <span className="font-medium">Person</span>
+          </button>
 
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="isConversation"
-            checked={object.isConversation || false}
-            onCheckedChange={(checked) =>
-              updateField("isConversation", checked as boolean)}
-          />
-          <Label
-            htmlFor="isConversation"
-            className="text-sm font-medium cursor-pointer"
+          <button
+            type="button"
+            onClick={() => updateField("isEvent", !object.isEvent)}
+            className={`
+              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              ${object.isEvent
+                ? "bg-green-100 text-green-800 border-green-200"
+                : "bg-background border-border hover:bg-muted"
+              }
+            `}
           >
-            Is Conversation
-          </Label>
-        </div>
+            <Calendar className="w-4 h-4" />
+            <span className="font-medium">Event</span>
+          </button>
 
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="isPerson"
-            checked={object.isPerson || false}
-            onCheckedChange={(checked) =>
-              updateField("isPerson", checked as boolean)}
-          />
-          <Label
-            htmlFor="isPerson"
-            className="text-sm font-medium cursor-pointer"
+          <button
+            type="button"
+            onClick={() => updateField("isConversation", !object.isConversation)}
+            className={`
+              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              ${object.isConversation
+                ? "bg-cyan-100 text-cyan-800 border-cyan-200"
+                : "bg-background border-border hover:bg-muted"
+              }
+            `}
           >
-            Is Person
-          </Label>
-        </div>
+            <MessageSquare className="w-4 h-4" />
+            <span className="font-medium">Conversation</span>
+          </button>
 
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="isRelationship"
-            checked={object.isRelationship || false}
-            onCheckedChange={(checked) => {
-              if (checked) {
-                onUpdate({
-                  isRelationship: true,
-                  relationship: {
-                    symmetrical: false,
-                  },
-                });
-              } else {
-                onUpdate({
+          <button
+            type="button"
+            onClick={() => {
+              if (object.isRelationship) {
+                onUpdate?.({
                   isRelationship: false,
                   relationship: undefined,
-                  isPromise: false, // Clear isPromise if relationship is removed
+                  isPromise: false,
+                });
+              } else {
+                onUpdate?.({
+                  isRelationship: true,
+                  relationship: { symmetrical: false },
                 });
               }
             }}
-          />
-          <Label
-            htmlFor="isRelationship"
-            className="text-sm font-medium cursor-pointer"
+            className={`
+              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              ${object.isRelationship && !object.isPromise
+                ? "bg-purple-100 text-purple-800 border-purple-200"
+                : "bg-background border-border hover:bg-muted"
+              }
+            `}
           >
-            Is Relationship
-          </Label>
-        </div>
+            <Users className="w-4 h-4" />
+            <span className="font-medium">Relationship</span>
+          </button>
 
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="isPromise"
-            checked={object.isPromise || false}
-            onCheckedChange={(checked) => {
-              if (checked) {
-                // If isPromise is true, ensure it's a relationship
+          <button
+            type="button"
+            onClick={() => {
+              if (object.isPromise) {
+                onUpdate?.({ isPromise: false });
+              } else {
                 const updates: Partial<ObjectFormData> = { isPromise: true };
-
-                // Ensure it's a relationship
                 if (!object.isRelationship) {
                   updates.isRelationship = true;
-                  updates.relationship = {
-                    symmetrical: false,
-                  };
+                  updates.relationship = { symmetrical: false };
                 }
-
-                onUpdate(updates);
-              } else {
-                onUpdate({ isPromise: false });
+                onUpdate?.(updates);
               }
             }}
-          />
-          <Label
-            htmlFor="isPromise"
-            className="text-sm font-medium cursor-pointer"
+            className={`
+              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              ${object.isPromise
+                ? "bg-orange-100 text-orange-800 border-orange-200"
+                : "bg-background border-border hover:bg-muted"
+              }
+            `}
           >
-            Is Promise
-          </Label>
+            <Handshake className="w-4 h-4" />
+            <span className="font-medium">Promise</span>
+          </button>
         </div>
       </div>
 

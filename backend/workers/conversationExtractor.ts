@@ -269,7 +269,8 @@ function extractJsonFromText(content: string): any {
   );
   
   if (jsonStart === Infinity) {
-    throw new Error("No JSON object or array found in response");
+    const preview = cleaned.length > 200 ? cleaned.slice(0, 200) + '...' : cleaned;
+    throw new Error(`No JSON object or array found in response. Got: ${preview}`);
   }
   
   // Find the matching closing bracket

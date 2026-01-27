@@ -45,13 +45,32 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     prefix: `mycelia-${job.id}-`,
   });
 
+  // Get URLs from env vars
+  const backendUrl = Deno.env.get("MYCELIA_BACKEND_INTERNAL_URL") || "http://backend:5173";
+  const pythonWorkerUrl = Deno.env.get("PYTHON_WORKER_URL") || "http://python-worker:8000";
+
   const jobEnv: Record<string, string> = {
       MYCELIA_JWT: token,
-      MYCELIA_URL: 'http://backend:5173',
+      MYCELIA_URL: backendUrl,
       MYCELIA_WORKER_PATH: capability.path.href,
       MYCELIA_JOB_ID: job.id || "",
       TMPDIR: tmpDir,
   };
+
+  // Extract hostnames from URLs for network permissions
+  const extractHostname = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.hostname}:${parsed.port || (parsed.protocol === "https:" ? "443" : "80")}`;
+    } catch {
+      return url; // Fallback if parsing fails
+    }
+  };
+
+  const allowedHosts = [
+    extractHostname(backendUrl),
+    extractHostname(pythonWorkerUrl),
+  ].join(",");
 
   const launcherPath = `${sdkPath}/app/lib/jobs/workerLauncher.ts`;
 
@@ -64,7 +83,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       `${sdkPath}/deno.json`,
       `--allow-read=${sdkPath},${sdkPath}/../myceliasdk,${tmpDir}`,
       `--allow-write=${tmpDir}`,
-      `--allow-net=backend:5173,python-worker:8000`, // TODO: allow extra hosts in manifest
+      `--allow-net=${allowedHosts}`,
       `--allow-run=ffmpeg`,
       `--allow-sys=hostname,osRelease`,
       launcherPath,

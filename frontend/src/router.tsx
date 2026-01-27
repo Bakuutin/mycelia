@@ -33,6 +33,7 @@ import JobsPage from "./pages/JobsPage";
 import JobDetailPage from "./pages/JobDetailPage";
 import CreateJobPage from "./pages/CreateJobPage";
 import ConversationsPage from "./pages/ConversationsPage";
+import AudioPipelinePage from "./pages/AudioPipelinePage";
 
 export const router = createBrowserRouter([
   {
@@ -102,6 +103,10 @@ export const router = createBrowserRouter([
       {
         path: "audio",
         element: <AudioPlayerPage />,
+      },
+      {
+        path: "audio/pipeline",
+        element: <AudioPipelinePage />,
       },
       {
         path: "audio/source_files",

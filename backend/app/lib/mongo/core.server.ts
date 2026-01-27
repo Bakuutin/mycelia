@@ -171,6 +171,18 @@ const listIndexesSchema = z.object({
   collection: z.string(),
 });
 
+const findOneAndUpdateSchema = z.object({
+  action: z.literal("findOneAndUpdate"),
+  collection: z.string(),
+  query: z.record(z.string(), z.any()),
+  update: z.record(z.string(), z.any()),
+  options: z.object({
+    sort: z.record(z.string(), z.any()).optional(),
+    returnDocument: z.enum(["before", "after"]).optional(),
+    upsert: z.boolean().optional(),
+  }).optional(),
+});
+
 const mongoRequestSchema = z.discriminatedUnion("action", [
   findSchema,
   findOneSchema,
@@ -187,6 +199,7 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
   listIndexesSchema,
   getFirstBatchSchema,
   getMoreSchema,
+  findOneAndUpdateSchema,
 ]);
 
 export type MongoRequest = z.infer<typeof mongoRequestSchema>;
@@ -208,6 +221,7 @@ const actionMap = {
   listIndexes: ["read"],
   getFirstBatch: ["read"],
   getMore: ["read"],
+  findOneAndUpdate: ["read", "update"],
 } satisfies { [K in MongoRequest["action"]]: string[] };
 
 export class MongoResource implements Resource<MongoRequest, MongoResponse> {
@@ -491,6 +505,23 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
             return [];
           }
           return collection.indexes();
+        case "findOneAndUpdate": {
+          const update = { ...input.update };
+          if (update.$set) {
+            update.$set = { ...update.$set, updatedAt: new Date() };
+          } else {
+            update.$set = { updatedAt: new Date() };
+          }
+          const options: any = { ...input.options };
+          if (options.returnDocument === "before") {
+            options.returnDocument = "before";
+          } else if (options.returnDocument === "after") {
+            options.returnDocument = "after";
+          }
+          const result = await collection.findOneAndUpdate(input.query, update, options);
+          // MongoDB driver returns the document directly (or null if not found)
+          return result;
+        }
         default:
           throw new Error("Unknown action");
       }
@@ -535,7 +566,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     } else {
       actions = [...actionMap[input.action]];
       if (
-        (input.action === "updateOne" || input.action === "updateMany") &&
+        (input.action === "updateOne" || input.action === "updateMany" || input.action === "findOneAndUpdate") &&
         (input as any).options?.upsert
       ) {
         actions.push("write");
