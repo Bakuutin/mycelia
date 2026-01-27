@@ -225,8 +225,7 @@ async function findStaleOpenChunks(mongo: MongoFn): Promise<OpenChunk[]> {
 
 async function findRecentUnassignedTranscriptions(mongo: MongoFn): Promise<Utterance[]> {
   const cutoffDate = new Date(Date.now() - RECENT_WINDOW_MS);
-  console.log(`[ChunkCreator] Finding recent transcriptions newer than ${cutoffDate.toISOString()}`);
-  
+
   const docs = await mongo({
     action: "find",
     collection: "transcriptions",
@@ -234,13 +233,11 @@ async function findRecentUnassignedTranscriptions(mongo: MongoFn): Promise<Utter
       chunk_id: { $exists: false },
       createdAt: { $gte: cutoffDate },
     },
-    options: { 
+    options: {
       sort: { start: 1 },  // Oldest first within recent window
       limit: MAX_STREAMING_PER_RUN,
     },
   }) as any[];
-  
-  console.log(`[ChunkCreator] Found ${docs.length} recent unassigned transcriptions`);
   
   return docs.map(doc => ({
     _id: doc._id,
@@ -254,8 +251,7 @@ async function findRecentUnassignedTranscriptions(mongo: MongoFn): Promise<Utter
 
 async function findHistoricalUnassignedTranscriptions(mongo: MongoFn): Promise<Utterance[]> {
   const cutoffDate = new Date(Date.now() - RECENT_WINDOW_MS);
-  console.log(`[ChunkCreator] Finding historical transcriptions older than ${cutoffDate.toISOString()}`);
-  
+
   const docs = await mongo({
     action: "find",
     collection: "transcriptions",
@@ -263,13 +259,11 @@ async function findHistoricalUnassignedTranscriptions(mongo: MongoFn): Promise<U
       chunk_id: { $exists: false },
       createdAt: { $lt: cutoffDate },
     },
-    options: { 
+    options: {
       sort: { start: -1 },  // Newest historical first (work backwards)
       limit: BACKFILL_BATCH_SIZE,
     },
   }) as any[];
-  
-  console.log(`[ChunkCreator] Found ${docs.length} historical unassigned transcriptions`);
   
   const results = docs.map(doc => {
     const text = doc.segments?.map((s: any) => s.text).join("").trim() ?? doc.text ?? "";
@@ -502,19 +496,23 @@ async function processStalOpenChunks(
   policyVersion: string,
 ): Promise<number> {
   const now = Date.now();
-  console.log(`[ChunkCreator] processStalOpenChunks: Looking for stale chunks (lastActivity > ${GAP_TIMEOUT_MS}ms OR end > ${CHUNK_END_STALENESS_MS}ms old)`);
   const staleChunks = await findStaleOpenChunks(mongo);
-  console.log(`[ChunkCreator] processStalOpenChunks: Found ${staleChunks.length} stale chunks`);
+
+  if (staleChunks.length === 0) {
+    return 0;
+  }
+
+  console.log(`[ChunkCreator] Found ${staleChunks.length} stale chunks to finalize`);
   let finalized = 0;
-  
+
   for (const chunk of staleChunks) {
     const endAge = chunk.end ? now - chunk.end.getTime() : 0;
     const activityAge = chunk.lastActivityAt ? now - chunk.lastActivityAt.getTime() : 0;
-    console.log(`[ChunkCreator] Finalizing stale chunk ${chunk._id} with ${chunk.transcriptionIds.length} transcriptions (endAge=${Math.round(endAge/1000)}s, activityAge=${Math.round(activityAge/1000)}s)`);
+    console.log(`[ChunkCreator] Finalizing chunk ${chunk._id}: ${chunk.transcriptionIds.length} transcriptions (endAge=${Math.round(endAge/1000)}s, activityAge=${Math.round(activityAge/1000)}s)`);
     const wasFinalized = await finalizeChunk(mongo, chunk, policyVersion);
     if (wasFinalized) finalized++;
   }
-  
+
   return finalized;
 }
 
@@ -525,16 +523,16 @@ async function processStreamingTranscriptions(
   policyVersion: string,
   model: string,
 ): Promise<{ streamed: number; chunksFinalized: number }> {
-  console.log(`[ChunkCreator] processStreamingTranscriptions: Starting...`);
   const transcriptions = await findRecentUnassignedTranscriptions(mongo);
   let streamed = 0;
   let chunksFinalized = 0;
   const now = Date.now();
-  
+
   if (transcriptions.length === 0) {
-    console.log(`[ChunkCreator] processStreamingTranscriptions: No recent transcriptions to stream`);
     return { streamed: 0, chunksFinalized: 0 };
   }
+
+  console.log(`[ChunkCreator] Processing ${transcriptions.length} recent transcriptions...`);
   
   // Group by original_id for efficient processing
   const byOriginal = new Map<string, Utterance[]>();
@@ -543,8 +541,6 @@ async function processStreamingTranscriptions(
     if (!byOriginal.has(key)) byOriginal.set(key, []);
     byOriginal.get(key)!.push(t);
   }
-  
-  console.log(`[ChunkCreator] processStreamingTranscriptions: ${transcriptions.length} transcriptions grouped into ${byOriginal.size} originals`);
   
   for (const [originalKey, utterances] of byOriginal) {
     const originalId = originalKey === "__none__" ? undefined : new ObjectId(originalKey);
@@ -778,10 +774,8 @@ const capability: JobCapability = {
   ],
   maxConcurrency: 1,
   use: async (job) => {
-    console.log(`[ChunkCreator] ========== Job ${job.id} starting ==========`);
     const data = job.data as ConversationChunkCreatorJobData;
-    console.log(`[ChunkCreator] Job data:`, JSON.stringify(data, null, 2));
-    
+
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
     const mongo: MongoFn = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
@@ -793,10 +787,6 @@ const capability: JobCapability = {
     const model = data.model ?? Deno.env.get("BASE_MODEL") ?? "medium";
     const mode = data.mode ?? "auto";
     const force = data.force ?? false;
-
-    console.log(`[ChunkCreator] Config: mode=${mode}, policyVersion=${policyVersion}, model=${model}, force=${force}`);
-    console.log(`[ChunkCreator] gapThresholds:`, gapThresholds);
-    console.log(`[ChunkCreator] charThresholds:`, charThresholds);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Manual range mode: explicit reprocessing of a time range
@@ -830,23 +820,22 @@ const capability: JobCapability = {
     // ─────────────────────────────────────────────────────────────────────────
     // Auto mode: Priority-based streaming + backfill
     // ─────────────────────────────────────────────────────────────────────────
-    console.log(`[ChunkCreator] Using AUTO mode`);
     let totalFinalized = 0;
     let totalStreamed = 0;
     let totalBackfilled = 0;
     let totalChunksCreated = 0;
 
     // Priority 1: Finalize stale open chunks (gap timeout reached)
-    console.log(`[ChunkCreator] Priority 1: Finalizing stale open chunks...`);
     await job.updateProgress({ stage: "finalizing_stale" });
     const finalized = await processStalOpenChunks(mongo, policyVersion);
     totalFinalized = finalized;
     totalChunksCreated += finalized;
-    console.log(`[ChunkCreator] Stale chunks finalized: ${finalized}`);
+    if (finalized > 0) {
+      console.log(`[ChunkCreator] Finalized ${finalized} stale chunks`);
+    }
 
     // Priority 2: Stream recent unassigned transcriptions
     if (mode === "auto" || mode === "streaming") {
-      console.log(`[ChunkCreator] Priority 2: Streaming recent transcriptions...`);
       await job.updateProgress({ stage: "streaming", finalized: totalFinalized });
       const streamResult = await processStreamingTranscriptions(
         mongo,
@@ -857,15 +846,15 @@ const capability: JobCapability = {
       );
       totalStreamed = streamResult.streamed;
       totalChunksCreated += streamResult.chunksFinalized;
-      console.log(`[ChunkCreator] Streaming result: streamed=${streamResult.streamed}, chunksFinalized=${streamResult.chunksFinalized}`);
+      if (streamResult.streamed > 0 || streamResult.chunksFinalized > 0) {
+        console.log(`[ChunkCreator] Streamed ${streamResult.streamed} transcriptions, finalized ${streamResult.chunksFinalized} chunks`);
+      }
     }
 
     // Priority 3: Backfill historical data (only if streaming is caught up)
     const shouldBackfill = (mode === "auto" && totalStreamed === 0) || mode === "backfill";
-    console.log(`[ChunkCreator] Should backfill? ${shouldBackfill} (mode=${mode}, totalStreamed=${totalStreamed})`);
-    
+
     if (shouldBackfill) {
-      console.log(`[ChunkCreator] Priority 3: Backfilling historical data...`);
       await job.updateProgress({ stage: "backfilling", finalized: totalFinalized, streamed: totalStreamed });
       const backfillResult = await processBackfillBatch(
         mongo,
@@ -877,7 +866,9 @@ const capability: JobCapability = {
       );
       totalBackfilled = backfillResult.backfilled;
       totalChunksCreated += backfillResult.chunksCreated;
-      console.log(`[ChunkCreator] Backfill result: backfilled=${backfillResult.backfilled}, chunksCreated=${backfillResult.chunksCreated}`);
+      if (backfillResult.backfilled > 0 || backfillResult.chunksCreated > 0) {
+        console.log(`[ChunkCreator] Backfilled ${backfillResult.backfilled} transcriptions, created ${backfillResult.chunksCreated} chunks`);
+      }
     }
 
     const hasMore = totalStreamed > 0 || totalBackfilled > 0 || totalFinalized > 0;
@@ -890,10 +881,12 @@ const capability: JobCapability = {
       chunksCreated: totalChunksCreated,
       hasMore,
     };
-    
-    console.log(`[ChunkCreator] ========== Job ${job.id} complete ==========`);
-    console.log(`[ChunkCreator] Final result:`, JSON.stringify(result));
-    
+
+    // Only log if there was actual work done
+    if (totalFinalized > 0 || totalStreamed > 0 || totalBackfilled > 0 || totalChunksCreated > 0) {
+      console.log(`[ChunkCreator] Job ${job.id} complete: finalized=${totalFinalized}, streamed=${totalStreamed}, backfilled=${totalBackfilled}, chunks=${totalChunksCreated}`);
+    }
+
     return result;
   },
   triggers: {
