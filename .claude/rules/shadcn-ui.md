@@ -1,0 +1,40 @@
+---
+paths: frontend/**/*.tsx
+---
+
+# shadcn/ui Components
+
+Always prefer shadcn/ui components over custom implementations or other UI libraries.
+
+## Available Components
+
+Import from `@/components/ui/`:
+
+- `Button`, `Badge`, `Card`, `Dialog`, `Input`, `Label`
+- `Select`, `Table`, `Tabs`, `Tooltip`, `Skeleton`
+- `DropdownMenu`, `Popover`, `Sheet`, `Toast`
+- `Switch`, `Checkbox`, `Progress`, `Collapsible`
+
+## Usage
+
+```tsx
+// GOOD - Use shadcn/ui
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+
+// BAD - Custom or other libraries
+<button className="bg-blue-500 px-4 py-2">Click</button>
+```
+
+## Icons
+
+Use `lucide-react` for icons (already integrated with shadcn/ui):
+
+```tsx
+import { Settings, User, ChevronDown } from "lucide-react";
+```
+
+## Adding New Components
+
+Run `npx shadcn@latest add <component>` to add missing components.

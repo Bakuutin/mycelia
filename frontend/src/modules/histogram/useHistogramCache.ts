@@ -135,12 +135,6 @@ export const useHistogramCache = create<HistogramCacheStore>((set, get) => ({
   },
 
   addData: (resolution, range, items = []) => {
-    console.log("addData called", {
-      resolution,
-      range,
-      newItemsCount: items.length,
-    });
-
     const existing = get().data[resolution] ?? {
       loadedRanges: [],
       items: [],
@@ -161,12 +155,6 @@ export const useHistogramCache = create<HistogramCacheStore>((set, get) => ({
     const sortedItems = Array.from(itemMap.values()).sort((a, b) =>
       a.id.localeCompare(b.id)
     );
-
-    console.log("addData updating store", {
-      resolution,
-      totalItemsAfterMerge: sortedItems.length,
-      loadedRangesCount: newRanges.length,
-    });
 
     set((state) => ({
       data: {
@@ -203,12 +191,6 @@ export const useHistogramCache = create<HistogramCacheStore>((set, get) => ({
   },
 
   fetchMissingRanges: (resolution, start, end) => {
-    console.log("fetchMissingRanges called", {
-      resolution,
-      start: new Date(start).toISOString(),
-      end: new Date(end).toISOString(),
-    });
-
     const pending = get().pendingByResolution[resolution] ?? [];
     const nextPending = mergeRanges([...pending, { start, end }]);
     set((state) => ({
@@ -246,7 +228,6 @@ export const useHistogramCache = create<HistogramCacheStore>((set, get) => ({
         minStart,
         maxEnd,
       );
-      console.log("Missing ranges to fetch:", missingRanges);
       if (missingRanges.length === 0) return;
 
       const existing = get().inFlightRequests[resolution];
@@ -273,13 +254,6 @@ export const useHistogramCache = create<HistogramCacheStore>((set, get) => ({
           const queryEnd = new Date(range.end);
           const binSize = RESOLUTION_TO_MS[resolution];
 
-          console.log("Fetching histogram data from mongo:", {
-            resolution,
-            collection: `histogram_${resolution}`,
-            queryStart: queryStart.toISOString(),
-            queryEnd: queryEnd.toISOString(),
-          });
-
           const histogramData = await callResource("mongo", {
             action: "find",
             collection: `histogram_${resolution}`,
@@ -288,11 +262,6 @@ export const useHistogramCache = create<HistogramCacheStore>((set, get) => ({
             },
             options: { sort: { start: 1 } },
           }) as any[];
-
-          console.log("Received histogram data from mongo:", {
-            itemsCount: histogramData.length,
-            range,
-          });
 
           const items = histogramData.map((doc: any) => ({
             id: doc._id.toString(),

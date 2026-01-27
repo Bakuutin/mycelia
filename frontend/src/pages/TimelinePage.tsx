@@ -1,10 +1,9 @@
 import { useEffect, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { TimelineChart } from "@/components/timeline/TimelineChart";
+import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { config } from "@/config";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
@@ -189,7 +188,7 @@ const TimelinePage = () => {
         />
 
         <div className="border rounded-lg p-2">
-          <TimelineChart timeline={timeline} layers={config.layers} />
+          <MultiTrackTimeline timeline={timeline} />
         </div>
 
         <SelectedObjectsPanel
