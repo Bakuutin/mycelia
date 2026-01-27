@@ -1,5 +1,8 @@
 import { env } from "#/env.ts";
 
+// TODO: values per specific worker belong to the worker file, not this file.
+// Workers are discovered at startup, so we can't know the full set of workers at compile time.
+
 // Default values (production)
 const DEFAULTS = {
   vad: { debounceMs: 1000, interval: 300 },
