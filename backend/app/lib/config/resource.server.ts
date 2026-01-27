@@ -228,6 +228,8 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
   }
 
   private deepMerge(target: any, source: any): any {
+    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+
     if (source === null || source === undefined) {
       return target;
     }
@@ -248,6 +250,9 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
     const result = { ...target };
 
     for (const key in source) {
+      if (FORBIDDEN_KEYS.includes(key)) {
+        continue;
+      }
       if (source[key] !== undefined) {
         const sourceVal = source[key];
         const targetVal = target[key];
@@ -268,11 +273,28 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
   }
 
   private getNestedValue(obj: any, path: string): any {
-    return path.split('.').reduce((current, key) => current?.[key], obj);
+    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+    const keys = path.split('.');
+
+    for (const key of keys) {
+      if (FORBIDDEN_KEYS.includes(key)) {
+        throw new Error(`Invalid config path: '${key}' is not allowed`);
+      }
+    }
+
+    return keys.reduce((current, key) => current?.[key], obj);
   }
 
   private setNestedValue(obj: any, path: string, value: any): void {
+    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
     const keys = path.split('.');
+
+    for (const key of keys) {
+      if (FORBIDDEN_KEYS.includes(key)) {
+        throw new Error(`Invalid config path: '${key}' is not allowed`);
+      }
+    }
+
     const lastKey = keys.pop()!;
     const target = keys.reduce((current, key) => {
       if (!current[key] || typeof current[key] !== 'object') {

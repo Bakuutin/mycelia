@@ -111,7 +111,8 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       jobId: job.id,
     };
 
-    let objectId;
+    let objectId: string;
+    let title: string;
 
     if (existingObjectId) {
       const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
@@ -123,6 +124,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         throw new Error(`Object ${existingObjectId} not found`);
       }
 
+      title = currentObject.name || "Conversation";
       const currentSummaries = currentObject.summaries || [];
       const newSummaries = [...currentSummaries, summaryEntry];
 
@@ -138,13 +140,13 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     } else {
       // For new objects with short duration, use first line as title or generic
       const firstLine = promptText.split('\n').find(line => !line.startsWith('[') && line.trim()) || "Brief conversation";
-      const generatedTitle = firstLine.slice(0, 100).trim();
+      title = firstLine.slice(0, 100).trim();
 
       const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
         action: "create",
         object: {
           isConversation: true,
-          name: generatedTitle,
+          name: title,
           summaries: [summaryEntry],
           timeRanges: [{ start, end }],
           metadata: {
@@ -160,6 +162,9 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     return {
       success: true,
       objectId,
+      title,
+      start: start.toISOString(),
+      end: end.toISOString(),
       description: promptText.trim(),
     };
   }
