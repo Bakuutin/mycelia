@@ -85,11 +85,11 @@ const TimelinePage = () => {
     try {
       const result = await callResource("objects", {
         action: "getTimeRange",
-      }) as { data?: { start: string; end: string } };
+      }) as { start: string | null; end: string | null };
 
-      if (result.data?.start && result.data?.end) {
-        const earliest = new Date(result.data.start);
-        const latest = new Date(result.data.end);
+      if (result.start && result.end) {
+        const earliest = new Date(result.start);
+        const latest = new Date(result.end);
 
         const duration = latest.getTime() - earliest.getTime();
         const padding = duration * 0.05;
