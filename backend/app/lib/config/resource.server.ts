@@ -103,7 +103,7 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
     } catch (error) {
       console.error("Config validation failed:", error);
       const message = error instanceof z.ZodError
-        ? error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+        ? error.issues.map((e: z.core.$ZodIssue) => `${e.path.join('.')}: ${e.message}`).join(', ')
         : String(error);
       throw new Error(`Configuration is invalid: ${message}`);
     }

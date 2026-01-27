@@ -1,6 +1,7 @@
 import { expect, fn } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getFileExtension, uploadToGridFS } from "@/lib/mongo/fs.server.ts";
 
@@ -16,7 +17,7 @@ Deno.test(
       category: "document",
     });
 
-    expect(fileId).toBeInstanceOf(ObjectId);
+    expect(fileId).toBeInstanceOf(MongoObjectId);
   }),
 );
 

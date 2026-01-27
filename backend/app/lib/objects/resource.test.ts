@@ -8,6 +8,7 @@ import {
   type ObjectsResponse,
 } from "@/lib/objects/resource.server.ts";
 import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 
 async function getObjectsResource(auth: Auth) {
   return getObjectsResourceFn(auth);
@@ -37,7 +38,7 @@ Deno.test(
     });
 
     expect(result.insertedId).toBeDefined();
-    expect(result.insertedId).toBeInstanceOf(ObjectId);
+    expect(result.insertedId).toBeInstanceOf(MongoObjectId);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
   }),

@@ -158,7 +158,7 @@ async function startServer(
   // HTTP request logging - disable with LOG_HTTP=false
   if (Deno.env.get("LOG_HTTP") !== "false") {
     app.use(morgan("tiny", {
-      skip: (req) =>
+      skip: (req: Request) =>
         req.url === "/health" ||
         req.url === "/readiness" ||
         req.url?.startsWith("/api/resource/"),

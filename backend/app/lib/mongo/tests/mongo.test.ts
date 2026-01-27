@@ -3,6 +3,7 @@ import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "../core.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 
 Deno.test(
   "should allow find",
@@ -39,7 +40,7 @@ Deno.test(
       collection: "users",
       doc: { name: "Bob" },
     });
-    expect(result.insertedId).toBeInstanceOf(ObjectId);
+    expect(result.insertedId).toBeInstanceOf(MongoObjectId);
   }),
 );
 
@@ -112,7 +113,7 @@ Deno.test(
       doc: { name: "Test Document", createdAt: new Date() },
     });
 
-    expect(result.insertedId).toBeInstanceOf(ObjectId);
+    expect(result.insertedId).toBeInstanceOf(MongoObjectId);
 
     // Verify the document was actually inserted
     const foundDoc = await mongo({
@@ -144,7 +145,7 @@ Deno.test(
       doc: { name: "First Document" },
     });
 
-    expect(result1.insertedId).toBeInstanceOf(ObjectId);
+    expect(result1.insertedId).toBeInstanceOf(MongoObjectId);
 
     // Second operation should use the cache (no "Auto-created collection" log)
     const result2 = await mongo({
@@ -153,7 +154,7 @@ Deno.test(
       doc: { name: "Second Document" },
     });
 
-    expect(result2.insertedId).toBeInstanceOf(ObjectId);
+    expect(result2.insertedId).toBeInstanceOf(MongoObjectId);
 
     // Verify both documents exist
     const count = await mongo({
@@ -1046,7 +1047,7 @@ Deno.test(
       doc: { name: "Test Document", value: 123 },
     });
 
-    expect(result.insertedId).toBeInstanceOf(ObjectId);
+    expect(result.insertedId).toBeInstanceOf(MongoObjectId);
 
     const foundDoc = await mongo({
       action: "findOne",

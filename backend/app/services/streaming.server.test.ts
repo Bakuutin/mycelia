@@ -6,6 +6,7 @@ import {
   processAudioFile,
 } from "./streaming.server.ts";
 import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 
@@ -115,7 +116,7 @@ Deno.test(
       createdBy,
     );
 
-    expect(sourceFileId).toBeInstanceOf(ObjectId);
+    expect(sourceFileId).toBeInstanceOf(MongoObjectId);
 
     const sourceFile = await getSourceFile(sourceFileId);
     expect(sourceFile).toBeDefined();
@@ -155,7 +156,7 @@ Deno.test(
       sourceFileId,
     );
 
-    expect(chunkId).toBeInstanceOf(ObjectId);
+    expect(chunkId).toBeInstanceOf(MongoObjectId);
   }),
 );
 

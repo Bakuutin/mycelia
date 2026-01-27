@@ -265,7 +265,7 @@ export async function apiChatHandler(req: Request, res: Response) {
     }
 
     // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
-    if (inference.baseUrl.includes('inference.mycelia.tech')) {
+    if (inference && inference.baseUrl.includes('inference.mycelia.tech')) {
       return modelName;
     }
 
