@@ -31,7 +31,7 @@ services:
         limits:
           cpus: '2.0'
           memory: 4G
-    
+
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
   #   entrypoint: ["/mongot-entrypoint.sh"]
@@ -64,13 +64,14 @@ services:
     expose:
       - "5173"
     restart: always
-    command: deno task dev
+    command: deno task dev:offline
     env_file:
       - .env
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000
+      DENO_DIR: /deno-dir
     volumes:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk

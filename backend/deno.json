@@ -1,6 +1,7 @@
 {
   "tasks": {
-    "dev": "deno run --watch -A server.ts serve"
+    "dev": "deno run --watch -A server.ts serve",
+    "dev:offline": "deno run --watch -A --node-modules-dir=false server.ts serve"
   },
   "lint": {
     "rules": {
