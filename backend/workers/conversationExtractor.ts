@@ -84,7 +84,7 @@ export const schema = z.object({
     .describe("Additional guidance for conversation topic segmentation response format"),
   
   extraction_system_prompt: z.string()
-    .default("You are an assistant that extracts metadata from conversations. Output JSON with 'agreed_upon_something' (boolean - true if participants made any agreement, promise, or commitment), 'entities' (array of strings - names of people, places, organizations, or topics mentioned), and 'emoji' (single emoji representing the conversation topic).")
+    .default("summarize this please")
     .describe("System prompt for extracting conversation metadata"),
   
   extraction_guidance_prompt: z.string()

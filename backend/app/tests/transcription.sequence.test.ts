@@ -4,7 +4,7 @@ Deno.env.set("DENO_ENV", "test");
 import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import transcription_sequence_creator from "#/workers/transcription_sequence_creator.ts";
 
 /**

@@ -7,7 +7,7 @@ import {
   createSourceFile,
   type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
 

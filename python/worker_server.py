@@ -43,31 +43,11 @@ class TestPythonIntegrationJobRequest(BaseModel):
 
 def update_progress(job_id: str, job_type: str, progress: Dict[str, Any]):
     """Send progress update back to TypeScript server (non-blocking)"""
-    # Capture current context to propagate to the thread
-    ctx = contextvars.copy_context()
-
-    print(f"My JWT is {job_token_var.get()}")
-    
-    # Define the worker function for the thread
-    # def _threaded_update():
-    #     try:
     call_resource("jobs", {
         "action": "progressUpdate",
         "jobId": job_id,
         "progress": progress,
     })
-    #     except Exception as e:
-    #         logger.error(f"Failed to update progress: {e}")
-
-    # _threaded_update()
-
-    # Fire and forget - don't block job processing
-    # thread = threading.Thread(
-    #     target=ctx.run,
-    #     args=(_threaded_update,),
-    #     daemon=True
-    # )
-    # thread.start()
 
 
 @app.get("/health")

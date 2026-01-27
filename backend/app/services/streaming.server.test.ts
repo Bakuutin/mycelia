@@ -5,7 +5,7 @@ import {
   getSourceFile,
   processAudioFile,
 } from "./streaming.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 

@@ -1,5 +1,5 @@
 import type { Worker } from "bullmq";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { createWorker, getQueueEvents, enqueueJob } from "./queue.ts";
 import { processJob } from "./processor.ts";
 import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";

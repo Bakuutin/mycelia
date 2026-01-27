@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { Buffer } from "node:buffer";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
 

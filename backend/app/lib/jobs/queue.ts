@@ -1,5 +1,5 @@
 import { Job, Queue, QueueEvents, Worker } from "bullmq";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { redis } from "@/lib/redis.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
