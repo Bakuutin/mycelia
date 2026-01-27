@@ -3,7 +3,7 @@
  * Forwards requests to the diarization service (default: http://localhost:8085).
  */
 import type { Request, Response } from "express";
-import { authenticateOr401 } from "../lib/auth/core.server.ts";
+import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 
 // Get diarization service URL from environment or use default
 const DIARIZATION_SERVICE_URL = (
