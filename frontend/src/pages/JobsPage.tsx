@@ -30,7 +30,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
-import { isEmptyJobResult } from "@/lib/jobUtils";
 
 type WorkerStatus = {
   workers: Record<string, { paused: boolean }>;
@@ -68,6 +67,47 @@ const STATUS_PRIORITY: Record<string, number> = {
   delayed: 3,
   completed: 4,
 };
+
+/**
+ * Determines if a completed job produced no meaningful output.
+ * Different job types have different "empty" indicators.
+ */
+function isEmptyJobResult(job: JobInfo): boolean {
+  if (job.state !== "completed") return false;
+
+  const progress = job.progress || {};
+  const result = job.result || {};
+
+  switch (job.type) {
+    case "vad":
+      return (
+        (progress.hasSpeech === 0 || result.hasSpeech === 0) &&
+        (progress.processed === 0 || result.processed === 0)
+      );
+    case "conversation_chunk_creator":
+      return (
+        (result.finalized ?? 0) === 0 &&
+        (result.streamed ?? 0) === 0 &&
+        (result.chunksCreated ?? 0) === 0
+      );
+    case "conversation_extractor":
+      return (
+        (result.conversationsCreated ?? 0) === 0 &&
+        (result.chunksProcessed ?? 0) === 0
+      );
+    case "transcription_sequence_creator":
+      return (result.processed ?? 0) === 0;
+    case "transcription":
+      return (
+        (result.processed ?? 0) === 0 ||
+        (progress.processed === 0 && progress.total === 0)
+      );
+    default:
+      const processed = progress.processed ?? result.processed ?? -1;
+      const total = progress.total ?? result.total ?? -1;
+      return processed === 0 && total === 0;
+  }
+}
 
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
@@ -225,7 +265,7 @@ export default function JobsPage() {
   const sortedWorkers = useMemo(() => {
     const pipelineOrder = new Map<string, number>(WORKER_PIPELINE.map((w, i) => [w.type, i]));
     const pipelineDescriptions = new Map<string, string>(WORKER_PIPELINE.map(w => [w.type, w.description]));
-    
+
     return [...allTypes].sort((a, b) => {
       const orderA = pipelineOrder.get(a) ?? 999;
       const orderB = pipelineOrder.get(b) ?? 999;
@@ -267,7 +307,7 @@ export default function JobsPage() {
 
   const filteredJobs = useMemo(() => {
     let result = jobs;
-    
+
     // Apply quick filter first
     if (quickFilter !== "all") {
       result = result.filter(j => j.state === quickFilter);
@@ -279,7 +319,7 @@ export default function JobsPage() {
         result = [];
       }
     }
-    
+
     // Apply type filter
     if (!allTypesSelected) {
       if (filterTypes.size === 0) {
@@ -288,7 +328,7 @@ export default function JobsPage() {
         result = result.filter(j => filterTypes.has(j.type));
       }
     }
-    
+
     // Apply search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -300,10 +340,9 @@ export default function JobsPage() {
 
     // Apply hide empty filter
     if (hideEmpty) {
-      result = result.filter(job => {
-        // Only filter completed jobs - keep active/waiting/failed visible
+      result = result.filter((job) => {
         if (job.state !== "completed") return true;
-        return !isEmptyJobResult(job.type, job.state, job.progress, job.result);
+        return !isEmptyJobResult(job);
       });
     }
 
@@ -611,7 +650,7 @@ export default function JobsPage() {
                   const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
                   const counts = workerJobCounts[worker.type] || { active: 0, waiting: 0, failed: 0 };
                   return (
-                    <TableRow 
+                    <TableRow
                       key={worker.type}
                       className={`h-9 ${isPaused ? "bg-amber-500/5" : ""}`}
                     >
@@ -941,7 +980,7 @@ export default function JobsPage() {
                 </TableRow>
               ) : (
                 filteredJobs.map((job) => (
-                  <TableRow 
+                  <TableRow
                     key={job.id}
                     className={job.state === "failed" ? "bg-red-500/5 border-l-2 border-l-red-500" : ""}
                   >

@@ -95,7 +95,7 @@ function getRightBoundaryPath(
   }
 }
 
-function RangeBox({ range, width }: { range: PlacedObjectRange; width: number }) {
+const RangeBox = React.memo(function RangeBox({ range, width }: { range: PlacedObjectRange; width: number }) {
   const { startX: rawStartX, endX, lane, object, startOffScreen, endOffScreen, isSmall } = range;
   const startX = rawStartX < 0 ? 0 : rawStartX;
   const { toggleSelection, isSelected, addToSelection, clearSelection } =
@@ -240,7 +240,7 @@ function RangeBox({ range, width }: { range: PlacedObjectRange; width: number })
       )}
     </g>
   );
-}
+});
 
 function flattenObjectsToRanges(objects: Object[]): ExtractedObjectRange[] {
   const ranges: ExtractedObjectRange[] = [];
@@ -268,7 +268,7 @@ function useLaneLayout(
   visibleStart: Date,
   visibleEnd: Date,
 ) {
-  const now = useNow(100);
+  const now = useNow(1000);
 
   return useMemo(() => {
     const bigRanges: ExtractedObjectRange[] = [];
