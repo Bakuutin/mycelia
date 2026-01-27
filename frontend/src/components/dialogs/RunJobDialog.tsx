@@ -31,8 +31,8 @@ interface RunJobDialogProps {
 }
 
 function hasStartEndProperties(schema: any): boolean {
-  if (!schema?.properties) return false;
-  return "start" in schema.properties && "end" in schema.properties;
+  if (!schema?.input?.properties) return false;
+  return "start" in schema.input.properties && "end" in schema.input.properties;
 }
 
 export function RunJobDialog({

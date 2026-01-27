@@ -650,7 +650,7 @@ const capability: JobCapability = {
 
     // Compute prompt version for idempotency (based on prompts that affect output)
     const promptVersion = createHash("sha256")
-      .update(input.segmentation_system_prompt + input.extraction_system_prompt)
+      .update(input.segmentation_system_prompt + input.segmentation_guidance_prompt + input.extraction_system_prompt + input.extraction_guidance_prompt)
       .digest("hex")
       .slice(0, 8);
 
@@ -753,13 +753,17 @@ const capability: JobCapability = {
         // LLM Call #1: Segmentation
         console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
         const promptLines = prompt.split('\n');
+        const segmentationMessages: Array<{ role: string; content: string }> = [
+          { role: "system", content: input.segmentation_system_prompt },
+          { role: "user", content: prompt },
+        ];
+        if (input.segmentation_guidance_prompt) {
+          segmentationMessages.push({ role: "assistant", content: input.segmentation_guidance_prompt });
+        }
         const segments = await callLLMStructured(
           llm,
           chunk.params.model,
-          [
-            { role: "system", content: input.segmentation_system_prompt },
-            { role: "user", content: prompt },
-          ],
+          segmentationMessages,
           createSegmentParser(promptLines, chunkStart, chunkEnd),
           `Chunk ${chunk._id} segmentation`,
         );

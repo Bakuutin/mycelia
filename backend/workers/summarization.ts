@@ -44,7 +44,7 @@ function getSilenceMessage(gapMs: number): string {
 export async function use(job: Job<JobData>): Promise<JobResult> {
   const jobData = job.data as SummarizationJobData;
 
-  const { start: startStr, end: endStr, prompt: userPrompt, model: userModel, objectId: existingObjectId } = jobData;
+  const { start: startStr, end: endStr, objectId: existingObjectId } = jobData;
   const start = new Date(startStr);
   const end = new Date(endStr);
 
@@ -94,7 +94,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }
   promptText += getTimestampMessage(new Date(lastEnd));
 
-  const modelAlias = userModel || jobData.model;
+  const modelAlias = jobData.model || "small";
   const minDurationForLlm = jobData.minDurationForLlm ?? 10;
   const durationSeconds = (end.getTime() - start.getTime()) / 1000;
 
@@ -134,7 +134,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         value: newSummaries,
       }, { jwt, myceliaUrl });
 
-      objectId = existingObjectId;
+      objectId = existingObjectId.toString();
     } else {
       // For new objects with short duration, use first line as title or generic
       const firstLine = promptText.split('\n').find(line => !line.startsWith('[') && line.trim()) || "Brief conversation";
@@ -164,9 +164,10 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     };
   }
 
-  // Load system prompt with priority: explicit job param > job data (includes default overrides) > schema default
-  const systemPrompt = userPrompt || jobData.prompt;
-  const promptSource = userPrompt ? "explicit" : "job_data";
+  // Load system prompt with priority: job data (includes default overrides) > schema default
+  const defaultPrompt = "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.";
+  const systemPrompt = jobData.prompt || defaultPrompt;
+  const promptSource = jobData.prompt ? "job_data" : "default";
 
   console.log(`[summarization] Job ${job.id}: using system prompt from ${promptSource}`);
 
@@ -223,7 +224,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       value: newSummaries,
     }, { jwt, myceliaUrl });
 
-    objectId = existingObjectId;
+    objectId = existingObjectId.toString();
   } else {
     console.log(`[summarization] Job ${job.id}: calling LLM for title generation`);
     const titleResponse = await callResource<any, any>("llm", {

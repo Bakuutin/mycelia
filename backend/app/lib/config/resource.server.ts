@@ -189,9 +189,11 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
       
       let updatedConfig;
       if (path) {
-        // Update specific path
+        // Update specific path - merge updates into existing value at path
         updatedConfig = { ...currentConfig };
-        this.setNestedValue(updatedConfig, path, updates);
+        const existingValue = this.getNestedValue(currentConfig, path);
+        const mergedValue = this.deepMerge(existingValue ?? {}, updates);
+        this.setNestedValue(updatedConfig, path, mergedValue);
       } else {
         // Merge updates at root level
         updatedConfig = this.deepMerge(currentConfig, updates);
