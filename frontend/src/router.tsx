@@ -34,6 +34,7 @@ import JobDetailPage from "./pages/JobDetailPage";
 import CreateJobPage from "./pages/CreateJobPage";
 import ConversationsPage from "./pages/ConversationsPage";
 import AudioPipelinePage from "./pages/AudioPipelinePage";
+import SpeakersPage from "./pages/SpeakersPage";
 
 export const router = createBrowserRouter([
   {
@@ -95,6 +96,10 @@ export const router = createBrowserRouter([
       {
         path: "conversations",
         element: <ConversationsPage />,
+      },
+      {
+        path: "speakers",
+        element: <SpeakersPage />,
       },
       {
         path: "diarizations/:id",

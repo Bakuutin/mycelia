@@ -1,5 +1,5 @@
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
-import { Clock, Home, Package, Settings, MessageSquare, Activity, Mic } from "lucide-react";
+import { Clock, Home, Package, Settings, MessageSquare, Activity, Mic, Users } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -91,6 +91,16 @@ const Layout = () => {
                   >
                     <Mic className="w-4 h-4" />
                     Pipeline
+                  </Link>
+                  <Link
+                    to="/speakers"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/speakers"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      }`}
+                  >
+                    <Users className="w-4 h-4" />
+                    Speakers
                   </Link>
                   <Link
                     to="/settings"

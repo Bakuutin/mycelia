@@ -23,6 +23,7 @@ import { authJwtLoginHandler } from "@/routes/auth.jwt.login.ts";
 import { wellKnownOauthAuthorizationServerHandler } from "@/routes/[.]well-known.oauth-authorization-server.ts";
 import { wellKnownOauthProtectedResourceHandler } from "@/routes/[.]well-known.oauth-protected-resource.ts";
 import { apiChatHandler } from "@/routes/api.chat.ts";
+import { apiDiarizationProxyHandler, apiDiarizationEnrollHandler } from "@/routes/api.diarization.ts";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
 
 export function registerRoutes(app: Express): void {
@@ -38,6 +39,8 @@ export function registerRoutes(app: Express): void {
   app.get("/api/audio/stream", apiAudioStreamHandler);
   app.post("/api/audio/upload", apiAudioUploadHandler);
   app.get("/api/audio/wav", apiAudioWavHandler);
+  // Diarization service proxy routes
+  app.all("/api/diarization/*", asyncHandler(apiDiarizationProxyHandler));
   app.get("/mcp", mcpGetHandler);
   app.post("/mcp", mcpPostHandler);
   app.post("/llm/chat/completions", llmChatCompletionsHandler);
