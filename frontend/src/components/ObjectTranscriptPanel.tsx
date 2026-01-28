@@ -1,13 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Play, FileText } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { callResource } from "@/lib/api";
 import { useAudioPlayer } from "@/modules/audio/player";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatTime } from "@/lib/formatTime";
+import { cn } from "@/lib/utils";
 
 interface ObjectTranscriptPanelProps {
   timeRange: { start: Date | string; end?: Date | string | null };
@@ -37,8 +37,28 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const { resetDate, setIsPlaying } = useAudioPlayer();
+  const { currentDate, resetDate, setIsPlaying } = useAudioPlayer();
   const { timeFormat } = useSettingsStore();
+  const currentSegmentRef = useRef<HTMLDivElement>(null);
+  const lastScrolledIndex = useRef<number>(-1);
+
+  // Find the index of the currently playing segment
+  const currentSegmentIndex = segments.findIndex(seg =>
+    currentDate &&
+    currentDate >= seg.time &&
+    currentDate < seg.endTime
+  );
+
+  // Auto-scroll to current segment when it changes
+  useEffect(() => {
+    if (currentSegmentIndex >= 0 && currentSegmentIndex !== lastScrolledIndex.current) {
+      lastScrolledIndex.current = currentSegmentIndex;
+      // Small delay to ensure DOM is updated
+      setTimeout(() => {
+        currentSegmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, [currentSegmentIndex]);
 
   const startDate = typeof timeRange.start === "string"
     ? new Date(timeRange.start)
@@ -161,34 +181,47 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
 
       <ScrollArea className="h-[300px] pr-3">
         <div className="space-y-1">
-          {segments.map((seg, idx) => (
-            <div
-              key={idx}
-              className="group flex items-start gap-2 p-2 rounded hover:bg-muted/80 transition-colors"
-            >
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+          {segments.map((seg, idx) => {
+            const isCurrentSegment = idx === currentSegmentIndex;
+            return (
+              <div
+                key={idx}
+                ref={isCurrentSegment ? currentSegmentRef : null}
+                className={cn(
+                  "group flex items-start gap-2 p-2 rounded transition-colors cursor-pointer",
+                  isCurrentSegment
+                    ? "bg-primary/10 border-l-2 border-primary"
+                    : "hover:bg-muted/80"
+                )}
                 onClick={() => handlePlayFromSegment(seg.time)}
-                title="Play from here"
               >
-                <Play className="w-3 h-3" />
-              </Button>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-xs text-muted-foreground font-mono">
-                    {formatTime(seg.time, timeFormat)}
-                  </span>
-                  <span className="text-xs text-muted-foreground/60">
-                    ({formatDuration(seg.time, seg.endTime)})
-                  </span>
+                <div className={cn(
+                  "flex-shrink-0 w-6 h-6 flex items-center justify-center",
+                  isCurrentSegment ? "text-primary" : "text-muted-foreground opacity-0 group-hover:opacity-100"
+                )}>
+                  <Play className="w-3 h-3" />
                 </div>
-                <p className="text-sm leading-relaxed">{seg.text}</p>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className={cn(
+                      "text-xs font-mono",
+                      isCurrentSegment ? "text-primary font-medium" : "text-muted-foreground"
+                    )}>
+                      {formatTime(seg.time, timeFormat)}
+                    </span>
+                    <span className="text-xs text-muted-foreground/60">
+                      ({formatDuration(seg.time, seg.endTime)})
+                    </span>
+                  </div>
+                  <p className={cn(
+                    "text-sm leading-relaxed",
+                    isCurrentSegment && "font-medium"
+                  )}>{seg.text}</p>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </ScrollArea>
     </Card>

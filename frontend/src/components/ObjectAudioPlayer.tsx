@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PlayPauseButton } from "@/modules/audio/PlayPauseButton";
-import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player";
+import { useAudioPlayer } from "@/modules/audio/player";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatTime } from "@/lib/formatTime";
 
@@ -31,7 +31,7 @@ const SPEED_OPTIONS = [
 ];
 
 export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
-  const { currentDate, isPlaying, resetDate } = useAudioPlayer();
+  const { currentDate, resetDate } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
   const hasInitialized = useRef(false);
 
@@ -84,11 +84,32 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  // Get total duration formatted
+  const getTotalDuration = () => {
+    if (!startDate || !endDate) return "";
+    const durationMs = endDate.getTime() - startDate.getTime();
+    const totalSeconds = Math.floor(durationMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    }
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  // Handle progress bar click to seek
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    const duration = (endDate?.getTime() || startDate.getTime() + 3600000) - startDate.getTime();
+    const targetTime = new Date(startDate.getTime() + duration * percentage);
+    resetDate(targetTime);
+  };
+
   return (
     <Card className="p-4 bg-muted/50">
-      {/* Hidden AudioPlayer component that manages Web Audio API */}
-      <AudioPlayer />
-
       <h3 className="text-sm font-semibold text-muted-foreground mb-3">
         Audio Player
       </h3>
@@ -99,8 +120,12 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
           <PlayPauseButton />
 
           <div className="flex-1">
-            {/* Progress bar */}
-            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+            {/* Clickable Progress bar */}
+            <div
+              className="h-2 bg-muted rounded-full overflow-hidden cursor-pointer hover:bg-muted/80 transition-colors"
+              onClick={handleProgressClick}
+              title="Click to seek"
+            >
               <div
                 className="h-full bg-primary transition-all duration-200"
                 style={{ width: `${getProgress()}%` }}
@@ -108,17 +133,15 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
             </div>
           </div>
 
-          <span className="text-sm font-mono text-muted-foreground min-w-[4rem] text-right">
-            {getElapsedTime()}
+          <span className="text-sm font-mono text-muted-foreground min-w-[5rem] text-right">
+            {getElapsedTime()} / {getTotalDuration()}
           </span>
         </div>
 
-        {/* Current playback time */}
-        {isPlaying && currentDate && (
-          <div className="text-xs text-muted-foreground text-center">
-            Playing: {formatTime(currentDate, timeFormat)}
-          </div>
-        )}
+        {/* Current playback timestamp */}
+        <div className="text-xs text-muted-foreground text-center">
+          {currentDate ? formatTime(currentDate, timeFormat) : "Not playing"}
+        </div>
 
         {/* Speed and Volume controls */}
         <div className="flex items-center gap-4">
