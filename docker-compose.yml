@@ -115,6 +115,9 @@ services:
       - ./misc/nginx/templates:/etc/nginx/templates:ro
       - ./misc/nginx/ssl:/etc/nginx/ssl
       - ./misc/nginx/nginx-entrypoint.sh:/nginx-entrypoint.sh:ro
+    depends_on:
+      - frontend
+      - backend
     restart: always
 
 
