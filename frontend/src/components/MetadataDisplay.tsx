@@ -18,6 +18,10 @@ import {
 
 interface MetadataDisplayProps {
   object: Object;
+  /** Hide the object type card when already displayed elsewhere */
+  hideObjectType?: boolean;
+  /** Hide time information when player is already visible */
+  hideTimeInfo?: boolean;
 }
 
 function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
@@ -69,7 +73,7 @@ function getObjectType(object: Object): {
   return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border-gray-200" };
 }
 
-export function MetadataDisplay({ object }: MetadataDisplayProps) {
+export function MetadataDisplay({ object, hideObjectType, hideTimeInfo }: MetadataDisplayProps) {
   const extractedWith = object?.metadata?.extractedWith;
   const timeRanges = object?.timeRanges;
   const hasTimeRange = timeRanges && timeRanges.length > 0;
@@ -79,19 +83,21 @@ export function MetadataDisplay({ object }: MetadataDisplayProps) {
 
   return (
     <div className="space-y-4">
-      {/* Object Type Badge */}
-      <Card className="p-4 bg-muted/50">
-        <h3 className="text-sm font-semibold text-muted-foreground mb-3">
-          Object Type
-        </h3>
-        <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border ${typeInfo.color}`}>
-          <TypeIcon className="w-4 h-4" />
-          <span className="font-medium">{typeInfo.type}</span>
-        </div>
-      </Card>
+      {/* Object Type Badge - hidden when displayed elsewhere */}
+      {!hideObjectType && (
+        <Card className="p-4 bg-muted/50">
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3">
+            Object Type
+          </h3>
+          <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border ${typeInfo.color}`}>
+            <TypeIcon className="w-4 h-4" />
+            <span className="font-medium">{typeInfo.type}</span>
+          </div>
+        </Card>
+      )}
 
       {/* Time Information - prominent display for conversations/events */}
-      {hasTimeRange && firstRange && (
+      {!hideTimeInfo && hasTimeRange && firstRange && (
         <Card className="p-4 bg-muted/50">
           <h3 className="text-sm font-semibold text-muted-foreground mb-3">
             Time Information

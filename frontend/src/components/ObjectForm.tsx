@@ -107,6 +107,10 @@ interface ObjectFormProps {
   object: ObjectFormData;
   onUpdate?: (updates: Partial<ObjectFormData>) => Promise<void>;
   onFieldUpdate?: (field: string, value: any) => void;
+  /** Hide the summary section when already displayed elsewhere on the page */
+  hideSummary?: boolean;
+  /** Hide icon and name when displayed as page title */
+  hideIconName?: boolean;
 }
 
 const renderIcon = (icon: any) => {
@@ -257,7 +261,7 @@ function useDebouncedUpdate(
 }
 
 export function ObjectForm(
-  { object, onUpdate, onFieldUpdate }: ObjectFormProps,
+  { object, onUpdate, onFieldUpdate, hideSummary, hideIconName }: ObjectFormProps,
 ) {
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
@@ -373,28 +377,30 @@ export function ObjectForm(
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <div className="flex-shrink-0">
-          <Label className="text-sm font-medium">Icon</Label>
-          <div className="mt-1">
-            <EmojiPickerButton
-              value={object.icon}
-              onChange={(icon) => updateField("icon", icon)}
+      {!hideIconName && (
+        <div className="flex items-start gap-4">
+          <div className="flex-shrink-0">
+            <Label className="text-sm font-medium">Icon</Label>
+            <div className="mt-1">
+              <EmojiPickerButton
+                value={object.icon}
+                onChange={(icon) => updateField("icon", icon)}
+              />
+            </div>
+          </div>
+
+          <div className="flex-1">
+            <Label htmlFor="name" className="text-sm font-medium">Name</Label>
+            <Input
+              id="name"
+              value={nameValue}
+              onChange={(e) => setNameValue(e.target.value)}
+              placeholder="Object name"
+              className="mt-1"
             />
           </div>
         </div>
-
-        <div className="flex-1">
-          <Label htmlFor="name" className="text-sm font-medium">Name</Label>
-          <Input
-            id="name"
-            value={nameValue}
-            onChange={(e) => setNameValue(e.target.value)}
-            placeholder="Object name"
-            className="mt-1"
-          />
-        </div>
-      </div>
+      )}
 
       <DetailsField
         value={detailsValue}
@@ -484,7 +490,7 @@ export function ObjectForm(
         </DialogContent>
       </Dialog>
 
-      {object.summaries && object.summaries.length > 0 && (
+      {!hideSummary && object.summaries && object.summaries.length > 0 && (
         <div className="space-y-2">
           <Label className="text-sm font-medium">{object.summaries.length > 1 ? 'Summaries' : 'Summary'}</Label>
           <div className="space-y-3">
@@ -911,103 +917,77 @@ export function ObjectForm(
         )}
       </div>
 
-      <div className="space-y-2">
-        {object.timeRanges && object.timeRanges.length > 0 && (
-          <Label className="text-sm font-medium">Time Ranges</Label>
-        )}
+      {/* Time Ranges - compact layout */}
+      {object.timeRanges && object.timeRanges.length > 0 && (
         <div className="space-y-3">
+          <Label className="text-sm font-medium">Time Ranges</Label>
           {(object.timeRanges || []).map((range, index) => (
-            <div key={index} className="border rounded-md p-4 space-y-3">
-              <div className="flex justify-between items-start">
-                <Label className="text-xs text-muted-foreground">
-                  Range {index + 1}
-                </Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    const newRanges = (object.timeRanges || []).filter((_, i) =>
-                      i !== index
-                    );
-                    onUpdate({
-                      timeRanges: newRanges.length > 0 ? newRanges : undefined,
-                    });
-                  }}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <div>
-                <Label htmlFor={`range-name-${index}`} className="text-xs">
-                  Name (optional)
-                </Label>
+            <div key={index} className="border rounded-md p-3 bg-muted/20">
+              <div className="flex items-center justify-between gap-2 mb-2">
                 <Input
-                  id={`range-name-${index}`}
                   value={range.name || ""}
                   onChange={(e) => {
                     const newRanges = [...(object.timeRanges || [])];
-                    newRanges[index] = {
-                      ...range,
-                      name: e.target.value || undefined,
-                    };
+                    newRanges[index] = { ...range, name: e.target.value || undefined };
                     onUpdate({ timeRanges: newRanges });
                   }}
-                  placeholder="Range name"
+                  placeholder={`Time Range ${index + 1}`}
+                  className="h-8 text-sm font-medium bg-transparent border-none shadow-none px-0 focus-visible:ring-0"
                 />
-              </div>
-              <div>
-                <Label htmlFor={`range-start-${index}`} className="text-xs">
-                  Start
-                </Label>
-                <DateTimePicker
-                  value={range.start}
-                  onChange={(date) => {
-                    if (date) {
-                      const newRanges = [...(object.timeRanges || [])];
-                      newRanges[index] = { ...range, start: date };
-                      onUpdate({ timeRanges: newRanges });
-                    }
-                  }}
-                  placeholder="Pick start time"
-                />
-              </div>
-              <div>
-                <Label htmlFor={`range-end-${index}`} className="text-xs">
-                  End (optional)
-                </Label>
-                <DateTimePicker
-                  nullable
-                  value={range.end}
-                  onChange={(date) => {
-                    const newRanges = [...(object.timeRanges || [])];
-                    newRanges[index] = { ...range, end: date || undefined };
-                    onUpdate({ timeRanges: newRanges });
-                  }}
-                  placeholder="Pick end time (optional)"
-                />
-              </div>
-
-              {/* Transcript button for ranges shorter than user-configured threshold */}
-              {range.end &&
-                isTimeRangeShorterThanTranscriptThreshold(
-                  range.start,
-                  range.end,
-                ) && (
-                <div className="pt-2 flex items-center gap-2">
-                  <Link
-                    to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}
+                <div className="flex items-center gap-1">
+                  {range.end && isTimeRangeShorterThanTranscriptThreshold(range.start, range.end) && (
+                    <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs">
+                        Transcript
+                      </Button>
+                    </Link>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const newRanges = (object.timeRanges || []).filter((_, i) => i !== index);
+                      onUpdate({ timeRanges: newRanges.length > 0 ? newRanges : undefined });
+                    }}
                   >
-                    <Button variant="outline" size="sm">
-                      Go to transcript
-                    </Button>
-                  </Link>
+                    <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
+                  </Button>
                 </div>
-              )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Start</Label>
+                  <DateTimePicker
+                    value={range.start}
+                    onChange={(date) => {
+                      if (date) {
+                        const newRanges = [...(object.timeRanges || [])];
+                        newRanges[index] = { ...range, start: date };
+                        onUpdate({ timeRanges: newRanges });
+                      }
+                    }}
+                    placeholder="Start time"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">End</Label>
+                  <DateTimePicker
+                    nullable
+                    value={range.end}
+                    onChange={(date) => {
+                      const newRanges = [...(object.timeRanges || [])];
+                      newRanges[index] = { ...range, end: date || undefined };
+                      onUpdate({ timeRanges: newRanges });
+                    }}
+                    placeholder="End time"
+                  />
+                </div>
+              </div>
             </div>
           ))}
         </div>
-      </div>
+      )}
 
       <div className="space-y-2">
 
