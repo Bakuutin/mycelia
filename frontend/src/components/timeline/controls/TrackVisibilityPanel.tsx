@@ -11,6 +11,7 @@ import { Layers, Eye, EyeOff, LayoutGrid, LayoutList } from "lucide-react";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
 import { TRACK_REGISTRY } from "@/components/timeline/tracks";
 import { OBJECT_CATEGORIES } from "@/types/tracks";
+import { useObjectCategoryCounts, useTotalObjectCount } from "@/modules/objects/useObjects";
 
 export function TrackVisibilityPanel() {
   const {
@@ -23,6 +24,9 @@ export function TrackVisibilityPanel() {
     visibleObjectCategories,
     toggleObjectCategory,
   } = useTrackVisibilityStore();
+
+  const categoryCounts = useObjectCategoryCounts();
+  const totalObjectCount = useTotalObjectCount();
 
   // Include objects track in the list
   const allTracks = [
@@ -79,12 +83,17 @@ export function TrackVisibilityPanel() {
                 key={track.config.id}
                 className="flex items-center justify-between"
               >
-                <Label htmlFor={track.config.id} className="text-sm cursor-pointer">
+                <Label htmlFor={track.config.id} className="text-sm cursor-pointer flex items-center">
                   <span
                     className="inline-block w-2 h-2 rounded-full mr-2"
                     style={{ backgroundColor: track.config.color }}
                   />
                   {track.config.label}
+                  {track.config.id === "objects" && (
+                    <span className="text-muted-foreground/60 ml-1 tabular-nums">
+                      ({totalObjectCount})
+                    </span>
+                  )}
                 </Label>
                 <Switch
                   id={track.config.id}
@@ -123,22 +132,24 @@ export function TrackVisibilityPanel() {
                   </div>
                 </div>
 
-                {/* Category toggles (only visible when by-category mode) */}
-                {objectsLayoutMode === "by-category" && (
-                  <div className="space-y-2 pl-2">
-                    <Label className="text-xs text-muted-foreground">Categories</Label>
-                    {OBJECT_CATEGORIES.map((category) => (
+                {/* Category toggles - always visible for filtering */}
+                <div className="space-y-2 pl-2">
+                  <Label className="text-xs text-muted-foreground">Categories</Label>
+                  {OBJECT_CATEGORIES.map((category) => (
                       <div
                         key={category.id}
                         className="flex items-center justify-between"
                       >
-                        <Label htmlFor={`cat-${category.id}`} className="text-xs cursor-pointer flex items-center gap-1.5">
+                        <Label htmlFor={`cat-${category.id}`} className="text-xs cursor-pointer flex items-center gap-1.5 flex-1">
                           <span>{category.icon}</span>
                           <span
                             className="inline-block w-2 h-2 rounded-full"
                             style={{ backgroundColor: category.color }}
                           />
                           {category.label}
+                          <span className="text-muted-foreground/60 ml-auto tabular-nums">
+                            {categoryCounts[category.id]}
+                          </span>
                         </Label>
                         <Switch
                           id={`cat-${category.id}`}
@@ -149,7 +160,6 @@ export function TrackVisibilityPanel() {
                       </div>
                     ))}
                   </div>
-                )}
               </div>
             </>
           )}

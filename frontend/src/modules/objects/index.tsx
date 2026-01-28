@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
-import { useObjects, useObjectsStore } from "./useObjects.ts";
+import { useFilteredObjects, useObjectsStore, getObjectCategory } from "./useObjects.ts";
 import { Button } from "@/components/ui/button.tsx";
 import type { Object } from "@/types/objects.ts";
 import {
@@ -31,15 +31,6 @@ type ExtractedObjectRange = {
   end?: Date;
   category: ObjectCategory;
 };
-
-// Determine the category of an object based on its flags
-function getObjectCategory(object: Object): ObjectCategory {
-  if (object.isPerson) return "person";
-  if (object.isEvent) return "event";
-  if (object.isPromise) return "promise";
-  if (object.isRelationship) return "relationship";
-  return "other";
-}
 
 type PlacedObjectRange = {
   startX: number;
@@ -595,7 +586,7 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
 export const ObjectsLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { objects, loading } = useObjects();
+      const { objects, loading } = useFilteredObjects();
       const setSpanningObjects = useSpanningObjectsStore(
         (state) => state.setSpanningObjects,
       );
