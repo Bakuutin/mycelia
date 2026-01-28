@@ -32,7 +32,7 @@ const SPEED_OPTIONS = [
 export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
   const { currentDate, resetDate } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
-  const hasInitialized = useRef(false);
+  const prevStartTimeRef = useRef<number | null>(null);
 
   const startDate = typeof timeRange.start === "string"
     ? new Date(timeRange.start)
@@ -42,11 +42,14 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
     ? (typeof timeRange.end === "string" ? new Date(timeRange.end) : timeRange.end)
     : null;
 
-  // Initialize player to start of time range when first mounted
+  // Initialize player to start of time range when mounted or when startDate changes
+  // This fixes the issue where navigating between objects with cached data
+  // wouldn't reset the player because the component stayed mounted
   useEffect(() => {
-    if (!hasInitialized.current && startDate) {
+    const startTime = startDate.getTime();
+    if (prevStartTimeRef.current !== startTime) {
       resetDate(startDate);
-      hasInitialized.current = true;
+      prevStartTimeRef.current = startTime;
     }
   }, [startDate, resetDate]);
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { Play, FileText, Link2, Link2Off } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,13 +61,22 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
     }
   }, [currentSegmentIndex, syncEnabled]);
 
-  const startDate = typeof timeRange.start === "string"
-    ? new Date(timeRange.start)
-    : timeRange.start;
+  // Memoize dates to prevent infinite re-renders when end is null
+  const startDate = useMemo(() => {
+    return typeof timeRange.start === "string"
+      ? new Date(timeRange.start)
+      : timeRange.start;
+  }, [timeRange.start]);
 
-  const endDate = timeRange.end
-    ? (typeof timeRange.end === "string" ? new Date(timeRange.end) : timeRange.end)
-    : new Date(); // If no end date, use now
+  // For endDate, we use a stable fallback (1 hour from start) instead of new Date()
+  // to prevent infinite re-renders when timeRange.end is null
+  const endDate = useMemo(() => {
+    if (timeRange.end) {
+      return typeof timeRange.end === "string" ? new Date(timeRange.end) : timeRange.end;
+    }
+    // Fallback: 1 hour from start instead of current time to keep it stable
+    return new Date(startDate.getTime() + 60 * 60 * 1000);
+  }, [timeRange.end, startDate]);
 
   useEffect(() => {
     async function fetchTranscripts() {
@@ -113,7 +122,7 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
     }
 
     fetchTranscripts();
-  }, [startDate.getTime(), endDate.getTime()]);
+  }, [startDate, endDate]);
 
   const handlePlayFromSegment = (segmentTime: Date) => {
     resetDate(segmentTime);
