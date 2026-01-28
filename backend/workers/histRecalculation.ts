@@ -146,6 +146,34 @@ export async function updateHistogram(
       });
     }
   }
+
+  // Create empty buckets for time slots that have no data
+  const emptyBucketOps = [];
+  for (let t = start.getTime(); t < end.getTime(); t += binSize) {
+    emptyBucketOps.push({
+      updateOne: {
+        filter: { start: new Date(t) },
+        update: {
+          $setOnInsert: {
+            start: new Date(t),
+            totals: {},
+            stale: false,
+            updated_at: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    });
+  }
+
+  for (let i = 0; i < emptyBucketOps.length; i += 500) {
+    await mongo({
+      action: "bulkWrite",
+      collection: `histogram_${resolution}`,
+      operations: emptyBucketOps.slice(i, i + 500),
+      options: { ordered: false },
+    });
+  }
 }
 
 async function updateHistogramOptimized(
@@ -173,6 +201,42 @@ async function updateHistogramOptimized(
   // Get the next lower resolution
   const currentIndex = RESOLUTION_ORDER.indexOf(resolution);
   const lowerResolution = RESOLUTION_ORDER[currentIndex - 1];
+  const lowerBinSize = RESOLUTION_TO_MS[lowerResolution];
+
+  // Batch to stay under 1000 lower-resolution bins per query
+  // e.g., for 1hour: 1000 * 5min = 5000 min = ~83 hours per batch
+  const MAX_LOWER_BINS = 900; // Stay safely under 1000 limit
+  const BATCH_SIZE = MAX_LOWER_BINS * lowerBinSize;
+
+  if (end.getTime() - start.getTime() > BATCH_SIZE) {
+    const steps = Math.ceil((end.getTime() - start.getTime()) / BATCH_SIZE);
+    console.log(`   ├─ Splitting into ${steps} batches (max ${MAX_LOWER_BINS} source bins each)...`);
+    for (let i = 0; i < steps; i++) {
+      const batchStart = new Date(start.getTime() + i * BATCH_SIZE);
+      const batchEnd = new Date(Math.min(start.getTime() + (i + 1) * BATCH_SIZE, end.getTime()));
+      console.log(`   ├─ Batch ${i + 1}/${steps}: ${batchStart.toISOString()} to ${batchEnd.toISOString()}`);
+      await updateHistogramOptimizedBatch(auth, batchStart, batchEnd, resolution);
+    }
+    return;
+  }
+
+  await updateHistogramOptimizedBatch(auth, start, end, resolution);
+}
+
+async function updateHistogramOptimizedBatch(
+  auth: Auth,
+  start: Date,
+  end: Date,
+  resolution: Resolution,
+): Promise<void> {
+  const mongo = await getMongoResource(auth);
+  const binSize = RESOLUTION_TO_MS[resolution];
+
+  const totalBins = Math.ceil((end.getTime() - start.getTime()) / binSize);
+
+  // Get the next lower resolution
+  const currentIndex = RESOLUTION_ORDER.indexOf(resolution);
+  const lowerResolution = RESOLUTION_ORDER[currentIndex - 1];
 
   // Query the lower resolution data
   const lowerData = await mongo({
@@ -182,7 +246,7 @@ async function updateHistogramOptimized(
   });
 
   console.log(
-    `   ├─ Processing ${lowerData.length} source bins into ${totalBins} target bins...`,
+    `   │  Processing ${lowerData.length} source bins into ${totalBins} target bins...`,
   );
 
   // Aggregate the lower resolution data into the current resolution
@@ -310,7 +374,41 @@ async function updateHistogramOptimized(
       );
     }
   }
-  console.log(`   └─ ✓ Completed writing ${ops.length} bins`);
+
+  // Create empty buckets for time slots that have no data
+  const emptyBucketOps = [];
+  for (let t = start.getTime(); t < end.getTime(); t += binSize) {
+    const binKey = new Date(t).toISOString();
+    if (!aggregatedData.has(binKey)) {
+      emptyBucketOps.push({
+        updateOne: {
+          filter: { start: new Date(t) },
+          update: {
+            $setOnInsert: {
+              start: new Date(t),
+              totals: {},
+              stale: false,
+              updated_at: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+  }
+
+  if (emptyBucketOps.length > 0) {
+    console.log(`   ├─ Creating ${emptyBucketOps.length} empty buckets...`);
+    for (let i = 0; i < emptyBucketOps.length; i += batchSize) {
+      await mongo({
+        action: "bulkWrite",
+        collection: `histogram_${resolution}`,
+        operations: emptyBucketOps.slice(i, i + batchSize),
+      });
+    }
+  }
+
+  console.log(`   └─ ✓ Completed writing ${ops.length + emptyBucketOps.length} bins`);
 }
 
 export async function updateAllHistogram(
