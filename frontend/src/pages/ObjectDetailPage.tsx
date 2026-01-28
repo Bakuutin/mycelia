@@ -90,8 +90,12 @@ const ObjectDetailPage = () => {
     );
   }
 
+  const hasTimeRanges = object.timeRanges && object.timeRanges.length > 0;
+  const hasSummary = object.summaries && object.summaries.length > 0;
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <SmartBackButton defaultPath="/objects" />
         <div className="flex items-center gap-2">
@@ -116,8 +120,37 @@ const ObjectDetailPage = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="border rounded-lg p-6">
+      {/* Audio Player - Full width at top when available */}
+      {hasTimeRanges && (
+        <ObjectAudioPlayer timeRange={object.timeRanges[0]} />
+      )}
+
+      {/* Summary + Transcript side by side */}
+      {hasTimeRanges && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Summary Panel */}
+          <div className="border rounded-lg p-4 bg-muted/30">
+            <h3 className="text-sm font-semibold text-muted-foreground mb-3">Summary</h3>
+            {hasSummary ? (
+              <div className="prose prose-sm max-w-none max-h-[400px] overflow-y-auto">
+                <div className="whitespace-pre-wrap text-sm">
+                  {object.summaries[0].text}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No summary available</p>
+            )}
+          </div>
+
+          {/* Transcript Panel */}
+          <ObjectTranscriptPanel timeRange={object.timeRanges[0]} />
+        </div>
+      )}
+
+      {/* Object Details Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Main Form - takes 2 columns */}
+        <div className="lg:col-span-2 border rounded-lg p-6">
           <ObjectForm
             object={formObject}
             onUpdate={async (updates) => {
@@ -129,17 +162,12 @@ const ObjectDetailPage = () => {
           />
         </div>
 
-        <div className="space-y-6">
-          <div className="border rounded-lg p-6">
+        {/* Side panel - Metadata & Relationships */}
+        <div className="space-y-4">
+          <MetadataDisplay object={object} />
+          <div className="border rounded-lg p-4">
             <RelationshipsPanel object={object} />
           </div>
-          <MetadataDisplay object={object} />
-          {object.timeRanges && object.timeRanges.length > 0 && (
-            <>
-              <ObjectAudioPlayer timeRange={object.timeRanges[0]} />
-              <ObjectTranscriptPanel timeRange={object.timeRanges[0]} />
-            </>
-          )}
         </div>
       </div>
     </div>

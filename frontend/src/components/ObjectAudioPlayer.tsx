@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { Volume2 } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import {
   Select,
@@ -109,79 +108,71 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
   };
 
   return (
-    <Card className="p-4 bg-muted/50">
-      <h3 className="text-sm font-semibold text-muted-foreground mb-3">
-        Audio Player
-      </h3>
+    <div className="border rounded-lg p-4 bg-gradient-to-r from-muted/50 to-muted/30">
+      <div className="flex flex-wrap items-center gap-4">
+        {/* Play button */}
+        <PlayPauseButton />
 
-      <div className="space-y-4">
-        {/* Play controls and time display */}
-        <div className="flex items-center gap-3">
-          <PlayPauseButton />
-
-          <div className="flex-1">
-            {/* Clickable Progress bar */}
+        {/* Progress bar section */}
+        <div className="flex-1 min-w-[200px]">
+          <div
+            className="h-2 bg-background rounded-full overflow-hidden cursor-pointer hover:h-3 transition-all"
+            onClick={handleProgressClick}
+            title="Click to seek"
+          >
             <div
-              className="h-2 bg-muted rounded-full overflow-hidden cursor-pointer hover:bg-muted/80 transition-colors"
-              onClick={handleProgressClick}
-              title="Click to seek"
-            >
-              <div
-                className="h-full bg-primary transition-all duration-200"
-                style={{ width: `${getProgress()}%` }}
-              />
-            </div>
+              className="h-full bg-primary transition-all duration-200"
+              style={{ width: `${getProgress()}%` }}
+            />
           </div>
+        </div>
 
-          <span className="text-sm font-mono text-muted-foreground min-w-[5rem] text-right">
+        {/* Time display */}
+        <div className="flex flex-col items-end">
+          <span className="text-sm font-mono font-medium">
             {getElapsedTime()} / {getTotalDuration()}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {currentDate ? formatTime(currentDate, timeFormat) : "Ready"}
           </span>
         </div>
 
-        {/* Current playback timestamp */}
-        <div className="text-xs text-muted-foreground text-center">
-          {currentDate ? formatTime(currentDate, timeFormat) : "Not playing"}
+        {/* Divider */}
+        <div className="h-8 w-px bg-border hidden sm:block" />
+
+        {/* Speed selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground hidden sm:inline">Speed</span>
+          <Select
+            value={playbackRate.toString()}
+            onValueChange={handleSpeedChange}
+          >
+            <SelectTrigger className="w-[70px] h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SPEED_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value.toString()}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
-        {/* Speed and Volume controls */}
-        <div className="flex items-center gap-4">
-          {/* Speed selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Speed</span>
-            <Select
-              value={playbackRate.toString()}
-              onValueChange={handleSpeedChange}
-            >
-              <SelectTrigger className="w-[70px] h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SPEED_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value.toString()}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Volume slider */}
-          <div className="flex items-center gap-2 flex-1">
-            <Volume2 className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-            <Slider
-              value={[volume]}
-              onValueChange={handleVolumeChange}
-              min={0}
-              max={2}
-              step={0.01}
-              className="flex-1"
-            />
-            <span className="text-xs text-muted-foreground min-w-[2.5rem] text-right">
-              {Math.round(volume * 100)}%
-            </span>
-          </div>
+        {/* Volume slider */}
+        <div className="flex items-center gap-2 min-w-[120px]">
+          <Volume2 className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          <Slider
+            value={[volume]}
+            onValueChange={handleVolumeChange}
+            min={0}
+            max={2}
+            step={0.01}
+            className="flex-1"
+          />
         </div>
       </div>
-    </Card>
+    </div>
   );
 }

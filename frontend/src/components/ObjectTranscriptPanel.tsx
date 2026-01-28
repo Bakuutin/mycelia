@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef } from "react";
 import { Play, FileText } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { callResource } from "@/lib/api";
@@ -131,7 +130,7 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
 
   if (loading) {
     return (
-      <Card className="p-4 bg-muted/50">
+      <div className="border rounded-lg p-4 bg-muted/30">
         <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
           <FileText className="w-4 h-4" />
           Transcript
@@ -141,25 +140,25 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-full" />
         </div>
-      </Card>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <Card className="p-4 bg-muted/50">
+      <div className="border rounded-lg p-4 bg-muted/30">
         <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
           <FileText className="w-4 h-4" />
           Transcript
         </h3>
         <p className="text-sm text-red-500">{error}</p>
-      </Card>
+      </div>
     );
   }
 
   if (segments.length === 0) {
     return (
-      <Card className="p-4 bg-muted/50">
+      <div className="border rounded-lg p-4 bg-muted/30">
         <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
           <FileText className="w-4 h-4" />
           Transcript
@@ -167,19 +166,19 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
         <p className="text-sm text-muted-foreground text-center py-4">
           No transcript available for this time range
         </p>
-      </Card>
+      </div>
     );
   }
 
   return (
-    <Card className="p-4 bg-muted/50">
+    <div className="border rounded-lg p-4 bg-muted/30">
       <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
         <FileText className="w-4 h-4" />
         Transcript
         <span className="text-xs font-normal">({segments.length} segments)</span>
       </h3>
 
-      <ScrollArea className="h-[300px] pr-3">
+      <ScrollArea className="h-[400px] pr-3">
         <div className="space-y-1">
           {segments.map((seg, idx) => {
             const isCurrentSegment = idx === currentSegmentIndex;
@@ -224,6 +223,6 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
           })}
         </div>
       </ScrollArea>
-    </Card>
+    </div>
   );
 }
