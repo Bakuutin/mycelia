@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
+import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibilityPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
@@ -174,28 +175,34 @@ const TimelinePage = () => {
 
   return (
     <TooltipProvider>
-      <div className="space-y-6">
-        <TimelineHeader
-          hasTimeSelection={hasTimeSelection}
-          timeSelectionStart={timeSelection.start}
-          timeSelectionEnd={timeSelection.end}
-          isShortRange={isShortRange}
-          onZoomToFit={handleZoomToFit}
-          onTimeRangeSelect={handleTimeRangeSelect}
-          onZoomToSelection={handleZoomToSelection}
-          onCreateEvent={handleCreateEvent}
-          onClearTimeSelection={clearTimeSelection}
-        />
+      <div className="flex gap-4">
+        {/* Main timeline content */}
+        <div className="flex-1 space-y-6 min-w-0">
+          <TimelineHeader
+            hasTimeSelection={hasTimeSelection}
+            timeSelectionStart={timeSelection.start}
+            timeSelectionEnd={timeSelection.end}
+            isShortRange={isShortRange}
+            onZoomToFit={handleZoomToFit}
+            onTimeRangeSelect={handleTimeRangeSelect}
+            onZoomToSelection={handleZoomToSelection}
+            onCreateEvent={handleCreateEvent}
+            onClearTimeSelection={clearTimeSelection}
+          />
 
-        <div className="border rounded-lg p-2">
-          <MultiTrackTimeline timeline={timeline} />
+          <div className="border rounded-lg p-2">
+            <MultiTrackTimeline timeline={timeline} />
+          </div>
+
+          <SelectedObjectsPanel
+            selectedObjects={panelObjects}
+            onClear={clearObjectSelection}
+            hasSelections={selectedIds.size > 0}
+          />
         </div>
 
-        <SelectedObjectsPanel
-          selectedObjects={panelObjects}
-          onClear={clearObjectSelection}
-          hasSelections={selectedIds.size > 0}
-        />
+        {/* Side panel for track visibility */}
+        <TrackVisibilityPanel />
       </div>
     </TooltipProvider>
   );

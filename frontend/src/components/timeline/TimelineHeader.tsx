@@ -1,6 +1,6 @@
 import { TimelineToolbar } from "./TimelineToolbar";
 import { TimelineSelectionActions } from "./TimelineSelectionActions";
-import { TrackVisibilityPanel } from "./controls/TrackVisibilityPanel";
+import { TrackVisibilityButton } from "./controls/TrackVisibilityPanel";
 
 interface TimelineHeaderProps {
   hasTimeSelection: boolean;
@@ -41,7 +41,7 @@ export function TimelineHeader({
         onZoomToFit={onZoomToFit}
         onTimeRangeSelect={onTimeRangeSelect}
       />
-      <TrackVisibilityPanel />
+      <TrackVisibilityButton />
     </div>
   );
 }

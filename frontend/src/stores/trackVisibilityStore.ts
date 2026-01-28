@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { TrackId } from "@/types/tracks";
+import type { TrackId, ObjectCategory, ObjectsLayoutMode } from "@/types/tracks";
 
 const DEFAULT_VISIBLE_TRACKS: TrackId[] = [
   "voice-detection",
@@ -20,15 +20,27 @@ const DEFAULT_HEIGHTS: Record<TrackId, number> = {
   "objects": 120,
 };
 
+const ALL_OBJECT_CATEGORIES: ObjectCategory[] = [
+  "event",
+  "person",
+  "relationship",
+  "promise",
+  "other",
+];
+
 interface TrackVisibilityState {
   visibleTracks: TrackId[];
   trackHeights: Record<string, number>;
+  objectsLayoutMode: ObjectsLayoutMode;
+  visibleObjectCategories: ObjectCategory[];
   toggleTrack: (id: TrackId) => void;
   setTrackHeight: (id: TrackId, height: number) => void;
   showAll: () => void;
   hideAll: () => void;
   resetDefaults: () => void;
   isVisible: (id: TrackId) => boolean;
+  setObjectsLayoutMode: (mode: ObjectsLayoutMode) => void;
+  toggleObjectCategory: (category: ObjectCategory) => void;
 }
 
 export const useTrackVisibilityStore = create<TrackVisibilityState>()(
@@ -36,6 +48,8 @@ export const useTrackVisibilityStore = create<TrackVisibilityState>()(
     (set, get) => ({
       visibleTracks: [...DEFAULT_VISIBLE_TRACKS],
       trackHeights: { ...DEFAULT_HEIGHTS },
+      objectsLayoutMode: "by-category" as ObjectsLayoutMode,
+      visibleObjectCategories: [...ALL_OBJECT_CATEGORIES],
 
       toggleTrack: (id) => {
         set((state) => {
@@ -64,9 +78,30 @@ export const useTrackVisibilityStore = create<TrackVisibilityState>()(
         set({
           visibleTracks: [...DEFAULT_VISIBLE_TRACKS],
           trackHeights: { ...DEFAULT_HEIGHTS },
+          objectsLayoutMode: "by-category",
+          visibleObjectCategories: [...ALL_OBJECT_CATEGORIES],
         }),
 
       isVisible: (id) => get().visibleTracks.includes(id),
+
+      setObjectsLayoutMode: (mode) => set({ objectsLayoutMode: mode }),
+
+      toggleObjectCategory: (category: ObjectCategory) => {
+        set((state) => {
+          const isVisible = state.visibleObjectCategories.includes(category);
+          if (isVisible) {
+            return {
+              visibleObjectCategories: state.visibleObjectCategories.filter(
+                (c: ObjectCategory) => c !== category
+              ),
+            };
+          } else {
+            return {
+              visibleObjectCategories: [...state.visibleObjectCategories, category],
+            };
+          }
+        });
+      },
     }),
     {
       name: "track-visibility",
