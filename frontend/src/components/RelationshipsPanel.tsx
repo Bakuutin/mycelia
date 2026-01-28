@@ -20,6 +20,7 @@ import {
   getRelationships,
   useCreateObject,
   useDeleteObject,
+  useObjectReferenceCounts,
 } from "@/hooks/useObjectQueries.ts";
 import { ObjectId } from "bson";
 import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime";
@@ -45,6 +46,7 @@ const renderIcon = (icon: any) => {
 
 export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
+  const { data: referenceCounts } = useObjectReferenceCounts(object._id);
   const createObjectMutation = useCreateObject();
   const deleteObjectMutation = useDeleteObject();
   const { timeFormat } = useSettingsStore();
@@ -139,6 +141,45 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
           </Button>
         )}
       </div>
+
+      {/* Reference Counts Display */}
+      {referenceCounts && (
+        <div className="grid grid-cols-3 gap-3 p-3 bg-muted/30 rounded-lg border">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-primary">
+              {referenceCounts.referencesTo}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              References TO
+            </div>
+            <div className="text-xs text-muted-foreground/70 mt-0.5">
+              (as target)
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-primary">
+              {referenceCounts.referencesFrom}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              References FROM
+            </div>
+            <div className="text-xs text-muted-foreground/70 mt-0.5">
+              (as source)
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-primary">
+              {referenceCounts.total}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Total
+            </div>
+            <div className="text-xs text-muted-foreground/70 mt-0.5">
+              relationships
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCreateForm && (
         <div className="border rounded-lg p-4 space-y-4 bg-muted/50">

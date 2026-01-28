@@ -19,7 +19,8 @@ export function subscribeToJob(
       event.event === "job.progress" ||
       event.event === "job.completed" ||
       event.event === "job.failed" ||
-      event.event === "job.started"
+      event.event === "job.started" ||
+      event.event === "job.active"
     ) {
       onUpdate(event.data);
     }

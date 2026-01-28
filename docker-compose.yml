@@ -64,7 +64,7 @@ services:
     expose:
       - "5173"
     restart: always
-    command: deno task dev
+    command: deno task ${BACKEND_TASK:-start}
     env_file:
       - .env
     environment:

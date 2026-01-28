@@ -159,7 +159,7 @@ async function startServer(
   // HTTP request logging - disable with LOG_HTTP=false
   if (Deno.env.get("LOG_HTTP") !== "false") {
     app.use(morgan("tiny", {
-      skip: (req) =>
+      skip: (req: Request) =>
         req.url === "/health" ||
         req.url === "/readiness" ||
         req.url?.startsWith("/api/audio/pipeline") ||
@@ -196,10 +196,23 @@ async function startServer(
     // Legacy endpoints (backward compatibility)
     } else if (url.pathname === "/ws_pcm") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
+        // Add error handler immediately to catch any errors including broken pipe
+        ws.on("error", (error: Error) => {
+          // Only log non-trivial errors (broken pipe is expected on disconnect)
+          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+            console.error("WebSocket /ws_pcm error:", error);
+          }
+        });
+        
         handlePcmWebSocket(ws, request).catch((error) => {
-          console.error("WebSocket error:", error);
-          if (ws.readyState === 1) {
-            ws.close(1011, "Internal server error");
+          console.error("WebSocket /ws_pcm handler error:", error);
+          // Try to close, but catch any errors (e.g., if already closed)
+          try {
+            if (ws.readyState === 1) {
+              ws.close(1011, "Internal server error");
+            }
+          } catch (closeError) {
+            // Ignore errors when closing (socket might already be dead)
           }
         });
       });
@@ -214,10 +227,23 @@ async function startServer(
       });
     } else if (url.pathname === "/ws") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
+        // Add error handler immediately to catch any errors including broken pipe
+        ws.on("error", (error: Error) => {
+          // Only log non-trivial errors (broken pipe is expected on disconnect)
+          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+            console.error("WebSocket /ws error:", error);
+          }
+        });
+        
         handleUpdatesWebSocket(ws, request).catch((error) => {
-          console.error("WebSocket updates error:", error);
-          if (ws.readyState === 1) {
-            ws.close(1011, "Internal server error");
+          console.error("WebSocket /ws handler error:", error);
+          // Try to close, but catch any errors (e.g., if already closed)
+          try {
+            if (ws.readyState === 1) {
+              ws.close(1011, "Internal server error");
+            }
+          } catch (closeError) {
+            // Ignore errors when closing (socket might already be dead)
           }
         });
       });

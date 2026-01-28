@@ -2,7 +2,8 @@ import { expect } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { getMessengerResource } from "@/lib/messenger/resource.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 
 async function getMessengerResourceHelper(auth: Auth) {
@@ -34,9 +35,9 @@ Deno.test(
       text: "Hello, world!",
     });
 
-    expect(result.messageId).toBeInstanceOf(ObjectId);
-    expect(result.chatId).toBeInstanceOf(ObjectId);
-    expect(result.senderId).toBeInstanceOf(ObjectId);
+    expect(result.messageId).toBeInstanceOf(MongoObjectId);
+    expect(result.chatId).toBeInstanceOf(MongoObjectId);
+    expect(result.senderId).toBeInstanceOf(MongoObjectId);
     expect(result.created).toBe(true);
     expect(result.chatCreated).toBe(true);
     expect(result.senderCreated).toBe(true);
@@ -276,7 +277,7 @@ Deno.test(
       replyToExternalId: "987654321",
     });
 
-    expect(replyMessage.messageId).toBeInstanceOf(ObjectId);
+    expect(replyMessage.messageId).toBeInstanceOf(MongoObjectId);
     expect(replyMessage.messageId).not.toEqual(firstMessage.messageId);
 
     const mongo = await getMongoResource(admin);
@@ -440,7 +441,7 @@ Deno.test(
       name: "Test Chat",
     });
 
-    expect(result.chatId).toBeInstanceOf(ObjectId);
+    expect(result.chatId).toBeInstanceOf(MongoObjectId);
     expect(result.created).toBe(true);
 
     const mongo = await getMongoResource(admin);
@@ -540,7 +541,7 @@ Deno.test(
       details: "Test contact",
     });
 
-    expect(result.personId).toBeInstanceOf(ObjectId);
+    expect(result.personId).toBeInstanceOf(MongoObjectId);
     expect(result.created).toBe(true);
 
     const mongo = await getMongoResource(admin);

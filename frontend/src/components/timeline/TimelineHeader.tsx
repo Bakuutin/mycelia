@@ -1,5 +1,6 @@
 import { TimelineToolbar } from "./TimelineToolbar";
 import { TimelineSelectionActions } from "./TimelineSelectionActions";
+import { TrackVisibilityPanel } from "./controls/TrackVisibilityPanel";
 
 interface TimelineHeaderProps {
   hasTimeSelection: boolean;
@@ -25,7 +26,7 @@ export function TimelineHeader({
   onClearTimeSelection,
 }: TimelineHeaderProps) {
   return (
-    <div className="flex items-center justify-end gap-2">
+    <div className="flex items-start justify-end gap-2">
       {hasTimeSelection && timeSelectionStart && timeSelectionEnd && (
         <TimelineSelectionActions
           startDate={timeSelectionStart}
@@ -40,6 +41,7 @@ export function TimelineHeader({
         onZoomToFit={onZoomToFit}
         onTimeRangeSelect={onTimeRangeSelect}
       />
+      <TrackVisibilityPanel />
     </div>
   );
 }

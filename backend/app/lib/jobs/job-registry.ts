@@ -57,13 +57,18 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
   }
 
   /**
-   * Get JSON schemas for all registered jobs.
+   * Get JSON schemas and policies for all registered jobs.
+   * Returns { workerName: { input: inputSchema, output: outputSchema, policies: Policy[] } }
    */
-  getJobSchemas(): Record<string, any> {
-    const schemas: Record<string, any> = {};
+  getJobSchemas(): Record<string, { input: any; output: any; policies: any[] }> {
+    const schemas: Record<string, { input: any; output: any; policies: any[] }> = {};
     for (const capability of this.list()) {
       try {
-        schemas[capability.manifest.name] = capability.manifest.inputSchema;
+        schemas[capability.manifest.name] = {
+          input: capability.manifest.inputSchema,
+          output: capability.manifest.outputSchema,
+          policies: capability.manifest.policies || [],
+        };
       } catch (err: any) {
         console.error(`Failed to convert schema for job type ${capability.manifest.name}:`, err.message);
         throw err;

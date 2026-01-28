@@ -7,7 +7,8 @@ import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
-import { ObjectId } from "mongodb";
+import { LLMResource } from "@/lib/llm/resource.server.ts";
+import { ObjectId } from "bson";
 import type { Db } from "mongodb";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
@@ -232,13 +233,11 @@ export async function apiChatHandler(req: Request, res: Response) {
   });
 
   // Fetch System Prompt
-  let systemPrompt = "You are Mycelia, an intelligent AI assistant.";
+  let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
 
-  // throw new Error("Not implemented 112");
   const config = await getServerConfig();
   try {
-
-    if (config.prompts.chat_system) {
+    if (config.prompts?.chat_system) {
         const promptDoc = await db.collection("prompts").findOne({ _id: config.prompts.chat_system });
         if (promptDoc && promptDoc.text) {
             systemPrompt = promptDoc.text;
@@ -266,7 +265,7 @@ export async function apiChatHandler(req: Request, res: Response) {
     }
 
     // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
-    if (inference.baseUrl.includes('inference.mycelia.tech')) {
+    if (inference && inference.baseUrl.includes('inference.mycelia.tech')) {
       return modelName;
     }
 

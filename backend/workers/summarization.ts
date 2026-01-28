@@ -1,6 +1,5 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
-import { ObjectId } from "mongodb";
 import type { JobData, JobResult } from "@/lib/jobs/types.ts";
 import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
@@ -8,8 +7,6 @@ import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import type { MongoRequest, MongoResponse } from "@/lib/mongo/core.server.ts";
 import type { ObjectsRequest, ObjectsResponse } from "@/lib/objects/resource.server.ts";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
 
 /** Job type name */
 export const name = "summarization";
@@ -19,9 +16,16 @@ export const schema = z.object({
   type: z.literal("summarization"),
   start: zDateOrString(),
   end: zDateOrString(),
-  prompt: z.string().optional(),
-  model: z.string().optional(),
+  prompt: z.string()
+    .default("You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.")
+    .describe("System prompt for the summarization. This guides how the AI analyzes the conversation."),
+  model: z.string()
+    .default("small")
+    .describe("LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')"),
   objectId: zObjectId().nullish(),
+  minDurationForLlm: z.number()
+    .default(10)
+    .describe("Minimum duration in seconds to use LLM. Shorter periods use transcript directly."),
 });
 
 export type SummarizationJobData = z.infer<typeof schema>;
@@ -35,39 +39,12 @@ function getSilenceMessage(gapMs: number): string {
   return `[Silence ${duration}m]`;
 }
 
-async function getSystemPromptFromConfig(jwt: string, myceliaUrl: string): Promise<string | null> {
-  try {
-    // Load server config
-    const config = await callResource<MongoRequest, MongoResponse>("mongo", {
-      action: "findOne",
-      collection: "configs",
-      query: { _id: SERVER_CONFIG_ID },
-    }, { jwt, myceliaUrl });
-
-    if (!config?.prompts?.summarization_system) {
-      return null;
-    }
-
-    // Load the prompt document
-    const promptId = config.prompts.summarization_system;
-    const prompt = await callResource<MongoRequest, MongoResponse>("mongo", {
-      action: "findOne",
-      collection: "prompts",
-      query: { _id: promptId },
-    }, { jwt, myceliaUrl });
-
-    return prompt?.text || null;
-  } catch (err) {
-    console.warn(`[summarization] Failed to load system prompt from config:`, err);
-    return null;
-  }
-}
 
 /** Process the summarization job */
 export async function use(job: Job<JobData>): Promise<JobResult> {
   const jobData = job.data as SummarizationJobData;
 
-  const { start: startStr, end: endStr, prompt: userPrompt, model: userModel, objectId: existingObjectId } = jobData;
+  const { start: startStr, end: endStr, objectId: existingObjectId } = jobData;
   const start = new Date(startStr);
   const end = new Date(endStr);
 
@@ -117,19 +94,87 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }
   promptText += getTimestampMessage(new Date(lastEnd));
 
-  const modelAlias = userModel || "small";
+  const modelAlias = jobData.model || "small";
+  const minDurationForLlm = jobData.minDurationForLlm ?? 10;
+  const durationSeconds = (end.getTime() - start.getTime()) / 1000;
 
-  // Load system prompt: user override > config setting > fallback
-  let systemPrompt = userPrompt;
-  if (!systemPrompt) {
-    const configPrompt = await getSystemPromptFromConfig(jwt, myceliaUrl);
-    systemPrompt = configPrompt || `You are a helpful assistant. Summarize the following conversation transcript.`;
-    if (configPrompt) {
-      console.log(`[summarization] Job ${job.id}: using system prompt from config`);
+  // Short duration optimization: skip LLM for very short periods
+  if (durationSeconds < minDurationForLlm) {
+    console.log(`[summarization] Job ${job.id}: duration ${durationSeconds}s < ${minDurationForLlm}s threshold, using transcript directly`);
+
+    const summaryEntry = {
+      text: promptText.trim(),
+      model: "passthrough",
+      modelName: "transcript-only",
+      date: new Date(),
+      prompt: "Short duration - transcript used directly",
+      jobId: job.id,
+    };
+
+    let objectId: string;
+    let title: string;
+
+    if (existingObjectId) {
+      const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "get",
+        id: existingObjectId.toString(),
+      }, { jwt, myceliaUrl });
+
+      if (!currentObject) {
+        throw new Error(`Object ${existingObjectId} not found`);
+      }
+
+      title = currentObject.name || "Conversation";
+      const currentSummaries = currentObject.summaries || [];
+      const newSummaries = [...currentSummaries, summaryEntry];
+
+      await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "update",
+        id: existingObjectId.toString(),
+        version: currentObject.version ?? 0,
+        field: "summaries",
+        value: newSummaries,
+      }, { jwt, myceliaUrl });
+
+      objectId = existingObjectId.toString();
     } else {
-      console.log(`[summarization] Job ${job.id}: using fallback system prompt (no config found)`);
+      // For new objects with short duration, use first line as title or generic
+      const firstLine = promptText.split('\n').find(line => !line.startsWith('[') && line.trim()) || "Brief conversation";
+      title = firstLine.slice(0, 100).trim();
+
+      const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "create",
+        object: {
+          isConversation: true,
+          name: title,
+          summaries: [summaryEntry],
+          timeRanges: [{ start, end }],
+          metadata: {
+            source: "summarization_job",
+            jobId: job.id,
+            shortDuration: true,
+          },
+        },
+      }, { jwt, myceliaUrl });
+      objectId = resultObject.insertedId.toString();
     }
+
+    return {
+      success: true,
+      objectId,
+      title,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      description: promptText.trim(),
+    };
   }
+
+  // Load system prompt with priority: job data (includes default overrides) > schema default
+  const defaultPrompt = "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.";
+  const systemPrompt = jobData.prompt || defaultPrompt;
+  const promptSource = jobData.prompt ? "job_data" : "default";
+
+  console.log(`[summarization] Job ${job.id}: using system prompt from ${promptSource}`);
 
   console.log(`[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`);
   const completion = await callResource<any, any>("llm", {
@@ -184,7 +229,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       value: newSummaries,
     }, { jwt, myceliaUrl });
 
-    objectId = existingObjectId;
+    objectId = existingObjectId.toString();
   } else {
     console.log(`[summarization] Job ${job.id}: calling LLM for title generation`);
     const titleResponse = await callResource<any, any>("llm", {
@@ -241,8 +286,6 @@ const capability: JobCapability = {
   })),
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
-    { resource: "db/configs", action: "read", effect: "allow" },
-    { resource: "db/prompts", action: "read", effect: "allow" },
     { resource: "llm/chat", action: "completions", effect: "allow" },
     { resource: "objects", action: "*", effect: "allow" },
   ],

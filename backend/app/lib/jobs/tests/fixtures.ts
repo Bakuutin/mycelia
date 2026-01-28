@@ -1,6 +1,6 @@
 import { defineFixture } from "@/tests/fixtures.server.ts";
 import { redis } from "@/lib/redis.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { fn } from "@std/expect";
 import { JobsResource } from "@/lib/resources/worker.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";

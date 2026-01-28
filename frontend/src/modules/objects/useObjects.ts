@@ -77,7 +77,7 @@ export function useObjects() {
 
       timeoutRef.current = setTimeout(() => {
         fetchForRange(start, end);
-      }, 800);
+      }, 150);
     },
     [fetchForRange],
   );

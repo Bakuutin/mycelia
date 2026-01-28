@@ -103,7 +103,7 @@ export default function CreateJobPage() {
           <CardContent>
             <div className="rjsf-container">
               <Form
-                schema={schemas[selectedType]}
+                schema={schemas[selectedType].input}
                 validator={validator}
                 onSubmit={(data: any) => onSubmit(data.formData)}
                 disabled={enqueueMutation.isPending}

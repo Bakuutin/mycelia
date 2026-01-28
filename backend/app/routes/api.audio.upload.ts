@@ -6,7 +6,7 @@ import {
   createAudioChunk,
 } from "@/services/streaming.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import multer from "npm:multer@^1.4.5-lts.1";
+import multer from "multer";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
 
 const upload = multer({
@@ -27,7 +27,7 @@ export const apiAudioUploadHandler = asyncHandler(
       });
     });
 
-    const files = req.files as Express.Multer.File[] | undefined;
+    const files = req.files as multer.File[] | undefined;
     if (!files || files.length === 0) {
       res.status(400).json({ error: "At least one audio file is required" });
       return;
@@ -62,6 +62,7 @@ export const apiAudioUploadHandler = asyncHandler(
         const { audioData, actualDurationMs } = await processAudioFile(audioFile);
 
         // Store as a single audio chunk
+        // TODO: split into multiple chunks, respect max chunk size (CRITICAL)
         await createAudioChunk(
           audioData,
           new Date(),

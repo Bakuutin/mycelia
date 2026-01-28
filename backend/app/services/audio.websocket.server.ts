@@ -8,7 +8,7 @@ import {
   decodeOpusToPcm,
   type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
 import { OpusDecoder } from "npm:opus-decoder@^0.7.11";
@@ -351,9 +351,13 @@ class PcmWebSocketSession {
         sessionId: this.sessionId,
         error: errorMsg
       });
-      this.ws.send(
-        JSON.stringify({ type: "error", message: errorMsg }) + "\n",
-      );
+      try {
+        this.ws.send(
+          JSON.stringify({ type: "error", message: errorMsg }) + "\n",
+        );
+      } catch (sendError) {
+        // Ignore errors when sending (client might have disconnected)
+      }
     }
   }
 
@@ -652,7 +656,7 @@ class PcmWebSocketSession {
           chunkStartTime,
           this.chunkIndex,
           this.sourceFileId,
-          formatConfig,
+          formatConfig.format,
         );
         log("INFO", `[AUDIO_WS] Audio chunk created`, {
           sessionId: this.sessionId,
@@ -767,7 +771,11 @@ function parseWyomingHeader(line: string): WyomingHeader | null {
 }
 
 function handlePing(ws: WebSocket | any): void {
-  ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  try {
+    ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  } catch (error) {
+    // Ignore errors when sending (client might have disconnected)
+  }
 }
 
 async function createRequestFromUpgrade(

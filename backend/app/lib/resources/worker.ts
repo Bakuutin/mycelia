@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { getServerAuth, type Auth } from "@/lib/auth/core.server.ts";
 import type { Resource, ResourcePath } from "@/lib/auth/resources.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
@@ -7,8 +7,7 @@ import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { getConfigResource } from "@/lib/config/resource.server.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -89,6 +88,25 @@ const GetWorkerStatusSchema = z.object({
   action: z.literal("get_worker_status"),
 });
 
+const ListWorkersSchema = z.object({
+  action: z.literal("list_workers"),
+});
+
+const GetWorkerDefaultsSchema = z.object({
+  action: z.literal("get_worker_defaults"),
+  workerType: z.string(),
+});
+
+const UpdateWorkerDefaultsSchema = z.object({
+  action: z.literal("update_worker_defaults"),
+  workerType: z.string(),
+  defaults: z.record(z.string(), z.any()),
+});
+
+const StatsSchema = z.object({
+  action: z.literal("stats"),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
@@ -103,6 +121,10 @@ const RequestSchema = z.union([
   PauseAllSchema,
   ResumeAllSchema,
   GetWorkerStatusSchema,
+  ListWorkersSchema,
+  GetWorkerDefaultsSchema,
+  UpdateWorkerDefaultsSchema,
+  StatsSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -145,6 +167,14 @@ export class JobsResource
         return this.resumeAll(auth);
       case "get_worker_status":
         return this.getWorkerStatus(auth);
+      case "list_workers":
+        return this.listWorkers(auth);
+      case "get_worker_defaults":
+        return this.getWorkerDefaults(input, auth);
+      case "update_worker_defaults":
+        return this.updateWorkerDefaults(input, auth);
+      case "stats":
+        return this.stats(auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -472,24 +502,210 @@ export class JobsResource
     return { workers: status };
   }
 
+  private async stats(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    // TODO: worker specific logic should belong to the worker file
+
+    // Aggregate job statistics by type
+    const pipeline = [
+      {
+        $group: {
+          _id: "$type",
+          totalRuns: { $sum: 1 },
+          completed: {
+            $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] }
+          },
+          failed: {
+            $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] }
+          },
+          // Calculate empty jobs based on result fields
+          emptyRuns: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$state", "completed"] },
+                    {
+                      $or: [
+                        // VAD: hasSpeech=0 and processed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "vad"] },
+                            { $eq: [{ $ifNull: ["$result.hasSpeech", { $ifNull: ["$progress.hasSpeech", -1] }] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] }
+                          ]
+                        },
+                        // conversation_chunk_creator: finalized=0 and streamed=0 and chunksCreated=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "conversation_chunk_creator"] },
+                            { $eq: [{ $ifNull: ["$result.finalized", 0] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.streamed", 0] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.chunksCreated", 0] }, 0] }
+                          ]
+                        },
+                        // conversation_extractor: conversationsCreated=0 and chunksProcessed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "conversation_extractor"] },
+                            { $eq: [{ $ifNull: ["$result.conversationsCreated", 0] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.chunksProcessed", 0] }, 0] }
+                          ]
+                        },
+                        // transcription_sequence_creator: processed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "transcription_sequence_creator"] },
+                            { $eq: [{ $ifNull: ["$result.processed", 0] }, 0] }
+                          ]
+                        },
+                        // transcription: processed=0
+                        {
+                          $and: [
+                            { $eq: ["$type", "transcription"] },
+                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] }
+                          ]
+                        },
+                        // Generic: processed=0 and total=0 for other types
+                        {
+                          $and: [
+                            { $not: { $in: ["$type", ["vad", "conversation_chunk_creator", "conversation_extractor", "transcription_sequence_creator", "transcription", "summarization"]] } },
+                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] },
+                            { $eq: [{ $ifNull: ["$result.total", { $ifNull: ["$progress.total", -1] }] }, 0] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          // Get timestamps for frequency calculation (last 20)
+          recentTimestamps: {
+            $push: {
+              $cond: [
+                { $eq: ["$state", "completed"] },
+                { $toLong: "$createdAt" },
+                null
+              ]
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          type: "$_id",
+          totalRuns: 1,
+          completed: 1,
+          failed: 1,
+          emptyRuns: 1,
+          successRate: {
+            $cond: [
+              { $eq: ["$totalRuns", 0] },
+              0,
+              { $multiply: [{ $divide: ["$completed", "$totalRuns"] }, 100] }
+            ]
+          },
+          // Filter out nulls and get last 20 timestamps
+          recentTimestamps: {
+            $slice: [
+              { $filter: { input: "$recentTimestamps", as: "ts", cond: { $ne: ["$$ts", null] } } },
+              -20
+            ]
+          }
+        }
+      }
+    ];
+
+    const stats = await mongo({
+      action: "aggregate",
+      collection: "jobs",
+      pipeline,
+    });
+
+    // Calculate frequency from timestamps
+    const result = stats.map((stat: any) => {
+      const timestamps = stat.recentTimestamps || [];
+      let avgFrequency = "-";
+
+      if (timestamps.length >= 2) {
+        const sorted = [...timestamps].sort((a: number, b: number) => b - a);
+        let totalGap = 0;
+        for (let i = 0; i < sorted.length - 1; i++) {
+          totalGap += sorted[i] - sorted[i + 1];
+        }
+        const avgMs = totalGap / (sorted.length - 1);
+
+        if (avgMs < 60000) avgFrequency = `~${Math.round(avgMs / 1000)}s`;
+        else if (avgMs < 3600000) avgFrequency = `~${Math.round(avgMs / 60000)}m`;
+        else avgFrequency = `~${(avgMs / 3600000).toFixed(1)}h`;
+      }
+
+      return {
+        type: stat.type,
+        totalRuns: stat.totalRuns,
+        completed: stat.completed,
+        failed: stat.failed,
+        emptyRuns: stat.emptyRuns,
+        successRate: stat.successRate,
+        avgFrequency,
+      };
+    });
+
+    return { stats: result };
+  }
+
   private async persistWorkerConfig(
     workerType: string,
     config: { paused: boolean },
     auth: Auth
   ) {
-    const mongo = await getMongoResource(auth);
+    const configResource = await getConfigResource(auth);
     
-    await mongo({
-      action: "updateOne",
-      collection: "configs",
-      query: { _id: SERVER_CONFIG_ID },
-      update: {
-        $set: {
-          [`workers.${workerType}`]: config,
-          updatedAt: new Date(),
-        },
-      },
+    await configResource({
+      action: "patch",
+      path: `workers.${workerType}`,
+      updates: config,
     });
+  }
+
+  private async listWorkers(_auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    const workers = await workerDiscovery.getAllWorkers();
+    
+    return { workers };
+  }
+
+  private async getWorkerDefaults(input: z.infer<typeof GetWorkerDefaultsSchema>, _auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    const defaults = await workerDiscovery.getDefaultOverrides(input.workerType);
+    
+    return { 
+      workerType: input.workerType,
+      defaults: defaults || {} 
+    };
+  }
+
+  private async updateWorkerDefaults(input: z.infer<typeof UpdateWorkerDefaultsSchema>, _auth: Auth) {
+    const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
+    
+    // Verify worker type exists
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+    
+    await workerDiscovery.updateDefaultOverrides(input.workerType, input.defaults);
+    
+    return { 
+      success: true,
+      workerType: input.workerType,
+      defaults: input.defaults
+    };
   }
 
   extractActions(input: WorkerProgressRequest): {
@@ -520,6 +736,14 @@ export class JobsResource
       case "resume_all":
         return [{ path: ["jobs", "all"], actions: ["resume"] }];
       case "get_worker_status":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "list_workers":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "get_worker_defaults":
+        return [{ path: ["jobs", input.workerType], actions: ["read"] }];
+      case "update_worker_defaults":
+        return [{ path: ["jobs", input.workerType], actions: ["configure"] }];
+      case "stats":
         return [{ path: ["jobs"], actions: ["read"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];

@@ -2,13 +2,8 @@ import { z } from "zod";
 import { Buffer } from "node:buffer";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
-import { meter, tracer } from "@/lib/telemetry.ts";
-import { zServerConfig } from "@myceliasdk/config.ts";
-import { ObjectId, Binary } from "bson";
-import { Binary as MongoBinary } from "mongodb";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { tracer } from "@/lib/telemetry.ts";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 
 const transcriptionRequestSchema = z.object({
   action: z.literal("transcribe"),
@@ -33,35 +28,15 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     response: z.any() as z.ZodType<TranscriptionResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string; model?: string } | null> {
-    // Stateless config: read from env vars first (ushadow pattern)
-    const envBaseUrl = Deno.env.get("TRANSCRIPTION_BASE_URL");
-    const envApiKey = Deno.env.get("TRANSCRIPTION_API_KEY");
-    const envModel = Deno.env.get("TRANSCRIPTION_MODEL");
-
-    if (envBaseUrl && envApiKey) {
-      return {
-        baseUrl: envBaseUrl,
-        apiKey: envApiKey,
-        model: envModel || "whisper-1",
-      };
-    }
-
-    // Fallback to MongoDB config for backward compatibility
-    const rootDb = await getRootDB();
-    const configDoc = await rootDb.collection("configs").findOne({ _id: SERVER_CONFIG_ID });
-    if (!configDoc) {
-      return null;
-    }
-    const config = zServerConfig.parse(configDoc);
-    const provider = config.transcription || config.inference;
-    if (!provider?.baseUrl || !provider?.apiKey) {
+  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
+    const config = await getServerConfig();
+    const inference = config.inference;
+    if (!inference?.baseUrl || !inference?.apiKey) {
       return null;
     }
     return {
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      model: provider.model,
+      baseUrl: inference.baseUrl,
+      apiKey: inference.apiKey,
     };
   }
 
@@ -112,29 +87,16 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           const fileName = input.fileName || "audio.mp3";
           const file = new File([blob], fileName, { type: input.fileType || "audio/mpeg" });
           formData.append("file", file);
-          // Request verbose_json to get segments with timestamps
-          formData.append("response_format", "verbose_json");
           if (input.language) {
             formData.append("language", input.language);
           }
           if (input.prompt) {
             formData.append("prompt", input.prompt);
           }
-          // Use configured model, or let server use default
-          if (provider.model) {
-            formData.append("model", provider.model);
-          }
-
-          // Expect standard format: https://api.openai.com/v1
-          const baseUrl = provider.baseUrl.replace(/\/$/, "");
-          if (!baseUrl.endsWith("/v1")) {
-            throw new Error(
-              `Invalid TRANSCRIPTION_BASE_URL format. Expected URL ending with /v1 (e.g., https://api.openai.com/v1). Got: ${baseUrl}`
-            );
-          }
+          formData.append("model", "whisper");
 
           const proxyResponse = await fetch(
-            `${baseUrl}/audio/transcriptions`,
+            provider.baseUrl.replace(/\/$/, "") + "/v1/audio/transcriptions",
             {
               method: "POST",
               headers: {

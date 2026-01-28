@@ -1,8 +1,9 @@
 import type { Request, Response } from "express";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { authenticateOr401 } from "../lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { Buffer } from "node:buffer";
+import { teeOutput } from "@/lib/subprocess.ts";
 
 const SAMPLE_RATE = 16000;
 const MAX_CHUNK_DURATION_MS = 10000;
@@ -50,23 +51,12 @@ async function decodeOpusToPcm(opusData: Uint8Array): Promise<Uint8Array> {
       stderr: "piped",
     });
 
-    const child = process.spawn();
-    const status = await child.status;
+    const { success, stderr } = await teeOutput(process);
 
-    if (!status.success) {
-      const stderrReader = child.stderr.getReader();
-      const stderr = await stderrReader.read();
-      const errorOutput = new TextDecoder().decode(
-        stderr.value || new Uint8Array(),
-      );
-      stderrReader.releaseLock();
-      await child.stderr.cancel();
-      await child.stdout.cancel();
+    if (!success) {
+      const errorOutput = new TextDecoder().decode(stderr);
       throw new Error(`FFmpeg decode failed: ${errorOutput}`);
     }
-
-    await child.stderr.cancel();
-    await child.stdout.cancel();
 
     return await Deno.readFile(tempOutputPath);
   } finally {

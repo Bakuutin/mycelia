@@ -5,6 +5,27 @@ import { callResource } from "@myceliasdk/resources.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { createHash } from "node:crypto";
 
+
+/**
+ * Conversation Extractor
+ * 
+ *  okay so what we have we have like a timeline of (overlapping) transcriptions 
+ * and then then when one person said something, and the other person said something and I want you to use ASCII art to represent it on a timeline.
+ * 
+ * 
+ *  10:00:00 - 10:00:09 - Person 1: "Hello"
+ *  10:00:09 - 10:00:11 - Person 2: "Hello"
+ *  10:00:20 - 10:00:30 - Person 1: "How are you?"
+ *  10:00:30 - 10:00:40 - Person 2: "I'm good, thank you!"
+ *  10:00:40 - 10:00:50 - Person 1: "What are you doing?"
+ *  10:00:50 - 10:01:00 - Person 2: "I'm writing this docstring."
+ * 
+ * 
+ * This worker is responsible for extracting conversations from transcriptions and creating conversation objects.
+ * It uses a LLM to segment the transcriptions into conversations and then extracts metadata from each conversation.
+ * It then creates a conversation object for each conversation and enqueues a summarization job for each conversation.
+ */
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -52,12 +73,27 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().default(1),
   extractorVersion: z.string().default("v1"),
+  
+  // Prompt overrides (migrated from config.prompts)
+  segmentation_system_prompt: z.string()
+    .default("You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.")
+    .describe("System prompt for finding conversation topics in transcripts"),
+  
+  segmentation_guidance_prompt: z.string()
+    .default("")
+    .describe("Additional guidance for conversation topic segmentation response format"),
+  
+  extraction_system_prompt: z.string()
+    .default("summarize this please")
+    .describe("System prompt for extracting conversation metadata"),
+  
+  extraction_guidance_prompt: z.string()
+    .default("")
+    .describe("Guidance for conversation metadata extraction response format"),
 });
 
 export type ConversationExtractorJobData = z.infer<typeof schema>;
 
-// Server config ID for prompts
-const SERVER_CONFIG_ID = "000000000000000000000000";
 
 // ============================================================================
 // Pure Functions
@@ -147,40 +183,6 @@ function generateExtractionKey(
 // ============================================================================
 // LLM Operations
 // ============================================================================
-
-async function getPrompts(
-  mongo: (input: any) => Promise<any>,
-): Promise<Record<string, string>> {
-  const config = await mongo({
-    action: "findOne",
-    collection: "configs",
-    query: { _id: new ObjectId(SERVER_CONFIG_ID) },
-  }) as { prompts?: Record<string, ObjectId> } | null;
-
-  if (!config?.prompts) {
-    throw new Error("Server configuration not found or missing prompts mapping");
-  }
-
-  const promptIds = Object.values(config.prompts) as ObjectId[];
-  
-  const prompts = await mongo({
-    action: "find",
-    collection: "prompts",
-    query: { _id: { $in: promptIds } },
-  }) as Array<{ _id: ObjectId; text: string }>;
-
-  const promptsMap = new Map(prompts.map((p) => [p._id.toString(), p.text]));
-
-  const result: Record<string, string> = {};
-  for (const [key, promptId] of Object.entries(config.prompts)) {
-    const text = promptsMap.get((promptId as ObjectId).toString());
-    if (text) {
-      result[key] = text;
-    }
-  }
-
-  return result;
-}
 
 async function callLLMStructured<T>(
   llm: (input: any) => Promise<any>,
@@ -589,7 +591,7 @@ const capability: JobCapability = {
   ],
   maxConcurrency: 1,
   use: async (job) => {
-    const data = job.data as ConversationExtractorJobData;
+    const input = job.data as ConversationExtractorJobData;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
     
@@ -604,11 +606,11 @@ const capability: JobCapability = {
     // Find chunks to process
     let chunks: ConversationChunk[];
     
-    if (data.chunkId) {
+    if (input.chunkId) {
       const chunk = await mongo({
         action: "findOne",
         collection: "conversation_chunks",
-        query: { _id: new ObjectId(data.chunkId) },
+        query: { _id: new ObjectId(input.chunkId) },
       }) as ConversationChunk | null;
       chunks = chunk ? [chunk] : [];
     } else {
@@ -624,8 +626,8 @@ const capability: JobCapability = {
       };
 
       const dateFilter: Record<string, any> = {};
-      if (data.start) dateFilter.$gte = new Date(data.start);
-      if (data.end) dateFilter.$lt = new Date(data.end);
+      if (input.start) dateFilter.$gte = new Date(input.start);
+      if (input.end) dateFilter.$lt = new Date(input.end);
 
       const query: Record<string, any> = { ...stateFilter };
       if (Object.keys(dateFilter).length > 0) {
@@ -639,13 +641,13 @@ const capability: JobCapability = {
         query,
         options: {
           sort: { start: -1 },
-          limit: data.limit + 1,  // +1 to check if there's more
+          limit: input.limit + 1,  // +1 to check if there's more
         },
       }) as ConversationChunk[];
     }
 
-    const hasMore = chunks.length > data.limit;
-    const chunksToProcess = chunks.slice(0, data.limit);
+    const hasMore = chunks.length > input.limit;
+    const chunksToProcess = chunks.slice(0, input.limit);
 
     console.log(`[ConvExtractor] Job ${job.id}: found ${chunks.length} chunks, processing ${chunksToProcess.length}, hasMore=${hasMore}`);
     for (const c of chunksToProcess) {
@@ -656,22 +658,9 @@ const capability: JobCapability = {
     let chunksProcessed = 0;
     const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
 
-    // Load prompts
-    let prompts: Record<string, string>;
-    try {
-      prompts = await getPrompts(mongo);
-    } catch (error) {
-      console.error("Failed to load prompts:", error);
-      // Use default prompts
-      prompts = {
-        segmentation_system: "You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.",
-        extraction_system: "You are an assistant that extracts metadata from conversations. Output JSON with 'agreed_upon_something' (boolean - true if participants made any agreement, promise, or commitment), 'entities' (array of strings - names of people, places, organizations, or topics mentioned), and 'emoji' (single emoji representing the conversation topic).",
-        extraction_guidance: "",
-      };
-    }
-
+    // Compute prompt version for idempotency (based on prompts that affect output)
     const promptVersion = createHash("sha256")
-      .update(JSON.stringify(prompts))
+      .update(input.segmentation_system_prompt + input.segmentation_guidance_prompt + input.extraction_system_prompt + input.extraction_guidance_prompt)
       .digest("hex")
       .slice(0, 8);
 
@@ -716,7 +705,7 @@ const capability: JobCapability = {
           chunk._id.toString(),
           promptVersion,
           chunk.params.model,
-          data.extractorVersion,
+          input.extractorVersion,
         );
 
         // Fetch transcriptions
@@ -774,13 +763,17 @@ const capability: JobCapability = {
         // LLM Call #1: Segmentation
         console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
         const promptLines = prompt.split('\n');
+        const segmentationMessages: Array<{ role: string; content: string }> = [
+          { role: "system", content: input.segmentation_system_prompt },
+          { role: "user", content: prompt },
+        ];
+        if (input.segmentation_guidance_prompt) {
+          segmentationMessages.push({ role: "assistant", content: input.segmentation_guidance_prompt });
+        }
         const segments = await callLLMStructured(
           llm,
           chunk.params.model,
-          [
-            { role: "system", content: prompts.segmentation_system },
-            { role: "user", content: prompt },
-          ],
+          segmentationMessages,
           createSegmentParser(promptLines, chunkStart, chunkEnd),
           `Chunk ${chunk._id} segmentation`,
         );
@@ -830,15 +823,12 @@ const capability: JobCapability = {
           const { prompt: segPrompt } = formatChunkAsPrompt(segUtterances);
 
           // LLM Call #2: Metadata extraction (entities, emoji, agreed_upon_something)
-          const extractionSystemPrompt = prompts.extraction_system || prompts.summarization_system;
-          const extractionGuidance = prompts.extraction_guidance || prompts.summarization_guidance;
-          
           const messages: Array<{ role: string; content: string }> = [
-            { role: "system", content: extractionSystemPrompt },
+            { role: "system", content: input.extraction_system_prompt },
             { role: "user", content: segPrompt },
           ];
-          if (extractionGuidance) {
-            messages.push({ role: "assistant", content: extractionGuidance });
+          if (input.extraction_guidance_prompt) {
+            messages.push({ role: "assistant", content: input.extraction_guidance_prompt });
           }
 
           const metadata = await callLLMStructured(
@@ -867,7 +857,7 @@ const capability: JobCapability = {
             metadata: {
               extractedWith: {
                 model: chunk.params.model,
-                extractorVersion: data.extractorVersion,
+                extractorVersion: input.extractorVersion,
                 chunkId: chunk._id.toString(),
                 timestamp: new Date().toISOString(),
               },

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "bson";
+import { ObjectId, ObjectIdLike } from "bson";
 import ms from "ms";
 
 function withJsonSchema<T extends z.ZodType>(
@@ -10,14 +10,13 @@ function withJsonSchema<T extends z.ZodType>(
   return schema;
 }
 
-export const zObjectId = () =>
-  withJsonSchema(
-    z.union([
-      z.instanceof(ObjectId),
-      z.string().transform((val) => new ObjectId(val)),
-    ]),
-    { type: "string", description: "MongoDB ObjectId as a 24-character hex string" }
-  );
+export const zObjectId = () => withJsonSchema(z.custom<ObjectId>((val) => {
+  return ObjectId.isValid(val as ObjectIdLike | string);
+}, {
+  message: "Not a valid ObjectId (must be a 24-character hex string)",
+}).transform((val) => new ObjectId(val)), { type: "string", description: "MongoDB ObjectId as a 24-character hex string" });
+
+
 
 export const zDateOrString = () =>
   withJsonSchema(
@@ -28,12 +27,13 @@ export const zDateOrString = () =>
     { type: "string", format: "date-time", description: "ISO 8601 date string or Date object" }
   );
 
-function parseDateOrRelativeTime(expr: string | Date): Date {
+export const parseDateOrRelativeTime = (expr: string | Date): Date | undefined => {
   if (expr instanceof Date) {
     return expr;
   }
 
   try {
+    // @ts-ignore
     const relativeMs = ms(expr);
     if (relativeMs) {
       return new Date(Date.now() - relativeMs);

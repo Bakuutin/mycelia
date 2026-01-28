@@ -22,6 +22,7 @@ import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 import { JobsResource } from "@/lib/resources/worker.ts";
 import { SearchResource } from "@/lib/search/resource.server.ts";
 import { DocsResource } from "@/lib/docs/resource.server.ts";
+import { ConfigResource } from "@/lib/config/resource.server.ts";
 import { z } from "zod";
 import type { Request } from "express";
 import { up } from "@/lib/mongo/migrator.ts";
@@ -180,6 +181,7 @@ defineFixture({
     const jobs = new JobsResource();
     const search = new SearchResource();
     const docs = new DocsResource();
+    const config = new ConfigResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
     objects.getRootDB = async () => isolatedDB;
@@ -191,6 +193,7 @@ defineFixture({
     defaultResourceManager.registerResource(jobs);
     defaultResourceManager.registerResource(search);
     defaultResourceManager.registerResource(docs);
+    defaultResourceManager.registerResource(config);
 
     return {
       db: isolatedDB,

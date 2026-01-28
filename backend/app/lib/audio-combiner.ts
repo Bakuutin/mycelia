@@ -1,6 +1,7 @@
 import { Binary } from "bson";
 import { Buffer } from "node:buffer";
 import { Binary as MongoBinary } from "mongodb";
+import { teeOutput } from "./subprocess.ts";
 
 export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
   const tempFiles: string[] = [];
@@ -44,6 +45,7 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
     const ffmpegArgs = [
       "-f", "concat",
       "-safe", "0",
+      "-fflags", "+genpts",
       "-i", concatFilePath,
       "-acodec", "pcm_s16le",
       "-ar", "16000",
@@ -60,14 +62,17 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
       stderr: "piped",
     });
 
-    const child = process.spawn();
-    const status = await child.status;
+    const { success, stderr } = await teeOutput(process, (stream, line) => {
+      if (stream === "stderr" && line.includes("invalid dropping")) {
+        return;
+      }
+      console.log(`[ffmpeg:${stream}] ${line}`);
+    });
 
-        if (!status.success) {
-        const stderr = await child.stderr.getReader().read();
-        const errorMsg = new TextDecoder().decode(stderr.value || new Uint8Array());
-        throw new Error(`ffmpeg concat failed: ${errorMsg}`);
-        }
+    if (!success) {
+      const errorMsg = new TextDecoder().decode(stderr);
+      throw new Error(`ffmpeg concat failed: ${errorMsg}`);
+    }
 
     const combinedData = await Deno.readFile(outputPath);
     await Deno.remove(outputPath);

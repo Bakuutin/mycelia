@@ -7,7 +7,7 @@
 // import { getMongoResource } from "@/lib/mongo/core.server.ts";
 // import { delay } from "@std/async/delay";
 // import { redis } from "@/lib/redis.ts";
-// import { ObjectId } from "mongodb";
+// import { ObjectId } from "bson";
 
 // Deno.test(
 //   "Transcription Triggers - should trigger transcription workers when relevant events occur",

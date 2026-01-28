@@ -188,7 +188,15 @@ class UpdatesWebSocketSession {
 
   sendMessage(message: ServerMessage): void {
     if (this.ws.readyState === 1) {
-      this.ws.send(JSON.stringify(message));
+      try {
+        this.ws.send(JSON.stringify(message));
+      } catch (error) {
+        // Ignore errors when sending (client might have disconnected)
+        // This prevents BrokenPipe errors from crashing the process
+        if (error instanceof Error && !error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+          console.error("Error sending WebSocket message:", error);
+        }
+      }
     }
   }
 
@@ -268,8 +276,12 @@ export async function handleUpdatesWebSocket(
     console.log("WebSocket /ws: Connection established successfully");
   } catch (error) {
     console.error("WebSocket /ws: Handler error:", error);
-    if (ws.readyState === 1) {
-      ws.close(1011, "Internal server error");
+    try {
+      if (ws.readyState === 1) {
+        ws.close(1011, "Internal server error");
+      }
+    } catch (closeError) {
+      // Ignore errors when closing (socket might already be dead)
     }
     if (session) {
       try {

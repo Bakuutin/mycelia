@@ -36,3 +36,9 @@ export interface JobAccessLogEntry {
   }>;
   timestamp: string;
 }
+
+export interface WorkerPolicy {
+  resource: string;
+  action: string;
+  effect: "allow" | "deny";
+}
