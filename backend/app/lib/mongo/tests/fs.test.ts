@@ -2,7 +2,8 @@ import { expect, fn } from "@std/expect";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { FsResource, getFsResource } from "../fs.server.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 
 Deno.test(
   "should upload a file and download it back",
@@ -18,7 +19,7 @@ Deno.test(
       data: new Uint8Array([1, 2, 3]),
       metadata: { foo: "bar" },
     });
-    expect(upload).toBeInstanceOf(ObjectId);
+    expect(upload).toBeInstanceOf(MongoObjectId);
 
     const download = await fs({
       action: "download",

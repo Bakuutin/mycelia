@@ -1,7 +1,7 @@
 import type { Request, Response as ExpressResponse } from "express";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getTranscriptionResource } from "@/lib/transcription/resource.server.ts";
-import multer from "npm:multer@^1.4.5-lts.1";
+import multer from "multer";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
 
 const upload = multer({ storage: multer.memoryStorage() });

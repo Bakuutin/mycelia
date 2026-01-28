@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import { enqueueJob, getQueue, getJob } from "../queue.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { schema as VadJobDataSchema } from "#/workers/vad.ts";
 import type { z } from "zod";
 import "./fixtures.ts";

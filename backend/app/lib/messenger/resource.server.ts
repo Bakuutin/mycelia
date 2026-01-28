@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";

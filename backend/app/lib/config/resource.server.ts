@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import { Resource, defaultResourceManager } from "@/lib/auth/resources.ts";
 import { type Auth } from "@/lib/auth/core.server.ts";
 import { ServerConfig, zServerConfig } from "@myceliasdk/config.ts";
@@ -102,7 +102,10 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
       return zServerConfig.parse(resolvedConfig);
     } catch (error) {
       console.error("Config validation failed:", error);
-      throw new Error("Configuration is invalid");
+      const message = error instanceof z.ZodError
+        ? error.issues.map((e: z.core.$ZodIssue) => `${e.path.join('.')}: ${e.message}`).join(', ')
+        : String(error);
+      throw new Error(`Configuration is invalid: ${message}`);
     }
   }
 

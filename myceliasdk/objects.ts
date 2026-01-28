@@ -13,20 +13,23 @@ const zCustomFieldValue = z.union([
   z.array(zCustomFieldPrimitive),
 ]);
 
-export const zObject = z.object({
+// Base schema without .loose() for clean type inference
+const zObjectBase = z.object({
   _id: z.instanceof(ObjectId),
   name: z.string().optional(),
   details: z.string().optional(),
   icon: zIcon,
   color: z.string().optional(),
   aliases: z.array(z.string()).optional(),
-  
+
   // Type flags
   isEvent: z.boolean().optional(),
   isPerson: z.boolean().optional(),
   isRelationship: z.boolean().optional(),
   isPromise: z.boolean().optional(),
   isConversation: z.boolean().optional(),
+  isTag: z.boolean().optional(),
+
   agreed_upon_something: z.boolean().optional(),
 
   relationship: z.object({
@@ -34,18 +37,18 @@ export const zObject = z.object({
     subject: z.instanceof(ObjectId),
     symmetrical: z.boolean(),
   }).optional(),
-  
+
   location: z.object({
     latitude: z.number(),
     longitude: z.number(),
   }).optional(),
-  
+
   timeRanges: z.array(z.object({
     start: z.date(),
     end: z.date().optional(),
     name: z.string().optional(),
   })).optional(),
-  
+
   summaries: z.array(z.object({
     text: z.string(),
     model: z.string(),
@@ -59,19 +62,21 @@ export const zObject = z.object({
     }).optional(),
     jobId: z.string().optional(),
   })).optional(),
-  
+
   metadata: z.object({
     extractedWith: z.object({
       model: z.string(),
       timestamp: z.date(),
     }).optional(),
-    // Allow other metadata
   }).loose().optional(),
-  
+
   createdAt: z.date(),
   updatedAt: z.date(),
   version: z.number().optional(),
-}).loose().refine(
+});
+
+// Full schema with .loose() for runtime validation (allows extra fields)
+export const zObject = zObjectBase.loose().refine(
   (data) => {
     if (data.isPromise) {
       return data.isRelationship === true &&
@@ -88,53 +93,19 @@ export const zObject = z.object({
 
 export type Object = z.infer<typeof zObject>;
 
-export type ObjectFormData = {
-  _id?: ObjectId;
-  name?: string;
-  details?: string;
-  icon?: { text: string } | { base64: string };
-  color?: string;
-  aliases?: string[];
-  isEvent?: boolean;
-  isPerson?: boolean;
-  isRelationship?: boolean;
-  isPromise?: boolean;
-  isConversation?: boolean;
-  agreed_upon_something?: boolean;
 
-  relationship?: {
-    object?: ObjectId;
-    subject?: ObjectId;
-    symmetrical: boolean;
-  };
-  location?: {
-    latitude: number;
-    longitude: number;
-  };
-  timeRanges?: Array<{
-    start: Date;
-    end?: Date;
-    name?: string;
-  }>;
-  
-  summaries?: Array<{
-    text: string;
-    model: string;
-    modelName: string;
-    date: Date;
-    prompt?: string;
-    usage?: {
-      promptTokens: number;
-      completionTokens: number;
-      totalTokens: number;
+type ObjectBase = z.infer<typeof zObjectBase>;
+
+export type ObjectFormData =
+  Partial<Omit<ObjectBase, '_id' | 'relationship' | 'icon'>> & {
+    _id?: ObjectId;
+    icon?: { text: string } | { base64: string };
+    relationship?: {
+      object?: ObjectId;
+      subject?: ObjectId;
+      symmetrical: boolean;
     };
-    jobId?: string;
-  }>;
-  
-  version?: number;
-  createdAt?: Date;
-  updatedAt?: Date;
-};
+  };
 
 export function validateObjectForSave(
   obj: ObjectFormData,

@@ -1,4 +1,5 @@
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
 import { teeOutput } from "@/lib/subprocess.ts";
@@ -36,7 +37,7 @@ export async function createSourceFile(
   filename: string,
   metadata: Record<string, any>,
   createdBy: string,
-): Promise<ObjectId> {
+): Promise<MongoObjectId> {
   const auth = await getServerAuth();
   const mongoResource = auth.getResource("mongo");
 
@@ -60,8 +61,8 @@ export async function createSourceFile(
   const result = await mongoResource({
     action: "insertOne",
     collection: "source_files",
-    doc: { ...sourceFile, _id: new ObjectId() },
-  }) as { insertedId: ObjectId };
+    doc: sourceFile,
+  }) as { insertedId: MongoObjectId };
 
   console.log(
     `Source file created: ${result.insertedId}, start: ${startTime.toISOString()}, size: ${fileSize} bytes`,
@@ -278,7 +279,7 @@ export async function createAudioChunk(
   index: number,
   originalId: ObjectId,
   format: "opus" | "pcm" | "float32" = "opus",
-): Promise<ObjectId> {
+): Promise<MongoObjectId> {
   await Deno.writeFile(
     `debug.${format}`,
     audioData,
@@ -306,7 +307,7 @@ export async function createAudioChunk(
     action: "insertOne",
     collection: "audio_chunks",
     doc: chunk,
-  }) as { insertedId: ObjectId };
+  }) as { insertedId: MongoObjectId };
 
   console.log(
     `Audio chunk created: ${result.insertedId}, index: ${index}, start: ${startTime.toISOString()}, size: ${audioData.length} bytes${

@@ -5,9 +5,8 @@ import type { IncomingMessage } from "node:http";
 import {
   createAudioChunk,
   createSourceFile,
-  type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
-import { ObjectId } from "mongodb";
+import { ObjectId } from "bson";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
 
@@ -334,7 +333,7 @@ class PcmWebSocketSession {
 
       // Determine format from audio header width
       const format = this.audioFormat ? getFormatFromWidth(this.audioFormat.width) : "float32";
-      const formatConfig: AudioFormatConfig = {
+      const formatConfig = {
         format,
         sampleRate: this.audioFormat?.rate || 16000,
         channels: this.audioFormat?.channels || 1,
@@ -346,7 +345,7 @@ class PcmWebSocketSession {
           chunkStartTime,
           this.chunkIndex,
           this.sourceFileId,
-          formatConfig,
+          formatConfig.format,
         );
         log("INFO", `Audio chunk created`, {
           sessionId: this.sessionId,

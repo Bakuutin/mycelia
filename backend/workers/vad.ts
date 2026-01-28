@@ -20,8 +20,7 @@ export default new NetworkJobCapability({
   schema,
   url: `${PYTHON_WORKER_URL}/jobs/vad`,
   policies: [
-    { resource: "db/audio_chunks", action: "read", effect: "allow" },
-    { resource: "db/audio_chunks", action: "update", effect: "allow" },
+    { resource: "db/audio_chunks", action: "*", effect: "allow" },
   ],
   maxConcurrency: 1,
   triggers: {
