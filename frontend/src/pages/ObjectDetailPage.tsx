@@ -11,6 +11,8 @@ import {
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
 import { MetadataDisplay } from "@/components/MetadataDisplay";
+import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
+import { ObjectTranscriptPanel } from "@/components/ObjectTranscriptPanel";
 import { ObjectId } from "bson";
 
 const ObjectDetailPage = () => {
@@ -132,6 +134,12 @@ const ObjectDetailPage = () => {
             <RelationshipsPanel object={object} />
           </div>
           <MetadataDisplay object={object} />
+          {object.timeRanges && object.timeRanges.length > 0 && (
+            <>
+              <ObjectAudioPlayer timeRange={object.timeRanges[0]} />
+              <ObjectTranscriptPanel timeRange={object.timeRanges[0]} />
+            </>
+          )}
         </div>
       </div>
     </div>
