@@ -36,8 +36,8 @@ type ExtractedObjectRange = {
 function getObjectCategory(object: Object): ObjectCategory {
   if (object.isPerson) return "person";
   if (object.isEvent) return "event";
-  if (object.isRelationship) return "relationship";
   if (object.isPromise) return "promise";
+  if (object.isRelationship) return "relationship";
   return "other";
 }
 
