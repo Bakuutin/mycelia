@@ -31,8 +31,8 @@ interface RunJobDialogProps {
 }
 
 function hasStartEndProperties(schema: any): boolean {
-  if (!schema?.properties) return false;
-  return "start" in schema.properties && "end" in schema.properties;
+  if (!schema?.input?.properties) return false;
+  return "start" in schema.input.properties && "end" in schema.input.properties;
 }
 
 export function RunJobDialog({
@@ -58,9 +58,9 @@ export function RunJobDialog({
   }, [schemas]);
 
   const currentSchema = useMemo(() => {
-    if (!selectedType || !schemas?.[selectedType]) return null;
+    if (!selectedType || !schemas?.[selectedType]?.input) return null;
     
-    const schema = { ...schemas[selectedType] };
+    const schema = { ...schemas[selectedType].input };
     if (schema.properties) {
       const { start, end, ...otherProps } = schema.properties;
       schema.properties = otherProps;

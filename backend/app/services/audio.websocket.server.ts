@@ -179,9 +179,13 @@ class PcmWebSocketSession {
         sessionId: this.sessionId,
         error: errorMsg
       });
-      this.ws.send(
-        JSON.stringify({ type: "error", message: errorMsg }) + "\n",
-      );
+      try {
+        this.ws.send(
+          JSON.stringify({ type: "error", message: errorMsg }) + "\n",
+        );
+      } catch (sendError) {
+        // Ignore errors when sending (client might have disconnected)
+      }
     }
   }
 
@@ -457,7 +461,11 @@ function parseWyomingHeader(line: string): WyomingHeader | null {
 }
 
 function handlePing(ws: WebSocket | any): void {
-  ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  try {
+    ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  } catch (error) {
+    // Ignore errors when sending (client might have disconnected)
+  }
 }
 
 async function createRequestFromUpgrade(
@@ -503,7 +511,11 @@ export async function handlePcmWebSocket(
 
   if (!auth) {
     log("WARN", `WebSocket auth failed`, { url: upgrade.url });
-    ws.close(1008, "Unauthorized: Token is missing or invalid");
+    try {
+      ws.close(1008, "Unauthorized: Token is missing or invalid");
+    } catch (closeError) {
+      // Ignore errors when closing
+    }
     throw new Error("Unauthorized");
   }
 

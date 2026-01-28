@@ -8,8 +8,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
-
-const SERVER_CONFIG_ID = new ObjectId("000000000000000000000000");
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 
 const workers: Worker[] = [];
 
@@ -18,6 +17,10 @@ export async function startWorkers() {
 
   // Discover and register all job workers
   await discoverJobWorkers();
+  
+  // Sync discovered workers with database
+  const { workerDiscovery } = await import("./worker-discovery.ts");
+  await workerDiscovery.syncDiscoveredWorkers();
 
   const jobTypes = jobRegistry.getJobTypes();
 
@@ -163,14 +166,7 @@ export async function startWorkers() {
 
 async function restorePausedWorkers() {
   try {
-    const auth = await getServerAuth();
-    const mongo = await getMongoResource(auth);
-    
-    const config = await mongo({
-      action: "findOne",
-      collection: "configs",
-      query: { _id: SERVER_CONFIG_ID },
-    });
+    const config = await getServerConfig();
 
     if (config?.workers) {
       await workerPauseManager.initFromConfig(config.workers);

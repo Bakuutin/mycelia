@@ -48,5 +48,5 @@ export const env = {
   JOB_INTERVAL_SECONDS: Deno.env.get("JOB_INTERVAL_SECONDS") ? parseInt(Deno.env.get("JOB_INTERVAL_SECONDS")!) : undefined,
 
   // Transcription Configuration
-  TRANSCRIPTION_LANGUAGE: Deno.env.get("TRANSCRIPTION_LANGUAGE"),
+  TRANSCRIPTION_LANGUAGE: Deno.env.get("TRANSCRIPTION_LANGUAGE") || "auto",
 };

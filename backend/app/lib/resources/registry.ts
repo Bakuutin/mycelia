@@ -12,6 +12,7 @@ import { JobsResource } from "@/lib/resources/worker.ts";
 import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 import { SearchResource } from "@/lib/search/resource.server.ts";
 import { DocsResource } from "@/lib/docs/resource.server.ts";
+import { ConfigResource } from "@/lib/config/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -26,6 +27,7 @@ const resources = [
   MessengerResource,
   SearchResource,
   DocsResource,
+  ConfigResource,
 ];
 
 export async function setupResources(): Promise<void> {

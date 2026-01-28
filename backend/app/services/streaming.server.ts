@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getTimelineResource } from "@/lib/timeline/resource.server.ts";
+import { teeOutput } from "@/lib/subprocess.ts";
 
 export interface AudioChunk {
   _id?: ObjectId;
@@ -119,23 +120,14 @@ export async function processAudioFile(
       stderr: "piped",
     });
 
-    const child = process.spawn();
-    const status = await child.status;
+    const { success, stderr } = await teeOutput(process, (stream, line) => {
+      console.log(`[ffmpeg:${stream}] ${line}`);
+    });
 
-    if (!status.success) {
-      const stderrReader = child.stderr.getReader();
-      const stderr = await stderrReader.read();
-      const errorOutput = new TextDecoder().decode(
-        stderr.value || new Uint8Array(),
-      );
-      stderrReader.releaseLock();
-      await child.stderr.cancel();
-      await child.stdout.cancel();
+    if (!success) {
+      const errorOutput = new TextDecoder().decode(stderr);
       throw new Error(`FFmpeg conversion failed: ${errorOutput}`);
     }
-
-    await child.stderr.cancel();
-    await child.stdout.cancel();
 
     const audioData = await Deno.readFile(tempOutputPath);
 
@@ -155,22 +147,13 @@ export async function processAudioFile(
       stderr: "piped",
     });
 
-    const durationChild = durationProcess.spawn();
-    const durationStatus = await durationChild.status;
+    const { success: durationSuccess, stdout } = await teeOutput(durationProcess);
 
     let actualDurationMs = 0;
-    if (durationStatus.success) {
-      const stdoutReader = durationChild.stdout.getReader();
-      const stdout = await stdoutReader.read();
-      const durationStr = new TextDecoder().decode(
-        stdout.value || new Uint8Array(),
-      ).trim();
+    if (durationSuccess) {
+      const durationStr = new TextDecoder().decode(stdout).trim();
       actualDurationMs = Math.round(parseFloat(durationStr) * 1000);
-      stdoutReader.releaseLock();
     }
-
-    await durationChild.stderr.cancel();
-    await durationChild.stdout.cancel();
 
     console.log(
       `Audio processed: ${audioData.length} bytes, duration: ${actualDurationMs}ms`,
@@ -249,21 +232,16 @@ async function ffmpeg(
       stdout: "piped",
       stderr: "piped",
     });
-    const child = process.spawn();
-    const status = await child.status;
-    if (!status.success) {
-      const stderrReader = child.stderr.getReader();
-      const stderr = await stderrReader.read();
-      const errorOutput = new TextDecoder().decode(
-        stderr.value || new Uint8Array(),
-      );
-      stderrReader.releaseLock();
-      await child.stderr.cancel();
-      await child.stdout.cancel();
+
+    const { success, stderr } = await teeOutput(process, (stream, line) => {
+      console.log(`[ffmpeg:${stream}] ${line}`);
+    });
+
+    if (!success) {
+      const errorOutput = new TextDecoder().decode(stderr);
       throw new Error(`FFmpeg conversion failed: ${errorOutput}`);
     }
-    await child.stderr.cancel();
-    await child.stdout.cancel();
+
     return Deno.readFile(tempOutputPath);
   } finally {
     try {

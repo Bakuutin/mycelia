@@ -89,6 +89,13 @@ export class ApiClient {
     return response.json();
   }
 
+  async getBlob(path: string): Promise<Blob> {
+    const response = await this.fetch(path, {
+      method: "GET",
+    });
+    return response.blob();
+  }
+
   async put<T>(path: string, data: unknown): Promise<T> {
     const response = await this.fetch(path, {
       method: "PUT",

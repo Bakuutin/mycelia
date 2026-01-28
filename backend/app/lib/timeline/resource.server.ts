@@ -7,33 +7,14 @@ import {
   invalidateHistogram,
   type Resolution,
 } from "@/services/timeline.server.ts";
-import { zDateOrRelativeTime } from "@myceliasdk/zod-json-schema.ts";
+import { zDateOrRelativeTime, parseDateOrRelativeTime } from "@myceliasdk/zod-json-schema.ts";
 import { getJobsResource } from "@/lib/resources/worker.ts";
 
-function parseDateOrRelativeTime(expr: string | Date): Date {
-  if (expr instanceof Date) {
-    return expr;
-  }
-
-  try {
-    const relativeMs = ms(expr);
-    if (relativeMs) {
-      return new Date(Date.now() - relativeMs);
-    }
-    return new Date(expr);
-  } catch {
-    throw new Error(
-      `Invalid time expression: ${expr}. Use format like "5d" or "10m" or an ISO date`,
-    );
-  }
-}
-
-const dateOrRelativeTimeSchema = zDateOrRelativeTime();
 
 const recalculateSchema = z.object({
   action: z.literal("recalculate"),
-  start: dateOrRelativeTimeSchema.optional(),
-  end: dateOrRelativeTimeSchema.optional(),
+  start: zDateOrRelativeTime().optional(),
+  end: zDateOrRelativeTime().optional(),
   all: z.boolean().optional(),
 });
 
@@ -43,8 +24,8 @@ const ensureIndexSchema = z.object({
 
 const invalidateSchema = z.object({
   action: z.literal("invalidate"),
-  start: dateOrRelativeTimeSchema.optional(),
-  end: dateOrRelativeTimeSchema.optional(),
+  start: zDateOrRelativeTime().optional(),
+  end: zDateOrRelativeTime().optional(),
   resolution: z.enum(["5min", "1hour", "1day", "1week"]).optional(),
 });
 
@@ -67,22 +48,16 @@ export class TimelineResource
   };
 
   async use(input: TimelineRequest, auth: Auth): Promise<TimelineResponse> {
-    switch (input.action) {
+    const validatedInput = timelineRequestSchema.parse(input);  
+    switch (validatedInput.action) {
       case "recalculate": {
-        const parsedStart = input.start !== undefined
-          ? parseDateOrRelativeTime(input.start)
-          : undefined;
-        const parsedEnd = input.end !== undefined
-          ? parseDateOrRelativeTime(input.end)
-          : undefined;
-
         const jobsResource = await getJobsResource(auth);
 
         const jobData = {
           type: "histRecalculation" as const,
-          start: parsedStart?.toISOString(),
-          end: parsedEnd?.toISOString(),
-          all: input.all || false,
+          start: validatedInput.start?.toISOString(),
+          end: validatedInput.end?.toISOString(),
+          all: validatedInput.all || false,
         };
 
         const jobResult = await jobsResource({
@@ -104,18 +79,11 @@ export class TimelineResource
         await ensureHistogramIndex(auth);
         return { success: true };
       case "invalidate": {
-        const parsedStart = input.start !== undefined
-          ? parseDateOrRelativeTime(input.start)
-          : undefined;
-        const parsedEnd = input.end !== undefined
-          ? parseDateOrRelativeTime(input.end)
-          : undefined;
-
         await invalidateHistogram(
           auth,
-          parsedStart,
-          parsedEnd,
-          input.resolution,
+          validatedInput.start,
+          validatedInput.end,
+          validatedInput.resolution,
         );
         return { success: true };
       }

@@ -12,6 +12,21 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
 
+  // Apply default overrides from workers collection
+  // These overrides are applied ONLY if the job data doesn't already have the field
+  const { workerDiscovery } = await import("./worker-discovery.ts");
+  const defaultOverrides = await workerDiscovery.getDefaultOverrides(jobType);
+  
+  const mergedJobData = { ...job.data };
+  if (defaultOverrides) {
+    // Only apply overrides for fields not already in job data
+    for (const [key, value] of Object.entries(defaultOverrides)) {
+      if (!(key in mergedJobData)) {
+        mergedJobData[key] = value;
+      }
+    }
+  }
+
   const policies = [
     ...(capability.manifest.policies || []),
     { resource: `jobs/${job.id}`, action: "progressUpdate", effect: "allow" },
@@ -113,7 +128,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(EJSON.stringify({
-    ...job.data,
+    ...mergedJobData,
     id: job.id,
   })));
   await writer.close();
