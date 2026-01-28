@@ -34,7 +34,22 @@ This repository consists of multiple projects with different technologies. Ensur
     *   `pytest` (Run all tests)
     *   To run a single test file: `pytest <path_to_test_file>` (e.g., `pytest diarizator/src/simple_speaker_recognition/api/tests/test_speaker_service.py`)
 
-### 1.3. Diarizator Web UI (React/TypeScript)
+### 1.3. Frontend (React/TypeScript)
+
+*   **Project Root:** `/frontend`
+*   **Access URL:** `https://localhost:4433/` (via nginx proxy in Docker)
+*   **Install Dependencies:** Deno handles dependencies automatically
+*   **Build/Run:**
+    *   `deno task dev` (Development server - typically accessed via Docker at https://localhost:4433/)
+    *   `deno task build` (Build for production)
+    *   `deno task preview` (Preview production build)
+*   **Linting:**
+    *   `deno lint` (Run linting)
+*   **Testing:**
+    *   `deno task test` (Run tests)
+    *   To run a single test file: `deno test <path_to_test_file>`
+
+### 1.4. Diarizator Web UI (React/TypeScript)
 
 *   **Project Root:** `/diarizator/webui`
 *   **Install Dependencies:** `npm install` or `yarn install`
