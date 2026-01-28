@@ -53,7 +53,24 @@ export async function enqueueJob(
   authOverride?: Auth,
 ): Promise<Job<JobData>> {
   const jobId = options?.jobId || new ObjectId().toString();
-  const parsedData = jobRegistry.validateJobData(data);
+
+  // Apply worker default overrides BEFORE schema validation
+  // This ensures worker defaults take precedence over schema defaults
+  // but explicit job data values still take precedence over worker defaults
+  let mergedData = { ...data };
+  if (data.type) {
+    const { workerDiscovery } = await import("./worker-discovery.ts");
+    const defaultOverrides = await workerDiscovery.getDefaultOverrides(data.type);
+    if (defaultOverrides) {
+      for (const [key, value] of Object.entries(defaultOverrides)) {
+        if (!(key in mergedData) || mergedData[key] === undefined) {
+          mergedData[key] = value;
+        }
+      }
+    }
+  }
+
+  const parsedData = jobRegistry.validateJobData(mergedData);
 
   if (!parsedData.type) {
     throw new Error(`Job data is missing 'type' field after validation for job ID: ${jobId}. Check if the schema for this job type includes the 'type' field.`);
