@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
-import { Play, FileText } from "lucide-react";
+import { Play, FileText, Link2, Link2Off } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { callResource } from "@/lib/api";
@@ -35,6 +36,7 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
   const [segments, setSegments] = useState<RenderSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncEnabled, setSyncEnabled] = useState(true);
 
   const { currentDate, resetDate, setIsPlaying } = useAudioPlayer();
   const { timeFormat } = useSettingsStore();
@@ -48,16 +50,16 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
     currentDate < seg.endTime
   );
 
-  // Auto-scroll to current segment when it changes
+  // Auto-scroll to current segment when it changes (only if sync enabled)
   useEffect(() => {
-    if (currentSegmentIndex >= 0 && currentSegmentIndex !== lastScrolledIndex.current) {
+    if (syncEnabled && currentSegmentIndex >= 0 && currentSegmentIndex !== lastScrolledIndex.current) {
       lastScrolledIndex.current = currentSegmentIndex;
       // Small delay to ensure DOM is updated
       setTimeout(() => {
         currentSegmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       }, 100);
     }
-  }, [currentSegmentIndex]);
+  }, [currentSegmentIndex, syncEnabled]);
 
   const startDate = typeof timeRange.start === "string"
     ? new Date(timeRange.start)
@@ -172,16 +174,32 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
 
   return (
     <div className="border rounded-lg p-4 bg-muted/30">
-      <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
-        <FileText className="w-4 h-4" />
-        Transcript
-        <span className="text-xs font-normal">({segments.length} segments)</span>
-      </h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+          <FileText className="w-4 h-4" />
+          Transcript
+          <span className="text-xs font-normal">({segments.length} segments)</span>
+        </h3>
+        <Button
+          variant={syncEnabled ? "secondary" : "ghost"}
+          size="sm"
+          onClick={() => setSyncEnabled(!syncEnabled)}
+          title={syncEnabled ? "Sync enabled - click to disable" : "Sync disabled - click to enable"}
+          className="h-7 px-2 gap-1"
+        >
+          {syncEnabled ? (
+            <Link2 className="w-3.5 h-3.5" />
+          ) : (
+            <Link2Off className="w-3.5 h-3.5" />
+          )}
+          <span className="text-xs">{syncEnabled ? "Sync" : "No sync"}</span>
+        </Button>
+      </div>
 
       <ScrollArea className="h-[400px] pr-3">
         <div className="space-y-1">
           {segments.map((seg, idx) => {
-            const isCurrentSegment = idx === currentSegmentIndex;
+            const isCurrentSegment = syncEnabled && idx === currentSegmentIndex;
             return (
               <div
                 key={idx}

@@ -120,30 +120,32 @@ const ObjectDetailPage = () => {
         </div>
       </div>
 
-      {/* Audio Player - Full width at top when available */}
+      {/* Main content: Player+Summary on left, Transcript on right */}
       {hasTimeRanges && (
-        <ObjectAudioPlayer timeRange={object.timeRanges[0]} />
-      )}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left column: Player + Summary */}
+          <div className="space-y-4">
+            <ObjectAudioPlayer timeRange={object.timeRanges[0]} />
 
-      {/* Summary + Transcript side by side */}
-      {hasTimeRanges && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Summary Panel */}
-          <div className="border rounded-lg p-4 bg-muted/30">
-            <h3 className="text-sm font-semibold text-muted-foreground mb-3">Summary</h3>
-            {hasSummary ? (
-              <div className="prose prose-sm max-w-none max-h-[400px] overflow-y-auto">
-                <div className="whitespace-pre-wrap text-sm">
-                  {object.summaries[0].text}
+            {/* Summary Panel */}
+            <div className="border rounded-lg p-4 bg-muted/30">
+              <h3 className="text-sm font-semibold text-muted-foreground mb-3">Summary</h3>
+              {hasSummary ? (
+                <div className="prose prose-sm max-w-none max-h-[300px] overflow-y-auto">
+                  <div className="whitespace-pre-wrap text-sm">
+                    {object.summaries[0].text}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">No summary available</p>
-            )}
+              ) : (
+                <p className="text-sm text-muted-foreground">No summary available</p>
+              )}
+            </div>
           </div>
 
-          {/* Transcript Panel */}
-          <ObjectTranscriptPanel timeRange={object.timeRanges[0]} />
+          {/* Right column: Transcript (bigger - 2 cols) */}
+          <div className="lg:col-span-2">
+            <ObjectTranscriptPanel timeRange={object.timeRanges[0]} />
+          </div>
         </div>
       )}
 
