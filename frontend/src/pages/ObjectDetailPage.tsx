@@ -12,7 +12,6 @@ import {
   Check, 
   X, 
   Tag, 
-  Link2,
   Handshake,
   Users,
   MessageSquare,
@@ -28,7 +27,6 @@ import {
   useDeleteObject,
   useObject,
   useUpdateObject,
-  getRelationships,
 } from "@/hooks/useObjectQueries";
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
@@ -173,9 +171,6 @@ const ObjectDetailPage = () => {
   const updateObjectMutation = useUpdateObject();
   const deleteObjectMutation = useDeleteObject();
   
-  // Fetch relationships for this object
-  const { data: relationships = [] } = getRelationships(object?._id);
-  
   // State for time range editing from metadata display
   const [editingTimeRangeIndex, setEditingTimeRangeIndex] = useState<number | null>(null);
   
@@ -191,6 +186,7 @@ const ObjectDetailPage = () => {
   const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, forceUpdate] = useState(0); // For relative time updates
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Update relative time every minute
   useEffect(() => {
@@ -198,10 +194,17 @@ const ObjectDetailPage = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const handleFieldUpdate = useCallback((field: string, value: any) => {
+  // Throttled save function - saves after 2 seconds of inactivity
+  const throttledSave = useCallback((field: string, value: any) => {
     if (!object || !id) return;
 
-    if (autoSave) {
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Set new timeout for 2 seconds
+    saveTimeoutRef.current = setTimeout(() => {
       updateObjectMutation.mutate({
         id: object._id.toString(),
         version: object.version,
@@ -210,11 +213,29 @@ const ObjectDetailPage = () => {
       }, {
         onSuccess: () => setLastSaved(new Date()),
       });
+    }, 2000);
+  }, [object, id, updateObjectMutation]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleFieldUpdate = useCallback((field: string, value: any) => {
+    if (!object || !id) return;
+
+    if (autoSave) {
+      // Use throttled save with 2 second delay
+      throttledSave(field, value);
     } else {
       // Accumulate changes when autosave is off
       setPendingChanges(prev => ({ ...prev, [field]: value }));
     }
-  }, [object, id, autoSave, updateObjectMutation]);
+  }, [object, id, autoSave, throttledSave]);
 
   // Manual save function
   const handleManualSave = useCallback(() => {
@@ -232,6 +253,8 @@ const ObjectDetailPage = () => {
     setPendingChanges({});
     setLastSaved(new Date());
   }, [object, id, pendingChanges, updateObjectMutation]);
+
+  const hasPendingChanges = Object.keys(pendingChanges).length > 0;
 
   // Convert Object to ObjectFormData for the form
   const formObject: ObjectFormData = object
@@ -301,28 +324,23 @@ const ObjectDetailPage = () => {
       {/* Header with navigation and actions */}
       <div className="flex items-center justify-between">
         <SmartBackButton defaultPath="/objects" />
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {/* Status indicator */}
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
             {updateObjectMutation.isPending ? (
               <span className="text-primary">Saving...</span>
-            ) : Object.keys(pendingChanges).length > 0 ? (
-              <span className="text-amber-600">Unsaved changes</span>
-            ) : lastSaved ? (
-              <span className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                Saved {formatRelativeTime(lastSaved)}
+            ) : hasPendingChanges ? (
+              <span className="text-amber-600">Unsaved</span>
+            ) : (
+              <span className="flex items-center gap-1 text-green-600">
+                <Check className="w-3 h-3" />
+                Saved
               </span>
-            ) : object?.updatedAt ? (
-              <span className="flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                Updated {formatRelativeTime(object.updatedAt)}
-              </span>
-            ) : null}
+            )}
           </div>
           
           {/* Autosave toggle */}
-          <div className="flex items-center gap-1.5 text-xs">
+          <div className="flex items-center gap-1 text-xs">
             <Switch
               checked={autoSave}
               onCheckedChange={setAutoSave}
@@ -331,13 +349,13 @@ const ObjectDetailPage = () => {
             <span className="text-muted-foreground">Auto</span>
           </div>
           
-          {/* Manual save button (shown when autosave is off and there are pending changes) */}
-          {!autoSave && Object.keys(pendingChanges).length > 0 && (
+          {/* Save button (shown when autosave is off) */}
+          {!autoSave && (
             <Button 
-              variant="default" 
+              variant={hasPendingChanges ? "default" : "outline"}
               size="sm" 
               onClick={handleManualSave}
-              disabled={updateObjectMutation.isPending}
+              disabled={!hasPendingChanges || updateObjectMutation.isPending}
             >
               <Save className="w-4 h-4 mr-1" />
               Save
@@ -346,8 +364,8 @@ const ObjectDetailPage = () => {
           
           <Button variant="outline" size="sm" asChild>
             <Link to={`/objects/${id}/history`}>
-              <History className="w-4 h-4 mr-2" />
-              History
+              <History className="w-4 h-4 mr-1" />
+              v{object.version}
             </Link>
           </Button>
           <Button
@@ -356,8 +374,7 @@ const ObjectDetailPage = () => {
             onClick={handleDelete}
             disabled={deleteObjectMutation.isPending}
           >
-            <Trash2 className="w-4 h-4 mr-2" />
-            {deleteObjectMutation.isPending ? "Deleting..." : "Delete"}
+            <Trash2 className="w-4 h-4" />
           </Button>
         </div>
       </div>
@@ -408,22 +425,14 @@ const ObjectDetailPage = () => {
               )}
             </div>
           )}
-          
-          {/* Relationships count */}
-          {relationships.length > 0 && (
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <Link2 className="w-3 h-3" />
-              <span>{relationships.length}</span>
-            </div>
-          )}
         </div>
       </div>
 
       {/* Row 1: Summary (left) + Player/Transcript (right) - flexible height */}
       {hasTimeRanges && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Summary - flexible height */}
-          <div className="border rounded-lg p-4 bg-muted/30 min-h-[300px] max-h-[600px] flex flex-col">
+          {/* Summary - flexible height, expands for long content */}
+          <div className="border rounded-lg p-4 bg-muted/30 min-h-[400px] max-h-[800px] flex flex-col">
             <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Summary</h3>
             {hasSummary ? (
               <>
@@ -463,8 +472,8 @@ const ObjectDetailPage = () => {
             )}
           </div>
 
-          {/* Player + Transcript - flexible height */}
-          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} minHeight={300} maxHeight={600} />
+          {/* Player + Transcript - flexible height, expands for long content */}
+          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} minHeight={400} maxHeight={800} />
         </div>
       )}
 
@@ -524,8 +533,8 @@ const ObjectDetailPage = () => {
           )}
         </div>
 
-        {/* Relationships - expandable */}
-        <div className="border rounded-lg p-4 min-h-[200px] max-h-[400px] flex flex-col overflow-hidden">
+        {/* Relationships - scrollable */}
+        <div className="border rounded-lg p-4 min-h-[200px] max-h-[500px] overflow-y-auto">
           <RelationshipsPanel object={object} />
         </div>
       </div>
