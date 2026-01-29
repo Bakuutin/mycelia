@@ -102,10 +102,11 @@ function isEmptyJobResult(job: JobInfo): boolean {
         (result.processed ?? 0) === 0 ||
         (progress.processed === 0 && progress.total === 0)
       );
-    default:
+    default: {
       const processed = progress.processed ?? result.processed ?? -1;
       const total = progress.total ?? result.total ?? -1;
       return processed === 0 && total === 0;
+    }
   }
 }
 
@@ -117,8 +118,8 @@ export default function JobsPage() {
   const [allTypesSelected, setAllTypesSelected] = useState(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
-  const [sortColumn, setSortColumn] = useState<string>("priority");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [sortColumn, setSortColumn] = useState<string>("timestamp");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const hideEmpty = searchParams.get("hideEmpty") === "true";
@@ -353,7 +354,7 @@ export default function JobsPage() {
       let bVal: any;
 
       switch (sortColumn) {
-        case "priority":
+        case "priority": {
           // Primary: status priority, Secondary: timestamp (desc)
           const priorityA = STATUS_PRIORITY[a.state] ?? 999;
           const priorityB = STATUS_PRIORITY[b.state] ?? 999;
@@ -362,6 +363,7 @@ export default function JobsPage() {
           }
           // Secondary sort by timestamp (most recent first)
           return (b.timestamp || 0) - (a.timestamp || 0);
+        }
         case "state":
           aVal = a.state;
           bVal = b.state;
