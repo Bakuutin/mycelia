@@ -43,6 +43,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { formatTime } from "@/lib/formatTime";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 
@@ -179,6 +181,10 @@ const ObjectDetailPage = () => {
   
   // State for summary details dialog
   const [selectedSummary, setSelectedSummary] = useState<any | null>(null);
+  
+  // State for editing details
+  const [isEditingDetails, setIsEditingDetails] = useState(false);
+  const [editingDetailsValue, setEditingDetailsValue] = useState("");
   
   // Autosave settings and status
   const { autoSave, setAutoSave } = useSettingsStore();
@@ -365,44 +371,59 @@ const ObjectDetailPage = () => {
           onNameChange={(name) => handleFieldUpdate("name", name)}
         />
         
-        {/* Object Type, Tags and Relationships */}
-        <div className="flex items-center gap-3 flex-shrink-0 flex-wrap justify-end">
+        {/* Object Type, Duration, Date, Tags and Relationships */}
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end text-xs">
           {/* Object Type Badge */}
-          <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium ${typeInfo.color}`}>
-            <TypeIcon className="w-3.5 h-3.5" />
+          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-medium ${typeInfo.color}`}>
+            <TypeIcon className="w-3 h-3" />
             <span>{typeInfo.type}</span>
           </div>
+          
+          {/* Duration */}
+          {hasTimeRanges && object.timeRanges[0].end && (
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <Clock className="w-3 h-3" />
+              <span>{Math.round((new Date(object.timeRanges[0].end).getTime() - new Date(object.timeRanges[0].start).getTime()) / 60000)}m</span>
+            </div>
+          )}
+          
+          {/* Date */}
+          {hasTimeRanges && (
+            <div className="text-muted-foreground">
+              {formatTime(new Date(object.timeRanges[0].start), "gregorian-local-natural")}
+            </div>
+          )}
           
           {/* Aliases as tags */}
           {object.aliases && object.aliases.length > 0 && (
             <div className="flex items-center gap-1">
-              <Tag className="w-3.5 h-3.5 text-muted-foreground" />
-              {object.aliases.slice(0, 3).map((alias, idx) => (
-                <Badge key={idx} variant="secondary" className="text-xs">
+              <Tag className="w-3 h-3 text-muted-foreground" />
+              {object.aliases.slice(0, 2).map((alias, idx) => (
+                <Badge key={idx} variant="secondary" className="text-xs py-0">
                   {alias}
                 </Badge>
               ))}
-              {object.aliases.length > 3 && (
-                <span className="text-xs text-muted-foreground">+{object.aliases.length - 3}</span>
+              {object.aliases.length > 2 && (
+                <span className="text-muted-foreground">+{object.aliases.length - 2}</span>
               )}
             </div>
           )}
           
           {/* Relationships count */}
           {relationships.length > 0 && (
-            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <Link2 className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <Link2 className="w-3 h-3" />
               <span>{relationships.length}</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Row 1: Summary (left) + Player/Transcript (right) - same height */}
+      {/* Row 1: Summary (left) + Player/Transcript (right) - flexible height */}
       {hasTimeRanges && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Summary - matches transcript height */}
-          <div className="border rounded-lg p-4 bg-muted/30 h-[500px] flex flex-col">
+          {/* Summary - flexible height */}
+          <div className="border rounded-lg p-4 bg-muted/30 min-h-[300px] max-h-[600px] flex flex-col">
             <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Summary</h3>
             {hasSummary ? (
               <>
@@ -442,25 +463,65 @@ const ObjectDetailPage = () => {
             )}
           </div>
 
-          {/* Player + Transcript */}
-          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} height={500} />
+          {/* Player + Transcript - flexible height */}
+          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} minHeight={300} maxHeight={600} />
         </div>
       )}
 
       {/* Row 2: Details (left) + Relationships (right) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Details - expandable */}
+        {/* Details - editable */}
         <div className="border rounded-lg p-4 bg-muted/30 min-h-[200px] max-h-[400px] flex flex-col">
-          <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Details</h3>
-          <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
-            <div className="prose prose-sm max-w-none pr-3">
-              {object.details ? (
-                <Markdown>{object.details}</Markdown>
-              ) : (
-                <p className="text-muted-foreground text-sm">No details available</p>
+          <div className="flex items-center justify-between mb-3 flex-shrink-0">
+            <h3 className="text-sm font-semibold text-muted-foreground">Details</h3>
+            <div className="flex items-center gap-1">
+              <Button
+                variant={isEditingDetails ? "default" : "ghost"}
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={() => {
+                  if (!isEditingDetails) {
+                    setEditingDetailsValue(object.details || "");
+                  }
+                  setIsEditingDetails(!isEditingDetails);
+                }}
+              >
+                {isEditingDetails ? "Preview" : "Edit"}
+              </Button>
+              {isEditingDetails && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => {
+                    handleFieldUpdate("details", editingDetailsValue);
+                    setIsEditingDetails(false);
+                  }}
+                >
+                  <Check className="w-3 h-3 mr-1" />
+                  Save
+                </Button>
               )}
             </div>
-          </ScrollArea>
+          </div>
+          {isEditingDetails ? (
+            <Textarea
+              value={editingDetailsValue}
+              onChange={(e) => setEditingDetailsValue(e.target.value)}
+              placeholder="Add details about this object..."
+              className="flex-1 min-h-[150px] resize-none font-mono text-sm"
+            />
+          ) : (
+            <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
+              <div className="prose prose-sm max-w-none pr-3">
+                {object.details ? (
+                  <Markdown>{object.details}</Markdown>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No details available. Click Edit to add.</p>
+                )}
+              </div>
+            </ScrollArea>
+          )}
         </div>
 
         {/* Relationships - expandable */}

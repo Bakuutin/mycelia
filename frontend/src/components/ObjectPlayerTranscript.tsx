@@ -20,8 +20,12 @@ import { cn } from "@/lib/utils";
 
 interface ObjectPlayerTranscriptProps {
   timeRange: { start: Date | string; end?: Date | string | null };
-  /** Height in pixels, defaults to 700 */
+  /** Fixed height in pixels (deprecated, use minHeight/maxHeight) */
   height?: number;
+  /** Minimum height in pixels */
+  minHeight?: number;
+  /** Maximum height in pixels */
+  maxHeight?: number;
 }
 
 interface TranscriptSegment {
@@ -162,7 +166,7 @@ function WaveformDisplay({ segments, startDate, endDate, currentDate, onSeek }: 
   );
 }
 
-export function ObjectPlayerTranscript({ timeRange, height = 700 }: ObjectPlayerTranscriptProps) {
+export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, maxHeight = 600 }: ObjectPlayerTranscriptProps) {
   // Audio player state
   const { currentDate, resetDate, setIsPlaying, isPlaying } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
@@ -363,8 +367,12 @@ export function ObjectPlayerTranscript({ timeRange, height = 700 }: ObjectPlayer
     return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
   };
 
+  const containerStyle = height 
+    ? { height: `${height}px` }
+    : { minHeight: `${minHeight}px`, maxHeight: `${maxHeight}px` };
+
   return (
-    <div className="border rounded-lg bg-muted/30 flex flex-col" style={{ height: `${height}px` }}>
+    <div className="border rounded-lg bg-muted/30 flex flex-col" style={containerStyle}>
       {/* Sticky Player Section */}
       <div className="flex-shrink-0 p-4 border-b bg-gradient-to-r from-muted/50 to-muted/30 rounded-t-lg space-y-3">
         {/* Waveform visualization */}
