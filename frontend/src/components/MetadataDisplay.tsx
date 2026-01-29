@@ -54,14 +54,7 @@ function formatDuration(startDate: Date | string, endDate?: Date | string | null
 
 function formatDateTime(date: Date | string): string {
   const d = typeof date === "string" ? new Date(date) : date;
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatTime(d, "gregorian-local-natural");
 }
 
 function getObjectType(object: Object): {
