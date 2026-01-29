@@ -211,7 +211,14 @@ const ObjectDetailPage = () => {
         field,
         value,
       }, {
-        onSuccess: () => setLastSaved(new Date()),
+        onSuccess: () => {
+          setLastSaved(new Date());
+          // Clear this field from pending changes after successful save
+          setPendingChanges(prev => {
+            const { [field]: _, ...rest } = prev;
+            return rest;
+          });
+        },
       });
     }, 2000);
   }, [object, id, updateObjectMutation]);
@@ -228,13 +235,14 @@ const ObjectDetailPage = () => {
   const handleFieldUpdate = useCallback((field: string, value: any) => {
     if (!object || !id) return;
 
+    // Always update pendingChanges immediately for instant visual feedback
+    setPendingChanges(prev => ({ ...prev, [field]: value }));
+
     if (autoSave) {
       // Use throttled save with 2 second delay
       throttledSave(field, value);
-    } else {
-      // Accumulate changes when autosave is off
-      setPendingChanges(prev => ({ ...prev, [field]: value }));
     }
+    // When autosave is off, changes stay in pendingChanges until manual save
   }, [object, id, autoSave, throttledSave]);
 
   // Manual save function
@@ -257,9 +265,11 @@ const ObjectDetailPage = () => {
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
 
   // Convert Object to ObjectFormData for the form
+  // Merge pendingChanges for instant visual feedback (before throttled save completes)
   const formObject: ObjectFormData = object
     ? {
       ...object,
+      ...pendingChanges, // Apply pending changes immediately for instant UI feedback
       relationship: object.relationship
         ? {
           object: object.relationship.object,
