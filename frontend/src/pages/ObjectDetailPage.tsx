@@ -186,7 +186,6 @@ const ObjectDetailPage = () => {
   const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, forceUpdate] = useState(0); // For relative time updates
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Update relative time every minute
   useEffect(() => {
@@ -194,17 +193,21 @@ const ObjectDetailPage = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Throttled save function - saves after 2 seconds of inactivity
+  // Per-field timeouts map for throttled saves
+  const fieldTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Throttled save function - saves after 2 seconds of inactivity per field
   const throttledSave = useCallback((field: string, value: any) => {
     if (!object || !id) return;
 
-    // Clear existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+    // Clear existing timeout for THIS field only
+    const existingTimeout = fieldTimeoutsRef.current.get(field);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
     }
 
-    // Set new timeout for 2 seconds
-    saveTimeoutRef.current = setTimeout(() => {
+    // Set new timeout for 2 seconds for THIS field
+    const timeout = setTimeout(() => {
       updateObjectMutation.mutate({
         id: object._id.toString(),
         version: object.version,
@@ -218,17 +221,24 @@ const ObjectDetailPage = () => {
             const { [field]: _, ...rest } = prev;
             return rest;
           });
+          // Remove from timeouts map
+          fieldTimeoutsRef.current.delete(field);
+        },
+        onError: () => {
+          // Remove from timeouts map on error too
+          fieldTimeoutsRef.current.delete(field);
         },
       });
     }, 2000);
+
+    fieldTimeoutsRef.current.set(field, timeout);
   }, [object, id, updateObjectMutation]);
 
-  // Cleanup timeout on unmount
+  // Cleanup all timeouts on unmount
   useEffect(() => {
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
+      fieldTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+      fieldTimeoutsRef.current.clear();
     };
   }, []);
 
@@ -245,21 +255,40 @@ const ObjectDetailPage = () => {
     // When autosave is off, changes stay in pendingChanges until manual save
   }, [object, id, autoSave, throttledSave]);
 
-  // Manual save function
-  const handleManualSave = useCallback(() => {
+  // Manual save function - saves all pending changes sequentially
+  const handleManualSave = useCallback(async () => {
     if (!object || !id || Object.keys(pendingChanges).length === 0) return;
 
-    // Save all pending changes
-    for (const [field, value] of Object.entries(pendingChanges)) {
-      updateObjectMutation.mutate({
-        id: object._id.toString(),
-        version: object.version,
-        field,
-        value,
-      });
+    const changesToSave = { ...pendingChanges };
+    const savedFields: string[] = [];
+    const failedFields: string[] = [];
+
+    // Save changes sequentially to handle version increments properly
+    for (const [field, value] of Object.entries(changesToSave)) {
+      try {
+        await updateObjectMutation.mutateAsync({
+          id: object._id.toString(),
+          version: object.version,
+          field,
+          value,
+        });
+        savedFields.push(field);
+        // Clear successfully saved field from pending
+        setPendingChanges(prev => {
+          const { [field]: _, ...rest } = prev;
+          return rest;
+        });
+      } catch (error) {
+        console.error(`Failed to save field ${field}:`, error);
+        failedFields.push(field);
+        // Don't clear failed fields - they remain in pendingChanges
+      }
     }
-    setPendingChanges({});
-    setLastSaved(new Date());
+
+    // Only update lastSaved if at least one field was saved successfully
+    if (savedFields.length > 0) {
+      setLastSaved(new Date());
+    }
   }, [object, id, pendingChanges, updateObjectMutation]);
 
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
