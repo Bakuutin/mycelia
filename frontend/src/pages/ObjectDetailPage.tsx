@@ -1,10 +1,28 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { History, Trash2, Pencil, Check, X, Tag, Link2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { 
+  History, 
+  Trash2, 
+  Pencil, 
+  Check, 
+  X, 
+  Tag, 
+  Link2,
+  Handshake,
+  Users,
+  MessageSquare,
+  User,
+  Calendar,
+  Package,
+  Save,
+  Clock,
+} from "lucide-react";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { SmartBackButton } from "@/components/SmartBackButton";
 import {
   useDeleteObject,
@@ -18,8 +36,48 @@ import { MetadataDisplay } from "@/components/MetadataDisplay";
 import { ObjectPlayerTranscript } from "@/components/ObjectPlayerTranscript";
 import { TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
 import { Markdown } from "@/components/Markdown";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
+
+// Helper to format relative time (e.g., "2 minutes ago")
+function formatRelativeTime(date: Date | string | undefined): string {
+  if (!date) return "";
+  const d = typeof date === "string" ? new Date(date) : date;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHours = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffSec < 5) return "just now";
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString();
+}
+
+// Helper to get object type info
+function getObjectType(object: { isPromise?: boolean; isRelationship?: boolean; isConversation?: boolean; isPerson?: boolean; isEvent?: boolean }): {
+  type: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+} {
+  if (object.isPromise) return { type: "Promise", icon: Handshake, color: "bg-orange-100 text-orange-800 border border-orange-200" };
+  if (object.isRelationship) return { type: "Relationship", icon: Users, color: "bg-purple-100 text-purple-800 border border-purple-200" };
+  if (object.isConversation) return { type: "Conversation", icon: MessageSquare, color: "bg-cyan-100 text-cyan-800 border border-cyan-200" };
+  if (object.isPerson) return { type: "Person", icon: User, color: "bg-blue-100 text-blue-800 border border-blue-200" };
+  if (object.isEvent) return { type: "Event", icon: Calendar, color: "bg-green-100 text-green-800 border border-green-200" };
+  return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border border-gray-200" };
+}
 
 // Inline editable title component
 function EditableTitle({
@@ -69,36 +127,36 @@ function EditableTitle({
   };
 
   return (
-    <div className="flex items-center gap-3 group">
+    <div className="flex items-center gap-3 group flex-1 min-w-0">
       <EmojiPickerButton
         value={icon}
         onChange={onIconChange}
-        className="text-4xl"
+        className="text-4xl flex-shrink-0"
       />
       {isEditing ? (
-        <div className="flex items-center gap-2 flex-1">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           <Input
             ref={inputRef}
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={handleSave}
-            className="text-2xl font-bold h-auto py-1"
+            className="text-2xl font-bold h-auto py-1 flex-1"
           />
-          <Button variant="ghost" size="sm" onClick={handleSave}>
+          <Button variant="ghost" size="sm" onClick={handleSave} className="flex-shrink-0">
             <Check className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={handleCancel}>
+          <Button variant="ghost" size="sm" onClick={handleCancel} className="flex-shrink-0">
             <X className="w-4 h-4" />
           </Button>
         </div>
       ) : (
         <h1 
-          className="text-2xl font-bold cursor-pointer hover:text-primary transition-colors flex items-center gap-2"
+          className="text-2xl font-bold cursor-pointer hover:text-primary transition-colors flex items-center gap-2 flex-1 min-w-0"
           onClick={() => setIsEditing(true)}
         >
-          {name || "Untitled Object"}
-          <Pencil className="w-4 h-4 opacity-0 group-hover:opacity-50 transition-opacity" />
+          <span className="truncate">{name || "Untitled Object"}</span>
+          <Pencil className="w-4 h-4 opacity-0 group-hover:opacity-50 transition-opacity flex-shrink-0" />
         </h1>
       )}
     </div>
@@ -118,17 +176,56 @@ const ObjectDetailPage = () => {
   
   // State for time range editing from metadata display
   const [editingTimeRangeIndex, setEditingTimeRangeIndex] = useState<number | null>(null);
+  
+  // State for summary details dialog
+  const [selectedSummary, setSelectedSummary] = useState<any | null>(null);
+  
+  // Autosave settings and status
+  const { autoSave, setAutoSave } = useSettingsStore();
+  const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [, forceUpdate] = useState(0); // For relative time updates
+  
+  // Update relative time every minute
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const handleFieldUpdate = (field: string, value: any) => {
+  const handleFieldUpdate = useCallback((field: string, value: any) => {
     if (!object || !id) return;
 
-    updateObjectMutation.mutate({
-      id: object._id.toString(),
-      version: object.version,
-      field,
-      value,
-    });
-  };
+    if (autoSave) {
+      updateObjectMutation.mutate({
+        id: object._id.toString(),
+        version: object.version,
+        field,
+        value,
+      }, {
+        onSuccess: () => setLastSaved(new Date()),
+      });
+    } else {
+      // Accumulate changes when autosave is off
+      setPendingChanges(prev => ({ ...prev, [field]: value }));
+    }
+  }, [object, id, autoSave, updateObjectMutation]);
+
+  // Manual save function
+  const handleManualSave = useCallback(() => {
+    if (!object || !id || Object.keys(pendingChanges).length === 0) return;
+
+    // Save all pending changes
+    for (const [field, value] of Object.entries(pendingChanges)) {
+      updateObjectMutation.mutate({
+        id: object._id.toString(),
+        version: object.version,
+        field,
+        value,
+      });
+    }
+    setPendingChanges({});
+    setLastSaved(new Date());
+  }, [object, id, pendingChanges, updateObjectMutation]);
 
   // Convert Object to ObjectFormData for the form
   const formObject: ObjectFormData = object
@@ -188,16 +285,59 @@ const ObjectDetailPage = () => {
 
   const hasTimeRanges = object.timeRanges && object.timeRanges.length > 0;
   const hasSummary = object.summaries && object.summaries.length > 0;
+  
+  // Get object type info for badge
+  const typeInfo = getObjectType(object);
+  const TypeIcon = typeInfo.icon;
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Header with navigation and actions */}
       <div className="flex items-center justify-between">
         <SmartBackButton defaultPath="/objects" />
-        <div className="flex items-center gap-2">
-          {updateObjectMutation.isPending && (
-            <span className="text-xs text-muted-foreground">Saving...</span>
+        <div className="flex items-center gap-3">
+          {/* Status indicator */}
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {updateObjectMutation.isPending ? (
+              <span className="text-primary">Saving...</span>
+            ) : Object.keys(pendingChanges).length > 0 ? (
+              <span className="text-amber-600">Unsaved changes</span>
+            ) : lastSaved ? (
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                Saved {formatRelativeTime(lastSaved)}
+              </span>
+            ) : object?.updatedAt ? (
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                Updated {formatRelativeTime(object.updatedAt)}
+              </span>
+            ) : null}
+          </div>
+          
+          {/* Autosave toggle */}
+          <div className="flex items-center gap-1.5 text-xs">
+            <Switch
+              checked={autoSave}
+              onCheckedChange={setAutoSave}
+              className="h-4 w-7"
+            />
+            <span className="text-muted-foreground">Auto</span>
+          </div>
+          
+          {/* Manual save button (shown when autosave is off and there are pending changes) */}
+          {!autoSave && Object.keys(pendingChanges).length > 0 && (
+            <Button 
+              variant="default" 
+              size="sm" 
+              onClick={handleManualSave}
+              disabled={updateObjectMutation.isPending}
+            >
+              <Save className="w-4 h-4 mr-1" />
+              Save
+            </Button>
           )}
+          
           <Button variant="outline" size="sm" asChild>
             <Link to={`/objects/${id}/history`}>
               <History className="w-4 h-4 mr-2" />
@@ -225,17 +365,26 @@ const ObjectDetailPage = () => {
           onNameChange={(name) => handleFieldUpdate("name", name)}
         />
         
-        {/* Tags and Relationships */}
-        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+        {/* Object Type, Tags and Relationships */}
+        <div className="flex items-center gap-3 flex-shrink-0 flex-wrap justify-end">
+          {/* Object Type Badge */}
+          <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium ${typeInfo.color}`}>
+            <TypeIcon className="w-3.5 h-3.5" />
+            <span>{typeInfo.type}</span>
+          </div>
+          
           {/* Aliases as tags */}
           {object.aliases && object.aliases.length > 0 && (
-            <div className="flex flex-wrap gap-1 justify-end">
-              <Tag className="w-3.5 h-3.5 text-muted-foreground mr-1" />
-              {object.aliases.map((alias, idx) => (
+            <div className="flex items-center gap-1">
+              <Tag className="w-3.5 h-3.5 text-muted-foreground" />
+              {object.aliases.slice(0, 3).map((alias, idx) => (
                 <Badge key={idx} variant="secondary" className="text-xs">
                   {alias}
                 </Badge>
               ))}
+              {object.aliases.length > 3 && (
+                <span className="text-xs text-muted-foreground">+{object.aliases.length - 3}</span>
+              )}
             </div>
           )}
           
@@ -243,38 +392,94 @@ const ObjectDetailPage = () => {
           {relationships.length > 0 && (
             <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Link2 className="w-3.5 h-3.5" />
-              <span>{relationships.length} relationship{relationships.length !== 1 ? 's' : ''}</span>
+              <span>{relationships.length}</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Main content: Summary on left, Player+Transcript on right */}
+      {/* Row 1: Summary (left) + Player/Transcript (right) - same height */}
       {hasTimeRanges && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left column: Summary */}
-          <div className="border rounded-lg p-4 bg-muted/30 h-[700px] flex flex-col">
+          {/* Summary - matches transcript height */}
+          <div className="border rounded-lg p-4 bg-muted/30 h-[500px] flex flex-col">
             <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Summary</h3>
             {hasSummary ? (
-              <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
-                <div className="prose prose-sm max-w-none pr-3">
-                  <Markdown>{object.summaries[0].text}</Markdown>
+              <>
+                <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
+                  <div className="prose prose-sm max-w-none pr-3">
+                    <Markdown>{object.summaries[0].text}</Markdown>
+                  </div>
+                </ScrollArea>
+                {/* Summary metadata */}
+                <div className="flex-shrink-0 pt-3 mt-3 border-t flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                  {object.summaries[0].model && (
+                    <span className="flex items-center gap-1">
+                      <span className="font-medium">Model:</span>
+                      <span>{object.summaries[0].modelName || object.summaries[0].model}</span>
+                    </span>
+                  )}
+                  {object.summaries[0].date && (
+                    <span className="flex items-center gap-1">
+                      <span className="font-medium">Generated:</span>
+                      <span>{formatRelativeTime(object.summaries[0].date)}</span>
+                    </span>
+                  )}
+                  {(object.summaries[0].usage || object.summaries[0].prompt || object.summaries[0].jobId) && (
+                    <Button 
+                      variant="link" 
+                      size="sm"
+                      onClick={() => setSelectedSummary(object.summaries[0])}
+                      className="p-0 h-auto text-xs"
+                    >
+                      More details...
+                    </Button>
+                  )}
                 </div>
-              </ScrollArea>
+              </>
             ) : (
               <p className="text-sm text-muted-foreground">No summary available</p>
             )}
           </div>
 
-          {/* Right column: Combined Player + Transcript with independent scrolling */}
-          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} />
+          {/* Player + Transcript */}
+          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} height={500} />
         </div>
       )}
 
-      {/* Object Details Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Form - takes 2 columns */}
-        <div className="lg:col-span-2 border rounded-lg p-6">
+      {/* Row 2: Details (left) + Relationships (right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Details - expandable */}
+        <div className="border rounded-lg p-4 bg-muted/30 min-h-[200px] max-h-[400px] flex flex-col">
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Details</h3>
+          <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
+            <div className="prose prose-sm max-w-none pr-3">
+              {object.details ? (
+                <Markdown>{object.details}</Markdown>
+              ) : (
+                <p className="text-muted-foreground text-sm">No details available</p>
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+
+        {/* Relationships - expandable */}
+        <div className="border rounded-lg p-4 min-h-[200px] max-h-[400px] flex flex-col overflow-hidden">
+          <RelationshipsPanel object={object} />
+        </div>
+      </div>
+
+      {/* Row 3: Time Info + Metadata + Form fields */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Time Information */}
+        <MetadataDisplay 
+          object={object} 
+          hideObjectType 
+          onEditTimeRanges={hasTimeRanges ? () => setEditingTimeRangeIndex(0) : undefined}
+        />
+
+        {/* Object Form - compact mode */}
+        <div className="border rounded-lg p-4 lg:col-span-2">
           <ObjectForm
             object={formObject}
             onUpdate={async (updates) => {
@@ -285,19 +490,8 @@ const ObjectDetailPage = () => {
             }}
             hideSummary
             hideIconName
+            hideDetails
           />
-        </div>
-
-        {/* Side panel - Metadata & Relationships */}
-        <div className="space-y-4">
-          <MetadataDisplay 
-            object={object} 
-            hideObjectType 
-            onEditTimeRanges={hasTimeRanges ? () => setEditingTimeRangeIndex(0) : undefined}
-          />
-          <div className="border rounded-lg p-4">
-            <RelationshipsPanel object={object} />
-          </div>
         </div>
       </div>
 
@@ -319,6 +513,78 @@ const ObjectDetailPage = () => {
           }}
         />
       )}
+
+      {/* Summary Details Dialog */}
+      <Dialog open={selectedSummary !== null} onOpenChange={(open) => !open && setSelectedSummary(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Summary Details</DialogTitle>
+          </DialogHeader>
+          {selectedSummary && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-sm font-medium">Model</Label>
+                  <div className="mt-1 text-sm">
+                    {selectedSummary.model} {selectedSummary.modelName && `(${selectedSummary.modelName})`}
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Generated</Label>
+                  <div className="mt-1 text-sm">
+                    {new Date(selectedSummary.date).toLocaleString([], {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {selectedSummary.usage && (
+                <div>
+                  <Label className="text-sm font-medium">Token Usage</Label>
+                  <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Prompt</div>
+                      <div className="font-medium">{selectedSummary.usage.promptTokens?.toLocaleString()}</div>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Completion</div>
+                      <div className="font-medium">{selectedSummary.usage.completionTokens?.toLocaleString()}</div>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Total</div>
+                      <div className="font-medium">{selectedSummary.usage.totalTokens?.toLocaleString()}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedSummary.prompt && (
+                <div>
+                  <Label className="text-sm font-medium">System Prompt</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-[200px] overflow-y-auto font-mono">
+                    {selectedSummary.prompt}
+                  </div>
+                </div>
+              )}
+
+              {selectedSummary.jobId && (
+                <div>
+                  <Label className="text-sm font-medium">Job ID</Label>
+                  <div className="mt-1 text-sm font-mono text-muted-foreground">
+                    {selectedSummary.jobId}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

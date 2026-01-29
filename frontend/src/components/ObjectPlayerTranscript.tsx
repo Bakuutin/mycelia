@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 
 interface ObjectPlayerTranscriptProps {
   timeRange: { start: Date | string; end?: Date | string | null };
+  /** Height in pixels, defaults to 700 */
+  height?: number;
 }
 
 interface TranscriptSegment {
@@ -160,7 +162,7 @@ function WaveformDisplay({ segments, startDate, endDate, currentDate, onSeek }: 
   );
 }
 
-export function ObjectPlayerTranscript({ timeRange }: ObjectPlayerTranscriptProps) {
+export function ObjectPlayerTranscript({ timeRange, height = 700 }: ObjectPlayerTranscriptProps) {
   // Audio player state
   const { currentDate, resetDate, setIsPlaying, isPlaying } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
@@ -362,7 +364,7 @@ export function ObjectPlayerTranscript({ timeRange }: ObjectPlayerTranscriptProp
   };
 
   return (
-    <div className="border rounded-lg bg-muted/30 flex flex-col h-[700px]">
+    <div className="border rounded-lg bg-muted/30 flex flex-col" style={{ height: `${height}px` }}>
       {/* Sticky Player Section */}
       <div className="flex-shrink-0 p-4 border-b bg-gradient-to-r from-muted/50 to-muted/30 rounded-t-lg space-y-3">
         {/* Waveform visualization */}

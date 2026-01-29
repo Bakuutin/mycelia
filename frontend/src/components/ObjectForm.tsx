@@ -171,6 +171,8 @@ interface ObjectFormProps {
   hideSummary?: boolean;
   /** Hide icon and name when displayed as page title */
   hideIconName?: boolean;
+  /** Hide details section when displayed elsewhere on the page */
+  hideDetails?: boolean;
 }
 
 const renderIcon = (icon: any) => {
@@ -321,7 +323,7 @@ function useDebouncedUpdate(
 }
 
 export function ObjectForm(
-  { object, onUpdate, onFieldUpdate, hideSummary, hideIconName }: ObjectFormProps,
+  { object, onUpdate, onFieldUpdate, hideSummary, hideIconName, hideDetails }: ObjectFormProps,
 ) {
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
@@ -462,10 +464,12 @@ export function ObjectForm(
         </div>
       )}
 
-      <DetailsField
-        value={detailsValue}
-        onChange={setDetailsValue}
-      />
+      {!hideDetails && (
+        <DetailsField
+          value={detailsValue}
+          onChange={setDetailsValue}
+        />
+      )}
 
       <SummarizeDialog
         open={isSummarizeOpen}
