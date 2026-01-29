@@ -2,13 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { History, Trash2, Pencil, Check, X } from "lucide-react";
+import { History, Trash2, Pencil, Check, X, Tag, Link2 } from "lucide-react";
 import { SmartBackButton } from "@/components/SmartBackButton";
 import {
   useDeleteObject,
   useObject,
   useUpdateObject,
+  getRelationships,
 } from "@/hooks/useObjectQueries";
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
@@ -111,6 +113,9 @@ const ObjectDetailPage = () => {
   const updateObjectMutation = useUpdateObject();
   const deleteObjectMutation = useDeleteObject();
   
+  // Fetch relationships for this object
+  const { data: relationships = [] } = getRelationships(object?._id);
+  
   // State for time range editing from metadata display
   const [editingTimeRangeIndex, setEditingTimeRangeIndex] = useState<number | null>(null);
 
@@ -211,13 +216,38 @@ const ObjectDetailPage = () => {
         </div>
       </div>
 
-      {/* Title: Icon + Name (editable inline) */}
-      <EditableTitle
-        icon={object.icon}
-        name={object.name || ""}
-        onIconChange={(icon) => handleFieldUpdate("icon", icon)}
-        onNameChange={(name) => handleFieldUpdate("name", name)}
-      />
+      {/* Title row: Icon + Name on left, Tags + Relationships on right */}
+      <div className="flex items-start justify-between gap-4">
+        <EditableTitle
+          icon={object.icon}
+          name={object.name || ""}
+          onIconChange={(icon) => handleFieldUpdate("icon", icon)}
+          onNameChange={(name) => handleFieldUpdate("name", name)}
+        />
+        
+        {/* Tags and Relationships */}
+        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          {/* Aliases as tags */}
+          {object.aliases && object.aliases.length > 0 && (
+            <div className="flex flex-wrap gap-1 justify-end">
+              <Tag className="w-3.5 h-3.5 text-muted-foreground mr-1" />
+              {object.aliases.map((alias, idx) => (
+                <Badge key={idx} variant="secondary" className="text-xs">
+                  {alias}
+                </Badge>
+              ))}
+            </div>
+          )}
+          
+          {/* Relationships count */}
+          {relationships.length > 0 && (
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Link2 className="w-3.5 h-3.5" />
+              <span>{relationships.length} relationship{relationships.length !== 1 ? 's' : ''}</span>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Main content: Summary on left, Player+Transcript on right */}
       {hasTimeRanges && (
