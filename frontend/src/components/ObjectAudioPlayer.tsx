@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Volume2 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -30,7 +30,7 @@ const SPEED_OPTIONS = [
 ];
 
 export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
-  const { currentDate, resetDate } = useAudioPlayer();
+  const { currentDate, resetDate, isPlaying, setIsPlaying } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
   const prevStartTimeRef = useRef<number | null>(null);
 
@@ -52,6 +52,17 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
       prevStartTimeRef.current = startTime;
     }
   }, [startDate, resetDate]);
+
+  // Stop playback when currentDate exceeds endDate
+  useEffect(() => {
+    if (!isPlaying || !currentDate || !endDate) return;
+    
+    if (currentDate.getTime() >= endDate.getTime()) {
+      setIsPlaying(false);
+      // Reset to end position so progress bar shows 100%
+      resetDate(endDate);
+    }
+  }, [currentDate, endDate, isPlaying, setIsPlaying, resetDate]);
 
   const handleVolumeChange = (value: number[]) => {
     setVolume(value[0]);

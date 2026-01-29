@@ -607,52 +607,52 @@ export function ObjectForm(
       {/* Object Type Toggle Buttons */}
       <div className={compact ? "space-y-1" : "space-y-2"}>
         <Label className={`text-muted-foreground ${compact ? 'text-xs' : 'text-sm'}`}>Object Type</Label>
-        <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
+        <div className={`flex flex-nowrap ${compact ? 'gap-1' : 'gap-2'}`}>
           <button
             type="button"
             onClick={() => updateField("isPerson", !object.isPerson)}
             className={`
-              flex items-center rounded-lg border-2 transition-all font-medium
-              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isPerson
-                ? "bg-blue-500 text-white border-blue-600 shadow-md"
+                ? "bg-blue-500 text-white border-blue-600 shadow-sm"
                 : "bg-background border-border hover:bg-blue-50 hover:border-blue-300"
               }
             `}
           >
-            <User className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
-            <span>Person</span>
+            <User className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>{compact ? "Pers" : "Person"}</span>
           </button>
 
           <button
             type="button"
             onClick={() => updateField("isEvent", !object.isEvent)}
             className={`
-              flex items-center rounded-lg border-2 transition-all font-medium
-              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isEvent
-                ? "bg-green-500 text-white border-green-600 shadow-md"
+                ? "bg-green-500 text-white border-green-600 shadow-sm"
                 : "bg-background border-border hover:bg-green-50 hover:border-green-300"
               }
             `}
           >
-            <Calendar className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
-            <span>Event</span>
+            <Calendar className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>{compact ? "Evt" : "Event"}</span>
           </button>
 
           <button
             type="button"
             onClick={() => updateField("isConversation", !object.isConversation)}
             className={`
-              flex items-center rounded-lg border-2 transition-all font-medium
-              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isConversation
-                ? "bg-cyan-500 text-white border-cyan-600 shadow-md"
+                ? "bg-cyan-500 text-white border-cyan-600 shadow-sm"
                 : "bg-background border-border hover:bg-cyan-50 hover:border-cyan-300"
               }
             `}
           >
-            <MessageSquare className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <MessageSquare className={compact ? "w-3 h-3" : "w-4 h-4"} />
             <span>{compact ? "Conv" : "Conversation"}</span>
           </button>
 
@@ -673,15 +673,15 @@ export function ObjectForm(
               }
             }}
             className={`
-              flex items-center rounded-lg border-2 transition-all font-medium
-              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isRelationship && !object.isPromise
-                ? "bg-purple-500 text-white border-purple-600 shadow-md"
+                ? "bg-purple-500 text-white border-purple-600 shadow-sm"
                 : "bg-background border-border hover:bg-purple-50 hover:border-purple-300"
               }
             `}
           >
-            <Users className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <Users className={compact ? "w-3 h-3" : "w-4 h-4"} />
             <span>{compact ? "Rel" : "Relationship"}</span>
           </button>
 
@@ -700,16 +700,16 @@ export function ObjectForm(
               }
             }}
             className={`
-              flex items-center rounded-lg border-2 transition-all font-medium
-              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isPromise
-                ? "bg-orange-500 text-white border-orange-600 shadow-md"
+                ? "bg-orange-500 text-white border-orange-600 shadow-sm"
                 : "bg-background border-border hover:bg-orange-50 hover:border-orange-300"
               }
             `}
           >
-            <Handshake className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
-            <span>Promise</span>
+            <Handshake className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>{compact ? "Prom" : "Promise"}</span>
           </button>
         </div>
       </div>

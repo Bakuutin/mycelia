@@ -536,6 +536,7 @@ const ObjectDetailPage = () => {
             hideSummary
             hideIconName
             hideDetails
+            compact
           />
         </div>
       </div>
