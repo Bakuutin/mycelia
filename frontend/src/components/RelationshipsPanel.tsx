@@ -34,6 +34,8 @@ import {
 
 interface RelationshipsPanelProps {
   object: Object;
+  /** Use compact layout with smaller text and spacing */
+  compact?: boolean;
 }
 
 const renderIcon = (icon: any) => {
@@ -44,7 +46,7 @@ const renderIcon = (icon: any) => {
   return "";
 };
 
-export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
+export function RelationshipsPanel({ object, compact = false }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
   const { data: referenceCounts } = useObjectReferenceCounts(object._id);
   const createObjectMutation = useCreateObject();
@@ -72,12 +74,12 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
 
   const handleCreateRelationship = async () => {
     if (!newRelationship.name.trim()) {
-      setCreateError("Relationship name is required");
+      setCreateError("Please enter a relationship name (e.g., 'knows', 'works with')");
       return;
     }
 
     if (!newRelationship.objectId) {
-      setCreateError("Please select the object");
+      setCreateError("Please select the target object (right side) for this relationship");
       return;
     }
 
@@ -127,55 +129,61 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Relationships</h3>
+    <div className={compact ? "space-y-2" : "space-y-4"}>
+      {/* Header with title, counts inline, and create button */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <h3 className={compact ? "text-sm font-semibold" : "text-lg font-semibold"}>Relationships</h3>
+          {/* Inline counts when compact */}
+          {compact && referenceCounts && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-bold text-primary">{referenceCounts.referencesTo}</span>
+              <span className="text-muted-foreground text-[10px]">TO</span>
+              <span className="font-bold text-primary">{referenceCounts.referencesFrom}</span>
+              <span className="text-muted-foreground text-[10px]">FROM</span>
+              <span className="font-bold text-primary">{referenceCounts.total}</span>
+              <span className="text-muted-foreground text-[10px]">Total</span>
+            </div>
+          )}
+        </div>
         {!showCreateForm && (
           <Button
             variant="outline"
             size="sm"
+            className={compact ? "h-6 text-xs px-2" : ""}
             onClick={() => setShowCreateForm(true)}
           >
-            <Plus className="w-4 h-4 mr-2" />
-            Create Relationship
+            <Plus className={compact ? "w-3 h-3 mr-1" : "w-4 h-4 mr-2"} />
+            {compact ? "Add" : "Create Relationship"}
           </Button>
         )}
       </div>
 
-      {/* Reference Counts Display */}
-      {referenceCounts && (
-        <div className="grid grid-cols-3 gap-3 p-3 bg-muted/30 rounded-lg border">
+      {/* Reference Counts Display - only show when not compact */}
+      {!compact && referenceCounts && (
+        <div className="grid grid-cols-3 gap-2 p-2 bg-muted/30 rounded-lg border">
           <div className="text-center">
-            <div className="text-2xl font-bold text-primary">
+            <div className="font-bold text-primary text-2xl">
               {referenceCounts.referencesTo}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              References TO
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-0.5">
-              (as target)
+            <div className="text-muted-foreground text-xs mt-1">
+              TO
             </div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-primary">
+            <div className="font-bold text-primary text-2xl">
               {referenceCounts.referencesFrom}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              References FROM
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-0.5">
-              (as source)
+            <div className="text-muted-foreground text-xs mt-1">
+              FROM
             </div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-primary">
+            <div className="font-bold text-primary text-2xl">
               {referenceCounts.total}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
+            <div className="text-muted-foreground text-xs mt-1">
               Total
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-0.5">
-              relationships
             </div>
           </div>
         </div>
@@ -218,21 +226,24 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
               <Input
                 id="rel-name"
                 value={newRelationship.name}
-                onChange={(e) =>
+                onChange={(e) => {
                   setNewRelationship((prev) => ({
                     ...prev,
                     name: e.target.value,
-                  }))}
+                  }));
+                  if (createError) setCreateError(null);
+                }}
                 placeholder="e.g., knows, works with, manages"
                 className="mt-1"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-end">
+          {/* Source and Target Objects - stacked layout for narrow containers */}
+          <div className="space-y-3">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <Label className="text-xs">Subject</Label>
+                <Label className="text-xs">Source Object</Label>
                 {!newRelationship.symmetrical && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -266,41 +277,46 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                     }));
                   }
                 }}
-                placeholder="Select a subject..."
+                placeholder="Select source object..."
               />
             </div>
 
-            <div className="flex items-center justify-center">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-px bg-border" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant="ghost"
-                    size="icon"
+                    variant="outline"
+                    size="sm"
                     onClick={() => {
                       setNewRelationship((prev) => ({
                         ...prev,
                         symmetrical: !prev.symmetrical,
                       }));
                     }}
-                    className="h-[40px] w-[40px] p-0"
+                    className="h-7 px-2 gap-1"
                   >
                     {newRelationship.symmetrical
-                      ? <MoveHorizontal className="w-4 h-4" />
-                      : <ArrowRight className="w-4 h-4" />}
+                      ? <MoveHorizontal className="w-3 h-3" />
+                      : <ArrowRight className="w-3 h-3" />}
+                    <span className="text-xs">
+                      {newRelationship.symmetrical ? "Bidirectional" : "Directional"}
+                    </span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
                   <p>
                     {newRelationship.symmetrical
-                      ? "Make Directional"
-                      : "Make Symmetrical"}
+                      ? "Click to make directional (one-way)"
+                      : "Click to make bidirectional (both ways)"}
                   </p>
                 </TooltipContent>
               </Tooltip>
+              <div className="flex-1 h-px bg-border" />
             </div>
 
             <div>
-              <Label className="text-xs mb-1 block">Object</Label>
+              <Label className="text-xs mb-1 block">Target Object</Label>
               <ObjectSelectionDropdown
                 value={newRelationship.objectId}
                 onChange={(value) => {
@@ -309,10 +325,16 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                       ...prev,
                       objectId: value,
                     }));
+                    if (createError) setCreateError(null);
                   }
                 }}
-                placeholder="Select an object..."
+                placeholder="Select target object..."
               />
+              {!newRelationship.objectId && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Select the object this relationship points to
+                </p>
+              )}
             </div>
           </div>
 
@@ -362,7 +384,7 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
         </div>
       )}
       {relationships.length > 0 && (
-        <div className="flex flex-col gap-2">
+        <div className={`flex flex-col ${compact ? 'gap-1' : 'gap-2'}`}>
           {relationships.map(({ other, relationship }) => {
             // Determine if current object is subject or object in the relationship
             const isCurrentObjectSubject =
@@ -376,29 +398,29 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
               : (isCurrentObjectSubject ? ArrowRight : ArrowLeft);
 
             return (
-              <div key={relationship._id.toString()} className="p-1 space-y-2">
+              <div key={relationship._id.toString()} className={compact ? "py-0.5" : "p-1 space-y-2"}>
                 {/* Horizontal relationship flow */}
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className={`flex items-center flex-1 min-w-0 ${compact ? 'gap-1.5 text-xs' : 'gap-3'}`}>
                     <Link
                       to={`/objects/${relationship._id.toString()}`}
-                      className="flex items-center gap-2 flex-shrink-0"
+                      className={`flex items-center flex-shrink-0 ${compact ? 'gap-1' : 'gap-2'}`}
                     >
-                      <span className="text-md">
+                      <span className={compact ? "text-sm" : "text-md"}>
                         {renderIcon(relationship.icon)}
                       </span>
-                      <span className="font-medium whitespace-nowrap">
+                      <span className={`font-medium whitespace-nowrap ${compact ? 'text-xs' : ''}`}>
                         {relationship.name}
                       </span>
 
-                      <ArrowComponent className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                      <ArrowComponent className={`text-muted-foreground flex-shrink-0 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} />
                     </Link>
                     <Link
                       to={`/objects/${other._id.toString()}`}
-                      className="flex items-center gap-2 min-w-0"
+                      className={`flex items-center min-w-0 ${compact ? 'gap-1' : 'gap-2'}`}
                     >
-                      <span className="text-md">{renderIcon(other.icon)}</span>
-                      <span className="font-medium truncate">{other.name}</span>
+                      <span className={compact ? "text-sm" : "text-md"}>{renderIcon(other.icon)}</span>
+                      <span className={`font-medium truncate ${compact ? 'text-xs' : ''}`}>{other.name}</span>
                     </Link>
                   </div>
                   <Tooltip>
@@ -409,9 +431,9 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                         onClick={() =>
                           handleDeleteRelationship(relationship._id.toString())}
                         disabled={deleteObjectMutation.isPending}
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        className={`text-muted-foreground hover:text-destructive ${compact ? 'h-5 w-5' : 'h-8 w-8'}`}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className={compact ? "w-3 h-3" : "w-4 h-4"} />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
@@ -420,8 +442,8 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                   </Tooltip>
                 </div>
 
-                {/* Relationship description and time ranges below */}
-                {(relationship.details ||
+                {/* Relationship description and time ranges below - hide in compact mode */}
+                {!compact && (relationship.details ||
                   (relationship.timeRanges &&
                     relationship.timeRanges.length > 0)) && (
                   <div className="text-sm text-muted-foreground pl-2 space-y-1">
