@@ -187,10 +187,16 @@ const ObjectDetailPage = () => {
   // Autosave settings and status
   const { autoSave, setAutoSave, dateFormat } = useSettingsStore();
   const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
+  const pendingChangesRef = useRef<Record<string, any>>({}); // Ref to always get latest pending changes
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [, forceUpdate] = useState(0); // For relative time updates
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    pendingChangesRef.current = pendingChanges;
+  }, [pendingChanges]);
   
   // Update relative time every minute
   useEffect(() => {
@@ -212,9 +218,9 @@ const ObjectDetailPage = () => {
     // Get current object from cache to ensure we have the latest version
     const currentObject = queryClient.getQueryData<typeof object>(objectKeys.detail(id!));
     if (!currentObject || !id) return;
-    
-    // Snapshot the pending changes at the moment of save
-    const changesToSave = { ...pendingChanges };
+
+    // Use ref to get latest pending changes (avoids stale closure issue)
+    const changesToSave = { ...pendingChangesRef.current };
     if (Object.keys(changesToSave).length === 0) return;
 
     setIsSaving(true);
@@ -250,8 +256,10 @@ const ObjectDetailPage = () => {
     setIsSaving(false);
     if (successCount > 0) {
       setLastSaved(new Date());
+      // Invalidate to ensure UI shows latest version
+      queryClient.invalidateQueries({ queryKey: objectKeys.detail(id) });
     }
-  }, [id, pendingChanges, updateObjectMutation, queryClient]);
+  }, [id, updateObjectMutation, queryClient]);
 
   // Schedule autosave - debounces all changes together
   const scheduleAutoSave = useCallback(() => {
