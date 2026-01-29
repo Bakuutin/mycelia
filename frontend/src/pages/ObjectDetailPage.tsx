@@ -182,7 +182,7 @@ const ObjectDetailPage = () => {
   const [editingDetailsValue, setEditingDetailsValue] = useState("");
   
   // Autosave settings and status
-  const { autoSave, setAutoSave } = useSettingsStore();
+  const { autoSave, setAutoSave, dateFormat } = useSettingsStore();
   const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, forceUpdate] = useState(0); // For relative time updates
@@ -475,23 +475,15 @@ const ObjectDetailPage = () => {
         </div>
       )}
 
-      {/* Row 2: Relationships + Time Info + Metadata (side by side) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Relationships - compact */}
-        <div className="border rounded-lg p-3 min-h-[180px] max-h-[300px] overflow-y-auto">
+      {/* Row 2: Relationships (left) | Object Type (right, half) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Relationships */}
+        <div className="border rounded-lg p-4 min-h-[180px] max-h-[300px] overflow-y-auto">
           <RelationshipsPanel object={object} compact />
         </div>
 
-        {/* Time Information - compact */}
-        <MetadataDisplay 
-          object={object} 
-          hideObjectType 
-          compact
-          onEditTimeRanges={hasTimeRanges ? () => setEditingTimeRangeIndex(0) : undefined}
-        />
-
-        {/* Object Form - compact mode */}
-        <div className="border rounded-lg p-3">
+        {/* Object Type - with labels, clickable */}
+        <div className="border rounded-lg p-4">
           <ObjectForm
             object={formObject}
             onUpdate={async (updates) => {
@@ -503,13 +495,36 @@ const ObjectDetailPage = () => {
             hideSummary
             hideIconName
             hideDetails
-            compact
           />
         </div>
       </div>
 
-      {/* Row 3: Details - full width */}
-      <div className="border rounded-lg p-4 bg-muted/30 min-h-[150px] max-h-[300px] flex flex-col">
+      {/* Row 3: Time Information (left) | Metadata (right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Time Information */}
+        <MetadataDisplay 
+          object={object} 
+          hideObjectType
+          hideMetadata
+          onEditTimeRanges={hasTimeRanges ? () => setEditingTimeRangeIndex(0) : undefined}
+        />
+
+        {/* Metadata */}
+        <div className="border rounded-lg p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-muted-foreground">Metadata</h3>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <div className="text-muted-foreground">Created:</div>
+            <div>{formatTime(object.createdAt, dateFormat)}</div>
+            <div className="text-muted-foreground">Updated:</div>
+            <div>{formatTime(object.updatedAt, dateFormat)}</div>
+            <div className="text-muted-foreground">Version:</div>
+            <div>{object.version}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Row 4: Details - full width */}
+      <div className="border rounded-lg p-4 bg-muted/30 min-h-[120px] max-h-[250px] flex flex-col">
         <div className="flex items-center justify-between mb-3 flex-shrink-0">
           <h3 className="text-sm font-semibold text-muted-foreground">Details</h3>
           <div className="flex items-center gap-1">
@@ -547,7 +562,7 @@ const ObjectDetailPage = () => {
             value={editingDetailsValue}
             onChange={(e) => setEditingDetailsValue(e.target.value)}
             placeholder="Add details about this object..."
-            className="flex-1 min-h-[100px] resize-none font-mono text-sm"
+            className="flex-1 min-h-[80px] resize-none font-mono text-sm"
           />
         ) : (
           <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">

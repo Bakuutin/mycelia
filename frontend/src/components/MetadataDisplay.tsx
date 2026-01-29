@@ -24,6 +24,8 @@ interface MetadataDisplayProps {
   hideObjectType?: boolean;
   /** Hide time information when player is already visible */
   hideTimeInfo?: boolean;
+  /** Hide metadata (created, updated, version) when displayed elsewhere */
+  hideMetadata?: boolean;
   /** Callback when Edit button is clicked for time ranges */
   onEditTimeRanges?: () => void;
   /** Use compact layout with smaller text and spacing */
@@ -72,7 +74,7 @@ function getObjectType(object: Object): {
   return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border-gray-200" };
 }
 
-export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, onEditTimeRanges, compact = false }: MetadataDisplayProps) {
+export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMetadata, onEditTimeRanges, compact = false }: MetadataDisplayProps) {
   const extractedWith = object?.metadata?.extractedWith;
   const timeRanges = object?.timeRanges;
   const hasTimeRange = timeRanges && timeRanges.length > 0;
@@ -185,31 +187,33 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, onEditTi
       )}
 
       {/* General Metadata */}
-      <Card className="p-4 bg-muted/50">
-        <h3 className="text-sm font-semibold text-muted-foreground mb-3">
-          Metadata
-        </h3>
-        <dl className="space-y-3 text-sm">
-          <div className="flex justify-between items-center">
-            <dt className="text-muted-foreground">Created:</dt>
-            <dd className="text-foreground">
-              {formatTime(new Date(object.createdAt))}
-            </dd>
-          </div>
-          <div className="flex justify-between items-center">
-            <dt className="text-muted-foreground">Updated:</dt>
-            <dd className="text-foreground">
-              {formatTime(new Date(object.updatedAt))}
-            </dd>
-          </div>
-          <div className="flex justify-between items-center">
-            <dt className="text-muted-foreground">Version:</dt>
-            <dd className="text-foreground">
-              {(object?.version || 0 ) as number}
-            </dd>
-          </div>
-        </dl>
-      </Card>
+      {!hideMetadata && (
+        <Card className="p-4 bg-muted/50">
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3">
+            Metadata
+          </h3>
+          <dl className="space-y-3 text-sm">
+            <div className="flex justify-between items-center">
+              <dt className="text-muted-foreground">Created:</dt>
+              <dd className="text-foreground">
+                {formatTime(new Date(object.createdAt))}
+              </dd>
+            </div>
+            <div className="flex justify-between items-center">
+              <dt className="text-muted-foreground">Updated:</dt>
+              <dd className="text-foreground">
+                {formatTime(new Date(object.updatedAt))}
+              </dd>
+            </div>
+            <div className="flex justify-between items-center">
+              <dt className="text-muted-foreground">Version:</dt>
+              <dd className="text-foreground">
+                {(object?.version || 0 ) as number}
+              </dd>
+            </div>
+          </dl>
+        </Card>
+      )}
 
       {extractedWith && (
         <Card className="p-4 bg-muted/50">
