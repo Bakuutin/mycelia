@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react";
-import { Volume2 } from "lucide-react";
+import { useEffect, useRef, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { Volume2, Calendar } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
   Select,
@@ -30,7 +32,7 @@ const SPEED_OPTIONS = [
 ];
 
 export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
-  const { currentDate, resetDate } = useAudioPlayer();
+  const { currentDate, resetDate, isPlaying, setIsPlaying } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
   const prevStartTimeRef = useRef<number | null>(null);
 
@@ -52,6 +54,17 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
       prevStartTimeRef.current = startTime;
     }
   }, [startDate, resetDate]);
+
+  // Stop playback when currentDate exceeds endDate
+  useEffect(() => {
+    if (!isPlaying || !currentDate || !endDate) return;
+    
+    if (currentDate.getTime() >= endDate.getTime()) {
+      setIsPlaying(false);
+      // Reset to end position so progress bar shows 100%
+      resetDate(endDate);
+    }
+  }, [currentDate, endDate, isPlaying, setIsPlaying, resetDate]);
 
   const handleVolumeChange = (value: number[]) => {
     setVolume(value[0]);
@@ -175,6 +188,22 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
             className="flex-1"
           />
         </div>
+
+        {/* Divider */}
+        <div className="h-8 w-px bg-border hidden sm:block" />
+
+        {/* View in Timeline button */}
+        <Button
+          variant="outline"
+          size="sm"
+          asChild
+          className="h-8 text-xs"
+        >
+          <Link to={`/timeline?start=${startDate.getTime()}${endDate ? `&end=${endDate.getTime()}` : ''}`}>
+            <Calendar className="w-3.5 h-3.5 mr-1.5" />
+            View in Timeline
+          </Link>
+        </Button>
       </div>
     </div>
   );
