@@ -365,7 +365,8 @@ const ObjectDetailPage = () => {
           <Button variant="outline" size="sm" asChild>
             <Link to={`/objects/${id}/history`}>
               <History className="w-4 h-4 mr-1" />
-              v{object.version}
+              History
+              <span className="ml-1 text-muted-foreground">v{object.version}</span>
             </Link>
           </Button>
           <Button
@@ -379,8 +380,8 @@ const ObjectDetailPage = () => {
         </div>
       </div>
 
-      {/* Title row: Icon + Name on left, Tags + Relationships on right */}
-      <div className="flex items-start justify-between gap-4">
+      {/* Title row: Icon + Name on left, metadata on right - all on one line */}
+      <div className="flex items-center justify-between gap-4">
         <EditableTitle
           icon={object.icon}
           name={object.name || ""}
@@ -388,26 +389,23 @@ const ObjectDetailPage = () => {
           onNameChange={(name) => handleFieldUpdate("name", name)}
         />
         
-        {/* Object Type, Duration, Date, Tags and Relationships */}
-        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end text-xs">
+        {/* Object Type, Date, Duration, Tags - aligned on one line */}
+        <div className="flex items-center gap-3 flex-shrink-0 text-xs">
           {/* Object Type Badge */}
           <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-medium ${typeInfo.color}`}>
             <TypeIcon className="w-3 h-3" />
             <span>{typeInfo.type}</span>
           </div>
           
-          {/* Duration */}
-          {hasTimeRanges && object.timeRanges[0].end && (
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <Clock className="w-3 h-3" />
-              <span>{Math.round((new Date(object.timeRanges[0].end).getTime() - new Date(object.timeRanges[0].start).getTime()) / 60000)}m</span>
-            </div>
-          )}
-          
-          {/* Date */}
+          {/* Date and Duration together */}
           {hasTimeRanges && (
-            <div className="text-muted-foreground">
-              {formatTime(new Date(object.timeRanges[0].start), "gregorian-local-natural")}
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <span>{formatTime(new Date(object.timeRanges[0].start), "gregorian-local-natural")}</span>
+              {object.timeRanges[0].end && (
+                <span className="font-semibold text-foreground">
+                  {Math.round((new Date(object.timeRanges[0].end).getTime() - new Date(object.timeRanges[0].start).getTime()) / 60000)}m
+                </span>
+              )}
             </div>
           )}
           
@@ -477,79 +475,23 @@ const ObjectDetailPage = () => {
         </div>
       )}
 
-      {/* Row 2: Details (left) + Relationships (right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Details - editable */}
-        <div className="border rounded-lg p-4 bg-muted/30 min-h-[200px] max-h-[400px] flex flex-col">
-          <div className="flex items-center justify-between mb-3 flex-shrink-0">
-            <h3 className="text-sm font-semibold text-muted-foreground">Details</h3>
-            <div className="flex items-center gap-1">
-              <Button
-                variant={isEditingDetails ? "default" : "ghost"}
-                size="sm"
-                className="h-6 px-2 text-xs"
-                onClick={() => {
-                  if (!isEditingDetails) {
-                    setEditingDetailsValue(object.details || "");
-                  }
-                  setIsEditingDetails(!isEditingDetails);
-                }}
-              >
-                {isEditingDetails ? "Preview" : "Edit"}
-              </Button>
-              {isEditingDetails && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-xs"
-                  onClick={() => {
-                    handleFieldUpdate("details", editingDetailsValue);
-                    setIsEditingDetails(false);
-                  }}
-                >
-                  <Check className="w-3 h-3 mr-1" />
-                  Save
-                </Button>
-              )}
-            </div>
-          </div>
-          {isEditingDetails ? (
-            <Textarea
-              value={editingDetailsValue}
-              onChange={(e) => setEditingDetailsValue(e.target.value)}
-              placeholder="Add details about this object..."
-              className="flex-1 min-h-[150px] resize-none font-mono text-sm"
-            />
-          ) : (
-            <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
-              <div className="prose prose-sm max-w-none pr-3">
-                {object.details ? (
-                  <Markdown>{object.details}</Markdown>
-                ) : (
-                  <p className="text-muted-foreground text-sm">No details available. Click Edit to add.</p>
-                )}
-              </div>
-            </ScrollArea>
-          )}
+      {/* Row 2: Relationships + Time Info + Metadata (side by side) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Relationships - compact */}
+        <div className="border rounded-lg p-3 min-h-[180px] max-h-[300px] overflow-y-auto">
+          <RelationshipsPanel object={object} compact />
         </div>
 
-        {/* Relationships - scrollable */}
-        <div className="border rounded-lg p-4 min-h-[200px] max-h-[500px] overflow-y-auto">
-          <RelationshipsPanel object={object} />
-        </div>
-      </div>
-
-      {/* Row 3: Time Info + Metadata + Form fields */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Time Information */}
+        {/* Time Information - compact */}
         <MetadataDisplay 
           object={object} 
           hideObjectType 
+          compact
           onEditTimeRanges={hasTimeRanges ? () => setEditingTimeRangeIndex(0) : undefined}
         />
 
         {/* Object Form - compact mode */}
-        <div className="border rounded-lg p-4 lg:col-span-2">
+        <div className="border rounded-lg p-3">
           <ObjectForm
             object={formObject}
             onUpdate={async (updates) => {
@@ -561,8 +503,63 @@ const ObjectDetailPage = () => {
             hideSummary
             hideIconName
             hideDetails
+            compact
           />
         </div>
+      </div>
+
+      {/* Row 3: Details - full width */}
+      <div className="border rounded-lg p-4 bg-muted/30 min-h-[150px] max-h-[300px] flex flex-col">
+        <div className="flex items-center justify-between mb-3 flex-shrink-0">
+          <h3 className="text-sm font-semibold text-muted-foreground">Details</h3>
+          <div className="flex items-center gap-1">
+            <Button
+              variant={isEditingDetails ? "default" : "ghost"}
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                if (!isEditingDetails) {
+                  setEditingDetailsValue(object.details || "");
+                }
+                setIsEditingDetails(!isEditingDetails);
+              }}
+            >
+              {isEditingDetails ? "Preview" : "Edit"}
+            </Button>
+            {isEditingDetails && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={() => {
+                  handleFieldUpdate("details", editingDetailsValue);
+                  setIsEditingDetails(false);
+                }}
+              >
+                <Check className="w-3 h-3 mr-1" />
+                Save
+              </Button>
+            )}
+          </div>
+        </div>
+        {isEditingDetails ? (
+          <Textarea
+            value={editingDetailsValue}
+            onChange={(e) => setEditingDetailsValue(e.target.value)}
+            placeholder="Add details about this object..."
+            className="flex-1 min-h-[100px] resize-none font-mono text-sm"
+          />
+        ) : (
+          <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
+            <div className="prose prose-sm max-w-none pr-3">
+              {object.details ? (
+                <Markdown>{object.details}</Markdown>
+              ) : (
+                <p className="text-muted-foreground text-sm">No details available. Click Edit to add.</p>
+              )}
+            </div>
+          </ScrollArea>
+        )}
       </div>
 
       {/* Time Range Edit Dialog triggered from MetadataDisplay */}

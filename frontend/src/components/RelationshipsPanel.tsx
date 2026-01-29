@@ -34,6 +34,8 @@ import {
 
 interface RelationshipsPanelProps {
   object: Object;
+  /** Use compact layout with smaller text and spacing */
+  compact?: boolean;
 }
 
 const renderIcon = (icon: any) => {
@@ -44,7 +46,7 @@ const renderIcon = (icon: any) => {
   return "";
 };
 
-export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
+export function RelationshipsPanel({ object, compact = false }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
   const { data: referenceCounts } = useObjectReferenceCounts(object._id);
   const createObjectMutation = useCreateObject();
@@ -144,38 +146,29 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
 
       {/* Reference Counts Display */}
       {referenceCounts && (
-        <div className="grid grid-cols-3 gap-3 p-3 bg-muted/30 rounded-lg border">
+        <div className={`grid grid-cols-3 gap-2 p-2 bg-muted/30 rounded-lg border ${compact ? 'text-xs' : ''}`}>
           <div className="text-center">
-            <div className="text-2xl font-bold text-primary">
+            <div className={`font-bold text-primary ${compact ? 'text-lg' : 'text-2xl'}`}>
               {referenceCounts.referencesTo}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              References TO
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-0.5">
-              (as target)
+            <div className={`text-muted-foreground ${compact ? 'text-[10px]' : 'text-xs mt-1'}`}>
+              TO
             </div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-primary">
+            <div className={`font-bold text-primary ${compact ? 'text-lg' : 'text-2xl'}`}>
               {referenceCounts.referencesFrom}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              References FROM
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-0.5">
-              (as source)
+            <div className={`text-muted-foreground ${compact ? 'text-[10px]' : 'text-xs mt-1'}`}>
+              FROM
             </div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-bold text-primary">
+            <div className={`font-bold text-primary ${compact ? 'text-lg' : 'text-2xl'}`}>
               {referenceCounts.total}
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
+            <div className={`text-muted-foreground ${compact ? 'text-[10px]' : 'text-xs mt-1'}`}>
               Total
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-0.5">
-              relationships
             </div>
           </div>
         </div>

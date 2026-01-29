@@ -26,6 +26,8 @@ interface MetadataDisplayProps {
   hideTimeInfo?: boolean;
   /** Callback when Edit button is clicked for time ranges */
   onEditTimeRanges?: () => void;
+  /** Use compact layout with smaller text and spacing */
+  compact?: boolean;
 }
 
 function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
@@ -70,7 +72,7 @@ function getObjectType(object: Object): {
   return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border-gray-200" };
 }
 
-export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, onEditTimeRanges }: MetadataDisplayProps) {
+export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, onEditTimeRanges, compact = false }: MetadataDisplayProps) {
   const extractedWith = object?.metadata?.extractedWith;
   const timeRanges = object?.timeRanges;
   const hasTimeRange = timeRanges && timeRanges.length > 0;
