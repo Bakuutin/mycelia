@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { Object } from "@/types/objects";
 import { formatTime } from "@/lib/formatTime";
 import {
@@ -14,6 +15,7 @@ import {
   User,
   Users,
   LineChart,
+  Pencil,
 } from "lucide-react";
 
 interface MetadataDisplayProps {
@@ -22,6 +24,8 @@ interface MetadataDisplayProps {
   hideObjectType?: boolean;
   /** Hide time information when player is already visible */
   hideTimeInfo?: boolean;
+  /** Callback when Edit button is clicked for time ranges */
+  onEditTimeRanges?: () => void;
 }
 
 function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
@@ -73,7 +77,7 @@ function getObjectType(object: Object): {
   return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border-gray-200" };
 }
 
-export function MetadataDisplay({ object, hideObjectType, hideTimeInfo }: MetadataDisplayProps) {
+export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, onEditTimeRanges }: MetadataDisplayProps) {
   const extractedWith = object?.metadata?.extractedWith;
   const timeRanges = object?.timeRanges;
   const hasTimeRange = timeRanges && timeRanges.length > 0;
@@ -99,9 +103,22 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo }: Metada
       {/* Time Information - prominent display for conversations/events */}
       {!hideTimeInfo && hasTimeRange && firstRange && (
         <Card className="p-4 bg-muted/50">
-          <h3 className="text-sm font-semibold text-muted-foreground mb-3">
-            Time Information
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-muted-foreground">
+              Time Information
+            </h3>
+            {onEditTimeRanges && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                onClick={onEditTimeRanges}
+              >
+                <Pencil className="w-3.5 h-3.5 mr-1" />
+                Edit
+              </Button>
+            )}
+          </div>
           <dl className="space-y-3 text-sm">
             <div className="flex items-start gap-3">
               <CalendarClock className="w-4 h-4 text-muted-foreground mt-0.5" />

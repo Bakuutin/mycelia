@@ -72,12 +72,12 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
 
   const handleCreateRelationship = async () => {
     if (!newRelationship.name.trim()) {
-      setCreateError("Relationship name is required");
+      setCreateError("Please enter a relationship name (e.g., 'knows', 'works with')");
       return;
     }
 
     if (!newRelationship.objectId) {
-      setCreateError("Please select the object");
+      setCreateError("Please select the target object (right side) for this relationship");
       return;
     }
 
@@ -218,21 +218,24 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
               <Input
                 id="rel-name"
                 value={newRelationship.name}
-                onChange={(e) =>
+                onChange={(e) => {
                   setNewRelationship((prev) => ({
                     ...prev,
                     name: e.target.value,
-                  }))}
+                  }));
+                  if (createError) setCreateError(null);
+                }}
                 placeholder="e.g., knows, works with, manages"
                 className="mt-1"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-end">
+          {/* Source and Target Objects - stacked layout for narrow containers */}
+          <div className="space-y-3">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <Label className="text-xs">Subject</Label>
+                <Label className="text-xs">Source Object</Label>
                 {!newRelationship.symmetrical && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -266,41 +269,46 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                     }));
                   }
                 }}
-                placeholder="Select a subject..."
+                placeholder="Select source object..."
               />
             </div>
 
-            <div className="flex items-center justify-center">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-px bg-border" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant="ghost"
-                    size="icon"
+                    variant="outline"
+                    size="sm"
                     onClick={() => {
                       setNewRelationship((prev) => ({
                         ...prev,
                         symmetrical: !prev.symmetrical,
                       }));
                     }}
-                    className="h-[40px] w-[40px] p-0"
+                    className="h-7 px-2 gap-1"
                   >
                     {newRelationship.symmetrical
-                      ? <MoveHorizontal className="w-4 h-4" />
-                      : <ArrowRight className="w-4 h-4" />}
+                      ? <MoveHorizontal className="w-3 h-3" />
+                      : <ArrowRight className="w-3 h-3" />}
+                    <span className="text-xs">
+                      {newRelationship.symmetrical ? "Bidirectional" : "Directional"}
+                    </span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
                   <p>
                     {newRelationship.symmetrical
-                      ? "Make Directional"
-                      : "Make Symmetrical"}
+                      ? "Click to make directional (one-way)"
+                      : "Click to make bidirectional (both ways)"}
                   </p>
                 </TooltipContent>
               </Tooltip>
+              <div className="flex-1 h-px bg-border" />
             </div>
 
             <div>
-              <Label className="text-xs mb-1 block">Object</Label>
+              <Label className="text-xs mb-1 block">Target Object</Label>
               <ObjectSelectionDropdown
                 value={newRelationship.objectId}
                 onChange={(value) => {
@@ -309,10 +317,16 @@ export function RelationshipsPanel({ object }: RelationshipsPanelProps) {
                       ...prev,
                       objectId: value,
                     }));
+                    if (createError) setCreateError(null);
                   }
                 }}
-                placeholder="Select an object..."
+                placeholder="Select target object..."
               />
+              {!newRelationship.objectId && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Select the object this relationship points to
+                </p>
+              )}
             </div>
           </div>
 

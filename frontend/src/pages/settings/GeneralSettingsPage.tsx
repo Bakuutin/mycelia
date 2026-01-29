@@ -70,6 +70,9 @@ const GeneralSettingsPage = () => {
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <optgroup label="Gregorian (Local)">
+                <option value="gregorian-local-natural">
+                  Natural ({formatTime(now, "gregorian-local-natural")})
+                </option>
                 <option value="gregorian-local-iso">
                   ISO 8601 ({formatTime(now, "gregorian-local-iso")})
                 </option>

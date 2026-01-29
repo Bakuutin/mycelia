@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 type Theme = "light" | "dark" | "system";
 
 type TimeFormat =
+  | "gregorian-local-natural"
   | "gregorian-local-iso"
   | "gregorian-local-verbose"
   | "gregorian-local-european"
@@ -48,7 +49,7 @@ function getDefaultApiEndpoint(): string {
 }
 
 const DEFAULT_API_ENDPOINT = getDefaultApiEndpoint();
-const DEFAULT_TIME_FORMAT: TimeFormat = "gregorian-local-iso";
+const DEFAULT_TIME_FORMAT: TimeFormat = "gregorian-local-natural";
 const DEFAULT_TRANSCRIPT_THRESHOLD_HOURS = 12;
 const DEFAULT_PLAYBACK_RATE = 1;
 const DEFAULT_VOLUME = 1;

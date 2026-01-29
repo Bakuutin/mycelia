@@ -13,8 +13,8 @@ import {
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
 import { MetadataDisplay } from "@/components/MetadataDisplay";
-import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
-import { ObjectTranscriptPanel } from "@/components/ObjectTranscriptPanel";
+import { ObjectPlayerTranscript } from "@/components/ObjectPlayerTranscript";
+import { TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
 import { Markdown } from "@/components/Markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
@@ -110,6 +110,9 @@ const ObjectDetailPage = () => {
   const { data: object, isLoading: loading, error } = useObject(id);
   const updateObjectMutation = useUpdateObject();
   const deleteObjectMutation = useDeleteObject();
+  
+  // State for time range editing from metadata display
+  const [editingTimeRangeIndex, setEditingTimeRangeIndex] = useState<number | null>(null);
 
   const handleFieldUpdate = (field: string, value: any) => {
     if (!object || !id) return;
@@ -220,10 +223,10 @@ const ObjectDetailPage = () => {
       {hasTimeRanges && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left column: Summary */}
-          <div className="border rounded-lg p-4 bg-muted/30">
-            <h3 className="text-sm font-semibold text-muted-foreground mb-3">Summary</h3>
+          <div className="border rounded-lg p-4 bg-muted/30 h-[700px] flex flex-col">
+            <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Summary</h3>
             {hasSummary ? (
-              <ScrollArea className="h-[500px]">
+              <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
                 <div className="prose prose-sm max-w-none pr-3">
                   <Markdown>{object.summaries[0].text}</Markdown>
                 </div>
@@ -233,11 +236,8 @@ const ObjectDetailPage = () => {
             )}
           </div>
 
-          {/* Right column: Player on top, Transcript below */}
-          <div className="space-y-4">
-            <ObjectAudioPlayer timeRange={object.timeRanges[0]} />
-            <ObjectTranscriptPanel timeRange={object.timeRanges[0]} />
-          </div>
+          {/* Right column: Combined Player + Transcript with independent scrolling */}
+          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} />
         </div>
       )}
 
@@ -260,12 +260,35 @@ const ObjectDetailPage = () => {
 
         {/* Side panel - Metadata & Relationships */}
         <div className="space-y-4">
-          <MetadataDisplay object={object} hideObjectType />
+          <MetadataDisplay 
+            object={object} 
+            hideObjectType 
+            onEditTimeRanges={hasTimeRanges ? () => setEditingTimeRangeIndex(0) : undefined}
+          />
           <div className="border rounded-lg p-4">
             <RelationshipsPanel object={object} />
           </div>
         </div>
       </div>
+
+      {/* Time Range Edit Dialog triggered from MetadataDisplay */}
+      {editingTimeRangeIndex !== null && object.timeRanges && object.timeRanges[editingTimeRangeIndex] && (
+        <TimeRangeEditDialog
+          open={editingTimeRangeIndex !== null}
+          onOpenChange={(open) => !open && setEditingTimeRangeIndex(null)}
+          timeRange={object.timeRanges[editingTimeRangeIndex]}
+          index={editingTimeRangeIndex}
+          onSave={(index, range) => {
+            const newRanges = [...(object.timeRanges || [])];
+            newRanges[index] = range;
+            handleFieldUpdate("timeRanges", newRanges);
+          }}
+          onDelete={(index) => {
+            const newRanges = (object.timeRanges || []).filter((_, i) => i !== index);
+            handleFieldUpdate("timeRanges", newRanges.length > 0 ? newRanges : undefined);
+          }}
+        />
+      )}
     </div>
   );
 };

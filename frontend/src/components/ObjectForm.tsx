@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
 import {
   ArrowRight,
   Calendar,
@@ -42,6 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+import { TimeRangeCompact, TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
 
 // Details field with edit/preview toggle
 function DetailsField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -98,6 +98,66 @@ function DetailsField({ value, onChange }: { value: string; onChange: (value: st
         <p className="text-xs text-muted-foreground">
           Supports Markdown: **bold**, *italic*, `code`, [links](url), lists, etc.
         </p>
+      )}
+    </div>
+  );
+}
+
+// Time Ranges Section with compact display and edit dialog
+interface TimeRange {
+  start: Date;
+  end?: Date;
+  name?: string;
+}
+
+function TimeRangesSection({ 
+  timeRanges, 
+  onUpdate 
+}: { 
+  timeRanges?: TimeRange[];
+  onUpdate: (ranges: TimeRange[] | undefined) => void;
+}) {
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+
+  if (!timeRanges || timeRanges.length === 0) {
+    return null;
+  }
+
+  const handleSave = (index: number, range: TimeRange) => {
+    const newRanges = [...timeRanges];
+    newRanges[index] = range;
+    onUpdate(newRanges);
+  };
+
+  const handleDelete = (index: number) => {
+    const newRanges = timeRanges.filter((_, i) => i !== index);
+    onUpdate(newRanges.length > 0 ? newRanges : undefined);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-sm font-medium">Time Ranges</Label>
+      <div className="space-y-2">
+        {timeRanges.map((range, index) => (
+          <TimeRangeCompact
+            key={index}
+            timeRange={range}
+            index={index}
+            onEdit={setEditingIndex}
+            onDelete={handleDelete}
+          />
+        ))}
+      </div>
+      
+      {editingIndex !== null && timeRanges[editingIndex] && (
+        <TimeRangeEditDialog
+          open={editingIndex !== null}
+          onOpenChange={(open) => !open && setEditingIndex(null)}
+          timeRange={timeRanges[editingIndex]}
+          index={editingIndex}
+          onSave={handleSave}
+          onDelete={handleDelete}
+        />
       )}
     </div>
   );
@@ -917,77 +977,11 @@ export function ObjectForm(
         )}
       </div>
 
-      {/* Time Ranges - compact layout */}
-      {object.timeRanges && object.timeRanges.length > 0 && (
-        <div className="space-y-3">
-          <Label className="text-sm font-medium">Time Ranges</Label>
-          {(object.timeRanges || []).map((range, index) => (
-            <div key={index} className="border rounded-md p-3 bg-muted/20">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <Input
-                  value={range.name || ""}
-                  onChange={(e) => {
-                    const newRanges = [...(object.timeRanges || [])];
-                    newRanges[index] = { ...range, name: e.target.value || undefined };
-                    onUpdate({ timeRanges: newRanges });
-                  }}
-                  placeholder={`Time Range ${index + 1}`}
-                  className="h-8 text-sm font-medium bg-transparent border-none shadow-none px-0 focus-visible:ring-0"
-                />
-                <div className="flex items-center gap-1">
-                  {range.end && isTimeRangeShorterThanTranscriptThreshold(range.start, range.end) && (
-                    <Link to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}>
-                      <Button variant="ghost" size="sm" className="h-7 text-xs">
-                        Transcript
-                      </Button>
-                    </Link>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    onClick={() => {
-                      const newRanges = (object.timeRanges || []).filter((_, i) => i !== index);
-                      onUpdate({ timeRanges: newRanges.length > 0 ? newRanges : undefined });
-                    }}
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
-                  </Button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Start</Label>
-                  <DateTimePicker
-                    value={range.start}
-                    onChange={(date) => {
-                      if (date) {
-                        const newRanges = [...(object.timeRanges || [])];
-                        newRanges[index] = { ...range, start: date };
-                        onUpdate({ timeRanges: newRanges });
-                      }
-                    }}
-                    placeholder="Start time"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">End</Label>
-                  <DateTimePicker
-                    nullable
-                    value={range.end}
-                    onChange={(date) => {
-                      const newRanges = [...(object.timeRanges || [])];
-                      newRanges[index] = { ...range, end: date || undefined };
-                      onUpdate({ timeRanges: newRanges });
-                    }}
-                    placeholder="End time"
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Time Ranges - compact display with edit dialog */}
+      <TimeRangesSection 
+        timeRanges={object.timeRanges}
+        onUpdate={(newRanges) => onUpdate({ timeRanges: newRanges })}
+      />
 
       <div className="space-y-2">
 
