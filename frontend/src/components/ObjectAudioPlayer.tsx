@@ -1,5 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
-import { Volume2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Volume2, Calendar } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
   Select,
@@ -186,6 +188,22 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
             className="flex-1"
           />
         </div>
+
+        {/* Divider */}
+        <div className="h-8 w-px bg-border hidden sm:block" />
+
+        {/* View in Timeline button */}
+        <Button
+          variant="outline"
+          size="sm"
+          asChild
+          className="h-8 text-xs"
+        >
+          <Link to={`/timeline?date=${(currentDate || startDate).getTime()}`}>
+            <Calendar className="w-3.5 h-3.5 mr-1.5" />
+            Timeline
+          </Link>
+        </Button>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
-import { Play, FileText, Link2, Link2Off, Volume2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Play, FileText, Link2, Link2Off, Volume2, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -449,6 +450,22 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
               className="flex-1"
             />
           </div>
+
+          {/* Divider */}
+          <div className="h-8 w-px bg-border hidden sm:block" />
+
+          {/* View in Timeline button */}
+          <Button
+            variant="outline"
+            size="sm"
+            asChild
+            className="h-8 text-xs"
+          >
+            <Link to={`/timeline?date=${(currentDate || startDate).getTime()}`}>
+              <Calendar className="w-3.5 h-3.5 mr-1.5" />
+              Timeline
+            </Link>
+          </Button>
         </div>
       </div>
 

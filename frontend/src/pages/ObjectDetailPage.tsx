@@ -23,10 +23,12 @@ import {
 } from "lucide-react";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SmartBackButton } from "@/components/SmartBackButton";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useDeleteObject,
   useObject,
   useUpdateObject,
+  objectKeys,
 } from "@/hooks/useObjectQueries";
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
@@ -166,6 +168,7 @@ function EditableTitle({
 const ObjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // Use React Query hooks
   const { data: object, isLoading: loading, error } = useObject(id);
   const updateObjectMutation = useUpdateObject();
@@ -185,7 +188,9 @@ const ObjectDetailPage = () => {
   const { autoSave, setAutoSave, dateFormat } = useSettingsStore();
   const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [, forceUpdate] = useState(0); // For relative time updates
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Update relative time every minute
   useEffect(() => {
@@ -193,103 +198,90 @@ const ObjectDetailPage = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Per-field timeouts map for throttled saves
-  const fieldTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  // Throttled save function - saves after 2 seconds of inactivity per field
-  const throttledSave = useCallback((field: string, value: any) => {
-    if (!object || !id) return;
-
-    // Clear existing timeout for THIS field only
-    const existingTimeout = fieldTimeoutsRef.current.get(field);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-    }
-
-    // Set new timeout for 2 seconds for THIS field
-    const timeout = setTimeout(() => {
-      updateObjectMutation.mutate({
-        id: object._id.toString(),
-        version: object.version,
-        field,
-        value,
-      }, {
-        onSuccess: () => {
-          setLastSaved(new Date());
-          // Clear this field from pending changes after successful save
-          setPendingChanges(prev => {
-            const { [field]: _, ...rest } = prev;
-            return rest;
-          });
-          // Remove from timeouts map
-          fieldTimeoutsRef.current.delete(field);
-        },
-        onError: () => {
-          // Remove from timeouts map on error too
-          fieldTimeoutsRef.current.delete(field);
-        },
-      });
-    }, 2000);
-
-    fieldTimeoutsRef.current.set(field, timeout);
-  }, [object, id, updateObjectMutation]);
-
-  // Cleanup all timeouts on unmount
+  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
-      fieldTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
-      fieldTimeoutsRef.current.clear();
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
     };
   }, []);
 
-  const handleFieldUpdate = useCallback((field: string, value: any) => {
-    if (!object || !id) return;
-
-    // Always update pendingChanges immediately for instant visual feedback
-    setPendingChanges(prev => ({ ...prev, [field]: value }));
-
-    if (autoSave) {
-      // Use throttled save with 2 second delay
-      throttledSave(field, value);
-    }
-    // When autosave is off, changes stay in pendingChanges until manual save
-  }, [object, id, autoSave, throttledSave]);
-
-  // Manual save function - saves all pending changes sequentially
-  const handleManualSave = useCallback(async () => {
-    if (!object || !id || Object.keys(pendingChanges).length === 0) return;
-
+  // Core save function - saves all pending changes sequentially with proper version tracking
+  const saveAllPendingChanges = useCallback(async () => {
+    // Get current object from cache to ensure we have the latest version
+    const currentObject = queryClient.getQueryData<typeof object>(objectKeys.detail(id!));
+    if (!currentObject || !id) return;
+    
+    // Snapshot the pending changes at the moment of save
     const changesToSave = { ...pendingChanges };
-    const savedFields: string[] = [];
-    const failedFields: string[] = [];
+    if (Object.keys(changesToSave).length === 0) return;
 
-    // Save changes sequentially to handle version increments properly
+    setIsSaving(true);
+    let currentVersion = currentObject.version;
+    let successCount = 0;
+
+    // Save changes sequentially with updated version after each save
     for (const [field, value] of Object.entries(changesToSave)) {
       try {
-        await updateObjectMutation.mutateAsync({
-          id: object._id.toString(),
-          version: object.version,
+        const result = await updateObjectMutation.mutateAsync({
+          id: currentObject._id.toString(),
+          version: currentVersion,
           field,
           value,
         });
-        savedFields.push(field);
-        // Clear successfully saved field from pending
+        // Update version from response for next iteration
+        if (result && typeof result.version === 'number') {
+          currentVersion = result.version;
+        }
+        successCount++;
+        // Clear this field from pending
         setPendingChanges(prev => {
           const { [field]: _, ...rest } = prev;
           return rest;
         });
       } catch (error) {
         console.error(`Failed to save field ${field}:`, error);
-        failedFields.push(field);
-        // Don't clear failed fields - they remain in pendingChanges
+        // Stop on error to avoid cascading failures
+        break;
       }
     }
 
-    // Only update lastSaved if at least one field was saved successfully
-    if (savedFields.length > 0) {
+    setIsSaving(false);
+    if (successCount > 0) {
       setLastSaved(new Date());
     }
-  }, [object, id, pendingChanges, updateObjectMutation]);
+  }, [id, pendingChanges, updateObjectMutation, queryClient]);
+
+  // Schedule autosave - debounces all changes together
+  const scheduleAutoSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveAllPendingChanges();
+    }, 2000);
+  }, [saveAllPendingChanges]);
+
+  // Handle field update - updates UI immediately, schedules save if autosave enabled
+  const handleFieldUpdate = useCallback((field: string, value: any) => {
+    if (!object || !id) return;
+
+    // Update pendingChanges immediately for instant visual feedback
+    setPendingChanges(prev => ({ ...prev, [field]: value }));
+
+    if (autoSave) {
+      scheduleAutoSave();
+    }
+  }, [object, id, autoSave, scheduleAutoSave]);
+
+  // Manual save - saves immediately
+  const handleManualSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveAllPendingChanges();
+  }, [saveAllPendingChanges]);
 
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
 
