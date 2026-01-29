@@ -607,53 +607,53 @@ export function ObjectForm(
       {/* Object Type Toggle Buttons */}
       <div className={compact ? "space-y-1" : "space-y-2"}>
         <Label className={`text-muted-foreground ${compact ? 'text-xs' : 'text-sm'}`}>Object Type</Label>
-        <div className={`flex flex-wrap ${compact ? 'gap-1' : 'gap-2'}`}>
+        <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
           <button
             type="button"
             onClick={() => updateField("isPerson", !object.isPerson)}
             className={`
-              flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-lg border-2 transition-all font-medium
+              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isPerson
-                ? "bg-blue-100 text-blue-800 border-blue-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-blue-500 text-white border-blue-600 shadow-md"
+                : "bg-background border-border hover:bg-blue-50 hover:border-blue-300"
               }
             `}
           >
-            <User className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span className={compact ? "" : "font-medium"}>{compact ? "Person" : "Person"}</span>
+            <User className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <span>Person</span>
           </button>
 
           <button
             type="button"
             onClick={() => updateField("isEvent", !object.isEvent)}
             className={`
-              flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-lg border-2 transition-all font-medium
+              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isEvent
-                ? "bg-green-100 text-green-800 border-green-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-green-500 text-white border-green-600 shadow-md"
+                : "bg-background border-border hover:bg-green-50 hover:border-green-300"
               }
             `}
           >
-            <Calendar className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span className={compact ? "" : "font-medium"}>{compact ? "Event" : "Event"}</span>
+            <Calendar className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <span>Event</span>
           </button>
 
           <button
             type="button"
             onClick={() => updateField("isConversation", !object.isConversation)}
             className={`
-              flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-lg border-2 transition-all font-medium
+              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isConversation
-                ? "bg-cyan-100 text-cyan-800 border-cyan-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-cyan-500 text-white border-cyan-600 shadow-md"
+                : "bg-background border-border hover:bg-cyan-50 hover:border-cyan-300"
               }
             `}
           >
-            <MessageSquare className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span className={compact ? "" : "font-medium"}>{compact ? "Conv" : "Conversation"}</span>
+            <MessageSquare className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <span>{compact ? "Conv" : "Conversation"}</span>
           </button>
 
           <button
@@ -673,16 +673,16 @@ export function ObjectForm(
               }
             }}
             className={`
-              flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-lg border-2 transition-all font-medium
+              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isRelationship && !object.isPromise
-                ? "bg-purple-100 text-purple-800 border-purple-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-purple-500 text-white border-purple-600 shadow-md"
+                : "bg-background border-border hover:bg-purple-50 hover:border-purple-300"
               }
             `}
           >
-            <Users className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span className={compact ? "" : "font-medium"}>{compact ? "Rel" : "Relationship"}</span>
+            <Users className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <span>{compact ? "Rel" : "Relationship"}</span>
           </button>
 
           <button
@@ -700,16 +700,16 @@ export function ObjectForm(
               }
             }}
             className={`
-              flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
+              flex items-center rounded-lg border-2 transition-all font-medium
+              ${compact ? 'gap-1.5 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isPromise
-                ? "bg-orange-100 text-orange-800 border-orange-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-orange-500 text-white border-orange-600 shadow-md"
+                : "bg-background border-border hover:bg-orange-50 hover:border-orange-300"
               }
             `}
           >
-            <Handshake className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span className={compact ? "" : "font-medium"}>{compact ? "Promise" : "Promise"}</span>
+            <Handshake className={compact ? "w-3.5 h-3.5" : "w-4 h-4"} />
+            <span>Promise</span>
           </button>
         </div>
       </div>

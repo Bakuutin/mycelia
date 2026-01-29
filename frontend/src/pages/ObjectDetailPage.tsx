@@ -320,43 +320,44 @@ const ObjectDetailPage = () => {
   const TypeIcon = typeInfo.icon;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header with navigation and actions */}
-      <div className="flex items-center justify-between">
-        <SmartBackButton defaultPath="/objects" />
-        <div className="flex items-center gap-2">
-          {/* Status indicator */}
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            {updateObjectMutation.isPending ? (
-              <span className="text-primary">Saving...</span>
-            ) : hasPendingChanges ? (
-              <span className="text-amber-600">Unsaved</span>
-            ) : (
-              <span className="flex items-center gap-1 text-green-600">
-                <Check className="w-3 h-3" />
-                Saved
-              </span>
-            )}
-          </div>
-          
-          {/* Autosave toggle */}
-          <div className="flex items-center gap-1 text-xs">
-            <Switch
-              checked={autoSave}
-              onCheckedChange={setAutoSave}
-              className="h-4 w-7"
-            />
-            <span className="text-muted-foreground">Auto</span>
-          </div>
-          
-          {/* Save button (shown when autosave is off) */}
-          {!autoSave && (
-            <Button 
-              variant={hasPendingChanges ? "default" : "outline"}
-              size="sm" 
-              onClick={handleManualSave}
-              disabled={!hasPendingChanges || updateObjectMutation.isPending}
-            >
+    <div className="max-w-7xl mx-auto space-y-4">
+      {/* Sticky Header with navigation and actions */}
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b pb-3 -mx-4 px-4 pt-2">
+        <div className="flex items-center justify-between">
+          <SmartBackButton defaultPath="/objects" />
+          <div className="flex items-center gap-3">
+            {/* Status indicator */}
+            <div className="flex items-center gap-1.5 text-sm">
+              {updateObjectMutation.isPending ? (
+                <span className="text-primary font-medium">Saving...</span>
+              ) : hasPendingChanges ? (
+                <span className="text-amber-600 font-medium">● Unsaved</span>
+              ) : (
+                <span className="flex items-center gap-1 text-green-600 font-medium">
+                  <Check className="w-4 h-4" />
+                  Saved
+                </span>
+              )}
+            </div>
+            
+            {/* Autosave toggle */}
+            <div className="flex items-center gap-1.5 text-sm">
+              <Switch
+                checked={autoSave}
+                onCheckedChange={setAutoSave}
+                className="h-4 w-7"
+              />
+              <span className="text-muted-foreground">Auto</span>
+            </div>
+            
+            {/* Save button (shown when autosave is off) */}
+            {!autoSave && (
+              <Button 
+                variant={hasPendingChanges ? "default" : "outline"}
+                size="sm" 
+                onClick={handleManualSave}
+                disabled={!hasPendingChanges || updateObjectMutation.isPending}
+              >
               <Save className="w-4 h-4 mr-1" />
               Save
             </Button>
@@ -377,6 +378,7 @@ const ObjectDetailPage = () => {
           >
             <Trash2 className="w-4 h-4" />
           </Button>
+        </div>
         </div>
       </div>
 
@@ -475,15 +477,15 @@ const ObjectDetailPage = () => {
         </div>
       )}
 
-      {/* Row 2: Relationships (left) | Object Type (right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {/* Row 2: Relationships (left) | Object Type (right) - equal height */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" style={{ gridAutoRows: '1fr' }}>
         {/* Relationships */}
-        <div className="border rounded-lg p-3 max-h-[250px] overflow-y-auto">
-          <RelationshipsPanel object={object} compact />
+        <div className="border rounded-lg p-3 min-h-[200px] max-h-[280px] overflow-y-auto flex flex-col">
+          <RelationshipsPanel object={object} />
         </div>
 
         {/* Object Type - with labels, clickable */}
-        <div className="border rounded-lg p-3">
+        <div className="border rounded-lg p-3 min-h-[200px] max-h-[280px] overflow-y-auto">
           <ObjectForm
             object={formObject}
             onUpdate={async (updates) => {
@@ -495,7 +497,6 @@ const ObjectDetailPage = () => {
             hideSummary
             hideIconName
             hideDetails
-            compact
           />
         </div>
       </div>
