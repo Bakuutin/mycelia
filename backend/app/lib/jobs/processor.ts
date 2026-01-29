@@ -12,11 +12,12 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
 
-  // Apply default overrides from workers collection
-  // These overrides are applied ONLY if the job data doesn't already have the field
+  // Apply default overrides from workers collection (fallback for legacy jobs)
+  // NOTE: Worker defaults are now primarily applied at enqueue time in queue.ts
+  // This fallback handles jobs enqueued before that change was deployed
   const { workerDiscovery } = await import("./worker-discovery.ts");
   const defaultOverrides = await workerDiscovery.getDefaultOverrides(jobType);
-  
+
   const mergedJobData = { ...job.data };
   if (defaultOverrides) {
     // Only apply overrides for fields not already in job data
