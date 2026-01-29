@@ -613,7 +613,7 @@ export function ObjectForm(
             onClick={() => updateField("isPerson", !object.isPerson)}
             className={`
               flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isPerson
                 ? "bg-blue-100 text-blue-800 border-blue-200"
                 : "bg-background border-border hover:bg-muted"
@@ -621,7 +621,7 @@ export function ObjectForm(
             `}
           >
             <User className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            {!compact && <span className="font-medium">Person</span>}
+            <span className={compact ? "" : "font-medium"}>{compact ? "Person" : "Person"}</span>
           </button>
 
           <button
@@ -629,7 +629,7 @@ export function ObjectForm(
             onClick={() => updateField("isEvent", !object.isEvent)}
             className={`
               flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isEvent
                 ? "bg-green-100 text-green-800 border-green-200"
                 : "bg-background border-border hover:bg-muted"
@@ -637,7 +637,7 @@ export function ObjectForm(
             `}
           >
             <Calendar className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            {!compact && <span className="font-medium">Event</span>}
+            <span className={compact ? "" : "font-medium"}>{compact ? "Event" : "Event"}</span>
           </button>
 
           <button
@@ -645,7 +645,7 @@ export function ObjectForm(
             onClick={() => updateField("isConversation", !object.isConversation)}
             className={`
               flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isConversation
                 ? "bg-cyan-100 text-cyan-800 border-cyan-200"
                 : "bg-background border-border hover:bg-muted"
@@ -653,7 +653,7 @@ export function ObjectForm(
             `}
           >
             <MessageSquare className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            {!compact && <span className="font-medium">Conversation</span>}
+            <span className={compact ? "" : "font-medium"}>{compact ? "Conv" : "Conversation"}</span>
           </button>
 
           <button
@@ -674,7 +674,7 @@ export function ObjectForm(
             }}
             className={`
               flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isRelationship && !object.isPromise
                 ? "bg-purple-100 text-purple-800 border-purple-200"
                 : "bg-background border-border hover:bg-muted"
@@ -682,7 +682,7 @@ export function ObjectForm(
             `}
           >
             <Users className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            {!compact && <span className="font-medium">Relationship</span>}
+            <span className={compact ? "" : "font-medium"}>{compact ? "Rel" : "Relationship"}</span>
           </button>
 
           <button
@@ -701,7 +701,7 @@ export function ObjectForm(
             }}
             className={`
               flex items-center rounded-lg border transition-all
-              ${compact ? 'gap-1 px-2 py-1 text-xs' : 'gap-2 px-3 py-2 text-sm'}
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm'}
               ${object.isPromise
                 ? "bg-orange-100 text-orange-800 border-orange-200"
                 : "bg-background border-border hover:bg-muted"
@@ -709,7 +709,7 @@ export function ObjectForm(
             `}
           >
             <Handshake className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            {!compact && <span className="font-medium">Promise</span>}
+            <span className={compact ? "" : "font-medium"}>{compact ? "Promise" : "Promise"}</span>
           </button>
         </div>
       </div>
