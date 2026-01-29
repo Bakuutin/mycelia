@@ -33,21 +33,23 @@ interface SummarySectionProps {
 
 export function SummarySection({ object, onSummaryClick }: SummarySectionProps) {
   const [selectedModel, setSelectedModel] = useState("medium");
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
 
   const summaries = object.summaries || [];
   const hasSummaries = summaries.length > 0;
   const hasMultipleSummaries = summaries.length > 1;
+
+  // Default to latest (last) summary
+  const [currentIndex, setCurrentIndex] = useState(hasSummaries ? summaries.length - 1 : 0);
   const currentSummary = hasSummaries ? summaries[currentIndex] : null;
 
   const canGenerateSummary = object.isConversation &&
     object.timeRanges?.[0]?.start &&
     object.timeRanges?.[0]?.end;
 
-  // Reset to first summary when summaries array changes (new summary added)
+  // Reset to latest (last) summary when summaries array changes
   useEffect(() => {
-    setCurrentIndex(0);
+    setCurrentIndex(summaries.length > 0 ? summaries.length - 1 : 0);
   }, [summaries.length]);
 
   const goToPrevious = () => {
@@ -173,7 +175,7 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
                     value={String(currentIndex)}
                     onValueChange={(v) => setCurrentIndex(Number(v))}
                   >
-                    <SelectTrigger className="h-7 w-[100px] text-xs">
+                    <SelectTrigger className="h-7 w-[130px] text-xs">
                       <SelectValue>
                         {currentIndex + 1} of {summaries.length}
                       </SelectValue>
@@ -181,10 +183,7 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
                     <SelectContent>
                       {summaries.map((s, i) => (
                         <SelectItem key={i} value={String(i)} className="text-xs">
-                          <div className="flex flex-col">
-                            <span>{formatRelativeTime(new Date(s.date))}</span>
-                            <span className="text-[10px] text-muted-foreground">{s.model}</span>
-                          </div>
+                          {s.model} - {formatRelativeTime(new Date(s.date))}
                         </SelectItem>
                       ))}
                     </SelectContent>

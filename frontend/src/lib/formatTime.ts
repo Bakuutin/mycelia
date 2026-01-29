@@ -174,9 +174,9 @@ export function formatRelativeTime(date: Date): string {
     return "yesterday";
   }
 
-  // This week (show day name)
+  // This week (show days ago)
   if (diffDay < 7) {
-    return date.toLocaleDateString("en-US", { weekday: "short" });
+    return `${diffDay}d ago`;
   }
 
   // This year (show month and day)
