@@ -621,7 +621,7 @@ export function ObjectForm(
             `}
           >
             <User className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span>{compact ? "Pers" : "Person"}</span>
+            <span>Person</span>
           </button>
 
           <button
@@ -637,7 +637,7 @@ export function ObjectForm(
             `}
           >
             <Calendar className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span>{compact ? "Evt" : "Event"}</span>
+            <span>Event</span>
           </button>
 
           <button
@@ -653,7 +653,7 @@ export function ObjectForm(
             `}
           >
             <MessageSquare className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span>{compact ? "Conv" : "Conversation"}</span>
+            <span>Conversation</span>
           </button>
 
           <button
@@ -682,7 +682,7 @@ export function ObjectForm(
             `}
           >
             <Users className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span>{compact ? "Rel" : "Relationship"}</span>
+            <span>Relationship</span>
           </button>
 
           <button
@@ -709,7 +709,7 @@ export function ObjectForm(
             `}
           >
             <Handshake className={compact ? "w-3 h-3" : "w-4 h-4"} />
-            <span>{compact ? "Prom" : "Promise"}</span>
+            <span>Promise</span>
           </button>
         </div>
       </div>

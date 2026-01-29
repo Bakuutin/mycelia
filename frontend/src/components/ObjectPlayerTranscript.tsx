@@ -208,6 +208,16 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
     }
   }, [startDate, resetDate]);
 
+  // Stop playback when currentDate reaches endDate
+  useEffect(() => {
+    if (!isPlaying || !currentDate) return;
+
+    if (currentDate.getTime() >= endDate.getTime()) {
+      setIsPlaying(false);
+      resetDate(endDate);
+    }
+  }, [currentDate, endDate, isPlaying, setIsPlaying, resetDate]);
+
   // Fetch transcripts
   useEffect(() => {
     async function fetchTranscripts() {
@@ -262,29 +272,44 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
   // Handle user scroll - temporarily disable auto-scroll
   const handleScroll = useCallback(() => {
     if (!syncEnabled) return;
-    
+
     setUserScrolling(true);
-    
+
     // Clear any existing timeout
     if (scrollTimeoutRef.current) {
       clearTimeout(scrollTimeoutRef.current);
     }
-    
+
     // Re-enable auto-scroll after 3 seconds of no scrolling
     scrollTimeoutRef.current = window.setTimeout(() => {
       setUserScrolling(false);
     }, 3000);
   }, [syncEnabled]);
 
+  // Scroll to segment within container only (doesn't scroll the whole page)
+  const scrollToSegmentInContainer = useCallback((element: HTMLElement) => {
+    const scrollViewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (!scrollViewport || !element) return;
+
+    const elementTop = element.offsetTop;
+    const containerHeight = scrollViewport.clientHeight;
+    const elementHeight = element.offsetHeight;
+    const targetScroll = elementTop - (containerHeight / 2) + (elementHeight / 2);
+
+    scrollViewport.scrollTo({ top: targetScroll, behavior: 'smooth' });
+  }, []);
+
   // Auto-scroll to current segment
   useEffect(() => {
     if (syncEnabled && !userScrolling && currentSegmentIndex >= 0 && currentSegmentIndex !== lastScrolledIndex.current) {
       lastScrolledIndex.current = currentSegmentIndex;
       setTimeout(() => {
-        currentSegmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (currentSegmentRef.current) {
+          scrollToSegmentInContainer(currentSegmentRef.current);
+        }
       }, 100);
     }
-  }, [currentSegmentIndex, syncEnabled, userScrolling]);
+  }, [currentSegmentIndex, syncEnabled, userScrolling, scrollToSegmentInContainer]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -461,9 +486,9 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
             asChild
             className="h-8 text-xs"
           >
-            <Link to={`/timeline?date=${(currentDate || startDate).getTime()}`}>
+            <Link to={`/timeline?start=${startDate.getTime()}&end=${endDate.getTime()}`}>
               <Calendar className="w-3.5 h-3.5 mr-1.5" />
-              Timeline
+              View in Timeline
             </Link>
           </Button>
         </div>

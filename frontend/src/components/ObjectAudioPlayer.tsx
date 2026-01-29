@@ -199,9 +199,9 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
           asChild
           className="h-8 text-xs"
         >
-          <Link to={`/timeline?date=${(currentDate || startDate).getTime()}`}>
+          <Link to={`/timeline?start=${startDate.getTime()}${endDate ? `&end=${endDate.getTime()}` : ''}`}>
             <Calendar className="w-3.5 h-3.5 mr-1.5" />
-            Timeline
+            View in Timeline
           </Link>
         </Button>
       </div>
