@@ -260,7 +260,7 @@ const ObjectDetailPage = () => {
     }
     saveTimeoutRef.current = setTimeout(() => {
       saveAllPendingChanges();
-    }, 2000);
+    }, 500);
   }, [saveAllPendingChanges]);
 
   // Handle field update - updates UI immediately, schedules save if autosave enabled
@@ -291,13 +291,16 @@ const ObjectDetailPage = () => {
     ? {
       ...object,
       ...pendingChanges, // Apply pending changes immediately for instant UI feedback
-      relationship: object.relationship
-        ? {
-          object: object.relationship.object,
-          subject: object.relationship.subject,
-          symmetrical: object.relationship.symmetrical,
-        }
-        : undefined,
+      // Use pending relationship changes if present, otherwise use server's relationship
+      relationship: pendingChanges.relationship !== undefined
+        ? pendingChanges.relationship
+        : object.relationship
+          ? {
+            object: object.relationship.object,
+            subject: object.relationship.subject,
+            symmetrical: object.relationship.symmetrical,
+          }
+          : undefined,
     }
     : {} as ObjectFormData;
 
