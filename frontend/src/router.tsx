@@ -7,6 +7,7 @@ import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
 import InferenceSettingsPage from "./pages/settings/InferenceSettingsPage";
+import PromptsPage from "./pages/settings/PromptsPage";
 import APIKeysPage from "./pages/settings/APIKeysPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
@@ -155,6 +156,10 @@ export const router = createBrowserRouter([
           {
             path: "inference",
             element: <InferenceSettingsPage />,
+          },
+          {
+            path: "prompts",
+            element: <PromptsPage />,
           },
           {
             path: "api-keys",

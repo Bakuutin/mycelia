@@ -55,6 +55,7 @@ const zObjectBase = z.object({
     modelName: z.string(),
     date: z.date(),
     prompt: z.string().optional(),
+    promptName: z.string().optional(),
     usage: z.object({
       promptTokens: z.number(),
       completionTokens: z.number(),

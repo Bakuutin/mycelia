@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { Link } from "react-router-dom";
 import { callResource } from "@/lib/api";
 import { subscribeToJob } from "@/lib/jobs";
 import { z } from "zod";
@@ -36,6 +37,7 @@ interface SummarizeDialogProps {
   objectId?: string;
   title?: string;
   description?: string;
+  defaultModel?: string;
 }
 
 export function SummarizeDialog({
@@ -46,10 +48,11 @@ export function SummarizeDialog({
   objectId,
   title = "Summarize Range",
   description = "Create a summary of all conversations within the selected time range.",
+  defaultModel = "medium",
 }: SummarizeDialogProps) {
   const [summarizePrompt, setSummarizePrompt] = useState("");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("medium");
+  const [selectedModel, setSelectedModel] = useState<string>(defaultModel);
   const [selectedPromptId, setSelectedPromptId] = useState<string>("custom");
   const [jobStatus, setJobStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,20 +88,18 @@ export function SummarizeDialog({
               setSummarizePrompt(defaultPrompt.text);
             }
           }
-
-          if (!selectedModel) {
-            setSelectedModel("medium");
-          }
         } catch (e) {
           console.error("Failed to fetch prompts or config", e);
           setError("Failed to load prompts");
         }
       };
       fetchData();
+      // Reset model to defaultModel when dialog opens
+      setSelectedModel(defaultModel);
     } else {
       resetDialog();
     }
-  }, [open]);
+  }, [open, defaultModel]);
 
   const resetDialog = () => {
     setJobStatus(null);
@@ -127,6 +128,10 @@ export function SummarizeDialog({
     setJobStatus("starting");
     setError(null);
 
+    // Get the selected prompt's name for tracking
+    const selectedPrompt = prompts.find((p) => p._id.toString() === selectedPromptId);
+    const promptName = selectedPrompt?.name || (selectedPromptId === "custom" ? "Custom" : undefined);
+
     try {
       const response = await callResource("jobs", {
         action: "enqueue",
@@ -135,6 +140,7 @@ export function SummarizeDialog({
           start: startDate,
           end: endDate,
           prompt: summarizePrompt || undefined,
+          promptName: promptName,
           model: selectedModel || undefined,
           objectId: objectId || undefined,
         },
@@ -237,9 +243,18 @@ export function SummarizeDialog({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="prompt-select">Prompt Template</Label>
-            <Select 
-              value={selectedPromptId} 
+            <div className="flex items-center justify-between">
+              <Label htmlFor="prompt-select">Prompt Template</Label>
+              <Link
+                to="/settings/prompts"
+                className="text-xs text-primary hover:underline"
+                onClick={() => onOpenChange(false)}
+              >
+                Manage Prompts
+              </Link>
+            </div>
+            <Select
+              value={selectedPromptId}
               onValueChange={handlePromptChange}
               disabled={isJobInProgress || isJobComplete}
             >
