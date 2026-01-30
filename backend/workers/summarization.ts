@@ -204,6 +204,8 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       promptTokens: completion.usage.prompt_tokens,
       completionTokens: completion.usage.completion_tokens,
       totalTokens: completion.usage.total_tokens,
+      // litellm returns cost in _hidden_params.response_cost or response headers
+      cost: completion._hidden_params?.response_cost ?? completion.response_cost,
     } : undefined,
     jobId: job.id,
   };

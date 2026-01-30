@@ -83,7 +83,11 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 {currentSummary.model && (
                   <span className="flex items-center gap-1">
-                    <span className="capitalize">{currentSummary.model}</span>
+                    <span className="capitalize">
+                      {["small", "medium", "large"].includes(currentSummary.model)
+                        ? currentSummary.model
+                        : "custom"}
+                    </span>
                     {currentSummary.modelName && (
                       <>
                         <span className="text-muted-foreground/50">|</span>

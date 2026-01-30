@@ -663,6 +663,12 @@ const ObjectDetailPage = () => {
                       <div className="font-medium">{selectedSummary.usage.totalTokens?.toLocaleString()}</div>
                     </div>
                   </div>
+                  {selectedSummary.usage.cost != null && (
+                    <div className="mt-3 p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Estimated Cost</div>
+                      <div className="font-medium">${selectedSummary.usage.cost.toFixed(6)}</div>
+                    </div>
+                  )}
                 </div>
               )}
 

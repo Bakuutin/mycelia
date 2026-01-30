@@ -60,6 +60,7 @@ const zObjectBase = z.object({
       promptTokens: z.number(),
       completionTokens: z.number(),
       totalTokens: z.number(),
+      cost: z.number().optional(),
     }).optional(),
     jobId: z.string().optional(),
   })).optional(),
