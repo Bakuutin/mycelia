@@ -58,7 +58,7 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
   // Stop playback when currentDate exceeds endDate
   useEffect(() => {
     if (!isPlaying || !currentDate || !endDate) return;
-    
+
     if (currentDate.getTime() >= endDate.getTime()) {
       setIsPlaying(false);
       // Reset to end position so progress bar shows 100%

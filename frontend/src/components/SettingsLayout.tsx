@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog } from "lucide-react";
+import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog, ScrollText } from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
@@ -25,6 +25,12 @@ const SettingsLayout = () => {
       path: "/settings/inference",
       icon: Server,
       description: "Configure OpenAI-compatible inference provider",
+    },
+    {
+      name: "Prompts",
+      path: "/settings/prompts",
+      icon: ScrollText,
+      description: "Manage prompt templates",
     },
     {
       name: "API Keys",
