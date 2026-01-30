@@ -255,6 +255,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           try {
             const jsonResponse = JSON.parse(responseText);
+
+            // Extract cost from litellm response header (x-litellm-response-cost)
+            const responseCostHeader = proxyResponse.headers.get("x-litellm-response-cost");
+            if (responseCostHeader) {
+              const cost = parseFloat(responseCostHeader);
+              if (!isNaN(cost)) {
+                jsonResponse.response_cost = cost;
+              }
+            }
+
             span.setStatus({ code: 1 }); // Success
             return jsonResponse;
           } catch (parseError) {
