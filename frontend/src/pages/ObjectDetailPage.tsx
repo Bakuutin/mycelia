@@ -476,7 +476,7 @@ const ObjectDetailPage = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Summary - with model selector, generate button, and history navigation */}
           <SummarySection
-            object={object}
+            object={pendingChanges.summaries ? { ...object, summaries: pendingChanges.summaries } : object}
             onSummaryClick={setSelectedSummary}
             onStarSummary={handleStarSummary}
           />

@@ -125,24 +125,24 @@ function SummaryPanel({
             <span className="text-muted-foreground">Cost:</span>
             <span className="font-medium text-right">{formatCost(summary.usage?.cost)}</span>
           </div>
-          <div className="flex justify-between">
+          <div className="flex items-center gap-2">
             <span className="text-muted-foreground">Version:</span>
-            <span className="font-medium text-right">{index + 1} of {summaries.length}</span>
+            <span className="font-medium">{index + 1} of {summaries.length}</span>
+            <Button
+              variant={isStarred ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-2 ml-auto"
+              onClick={onStar}
+            >
+              <Star className={`w-3 h-3 mr-1 ${isStarred ? "fill-current" : ""}`} />
+              {isStarred ? "Starred" : "Star"}
+            </Button>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Date:</span>
             <span className="font-medium text-right">{formatRelativeTime(new Date(summary.date))}</span>
           </div>
         </div>
-        <Button
-          variant={isStarred ? "default" : "outline"}
-          size="sm"
-          className="w-full"
-          onClick={onStar}
-        >
-          <Star className={`w-4 h-4 mr-2 ${isStarred ? "fill-current" : ""}`} />
-          {isStarred ? "Starred" : "Star"} (Space)
-        </Button>
       </div>
     </div>
   );
