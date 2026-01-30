@@ -63,6 +63,7 @@ const zObjectBase = z.object({
       cost: z.number().optional(),
     }).optional(),
     jobId: z.string().optional(),
+    starred: z.boolean().optional(),
   })).optional(),
 
   metadata: z.object({
