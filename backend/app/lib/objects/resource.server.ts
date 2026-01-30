@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ObjectId } from "bson";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
-import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
 const zIcon = z.union([
@@ -238,12 +238,8 @@ export class ObjectsResource
     response: z.any(),
   };
 
-  async getRootDB() {
-    return getRootDB();
-  }
-
   // Calculate and cache object counts in the database
-  private async refreshCounts(): Promise<{
+  private async refreshCounts(auth: Auth): Promise<{
     person: number;
     event: number;
     relationship: number;
@@ -254,8 +250,7 @@ export class ObjectsResource
     total: number;
     updatedAt: Date;
   }> {
-    const db = await this.getRootDB();
-    const objectsCollection = db.collection("objects");
+    const mongo = getMongoResource(auth);
 
     // Calculate type counts with a single aggregation
     const countsPipeline = [
@@ -302,7 +297,11 @@ export class ObjectsResource
       },
     ];
 
-    const countsResult = await objectsCollection.aggregate(countsPipeline).toArray();
+    const countsResult = await mongo({
+      action: "aggregate",
+      collection: "objects",
+      pipeline: countsPipeline,
+    });
     const typeCounts = countsResult[0] || {
       person: 0,
       event: 0,
@@ -349,7 +348,11 @@ export class ObjectsResource
       { $count: "total" },
     ];
 
-    const orphanedResult = await objectsCollection.aggregate(orphanedPipeline).toArray();
+    const orphanedResult = await mongo({
+      action: "aggregate",
+      collection: "objects",
+      pipeline: orphanedPipeline,
+    });
     const orphanedCount = orphanedResult[0]?.total ?? 0;
 
     const stats = {
@@ -365,17 +368,19 @@ export class ObjectsResource
     };
 
     // Store in cache collection
-    await db.collection("object_stats").updateOne(
-      { _id: "counts" },
-      { $set: stats },
-      { upsert: true }
-    );
+    await mongo({
+      action: "updateOne",
+      collection: "object_stats",
+      query: { _id: "counts" },
+      update: { $set: stats },
+      options: { upsert: true },
+    });
 
     return stats;
   }
 
   // Get cached counts, or calculate if not exists
-  private async getCachedCounts(): Promise<{
+  private async getCachedCounts(auth: Auth): Promise<{
     person: number;
     event: number;
     relationship: number;
@@ -387,8 +392,12 @@ export class ObjectsResource
     updatedAt: Date | null;
     stale?: boolean;
   } | null> {
-    const db = await this.getRootDB();
-    const cached = await db.collection("object_stats").findOne({ _id: "counts" });
+    const mongo = getMongoResource(auth);
+    const cached = await mongo({
+      action: "findOne",
+      collection: "object_stats",
+      query: { _id: "counts" },
+    });
     if (!cached) return null;
     return {
       person: cached.person,
@@ -405,17 +414,20 @@ export class ObjectsResource
   }
 
   // Invalidate counts cache (called after create/update/delete)
-  private async invalidateCountsCache(): Promise<void> {
+  private async invalidateCountsCache(auth: Auth): Promise<void> {
+    const mongo = getMongoResource(auth);
     // Just mark as stale by updating a flag, don't recalculate immediately
-    const db = await this.getRootDB();
-    await db.collection("object_stats").updateOne(
-      { _id: "counts" },
-      { $set: { stale: true } },
-      { upsert: true }
-    );
+    await mongo({
+      action: "updateOne",
+      collection: "object_stats",
+      query: { _id: "counts" },
+      update: { $set: { stale: true } },
+      options: { upsert: true },
+    });
   }
 
   private async recordHistory(
+    auth: Auth,
     objectId: ObjectId,
     action: "create" | "update" | "delete",
     userId: string,
@@ -425,16 +437,20 @@ export class ObjectsResource
     newValue: any,
   ): Promise<void> {
     try {
-      const db = await this.getRootDB();
-      await db.collection("object_history").insertOne({
-        objectId,
-        action,
-        timestamp: new Date(),
-        userId,
-        version,
-        field,
-        oldValue,
-        newValue,
+      const mongo = getMongoResource(auth);
+      await mongo({
+        action: "insertOne",
+        collection: "object_history",
+        doc: {
+          objectId,
+          action,
+          timestamp: new Date(),
+          userId,
+          version,
+          field,
+          oldValue,
+          newValue,
+        },
       });
     } catch (error) {
       console.error("Failed to record object history:", error);
@@ -460,6 +476,7 @@ export class ObjectsResource
         });
 
         await this.recordHistory(
+          auth,
           result.insertedId,
           "create",
           auth.principal,
@@ -470,7 +487,7 @@ export class ObjectsResource
         );
 
         // Invalidate counts cache
-        await this.invalidateCountsCache();
+        await this.invalidateCountsCache(auth);
 
         return { insertedId: result.insertedId };
       }
@@ -553,6 +570,7 @@ export class ObjectsResource
         }
 
         await this.recordHistory(
+          auth,
           objectId,
           "update",
           auth.principal,
@@ -565,7 +583,7 @@ export class ObjectsResource
         // Invalidate counts cache if type-related fields changed
         const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation"];
         if (typeFields.includes(input.field) || input.field.startsWith("relationship")) {
-          await this.invalidateCountsCache();
+          await this.invalidateCountsCache(auth);
         }
 
         return result;
@@ -590,6 +608,7 @@ export class ObjectsResource
         });
 
         await this.recordHistory(
+          auth,
           objectId,
           "delete",
           auth.principal,
@@ -600,7 +619,7 @@ export class ObjectsResource
         );
 
         // Invalidate counts cache
-        await this.invalidateCountsCache();
+        await this.invalidateCountsCache(auth);
 
         return { deletedCount: result.deletedCount };
       }
@@ -1077,16 +1096,16 @@ export class ObjectsResource
       case "getCounts": {
         // Get cached counts or calculate if not available
         if (input.forceRefresh) {
-          return await this.refreshCounts();
+          return await this.refreshCounts(auth);
         }
 
-        const cached = await this.getCachedCounts();
+        const cached = await this.getCachedCounts(auth);
         if (cached && !cached.stale) {
           return cached;
         }
 
         // Cache doesn't exist or is stale, recalculate
-        return await this.refreshCounts();
+        return await this.refreshCounts(auth);
       }
 
       default:
