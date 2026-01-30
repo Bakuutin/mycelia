@@ -1,7 +1,6 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { callResource } from "@/lib/api";
-import { subscribeToJob } from "@/lib/jobs";
 import { z } from "zod";
 import { zServerConfig, zPrompt } from "@myceliasdk/config.ts";
 import {
@@ -14,7 +13,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -23,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { ModelSelector } from "@/components/ModelSelector";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import type { Prompt } from "@/types/config";
@@ -56,7 +55,6 @@ export function SummarizeDialog({
   const [selectedPromptId, setSelectedPromptId] = useState<string>("custom");
   const [jobStatus, setJobStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -86,6 +84,10 @@ export function SummarizeDialog({
             if (defaultPrompt) {
               setSelectedPromptId(defaultId);
               setSummarizePrompt(defaultPrompt.text);
+              // If the default prompt has a model configured, use it
+              if (defaultPrompt.model) {
+                setSelectedModel(defaultPrompt.model);
+              }
             }
           }
         } catch (e) {
@@ -106,10 +108,6 @@ export function SummarizeDialog({
     setError(null);
     setSummarizePrompt("");
     setSelectedPromptId("custom");
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-      unsubscribeRef.current = null;
-    }
   };
 
   const handlePromptChange = (promptId: string) => {
@@ -120,6 +118,10 @@ export function SummarizeDialog({
       const prompt = prompts.find((p) => p._id.toString() === promptId);
       if (prompt) {
         setSummarizePrompt(prompt.text);
+        // If the prompt has a model configured, use it
+        if (prompt.model) {
+          setSelectedModel(prompt.model);
+        }
       }
     }
   };
@@ -155,39 +157,18 @@ export function SummarizeDialog({
         throw new Error("No job ID returned");
       }
 
-      setJobStatus("waiting");
-
-      unsubscribeRef.current = subscribeToJob(jobId, (update) => {
-        setJobStatus(update.state);
-
-        if (update.state === "active" || update.state === "started") {
-          toast.success("Summarization started", {
-            description: "Check Jobs or the timeline when it's done.",
-            duration: 5000,
-          });
-          if (unsubscribeRef.current) {
-            unsubscribeRef.current();
-            unsubscribeRef.current = null;
-          }
-          onOpenChange(false);
-        } else if (update.state === "failed") {
-          setError(update.failedReason || "Summarization job failed");
-        }
+      // Job enqueued successfully - close dialog immediately and show toast
+      toast.success("Summarization job queued", {
+        description: "Check Jobs page to track progress.",
+        duration: 5000,
       });
+      onOpenChange(false);
     } catch (e) {
       console.error("Failed to start summarization", e);
       setError("Failed to start summarization job");
       setJobStatus(null);
     }
   };
-
-  useEffect(() => {
-    return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-      }
-    };
-  }, []);
 
   const getButtonText = () => {
     switch (jobStatus) {
@@ -229,17 +210,13 @@ export function SummarizeDialog({
           )}
 
           <div className="grid gap-2">
-            <Label htmlFor="model">Model</Label>
-            <Input
-              id="model"
+            <Label>Model</Label>
+            <ModelSelector
               value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              placeholder="e.g., gpt-4, gpt-3.5-turbo, medium"
+              onChange={setSelectedModel}
               disabled={isJobInProgress || isJobComplete}
+              placeholder="Select model..."
             />
-            <p className="text-xs text-muted-foreground">
-              Enter the model name to use for summarization
-            </p>
           </div>
 
           <div className="grid gap-2">
@@ -269,6 +246,11 @@ export function SummarizeDialog({
                     value={prompt._id.toString()}
                   >
                     {prompt.name}
+                    {prompt.model && (
+                      <span className="ml-2 text-muted-foreground text-xs">
+                        ({prompt.model})
+                      </span>
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>

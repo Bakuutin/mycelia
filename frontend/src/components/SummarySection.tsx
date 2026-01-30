@@ -6,46 +6,13 @@ import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { ChevronLeft, ChevronRight, Wand2, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Wand2 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/formatTime";
-import { callResource } from "@/lib/api";
 import type { Object } from "@/types/objects";
-
-type CategoryKey = "small" | "medium" | "large";
-
-// Category labels and descriptions
-const CATEGORIES: Record<CategoryKey, { label: string; hint: string }> = {
-  small: { label: "Small", hint: "Fast, economical" },
-  medium: { label: "Medium", hint: "Balanced performance" },
-  large: { label: "Large", hint: "Most capable" },
-};
-
-const CATEGORY_KEYS: CategoryKey[] = ["small", "medium", "large"];
-
-interface ModelCategory {
-  default: string;
-  models: string[];
-}
-
-interface ModelsResponse {
-  models: { id: string; owned_by?: string }[];
-  categories: {
-    small: ModelCategory;
-    medium: ModelCategory;
-    large: ModelCategory;
-  };
-}
 
 interface SummarySectionProps {
   object: Object;
@@ -53,10 +20,7 @@ interface SummarySectionProps {
 }
 
 export function SummarySection({ object, onSummaryClick }: SummarySectionProps) {
-  const [selectedModel, setSelectedModel] = useState("medium");
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
-  const [modelsData, setModelsData] = useState<ModelsResponse | null>(null);
-  const [loadingModels, setLoadingModels] = useState(false);
 
   const summaries = object.summaries || [];
   const hasSummaries = summaries.length > 0;
@@ -69,22 +33,6 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
   const canGenerateSummary = object.isConversation &&
     object.timeRanges?.[0]?.start &&
     object.timeRanges?.[0]?.end;
-
-  // Fetch available models on mount
-  useEffect(() => {
-    const fetchModels = async () => {
-      try {
-        setLoadingModels(true);
-        const response = await callResource("llm", { action: "list" }) as ModelsResponse;
-        setModelsData(response);
-      } catch (e) {
-        console.error("Failed to fetch models:", e);
-      } finally {
-        setLoadingModels(false);
-      }
-    };
-    fetchModels();
-  }, []);
 
   // Reset to latest (last) summary when summaries array changes
   useEffect(() => {
@@ -105,85 +53,18 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
       <div className="flex items-center justify-between gap-2 mb-3 flex-shrink-0">
         <h3 className="text-sm font-semibold text-muted-foreground">Summary</h3>
 
-        <div className="flex items-center gap-2">
-          {/* Model Size Selector */}
-          {canGenerateSummary && (
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
-              <SelectTrigger className="w-[200px] h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {loadingModels ? (
-                  <div className="flex items-center justify-center p-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  </div>
-                ) : (
-                  <>
-                    {CATEGORY_KEYS.map((category) => {
-                      const cat = modelsData?.categories[category];
-                      const categoryInfo = CATEGORIES[category];
-                      const availableModels = modelsData?.models || [];
-
-                      return (
-                        <SelectGroup key={category}>
-                          <SelectLabel className="text-xs font-semibold">
-                            {categoryInfo.label}
-                            <span className="font-normal text-muted-foreground ml-1">
-                              ({categoryInfo.hint})
-                            </span>
-                          </SelectLabel>
-                          <SelectItem value={category} className="pl-4">
-                            <span className="capitalize">{category}</span>
-                            {cat?.default && cat.default !== category && (
-                              <span className="text-muted-foreground ml-1">→ {cat.default}</span>
-                            )}
-                          </SelectItem>
-                          {availableModels
-                            .filter((m: { id: string }) => {
-                              const id = m.id.toLowerCase();
-                              if (category === "small") {
-                                return id.includes("haiku") || id.includes("mini") || id.includes("small");
-                              }
-                              if (category === "large") {
-                                return id.includes("opus") || id.includes("large") || (id.includes("4o") && !id.includes("mini"));
-                              }
-                              // medium: sonnet or anything not matching small/large
-                              return id.includes("sonnet");
-                            })
-                            .map((model: { id: string }) => (
-                              <SelectItem key={model.id} value={model.id} className="pl-6 text-xs">
-                                {model.id}
-                              </SelectItem>
-                            ))}
-                        </SelectGroup>
-                      );
-                    })}
-                  </>
-                )}
-              </SelectContent>
-            </Select>
-          )}
-
-          {/* Generate Summary Button */}
-          {canGenerateSummary && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8"
-                  onClick={() => setIsSummarizeOpen(true)}
-                >
-                  <Wand2 className="w-4 h-4 mr-1" />
-                  Generate
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Generate a new summary using {selectedModel} model</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
+        {/* Generate Summary Button */}
+        {canGenerateSummary && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8"
+            onClick={() => setIsSummarizeOpen(true)}
+          >
+            <Wand2 className="w-4 h-4 mr-1" />
+            Generate
+          </Button>
+        )}
       </div>
 
       {/* Summary Content */}
@@ -300,7 +181,6 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
           objectId={object._id?.toString()}
           title="Summarize Conversation"
           description="Generate a summary for this conversation."
-          defaultModel={selectedModel}
         />
       )}
     </div>

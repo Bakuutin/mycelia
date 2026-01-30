@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ModelSelector } from "@/components/ModelSelector";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,7 @@ const PromptsPage = () => {
   const [formName, setFormName] = useState("");
   const [formText, setFormText] = useState("");
   const [formDescription, setFormDescription] = useState("");
+  const [formModel, setFormModel] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Delete confirmation state
@@ -83,6 +85,7 @@ const PromptsPage = () => {
     setFormName("");
     setFormText("");
     setFormDescription("");
+    setFormModel("");
     setDialogOpen(true);
   };
 
@@ -91,6 +94,7 @@ const PromptsPage = () => {
     setFormName(prompt.name);
     setFormText(prompt.text);
     setFormDescription(prompt.description || "");
+    setFormModel(prompt.model || "");
     setDialogOpen(true);
   };
 
@@ -113,6 +117,7 @@ const PromptsPage = () => {
               name: formName.trim(),
               text: formText.trim(),
               description: formDescription.trim() || undefined,
+              model: formModel.trim() || undefined,
             },
           },
         });
@@ -126,6 +131,7 @@ const PromptsPage = () => {
             name: formName.trim(),
             text: formText.trim(),
             description: formDescription.trim() || undefined,
+            model: formModel.trim() || undefined,
           },
         });
         toast.success("Prompt created");
@@ -258,6 +264,11 @@ const PromptsPage = () => {
                           Default
                         </Badge>
                       )}
+                      {prompt.model && (
+                        <Badge variant="outline" className="text-xs font-mono">
+                          {prompt.model}
+                        </Badge>
+                      )}
                     </div>
                     {prompt.description && (
                       <p className="text-sm text-muted-foreground mb-2">
@@ -335,6 +346,17 @@ const PromptsPage = () => {
                 onChange={(e) => setFormDescription(e.target.value)}
                 placeholder="Brief description of what this prompt does"
               />
+            </div>
+            <div className="grid gap-2">
+              <Label>Model (optional)</Label>
+              <ModelSelector
+                value={formModel}
+                onChange={setFormModel}
+                placeholder="Select model or leave empty..."
+              />
+              <p className="text-xs text-muted-foreground">
+                Specify a model to use with this prompt, or leave empty to use the selected category
+              </p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="text">Prompt Text</Label>
