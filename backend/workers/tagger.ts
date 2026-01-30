@@ -275,8 +275,8 @@ async function callLLMForTags(
       { role: "system", content: systemPrompt },
       { role: "user", content: `${tagsPrompt}\n\nConversation:\n${conversationPrompt}` },
     ],
-    response_format: { type: "json_object" },
-  });
+    response_format: { type: "json_schema", json_schema: z.object({ tags: z.array(z.string()) }).toJSONSchema() },
+  }) as { choices: Array<{ message: { content: string } }> };
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
