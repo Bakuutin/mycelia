@@ -19,6 +19,8 @@ export const schema = z.object({
   prompt: z.string()
     .default("You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.")
     .describe("System prompt for the summarization. This guides how the AI analyzes the conversation."),
+  promptName: z.string().optional()
+    .describe("Name of the prompt template used (for display in UI)"),
   model: z.string()
     .default("small")
     .describe("LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')"),
@@ -108,6 +110,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       modelName: "transcript-only",
       date: new Date(),
       prompt: "Short duration - transcript used directly",
+      promptName: jobData.promptName,
       jobId: job.id,
     };
 
@@ -196,10 +199,13 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     modelName: completion.model,
     date: new Date(),
     prompt: systemPrompt,
+    promptName: jobData.promptName,
     usage: completion.usage ? {
       promptTokens: completion.usage.prompt_tokens,
       completionTokens: completion.usage.completion_tokens,
       totalTokens: completion.usage.total_tokens,
+      // litellm returns cost in response_cost (extracted from x-litellm-response-cost header)
+      cost: completion.response_cost,
     } : undefined,
     jobId: job.id,
   };

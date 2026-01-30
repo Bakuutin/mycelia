@@ -61,7 +61,7 @@ export function TimeRangeEditDialog({
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    
+
     if (diffMins < 1) return "< 1 minute";
     if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? "s" : ""}`;
     if (diffHours < 24) {
@@ -77,7 +77,7 @@ export function TimeRangeEditDialog({
         <DialogHeader>
           <DialogTitle>Edit Time Range {index + 1}</DialogTitle>
         </DialogHeader>
-        
+
         <div className="space-y-4 py-4">
           {/* Name */}
           <div className="space-y-2">
@@ -161,7 +161,7 @@ export function TimeRangeCompact({
     const diffMs = timeRange.end.getTime() - timeRange.start.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    
+
     if (diffMins < 60) return `${diffMins}m`;
     if (diffHours < 24) {
       const mins = diffMins % 60;

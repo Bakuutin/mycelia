@@ -35,6 +35,7 @@ import { RelationshipsPanel } from "@/components/RelationshipsPanel";
 import { MetadataDisplay } from "@/components/MetadataDisplay";
 import { ObjectPlayerTranscript } from "@/components/ObjectPlayerTranscript";
 import { TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
+import { SummarySection } from "@/components/SummarySection";
 import { Markdown } from "@/components/Markdown";
 import {
   Dialog,
@@ -47,25 +48,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatTime } from "@/lib/formatTime";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
-
-// Helper to format relative time (e.g., "2 minutes ago")
-function formatRelativeTime(date: Date | string | undefined): string {
-  if (!date) return "";
-  const d = typeof date === "string" ? new Date(date) : date;
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHours = Math.floor(diffMin / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffSec < 5) return "just now";
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return d.toLocaleDateString();
-}
 
 // Helper to get object type info
 function getObjectType(object: { isPromise?: boolean; isRelationship?: boolean; isConversation?: boolean; isPerson?: boolean; isEvent?: boolean }): {
@@ -355,7 +337,6 @@ const ObjectDetailPage = () => {
   }
 
   const hasTimeRanges = object.timeRanges && object.timeRanges.length > 0;
-  const hasSummary = object.summaries && object.summaries.length > 0;
   
   // Get object type info for badge
   const typeInfo = getObjectType(object);
@@ -473,46 +454,11 @@ const ObjectDetailPage = () => {
       {/* Row 1: Summary (left) + Player/Transcript (right) - flexible height */}
       {hasTimeRanges && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Summary - flexible height, expands for long content */}
-          <div className="border rounded-lg p-4 bg-muted/30 min-h-[400px] max-h-[800px] flex flex-col">
-            <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex-shrink-0">Summary</h3>
-            {hasSummary ? (
-              <>
-                <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
-                  <div className="prose prose-sm max-w-none pr-3">
-                    <Markdown>{object.summaries[0].text}</Markdown>
-                  </div>
-                </ScrollArea>
-                {/* Summary metadata */}
-                <div className="flex-shrink-0 pt-3 mt-3 border-t flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  {object.summaries[0].model && (
-                    <span className="flex items-center gap-1">
-                      <span className="font-medium">Model:</span>
-                      <span>{object.summaries[0].modelName || object.summaries[0].model}</span>
-                    </span>
-                  )}
-                  {object.summaries[0].date && (
-                    <span className="flex items-center gap-1">
-                      <span className="font-medium">Generated:</span>
-                      <span>{formatRelativeTime(object.summaries[0].date)}</span>
-                    </span>
-                  )}
-                  {(object.summaries[0].usage || object.summaries[0].prompt || object.summaries[0].jobId) && (
-                    <Button 
-                      variant="link" 
-                      size="sm"
-                      onClick={() => setSelectedSummary(object.summaries[0])}
-                      className="p-0 h-auto text-xs"
-                    >
-                      More details...
-                    </Button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">No summary available</p>
-            )}
-          </div>
+          {/* Summary - with model selector, generate button, and history navigation */}
+          <SummarySection
+            object={object}
+            onSummaryClick={setSelectedSummary}
+          />
 
           {/* Player + Transcript - flexible height, expands for long content */}
           <ObjectPlayerTranscript timeRange={object.timeRanges[0]} minHeight={400} maxHeight={800} />
@@ -717,6 +663,12 @@ const ObjectDetailPage = () => {
                       <div className="font-medium">{selectedSummary.usage.totalTokens?.toLocaleString()}</div>
                     </div>
                   </div>
+                  {selectedSummary.usage.cost != null && (
+                    <div className="mt-3 p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Estimated Cost</div>
+                      <div className="font-medium">${selectedSummary.usage.cost.toFixed(6)}</div>
+                    </div>
+                  )}
                 </div>
               )}
 
