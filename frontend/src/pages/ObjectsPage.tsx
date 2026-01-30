@@ -504,12 +504,11 @@ const ObjectsPage = () => {
 
     // Only do expensive orphaned checks when the filter is active
     if (showOrphanedOnly) {
-      // First, exclude relationship objects themselves (they're not "orphaned")
-      pipeline.push({
-        $match: {
-          isRelationship: { $ne: true },
-        },
-      });
+      // Relationships cannot be orphaned - they ARE the references between objects
+      // Skip fetching for relationship type when orphaned filter is active
+      if (type === "relationship") {
+        return [];
+      }
       
       // Check if this object is referenced as subject in any relationship
       pipeline.push({
