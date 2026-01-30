@@ -59,6 +59,10 @@ export function SummarizeDialog({
   useEffect(() => {
     if (open) {
       const fetchData = async () => {
+        // Reset model to defaultModel at the start, before async operations
+        // This ensures deterministic order: reset first, then override with prompt's model if found
+        setSelectedModel(defaultModel);
+
         try {
           const [configData, promptsData] = await Promise.all([
             callResource("mongo", {
@@ -96,8 +100,6 @@ export function SummarizeDialog({
         }
       };
       fetchData();
-      // Reset model to defaultModel when dialog opens
-      setSelectedModel(defaultModel);
     } else {
       resetDialog();
     }
