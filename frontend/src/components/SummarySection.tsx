@@ -6,7 +6,9 @@ import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -15,16 +17,35 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronLeft, ChevronRight, Wand2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Wand2, Loader2 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/formatTime";
+import { callResource } from "@/lib/api";
 import type { Object } from "@/types/objects";
 
-// Model size options with hints about actual models
-const MODEL_OPTIONS = [
-  { value: "small", label: "Small", hint: "Claude Haiku / GPT-4o-mini" },
-  { value: "medium", label: "Medium", hint: "Claude Sonnet / GPT-4o" },
-  { value: "large", label: "Large", hint: "Claude Opus / GPT-4" },
-] as const;
+type CategoryKey = "small" | "medium" | "large";
+
+// Category labels and descriptions
+const CATEGORIES: Record<CategoryKey, { label: string; hint: string }> = {
+  small: { label: "Small", hint: "Fast, economical" },
+  medium: { label: "Medium", hint: "Balanced performance" },
+  large: { label: "Large", hint: "Most capable" },
+};
+
+const CATEGORY_KEYS: CategoryKey[] = ["small", "medium", "large"];
+
+interface ModelCategory {
+  default: string;
+  models: string[];
+}
+
+interface ModelsResponse {
+  models: { id: string; owned_by?: string }[];
+  categories: {
+    small: ModelCategory;
+    medium: ModelCategory;
+    large: ModelCategory;
+  };
+}
 
 interface SummarySectionProps {
   object: Object;
@@ -34,6 +55,8 @@ interface SummarySectionProps {
 export function SummarySection({ object, onSummaryClick }: SummarySectionProps) {
   const [selectedModel, setSelectedModel] = useState("medium");
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
+  const [modelsData, setModelsData] = useState<ModelsResponse | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   const summaries = object.summaries || [];
   const hasSummaries = summaries.length > 0;
@@ -46,6 +69,22 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
   const canGenerateSummary = object.isConversation &&
     object.timeRanges?.[0]?.start &&
     object.timeRanges?.[0]?.end;
+
+  // Fetch available models on mount
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        setLoadingModels(true);
+        const response = await callResource("llm", { action: "list" }) as ModelsResponse;
+        setModelsData(response);
+      } catch (e) {
+        console.error("Failed to fetch models:", e);
+      } finally {
+        setLoadingModels(false);
+      }
+    };
+    fetchModels();
+  }, []);
 
   // Reset to latest (last) summary when summaries array changes
   useEffect(() => {
@@ -70,18 +109,57 @@ export function SummarySection({ object, onSummaryClick }: SummarySectionProps) 
           {/* Model Size Selector */}
           {canGenerateSummary && (
             <Select value={selectedModel} onValueChange={setSelectedModel}>
-              <SelectTrigger className="w-[160px] h-8 text-xs">
+              <SelectTrigger className="w-[200px] h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {MODEL_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value} className="py-2">
-                    <div className="flex flex-col">
-                      <span className="font-medium">{option.label}</span>
-                      <span className="text-[10px] text-muted-foreground leading-tight">{option.hint}</span>
-                    </div>
-                  </SelectItem>
-                ))}
+                {loadingModels ? (
+                  <div className="flex items-center justify-center p-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
+                ) : (
+                  <>
+                    {CATEGORY_KEYS.map((category) => {
+                      const cat = modelsData?.categories[category];
+                      const categoryInfo = CATEGORIES[category];
+                      const availableModels = modelsData?.models || [];
+
+                      return (
+                        <SelectGroup key={category}>
+                          <SelectLabel className="text-xs font-semibold">
+                            {categoryInfo.label}
+                            <span className="font-normal text-muted-foreground ml-1">
+                              ({categoryInfo.hint})
+                            </span>
+                          </SelectLabel>
+                          <SelectItem value={category} className="pl-4">
+                            <span className="capitalize">{category}</span>
+                            {cat?.default && cat.default !== category && (
+                              <span className="text-muted-foreground ml-1">→ {cat.default}</span>
+                            )}
+                          </SelectItem>
+                          {availableModels
+                            .filter((m: { id: string }) => {
+                              const id = m.id.toLowerCase();
+                              if (category === "small") {
+                                return id.includes("haiku") || id.includes("mini") || id.includes("small");
+                              }
+                              if (category === "large") {
+                                return id.includes("opus") || id.includes("large") || (id.includes("4o") && !id.includes("mini"));
+                              }
+                              // medium: sonnet or anything not matching small/large
+                              return id.includes("sonnet");
+                            })
+                            .map((model: { id: string }) => (
+                              <SelectItem key={model.id} value={model.id} className="pl-6 text-xs">
+                                {model.id}
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                      );
+                    })}
+                  </>
+                )}
               </SelectContent>
             </Select>
           )}
