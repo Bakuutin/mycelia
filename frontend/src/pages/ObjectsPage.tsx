@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -341,9 +342,10 @@ interface TypeFilterButtonProps {
   count: number;
   isActive: boolean;
   onClick: () => void;
+  loading?: boolean;
 }
 
-function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonProps) {
+function TypeFilterButton({ type, count, isActive, onClick, loading }: TypeFilterButtonProps) {
   const config = TYPE_CONFIG[type];
   const Icon = config.icon;
 
@@ -360,9 +362,13 @@ function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonPr
     >
       <Icon className="w-4 h-4" />
       <span className="text-sm font-medium">{config.label}</span>
-      <Badge variant="secondary" className="text-xs ml-1">
-        {count}
-      </Badge>
+      {loading ? (
+        <Skeleton className="h-5 w-6 ml-1" />
+      ) : (
+        <Badge variant="secondary" className="text-xs ml-1">
+          {count}
+        </Badge>
+      )}
     </button>
   );
 }
@@ -868,24 +874,27 @@ const ObjectsPage = () => {
     setSearchParams(new URLSearchParams());
   }
 
-  // Total count across all types
+  // Total count across all types (use loaded objects count as fallback when counts are loading)
   const grandTotal = useMemo(() => {
-    return Object.values(totalCounts).reduce((sum, c) => sum + c, 0);
-  }, [totalCounts]);
+    const countsTotal = Object.values(totalCounts).reduce((sum, c) => sum + c, 0);
+    if (countsTotal > 0) return countsTotal;
+    // Fallback to actual loaded objects count
+    return Object.values(objectsByType).reduce((sum, arr) => sum + arr.length, 0);
+  }, [totalCounts, objectsByType]);
 
   // Determine which types to show based on filters
   const visibleTypes = useMemo(() => {
+    // Helper to check if a type has items (from counts or actual loaded objects)
+    const hasItems = (type: ObjectType) => 
+      totalCounts[type] > 0 || objectsByType[type].length > 0;
+    
     if (activeTypes.size === 0) {
-      // Show all types that have items (in database)
-      return (Object.keys(TYPE_CONFIG) as ObjectType[]).filter(
-        (type) => totalCounts[type] > 0
-      );
+      // Show all types that have items (in database or loaded)
+      return (Object.keys(TYPE_CONFIG) as ObjectType[]).filter(hasItems);
     }
     // Show only selected types that have results
-    return Array.from(activeTypes).filter(
-      (type) => totalCounts[type] > 0
-    );
-  }, [activeTypes, totalCounts]);
+    return Array.from(activeTypes).filter(hasItems);
+  }, [activeTypes, totalCounts, objectsByType]);
 
   const hasActiveFilters = q.trim() || activeTypes.size > 0 || showOrphanedOnly;
 
@@ -945,6 +954,7 @@ const ObjectsPage = () => {
               count={totalCounts[type]}
               isActive={activeTypes.has(type)}
               onClick={() => toggleType(type)}
+              loading={countsLoading}
             />
           ))}
         </div>
@@ -967,9 +977,13 @@ const ObjectsPage = () => {
               Show Orphaned
             </>
           )}
-          <Badge variant="secondary" className="text-xs ml-1">
-            {countsLoading ? "..." : (orphanedCount ?? 0)}
-          </Badge>
+          {countsLoading ? (
+            <Skeleton className="h-5 w-6 ml-1" />
+          ) : (
+            <Badge variant="secondary" className="text-xs ml-1">
+              {orphanedCount ?? 0}
+            </Badge>
+          )}
         </Button>
         
         {/* Refresh counts button */}
@@ -1006,17 +1020,22 @@ const ObjectsPage = () => {
 
       {/* Results summary */}
       <div className="flex items-center gap-2 text-sm flex-wrap">
-        <span className="text-muted-foreground">
-          {loading
-            ? "Loading..."
-            : countsLoading
-              ? "Counting..."
-              : hasActiveFilters
-                ? `${activeTypes.size > 0
-                    ? Array.from(activeTypes).reduce((sum, t) => sum + totalCounts[t], 0)
-                    : grandTotal
-                  } objects found`
-                : `${grandTotal} objects in database`}
+        <span className="text-muted-foreground inline-flex items-center gap-1">
+          {loading ? (
+            "Loading..."
+          ) : countsLoading ? (
+            <>
+              <Skeleton className="h-4 w-8 inline-block" />
+              <span>objects in database</span>
+            </>
+          ) : hasActiveFilters ? (
+            `${activeTypes.size > 0
+              ? Array.from(activeTypes).reduce((sum, t) => sum + totalCounts[t], 0)
+              : grandTotal
+            } objects found`
+          ) : (
+            `${grandTotal} objects in database`
+          )}
         </span>
         <span className="text-xs text-muted-foreground/60">
           (expand sections and use "Load more" to see all)
@@ -1112,9 +1131,13 @@ const ObjectsPage = () => {
                         )}
                         <Icon className="w-5 h-5 text-muted-foreground" />
                         <h2 className="text-lg font-semibold flex-1">{config.label}</h2>
-                        <Badge variant="secondary">
-                          {loaded < total ? `${loaded} of ${total}` : total}
-                        </Badge>
+                        {countsLoading ? (
+                          <Skeleton className="h-5 w-10" />
+                        ) : (
+                          <Badge variant="secondary">
+                            {loaded < total ? `${loaded} of ${total}` : total}
+                          </Badge>
+                        )}
                       </button>
                     </CollapsibleTrigger>
                     
