@@ -72,29 +72,29 @@ interface WaveformDisplayProps {
 function WaveformDisplay({ segments, startDate, endDate, currentDate, onSeek }: WaveformDisplayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const totalDuration = endDate.getTime() - startDate.getTime();
-  
+
   // Generate waveform bars based on time buckets
   const bars = useMemo(() => {
     const numBars = 100; // Number of bars to display
     const bucketSize = totalDuration / numBars;
     const result: { intensity: number; hasVoice: boolean }[] = [];
-    
+
     for (let i = 0; i < numBars; i++) {
       const bucketStart = startDate.getTime() + i * bucketSize;
       const bucketEnd = bucketStart + bucketSize;
-      
+
       // Check if any segment overlaps with this bucket
       let intensity = 0;
       let hasVoice = false;
-      
+
       for (const seg of segments) {
         const segStart = seg.time.getTime();
         const segEnd = seg.endTime.getTime();
-        
+
         // Calculate overlap
         const overlapStart = Math.max(bucketStart, segStart);
         const overlapEnd = Math.min(bucketEnd, segEnd);
-        
+
         if (overlapEnd > overlapStart) {
           hasVoice = true;
           // Calculate how much of the bucket is covered by speech
@@ -104,23 +104,23 @@ function WaveformDisplay({ segments, startDate, endDate, currentDate, onSeek }: 
           intensity = Math.max(intensity, coverage * (0.3 + textIntensity * 0.7));
         }
       }
-      
+
       // Add slight noise for silent parts
       if (!hasVoice) {
         intensity = 0.05 + Math.random() * 0.05;
       }
-      
+
       result.push({ intensity, hasVoice });
     }
-    
+
     return result;
   }, [segments, startDate, totalDuration]);
-  
+
   // Calculate playhead position
-  const playheadPosition = currentDate 
+  const playheadPosition = currentDate
     ? ((currentDate.getTime() - startDate.getTime()) / totalDuration) * 100
     : 0;
-  
+
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -129,9 +129,9 @@ function WaveformDisplay({ segments, startDate, endDate, currentDate, onSeek }: 
     const targetTime = new Date(startDate.getTime() + totalDuration * percentage);
     onSeek(targetTime);
   };
-  
+
   return (
-    <div 
+    <div
       ref={containerRef}
       className="relative h-12 bg-background/50 rounded cursor-pointer group"
       onClick={handleClick}
@@ -146,21 +146,21 @@ function WaveformDisplay({ segments, startDate, endDate, currentDate, onSeek }: 
               "flex-1 rounded-sm transition-all",
               bar.hasVoice ? "bg-primary/60" : "bg-muted-foreground/20"
             )}
-            style={{ 
+            style={{
               height: `${Math.max(4, bar.intensity * 100)}%`,
             }}
           />
         ))}
       </div>
-      
+
       {/* Playhead */}
-      <div 
+      <div
         className="absolute top-0 bottom-0 w-0.5 bg-primary shadow-lg z-10 transition-all duration-100"
         style={{ left: `${Math.max(0, Math.min(100, playheadPosition))}%` }}
       >
         <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-primary rounded-full" />
       </div>
-      
+
       {/* Hover effect */}
       <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity rounded" />
     </div>
@@ -393,7 +393,7 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
     return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
   };
 
-  const containerStyle = height 
+  const containerStyle = height
     ? { height: `${height}px` }
     : { minHeight: `${minHeight}px`, maxHeight: `${maxHeight}px` };
 
@@ -411,7 +411,7 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
             onSeek={resetDate}
           />
         )}
-        
+
         <div className="flex flex-wrap items-center gap-4">
           {/* Play button */}
           <PlayPauseButton />
@@ -549,8 +549,8 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
             </p>
           </div>
         ) : (
-          <ScrollArea 
-            className="h-full [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll" 
+          <ScrollArea
+            className="h-full [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll"
             ref={scrollAreaRef}
             onScrollCapture={handleScroll}
           >

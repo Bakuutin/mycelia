@@ -102,10 +102,11 @@ function isEmptyJobResult(job: JobInfo): boolean {
         (result.processed ?? 0) === 0 ||
         (progress.processed === 0 && progress.total === 0)
       );
-    default:
+    default: {
       const processed = progress.processed ?? result.processed ?? -1;
       const total = progress.total ?? result.total ?? -1;
       return processed === 0 && total === 0;
+    }
   }
 }
 
@@ -117,8 +118,8 @@ export default function JobsPage() {
   const [allTypesSelected, setAllTypesSelected] = useState(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
-  const [sortColumn, setSortColumn] = useState<string>("priority");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [sortColumn, setSortColumn] = useState<string>("timestamp");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const hideEmpty = searchParams.get("hideEmpty") === "true";
@@ -353,7 +354,7 @@ export default function JobsPage() {
       let bVal: any;
 
       switch (sortColumn) {
-        case "priority":
+        case "priority": {
           // Primary: status priority, Secondary: timestamp (desc)
           const priorityA = STATUS_PRIORITY[a.state] ?? 999;
           const priorityB = STATUS_PRIORITY[b.state] ?? 999;
@@ -362,6 +363,7 @@ export default function JobsPage() {
           }
           // Secondary sort by timestamp (most recent first)
           return (b.timestamp || 0) - (a.timestamp || 0);
+        }
         case "state":
           aVal = a.state;
           bVal = b.state;
@@ -657,7 +659,7 @@ export default function JobsPage() {
         </div>
       </div>
 
-      {/* Worker Console */}
+      {/* Workers & Statistics */}
       <Card>
         <CardHeader className="py-3 px-4">
           <div className="flex items-center justify-between">
@@ -678,10 +680,13 @@ export default function JobsPage() {
                 <TableRow className="h-8">
                   <TableHead className="w-[40px] pl-4">On</TableHead>
                   <TableHead>Worker</TableHead>
-                  <TableHead className="hidden lg:table-cell">Description</TableHead>
-                  <TableHead className="text-center w-[60px]">Run</TableHead>
-                  <TableHead className="text-center w-[60px]">Queue</TableHead>
-                  <TableHead className="text-center w-[60px]">Err</TableHead>
+                  <TableHead className="text-center w-[50px]">Run</TableHead>
+                  <TableHead className="text-center w-[50px]">Queue</TableHead>
+                  <TableHead className="text-center w-[50px]">Err</TableHead>
+                  <TableHead className="text-center w-[60px]">Runs</TableHead>
+                  <TableHead className="text-center w-[70px]">Success</TableHead>
+                  <TableHead className="text-center w-[50px]">Empty</TableHead>
+                  <TableHead className="w-[80px]">Freq</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -689,6 +694,7 @@ export default function JobsPage() {
                   const isPaused = workerStatus?.workers[worker.type]?.paused ?? false;
                   const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
                   const counts = workerJobCounts[worker.type] || { active: 0, waiting: 0, failed: 0 };
+                  const stats = jobTypeStats.find(s => s.type === worker.type);
                   return (
                     <TableRow 
                       key={worker.type}
@@ -706,10 +712,8 @@ export default function JobsPage() {
                         <div className="flex items-center gap-1.5">
                           <span className="text-xs text-muted-foreground w-4">{worker.order < 999 ? worker.order : ""}</span>
                           <span className={`text-sm ${isPaused ? "text-muted-foreground" : ""}`}>{worker.type}</span>
+                          <span className="text-xs text-muted-foreground hidden lg:inline">— {worker.description}</span>
                         </div>
-                      </TableCell>
-                      <TableCell className="hidden lg:table-cell text-muted-foreground text-xs py-1">
-                        {worker.description}
                       </TableCell>
                       <TableCell className="text-center py-1">
                         {counts.active > 0 ? (
@@ -732,6 +736,28 @@ export default function JobsPage() {
                           <span className="text-muted-foreground/50">-</span>
                         )}
                       </TableCell>
+                      <TableCell className="text-center py-1 text-sm">
+                        {stats?.totalRuns ?? "-"}
+                      </TableCell>
+                      <TableCell className="text-center py-1">
+                        {stats ? (
+                          <Badge variant="secondary" className={
+                            stats.successRate >= 95 ? "bg-green-500/10 text-green-600" :
+                            stats.successRate >= 80 ? "bg-yellow-500/10 text-yellow-600" :
+                            "bg-red-500/10 text-red-600"
+                          }>
+                            {stats.successRate.toFixed(0)}%
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center py-1 text-sm text-muted-foreground">
+                        {stats && stats.emptyRuns > 0 ? stats.emptyRuns : "-"}
+                      </TableCell>
+                      <TableCell className="py-1 text-sm text-muted-foreground">
+                        {stats?.avgFrequency ?? "-"}
+                      </TableCell>
                     </TableRow>
                   );
                 })}
@@ -740,51 +766,6 @@ export default function JobsPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Job Statistics */}
-      {jobTypeStats.length > 0 && (
-        <Card>
-          <CardHeader className="py-3 px-4">
-            <CardTitle className="text-base">Job Statistics</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="h-8">
-                  <TableHead>Type</TableHead>
-                  <TableHead className="text-center w-[80px]">Runs</TableHead>
-                  <TableHead className="text-center w-[80px]">Success</TableHead>
-                  <TableHead className="text-center w-[80px]">Empty</TableHead>
-                  <TableHead className="w-[100px]">Frequency</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {jobTypeStats.map((stats) => (
-                  <TableRow key={stats.type} className="h-9">
-                    <TableCell className="text-sm font-mono">{stats.type}</TableCell>
-                    <TableCell className="text-center text-sm">{stats.totalRuns}</TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary" className={
-                        stats.successRate >= 95 ? "bg-green-500/10 text-green-600" :
-                        stats.successRate >= 80 ? "bg-yellow-500/10 text-yellow-600" :
-                        "bg-red-500/10 text-red-600"
-                      }>
-                        {stats.successRate.toFixed(0)}%
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center text-sm text-muted-foreground">
-                      {stats.emptyRuns > 0 ? stats.emptyRuns : "-"}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {stats.avgFrequency}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Quick Filter Tabs */}
       <div className="flex flex-wrap gap-2">

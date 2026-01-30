@@ -58,12 +58,15 @@ const zObjectBase = z.object({
     modelName: z.string(),
     date: z.date(),
     prompt: z.string().optional(),
+    promptName: z.string().optional(),
     usage: z.object({
       promptTokens: z.number(),
       completionTokens: z.number(),
       totalTokens: z.number(),
+      cost: z.number().optional(),
     }).optional(),
     jobId: z.string().optional(),
+    starred: z.boolean().optional(),
   })).optional(),
 
   metadata: z.object({
