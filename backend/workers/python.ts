@@ -101,24 +101,30 @@ export class NetworkJobCapability<
     if (data.originalId) timeInfo.push(`originalId=${data.originalId}`);
     if (data.limit) timeInfo.push(`limit=${data.limit}`);
     
-    console.log(`[${this.name}] Job ${jobId}: delegating to Python worker${timeInfo.length > 0 ? ` (${timeInfo.join(', ')})` : ''}`);
-    
-    const response = await fetch(url, {
-      method: this.getMethod(input),
-      headers: this.getHeaders(input),
-      body: this.getBody(input),
-    });
+    console.log(`[${this.name}] Job ${jobId}: delegating to ${url}${timeInfo.length > 0 ? ` (${timeInfo.join(', ')})` : ''}`);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: this.getMethod(input),
+        headers: this.getHeaders(input),
+        body: this.getBody(input),
+      });
+    } catch (err) {
+      console.error(`[${this.name}] Job ${jobId}: fetch failed - ${err}`);
+      throw err;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.log(`[${this.name}] Job ${jobId}: Python worker FAILED (${response.status})`);
+      console.log(`[${this.name}] Job ${jobId}: worker FAILED (${response.status})`);
       throw new Error(
         `Network capability failed for ${url} (${response.status}): ${errorText}`,
       );
     }
     
     const result = await response.json();
-    console.log(`[${this.name}] Job ${jobId}: Python worker completed`, JSON.stringify(result));
+    console.log(`[${this.name}] Job ${jobId}: worker completed`, JSON.stringify(result));
     return result;
   }
 }

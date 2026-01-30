@@ -224,26 +224,10 @@ def process_vad_job(job_id: str, data: VadJobData, progress_callback: Callable) 
 
     logger.info(f"VAD job {job_id} completed: processed={total_processed}, speech_chunks={has_speech}, duration={duration:.2f}s")
 
-    progress_callback({
+    return {
         "processed": total_processed,
         "total": total_processed,
         "hasSpeech": has_speech,
-    })
-
-    # Check if there are actually more chunks to process
-    # (new chunks may have been inserted while we were processing)
-    remaining = call_resource('mongo', {
-        "action": "count",
-        "collection": "audio_chunks",
-        "query": {"vad": None},
-    })
-    more_work = remaining > 0
-
-    logger.info(f"VAD job {job_id}: remaining chunks with vad=null: {remaining}, hasMore: {more_work}")
-
-    return {
-        "processed": total_processed,
-        "hasSpeech": has_speech,
         "duration": duration,
-        "hasMore": more_work,
+        "hasMore": has_more,
     }
