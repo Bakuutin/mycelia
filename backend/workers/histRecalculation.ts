@@ -54,6 +54,130 @@ const TARGET_COLLECTIONS: Record<string, AggregationConfig> = {
 
 const day = 1000 * 60 * 60 * 24;
 
+/**
+ * Mark histogram buckets as stale for a given time range.
+ * Uses optimal tiling: largest buckets in the middle, smaller at edges.
+ * This minimizes the number of buckets marked stale.
+ */
+export async function markHistogramStale(
+  auth: Auth,
+  start: Date,
+  end: Date,
+): Promise<{ total: number; byResolution: Record<string, number> }> {
+  const mongo = await getMongoResource(auth);
+  const byResolution: Record<string, number> = {};
+  let total = 0;
+
+  // Work from highest to lowest resolution
+  const resolutionsHighToLow = [...RESOLUTION_ORDER].reverse();
+
+  // Ranges still needing coverage: [{start, end}, ...]
+  let remainingRanges: Array<{ start: Date; end: Date }> = [
+    { start: new Date(start), end: new Date(end) },
+  ];
+
+  for (const resolution of resolutionsHighToLow) {
+    const binSize = RESOLUTION_TO_MS[resolution];
+    const newRemainingRanges: Array<{ start: Date; end: Date }> = [];
+
+    for (const range of remainingRanges) {
+      // Find the largest aligned range within this range for this resolution
+      const alignedStart = new Date(
+        Math.ceil(range.start.getTime() / binSize) * binSize,
+      );
+      const alignedEnd = new Date(
+        Math.floor(range.end.getTime() / binSize) * binSize,
+      );
+
+      // If we can fit at least one bucket of this resolution
+      if (alignedStart.getTime() < alignedEnd.getTime()) {
+        // Mark these buckets as stale
+        const result = await mongo({
+          action: "updateMany",
+          collection: `histogram_${resolution}`,
+          query: { start: { $gte: alignedStart, $lt: alignedEnd } },
+          update: { $set: { stale: true } },
+        });
+
+        const count = result.modifiedCount || 0;
+        byResolution[resolution] = (byResolution[resolution] || 0) + count;
+        total += count;
+
+        // Left edge: range.start to alignedStart (needs smaller buckets)
+        if (range.start.getTime() < alignedStart.getTime()) {
+          newRemainingRanges.push({
+            start: range.start,
+            end: alignedStart,
+          });
+        }
+
+        // Right edge: alignedEnd to range.end (needs smaller buckets)
+        if (alignedEnd.getTime() < range.end.getTime()) {
+          newRemainingRanges.push({
+            start: alignedEnd,
+            end: range.end,
+          });
+        }
+      } else {
+        // Can't fit any buckets of this resolution, pass to next smaller
+        newRemainingRanges.push(range);
+      }
+    }
+
+    remainingRanges = newRemainingRanges;
+
+    // If nothing left to cover, we're done
+    if (remainingRanges.length === 0) {
+      break;
+    }
+  }
+
+  console.log(
+    `[histRecalculation] Marked ${total} buckets stale: ${
+      Object.entries(byResolution)
+        .map(([r, c]) => `${r}=${c}`)
+        .join(", ")
+    }`,
+  );
+
+  return { total, byResolution };
+}
+
+
+/**
+ * Mark higher resolution buckets as stale based on processed lower resolution range.
+ */ 
+async function markHigherResolutionStale(
+  auth: Auth,
+  start: Date,
+  end: Date,
+  processedResolution: Resolution,
+): Promise<void> {
+  const currentIndex = RESOLUTION_ORDER.indexOf(processedResolution);
+  if (currentIndex >= RESOLUTION_ORDER.length - 1) {
+    return; // Already at highest resolution
+  }
+
+  const higherResolution = RESOLUTION_ORDER[currentIndex + 1];
+  const higherBinSize = RESOLUTION_TO_MS[higherResolution];
+
+  // Align to higher resolution boundaries
+  const alignedStart = new Date(
+    Math.floor(start.getTime() / higherBinSize) * higherBinSize,
+  );
+  const alignedEnd = new Date(
+    Math.ceil(end.getTime() / higherBinSize) * higherBinSize,
+  );
+
+  const mongo = await getMongoResource(auth);
+  await mongo({
+    action: "updateMany",
+    collection: `histogram_${higherResolution}`,
+    query: { start: { $gte: alignedStart, $lt: alignedEnd } },
+    update: { $set: { stale: true } },
+  });
+}
+
 export async function updateHistogram(
   auth: Auth,
   start: Date,
@@ -145,34 +269,6 @@ export async function updateHistogram(
         options: { ordered: false },
       });
     }
-  }
-
-  // Create empty buckets for time slots that have no data
-  const emptyBucketOps = [];
-  for (let t = start.getTime(); t < end.getTime(); t += binSize) {
-    emptyBucketOps.push({
-      updateOne: {
-        filter: { start: new Date(t) },
-        update: {
-          $setOnInsert: {
-            start: new Date(t),
-            totals: {},
-            stale: false,
-            updated_at: new Date(),
-          },
-        },
-        upsert: true,
-      },
-    });
-  }
-
-  for (let i = 0; i < emptyBucketOps.length; i += 500) {
-    await mongo({
-      action: "bulkWrite",
-      collection: `histogram_${resolution}`,
-      operations: emptyBucketOps.slice(i, i + 500),
-      options: { ordered: false },
-    });
   }
 }
 
@@ -375,40 +471,7 @@ async function updateHistogramOptimizedBatch(
     }
   }
 
-  // Create empty buckets for time slots that have no data
-  const emptyBucketOps = [];
-  for (let t = start.getTime(); t < end.getTime(); t += binSize) {
-    const binKey = new Date(t).toISOString();
-    if (!aggregatedData.has(binKey)) {
-      emptyBucketOps.push({
-        updateOne: {
-          filter: { start: new Date(t) },
-          update: {
-            $setOnInsert: {
-              start: new Date(t),
-              totals: {},
-              stale: false,
-              updated_at: new Date(),
-            },
-          },
-          upsert: true,
-        },
-      });
-    }
-  }
-
-  if (emptyBucketOps.length > 0) {
-    console.log(`   ├─ Creating ${emptyBucketOps.length} empty buckets...`);
-    for (let i = 0; i < emptyBucketOps.length; i += batchSize) {
-      await mongo({
-        action: "bulkWrite",
-        collection: `histogram_${resolution}`,
-        operations: emptyBucketOps.slice(i, i + batchSize),
-      });
-    }
-  }
-
-  console.log(`   └─ ✓ Completed writing ${ops.length + emptyBucketOps.length} bins`);
+  console.log(`   └─ ✓ Completed writing ${ops.length} bins`);
 }
 
 export async function updateAllHistogram(
@@ -531,6 +594,86 @@ export async function updateAllHistogram(
   );
 }
 
+/**
+ * Process stale buckets at a single resolution level.
+ * After processing, marks the next higher resolution as stale.
+ * Returns true if there are more stale buckets at this resolution.
+ */
+async function processStaleResolution(
+  auth: Auth,
+  resolution: Resolution,
+  limit: number = 500,
+): Promise<{ processed: number; hasMore: boolean }> {
+  const mongo = await getMongoResource(auth);
+  const binSize = RESOLUTION_TO_MS[resolution];
+
+  // Find stale buckets at this resolution (up to limit + 1 to check hasMore)
+  const staleBuckets = await mongo({
+    action: "find",
+    collection: `histogram_${resolution}`,
+    query: { stale: true },
+    options: { sort: { start: 1 }, limit: limit + 1 },
+  });
+
+  if (staleBuckets.length === 0) {
+    return { processed: 0, hasMore: false };
+  }
+
+  const hasMore = staleBuckets.length > limit;
+  const bucketsToProcess = staleBuckets.slice(0, limit);
+
+  const start = bucketsToProcess[0].start;
+  const end = new Date(
+    bucketsToProcess[bucketsToProcess.length - 1].start.getTime() + binSize,
+  );
+
+  console.log(
+    `[histRecalculation] Processing ${bucketsToProcess.length} stale ${resolution} buckets from ${start.toISOString()} to ${end.toISOString()}`,
+  );
+
+  // Process this resolution
+  if (resolution === LOWEST_RESOLUTION) {
+    await updateHistogram(auth, start, end, resolution);
+  } else {
+    await updateHistogramOptimized(auth, start, end, resolution);
+  }
+
+  return { processed: bucketsToProcess.length, hasMore };
+}
+
+/**
+ * Process all stale buckets across all resolutions.
+ * Processes one resolution at a time, bottom-up.
+ * Always finishes the finest resolution before climbing to higher ones.
+ */
+export async function processStaleHistograms(
+  auth: Auth,
+  limit: number = 500,
+): Promise<{ processed: number; hasMore: boolean }> {
+  let totalProcessed = 0;
+  let hasMoreAtAnyLevel = false;
+
+  for (const resolution of RESOLUTION_ORDER) {
+    const { processed, hasMore } = await processStaleResolution(
+      auth,
+      resolution,
+      limit,
+    );
+    totalProcessed += processed;
+
+    if (hasMore) {
+      hasMoreAtAnyLevel = true;
+      // Don't process higher resolutions if current resolution has more work
+      console.log(
+        `[histRecalculation] More stale ${resolution} buckets remain, stopping here`,
+      );
+      break;
+    }
+  }
+
+  return { processed: totalProcessed, hasMore: hasMoreAtAnyLevel };
+}
+
 /** Job type name */
 export const name = "histRecalculation";
 
@@ -539,7 +682,10 @@ export const schema = z.object({
   type: z.literal("histRecalculation"),
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
-  all: z.boolean().default(false),
+  /** Process only stale buckets (default: true) */
+  staleOnly: z.boolean().default(true),
+  /** Mark range as stale without processing (for manual invalidation) */
+  markStale: z.boolean().default(false),
 });
 
 export type HistRecalculationJobData = z.infer<typeof schema>;
@@ -548,34 +694,61 @@ export type HistRecalculationJobData = z.infer<typeof schema>;
 export async function use(job: Job<JobData>): Promise<JobResult> {
   const jobData = job.data as HistRecalculationJobData;
 
-  const start = jobData.start ? new Date(jobData.start) : undefined;
-  const end = jobData.end ? new Date(jobData.end) : undefined;
-
-  console.log(`[histRecalculation] Job ${job.id}: processing time range ${start?.toISOString() ?? 'N/A'} to ${end?.toISOString() ?? 'N/A'}`);
-
-  if (!start || !end) {
-    console.log(`[histRecalculation] Job ${job.id}: missing start or end date`);
-    return { success: false, message: "Start or end date is required" };
-  }
-
   const jwt = Deno.env.get("MYCELIA_JWT")!;
   const myceliaUrl = env.MYCELIA_URL;
 
   const auth = {
-    getResource: (code: string) => (input: any) => callResource(code, input, { jwt, myceliaUrl })
+    getResource: (code: string) => (input: any) =>
+      callResource(code, input, { jwt, myceliaUrl }),
   } as any;
 
-  await updateAllHistogram(auth, start, end);
+  const start = jobData.start ? new Date(jobData.start) : undefined;
+  const end = jobData.end ? new Date(jobData.end) : undefined;
 
-  return { success: true };
+  // Mode 1: Mark range as stale (for manual invalidation)
+  if (jobData.markStale) {
+    if (!start || !end) {
+      return { success: false, message: "Start and end required for markStale" };
+    }
+    const { total, byResolution } = await markHistogramStale(auth, start, end);
+    return { success: true, marked: total, byResolution, hasMore: false };
+  }
+
+  // Mode 2: Process specific range (legacy mode, processes everything in range)
+  if (start && end && !jobData.staleOnly) {
+    console.log(
+      `[histRecalculation] Processing full range ${start.toISOString()} to ${end.toISOString()}`,
+    );
+    await updateAllHistogram(auth, start, end);
+    return { success: true, hasMore: false };
+  }
+
+  // Mode 3: Process stale buckets only (default)
+  console.log(`[histRecalculation] Processing stale buckets`);
+  const { processed, hasMore } = await processStaleHistograms(auth);
+
+  if (processed === 0) {
+    console.log(`[histRecalculation] No stale buckets to process`);
+  } else {
+    console.log(
+      `[histRecalculation] Processed ${processed} buckets, hasMore: ${hasMore}`,
+    );
+  }
+
+  return { success: true, processed, hasMore };
 }
 
 const capability: JobCapability = {
   name,
   inputSchema: z.toJSONSchema(schema),
-  outputSchema: z.toJSONSchema(z.object({
-    success: z.boolean(),
-  })),
+  outputSchema: z.toJSONSchema(
+    z.object({
+      success: z.boolean(),
+      processed: z.number().optional(),
+      marked: z.number().optional(),
+      hasMore: z.boolean(),
+    }),
+  ),
   policies: [
     { resource: "db/audio_chunks", action: "*", effect: "allow" },
     { resource: "db/diarizations", action: "*", effect: "allow" },

@@ -68,6 +68,7 @@ const chatCompletionRequestSchema = z.object({
     .union([
       z.object({ type: z.literal("text") }),
       z.object({ type: z.literal("json_object") }),
+      z.object({ type: z.literal("json_schema"), json_schema: z.any() }),
     ])
     .optional(),
 });
