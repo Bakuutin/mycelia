@@ -23,6 +23,7 @@ import {
   Search,
   SortAsc,
   SortDesc,
+  Star,
   User,
   Users,
   X,
@@ -104,15 +105,15 @@ function formatDateTime(date: Date | string | undefined) {
 
 function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
   const start = typeof startDate === "string" ? new Date(startDate) : startDate;
-  const end = endDate 
+  const end = endDate
     ? (typeof endDate === "string" ? new Date(endDate) : endDate)
     : new Date();
-  
+
   const diffMs = end.getTime() - start.getTime();
   const diffMins = Math.floor(diffMs / (1000 * 60));
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  
+
   if (diffMins < 1) return "< 1 min";
   if (diffMins < 60) return `${diffMins} min`;
   if (diffHours < 24) {
@@ -177,24 +178,25 @@ const TYPE_CONFIG = {
 };
 
 interface ObjectCardProps {
-  object: ObjectModel & { 
-    subjectObject?: ObjectModel; 
+  object: ObjectModel & {
+    subjectObject?: ObjectModel;
     objectObject?: ObjectModel;
     referencesToCount?: number;
     referencesFromCount?: number;
   };
   searchQuery: string;
   showType?: boolean;
+  onToggleStar?: (objectId: string, currentStarred: boolean) => void;
 }
 
-function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) {
+function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: ObjectCardProps) {
   const isRelationship = object.isRelationship;
   const isConversation = object.isConversation;
   const hasRelationshipData = object.relationship && object.subjectObject &&
     object.objectObject;
   const objectType = getObjectType(object);
   const typeConfig = TYPE_CONFIG[objectType];
-  
+
   // Reference counts (not shown for relationship objects)
   const referencesToCount = object.referencesToCount ?? 0;
   const referencesFromCount = object.referencesFromCount ?? 0;
@@ -216,10 +218,31 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
     };
   }, [object.timeRanges]);
 
+  const handleStarClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleStar?.(object._id.toString(), !!object.starred);
+  };
+
   return (
     <Link to={`/objects/${object._id.toString()}`}>
-      <Card className="p-4 hover:border-primary transition-colors h-full">
-        <div className="space-y-3">
+      <Card className="p-3 hover:border-primary transition-colors h-full relative group/card">
+        {/* Star button - top right corner */}
+        {onToggleStar && (
+          <button
+            type="button"
+            onClick={handleStarClick}
+            className={`absolute top-2 right-2 p-1 rounded-md transition-all ${
+              object.starred
+                ? "text-yellow-500 hover:text-yellow-600"
+                : "text-muted-foreground/30 hover:text-muted-foreground opacity-0 group-hover/card:opacity-100"
+            }`}
+            title={object.starred ? "Remove from starred" : "Add to starred"}
+          >
+            <Star className={`w-4 h-4 ${object.starred ? "fill-current" : ""}`} />
+          </button>
+        )}
+        <div className="space-y-2">
           {/* Header with icon, name and type badge */}
           <div className="flex items-start gap-3 min-w-0">
             <span
@@ -264,7 +287,7 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
 
           {/* Relationship info */}
           {isRelationship && hasRelationshipData && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground pl-11">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground pl-10">
               <div className="flex items-center gap-1 min-w-0">
                 <span className="flex-shrink-0">{renderIcon(object.subjectObject?.icon)}</span>
                 <span className="truncate">{object.subjectObject?.name}</span>
@@ -281,7 +304,7 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
 
           {/* Details with markdown support */}
           {object.details && (
-            <div className="text-sm text-muted-foreground pl-11 line-clamp-3">
+            <div className="text-sm text-muted-foreground pl-10 line-clamp-3">
               <Markdown compact className="text-muted-foreground">
                 {object.details}
               </Markdown>
@@ -290,7 +313,7 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
 
           {/* Time range and metadata - show for non-conversations */}
           {!isConversation && (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground pl-11 flex-wrap">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground pl-10 flex-wrap">
               {timeRangeInfo && (
                 <div className="flex items-center gap-1">
                   <CalendarClock className="w-3 h-3" />
@@ -313,10 +336,10 @@ function ObjectCard({ object, searchQuery, showType = false }: ObjectCardProps) 
               )}
             </div>
           )}
-          
+
           {/* Reference counts - not shown for relationships */}
           {!isRelationship && hasReferences && (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground pl-11">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground pl-10">
               <div className="flex items-center gap-1" title="References TO this object (as target)">
                 <ArrowRight className="w-3 h-3" />
                 <span>{referencesToCount} to</span>
@@ -367,8 +390,8 @@ function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonPr
   );
 }
 
-type ObjectWithRelations = ObjectModel & { 
-  subjectObject?: ObjectModel; 
+type ObjectWithRelations = ObjectModel & {
+  subjectObject?: ObjectModel;
   objectObject?: ObjectModel;
   referencesToCount?: number;
   referencesFromCount?: number;
@@ -392,7 +415,7 @@ const ObjectsPage = () => {
   const [loading, setLoading] = useState(true);
   const [loadingTypes, setLoadingTypes] = useState<Set<ObjectType>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  
+
   // How many items to show per type
   const [limits, setLimits] = useState<Record<ObjectType, number>>({
     person: ITEMS_PER_TYPE,
@@ -402,7 +425,7 @@ const ObjectsPage = () => {
     conversation: ITEMS_PER_TYPE,
     other: ITEMS_PER_TYPE,
   });
-  
+
   // Collapsed state per type
   const [collapsed, setCollapsed] = useState<Record<ObjectType, boolean>>({
     person: false,
@@ -412,7 +435,7 @@ const ObjectsPage = () => {
     conversation: false,
     other: false,
   });
-  
+
   // Section-specific sort (for conversations: chronological vs recent)
   type SectionSortOption = "default" | "chronological" | "chronological-desc";
   const [sectionSort, setSectionSort] = useState<Record<ObjectType, SectionSortOption>>({
@@ -423,7 +446,7 @@ const ObjectsPage = () => {
     conversation: "chronological-desc", // Default to newest first for conversations
     other: "default",
   });
-  
+
   // Total counts per type from database
   const [totalCounts, setTotalCounts] = useState<Record<ObjectType, number>>({
     person: 0,
@@ -435,6 +458,10 @@ const ObjectsPage = () => {
   });
   const [countsLoading, setCountsLoading] = useState(true);
   const [orphanedCount, setOrphanedCount] = useState<number | null>(null);
+  
+  // Starred objects section
+  const [starredObjects, setStarredObjects] = useState<ObjectWithRelations[]>([]);
+  const [starredCollapsed, setStarredCollapsed] = useState(false);
 
   const q = searchParams.get("q") || "";
   const sortBy = (searchParams.get("sort") as SortOption) || "updatedAt";
@@ -493,7 +520,7 @@ const ObjectsPage = () => {
   const fetchTypeObjects = useCallback(async (type: ObjectType, limit: number): Promise<ObjectWithRelations[]> => {
     const typeMatch = getTypeMatch(type);
     const searchMatch: Record<string, unknown> = { ...typeMatch };
-    
+
     if (q.trim()) {
       searchMatch.$text = { $search: q.trim() };
     }
@@ -509,7 +536,13 @@ const ObjectsPage = () => {
       if (type === "relationship") {
         return [];
       }
-      
+
+      // OPTIMIZATION: Sort and limit BEFORE expensive lookups
+      // We fetch more than needed (5x) since some will be filtered out as non-orphaned
+      // This makes orphaned filter fast while still returning reasonable results
+      pipeline.push(getSortStage());
+      pipeline.push({ $limit: limit * 5 });
+
       // Check if this object is referenced as subject in any relationship
       pipeline.push({
         $lookup: {
@@ -555,15 +588,14 @@ const ObjectsPage = () => {
           },
         },
       });
-      // Sort and limit AFTER orphaned filtering (can't optimize this case)
-      pipeline.push(getSortStage());
+      // Final limit after orphaned filtering
       pipeline.push({ $limit: limit });
     } else {
       // OPTIMIZATION: Sort and limit BEFORE expensive lookups
       // This way we only do lookups on the limited set of documents
       pipeline.push(getSortStage());
       pipeline.push({ $limit: limit });
-      
+
       // Now add relationship lookups only on the limited documents
       if (type === "relationship") {
         pipeline.push({
@@ -605,6 +637,56 @@ const ObjectsPage = () => {
       pipeline,
     });
   }, [q, getSortStage, getTypeMatch, showOrphanedOnly]);
+
+  // Fetch starred objects
+  const fetchStarredObjects = useCallback(async (): Promise<ObjectWithRelations[]> => {
+    const searchMatch: Record<string, unknown> = { starred: true };
+    
+    if (q.trim()) {
+      searchMatch.$text = { $search: q.trim() };
+    }
+
+    const pipeline: unknown[] = [
+      { $match: searchMatch },
+      getSortStage(),
+      { $limit: 50 }, // Limit starred objects
+      // Add relationship lookups for starred relationship objects
+      {
+        $lookup: {
+          from: "objects",
+          localField: "relationship.subject",
+          foreignField: "_id",
+          as: "subjectObject",
+        },
+      },
+      {
+        $lookup: {
+          from: "objects",
+          localField: "relationship.object",
+          foreignField: "_id",
+          as: "objectObject",
+        },
+      },
+      {
+        $unwind: {
+          path: "$subjectObject",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $unwind: {
+          path: "$objectObject",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+    ];
+
+    return await callResource("mongo", {
+      action: "aggregate",
+      collection: "objects",
+      pipeline,
+    });
+  }, [q, getSortStage]);
 
   // Fetch total counts per type from cached API (no search filter - absolute counts)
   const fetchCounts = useCallback(async (forceRefresh = false) => {
@@ -655,7 +737,7 @@ const ObjectsPage = () => {
     const fetchAllTypes = async () => {
       setLoading(true);
       setError(null);
-      
+
       // Reset limits when search/sort changes
       setLimits({
         person: ITEMS_PER_TYPE,
@@ -665,19 +747,23 @@ const ObjectsPage = () => {
         conversation: ITEMS_PER_TYPE,
         other: ITEMS_PER_TYPE,
       });
-      
+
       try {
-        const typesToFetch = activeTypes.size > 0 
-          ? Array.from(activeTypes) 
+        const typesToFetch = activeTypes.size > 0
+          ? Array.from(activeTypes)
           : (Object.keys(TYPE_CONFIG) as ObjectType[]);
-        
-        const results = await Promise.all(
-          typesToFetch.map(async (type) => ({
-            type,
-            objects: await fetchTypeObjects(type, ITEMS_PER_TYPE),
-          }))
-        );
-        
+
+        // Fetch types and starred objects in parallel
+        const [typeResults, starred] = await Promise.all([
+          Promise.all(
+            typesToFetch.map(async (type) => ({
+              type,
+              objects: await fetchTypeObjects(type, ITEMS_PER_TYPE),
+            }))
+          ),
+          fetchStarredObjects(),
+        ]);
+
         const newObjectsByType: Record<ObjectType, ObjectWithRelations[]> = {
           person: [],
           event: [],
@@ -686,12 +772,13 @@ const ObjectsPage = () => {
           conversation: [],
           other: [],
         };
-        
-        for (const { type, objects } of results) {
+
+        for (const { type, objects } of typeResults) {
           newObjectsByType[type] = objects;
         }
-        
+
         setObjectsByType(newObjectsByType);
+        setStarredObjects(starred);
         setHasLoadedOnce(true);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to fetch objects");
@@ -701,7 +788,7 @@ const ObjectsPage = () => {
     };
 
     fetchAllTypes();
-  }, [q, sortBy, activeTypesParam, showOrphanedOnly, fetchTypeObjects]);
+  }, [q, sortBy, activeTypesParam, showOrphanedOnly, fetchTypeObjects, fetchStarredObjects]);
 
   // Ref to track if a refetch is in progress (to avoid overlapping fetches)
   const isRefetchingRef = useRef(false);
@@ -711,19 +798,23 @@ const ObjectsPage = () => {
     // Avoid overlapping refetches, but don't skip if main loading is true
     if (isRefetchingRef.current) return;
     isRefetchingRef.current = true;
-    
+
     try {
-      const typesToFetch = activeTypes.size > 0 
-        ? Array.from(activeTypes) 
+      const typesToFetch = activeTypes.size > 0
+        ? Array.from(activeTypes)
         : (Object.keys(TYPE_CONFIG) as ObjectType[]);
-      
-      const results = await Promise.all(
-        typesToFetch.map(async (type) => ({
-          type,
-          objects: await fetchTypeObjects(type, limits[type] || ITEMS_PER_TYPE),
-        }))
-      );
-      
+
+      // Fetch types and starred objects in parallel
+      const [typeResults, starred] = await Promise.all([
+        Promise.all(
+          typesToFetch.map(async (type) => ({
+            type,
+            objects: await fetchTypeObjects(type, limits[type] || ITEMS_PER_TYPE),
+          }))
+        ),
+        fetchStarredObjects(),
+      ]);
+
       const newObjectsByType: Record<ObjectType, ObjectWithRelations[]> = {
         person: [],
         event: [],
@@ -732,23 +823,24 @@ const ObjectsPage = () => {
         conversation: [],
         other: [],
       };
-      
-      for (const { type, objects } of results) {
+
+      for (const { type, objects } of typeResults) {
         newObjectsByType[type] = objects;
       }
-      
+
       setObjectsByType(newObjectsByType);
+      setStarredObjects(starred);
     } catch (err) {
       console.error("Failed to refetch objects:", err);
     } finally {
       isRefetchingRef.current = false;
     }
-  }, [activeTypes, limits, fetchTypeObjects]);
+  }, [activeTypes, limits, fetchTypeObjects, fetchStarredObjects]);
 
   // Track navigation to refetch when coming back to this page
   const location = useLocation();
   const lastLocationKeyRef = useRef<string | null>(null);
-  
+
   // Refetch when navigating back to this page (location.key changes)
   useEffect(() => {
     // Skip if we haven't loaded once yet
@@ -756,13 +848,13 @@ const ObjectsPage = () => {
       lastLocationKeyRef.current = location.key;
       return;
     }
-    
+
     // If the location key changed, we navigated (could be back from detail page)
     if (lastLocationKeyRef.current !== null && lastLocationKeyRef.current !== location.key) {
       refetchCurrentData();
       fetchCounts();
     }
-    
+
     lastLocationKeyRef.current = location.key;
   }, [location.key, hasLoadedOnce, refetchCurrentData, fetchCounts]);
 
@@ -787,12 +879,12 @@ const ObjectsPage = () => {
   // Load more for a specific type
   const loadMore = useCallback(async (type: ObjectType, loadAll = false) => {
     const total = totalCounts[type];
-    const newLimit = loadAll 
-      ? Math.min(total, MAX_ITEMS_PER_TYPE) 
+    const newLimit = loadAll
+      ? Math.min(total, MAX_ITEMS_PER_TYPE)
       : Math.min(limits[type] + LOAD_MORE_COUNT, total);
-    
+
     setLoadingTypes((prev) => new Set(prev).add(type));
-    
+
     try {
       const objects = await fetchTypeObjects(type, newLimit);
       setObjectsByType((prev) => ({ ...prev, [type]: objects }));
@@ -807,6 +899,77 @@ const ObjectsPage = () => {
       });
     }
   }, [limits, totalCounts, fetchTypeObjects]);
+
+  // Toggle star on an object
+  const toggleStar = useCallback(async (objectId: string, currentStarred: boolean) => {
+    const newStarred = !currentStarred;
+    
+    // Optimistically update the UI - update both objectsByType and starredObjects
+    setObjectsByType((prev) => {
+      const updated = { ...prev };
+      for (const type of Object.keys(updated) as ObjectType[]) {
+        updated[type] = updated[type].map((obj) =>
+          obj._id.toString() === objectId
+            ? { ...obj, starred: newStarred }
+            : obj
+        );
+      }
+      return updated;
+    });
+    
+    // Update starred objects list
+    if (newStarred) {
+      // Find the object from objectsByType and add to starred
+      setStarredObjects((prev) => {
+        const alreadyExists = prev.some((obj) => obj._id.toString() === objectId);
+        if (alreadyExists) return prev;
+        
+        // Find the object in objectsByType
+        for (const type of Object.keys(objectsByType) as ObjectType[]) {
+          const found = objectsByType[type].find((obj) => obj._id.toString() === objectId);
+          if (found) {
+            return [{ ...found, starred: true }, ...prev];
+          }
+        }
+        return prev;
+      });
+    } else {
+      // Remove from starred
+      setStarredObjects((prev) => prev.filter((obj) => obj._id.toString() !== objectId));
+    }
+
+    try {
+      // Get current version first
+      const current = await callResource("objects", {
+        action: "get",
+        id: objectId,
+      });
+      
+      await callResource("objects", {
+        action: "update",
+        id: objectId,
+        version: current.version ?? 0,
+        field: "starred",
+        value: newStarred,
+      });
+    } catch (err) {
+      console.error("Failed to toggle star:", err);
+      // Revert on error
+      setObjectsByType((prev) => {
+        const updated = { ...prev };
+        for (const type of Object.keys(updated) as ObjectType[]) {
+          updated[type] = updated[type].map((obj) =>
+            obj._id.toString() === objectId
+              ? { ...obj, starred: currentStarred }
+              : obj
+          );
+        }
+        return updated;
+      });
+      // Also revert starred objects - refetch to be safe
+      fetchStarredObjects().then(setStarredObjects).catch(console.error);
+    }
+  }, [objectsByType, fetchStarredObjects]);
 
   useEffect(() => {
     setLocalQ(q);
@@ -971,7 +1134,7 @@ const ObjectsPage = () => {
             {countsLoading ? "..." : (orphanedCount ?? 0)}
           </Badge>
         </Button>
-        
+
         {/* Refresh counts button */}
         <Button
           variant="ghost"
@@ -1064,6 +1227,50 @@ const ObjectsPage = () => {
 
       {!loading && grandTotal > 0 && (
         <div className="space-y-4">
+          {/* Starred Section - shown at top if there are starred objects */}
+          {starredObjects.length > 0 && (
+            <Collapsible
+              open={!starredCollapsed}
+              onOpenChange={() => setStarredCollapsed(!starredCollapsed)}
+            >
+              <div className="border rounded-lg border-yellow-200 bg-yellow-50/30 dark:border-yellow-900/50 dark:bg-yellow-900/10">
+                <div className="flex items-center p-4 gap-2">
+                  <CollapsibleTrigger asChild>
+                    <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
+                      {starredCollapsed ? (
+                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                      )}
+                      <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+                      <h2 className="text-lg font-semibold">Starred</h2>
+                      <Badge variant="outline" className="font-semibold">
+                        {starredObjects.length}
+                      </Badge>
+                      <div className="flex-1" />
+                    </button>
+                  </CollapsibleTrigger>
+                </div>
+                
+                <CollapsibleContent>
+                  <div className="p-4 pt-0">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {starredObjects.map((object) => (
+                        <ObjectCard
+                          key={object._id.toString()}
+                          object={object}
+                          searchQuery={q}
+                          showType={true}
+                          onToggleStar={toggleStar}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+
           {visibleTypes.map((type) => {
             const typeObjects = objectsByType[type];
             const config = TYPE_CONFIG[type];
@@ -1075,22 +1282,22 @@ const ObjectsPage = () => {
             const isLoadingMore = loadingTypes.has(type);
             const currentSort = sectionSort[type];
             const showTimeSort = type === "conversation" || type === "event";
-            
+
             // Sort objects based on section sort option
-            const sortedObjects = currentSort === "default" 
-              ? typeObjects 
+            const sortedObjects = currentSort === "default"
+              ? typeObjects
               : [...typeObjects].sort((a, b) => {
                   const aTime = a.timeRanges?.[0]?.start;
                   const bTime = b.timeRanges?.[0]?.start;
-                  
+
                   if (!aTime && !bTime) return 0;
                   if (!aTime) return 1;
                   if (!bTime) return -1;
-                  
+
                   const aDate = typeof aTime === "string" ? new Date(aTime) : aTime;
                   const bDate = typeof bTime === "string" ? new Date(bTime) : bTime;
-                  
-                  return currentSort === "chronological" 
+
+                  return currentSort === "chronological"
                     ? aDate.getTime() - bDate.getTime()  // Oldest first
                     : bDate.getTime() - aDate.getTime(); // Newest first
                 });
@@ -1111,13 +1318,14 @@ const ObjectsPage = () => {
                           <ChevronDown className="w-5 h-5 text-muted-foreground" />
                         )}
                         <Icon className="w-5 h-5 text-muted-foreground" />
-                        <h2 className="text-lg font-semibold flex-1">{config.label}</h2>
-                        <Badge variant="secondary">
-                          {loaded < total ? `${loaded} of ${total}` : total}
+                        <h2 className="text-lg font-semibold">{config.label}</h2>
+                        <Badge variant="outline" className="font-semibold">
+                          {loaded < total ? `${loaded} / ${total}` : total}
                         </Badge>
+                        <div className="flex-1" />
                       </button>
                     </CollapsibleTrigger>
-                    
+
                     {/* Time-based sort toggle for conversations/events */}
                     {showTimeSort && !isCollapsed && (
                       <div className="flex items-center gap-1">
@@ -1150,7 +1358,7 @@ const ObjectsPage = () => {
                       </div>
                     )}
                   </div>
-                  
+
                   <CollapsibleContent>
                     <div className="p-4 pt-0">
                       {typeObjects.length === 0 ? (
@@ -1166,10 +1374,11 @@ const ObjectsPage = () => {
                                 object={object}
                                 searchQuery={q}
                                 showType={false}
+                                onToggleStar={toggleStar}
                               />
                             ))}
                           </div>
-                          
+
                           {hasMore && (
                             <div className="mt-4 flex items-center justify-center gap-2">
                               <Button
@@ -1189,7 +1398,7 @@ const ObjectsPage = () => {
                                   onClick={() => loadMore(type, true)}
                                   disabled={isLoadingMore}
                                 >
-                                  {total <= MAX_ITEMS_PER_TYPE 
+                                  {total <= MAX_ITEMS_PER_TYPE
                                     ? `Load all ${total - loaded}`
                                     : `Load ${MAX_ITEMS_PER_TYPE - loaded} (max)`}
                                 </Button>

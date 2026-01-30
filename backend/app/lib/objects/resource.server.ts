@@ -42,6 +42,9 @@ const zObjectInput = z.object({
   isPromise: z.boolean().optional().describe(
     "True if this object represents a promise or commitment"
   ),
+  starred: z.boolean().optional().describe(
+    "True if the user has starred/favorited this object"
+  ),
   relationship: z.object({
     object: zObjectId().describe("The object/target of the relationship (the 'to' entity)"),
     subject: zObjectId().describe("The subject/source of the relationship (the 'from' entity)"),
