@@ -110,24 +110,24 @@ function SummaryPanel({
       <div className="p-4 border-t bg-muted/30 flex-shrink-0 space-y-3">
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Version:</span>
-            <span className="font-medium text-right">{index + 1} of {summaries.length}</span>
+            <span className="text-muted-foreground">Prompt:</span>
+            <span className="font-medium text-right">{summary.promptName || "Default"}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Model:</span>
             <span className="font-medium text-right">{getModelDisplay(summary)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Prompt:</span>
-            <span className="font-medium text-right">{summary.promptName || "Default"}</span>
+            <span className="text-muted-foreground">Tokens:</span>
+            <span className="font-medium text-right">{formatTokens(summary.usage?.totalTokens)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Cost:</span>
             <span className="font-medium text-right">{formatCost(summary.usage?.cost)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Tokens:</span>
-            <span className="font-medium text-right">{formatTokens(summary.usage?.totalTokens)}</span>
+            <span className="text-muted-foreground">Version:</span>
+            <span className="font-medium text-right">{index + 1} of {summaries.length}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Date:</span>
