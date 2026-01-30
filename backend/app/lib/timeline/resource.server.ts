@@ -15,7 +15,6 @@ const recalculateSchema = z.object({
   action: z.literal("recalculate"),
   start: zDateOrRelativeTime().optional(),
   end: zDateOrRelativeTime().optional(),
-  all: z.boolean().optional(),
 });
 
 const ensureIndexSchema = z.object({
@@ -57,7 +56,6 @@ export class TimelineResource
           type: "histRecalculation" as const,
           start: validatedInput.start?.toISOString(),
           end: validatedInput.end?.toISOString(),
-          all: validatedInput.all || false,
         };
 
         const jobResult = await jobsResource({
