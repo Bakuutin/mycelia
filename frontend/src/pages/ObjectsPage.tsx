@@ -374,7 +374,7 @@ type ObjectWithRelations = ObjectModel & {
   referencesFromCount?: number;
 };
 
-const ITEMS_PER_TYPE = 25; // Initial items per type
+const ITEMS_PER_TYPE = 20; // Initial items per type
 const LOAD_MORE_COUNT = 50; // Items to load when clicking "load more"
 const MAX_ITEMS_PER_TYPE = 500; // Maximum items per type for "load all"
 
@@ -435,7 +435,6 @@ const ObjectsPage = () => {
   });
   const [countsLoading, setCountsLoading] = useState(true);
   const [orphanedCount, setOrphanedCount] = useState<number | null>(null);
-  const [orphanedCountLoading, setOrphanedCountLoading] = useState(false);
 
   const q = searchParams.get("q") || "";
   const sortBy = (searchParams.get("sort") as SortOption) || "updatedAt";
@@ -505,12 +504,11 @@ const ObjectsPage = () => {
 
     // Only do expensive orphaned checks when the filter is active
     if (showOrphanedOnly) {
-      // First, exclude relationship objects themselves (they're not "orphaned")
-      pipeline.push({
-        $match: {
-          isRelationship: { $ne: true },
-        },
-      });
+      // Relationships cannot be orphaned - they ARE the references between objects
+      // Skip fetching for relationship type when orphaned filter is active
+      if (type === "relationship") {
+        return [];
+      }
       
       // Check if this object is referenced as subject in any relationship
       pipeline.push({
@@ -547,7 +545,6 @@ const ObjectsPage = () => {
         },
       });
       // Filter for orphaned objects (not referenced anywhere)
-      // An object is orphaned if it has no references as subject AND no references as object
       pipeline.push({
         $match: {
           $expr: {
@@ -558,9 +555,16 @@ const ObjectsPage = () => {
           },
         },
       });
+      // Sort and limit AFTER orphaned filtering (can't optimize this case)
+      pipeline.push(getSortStage());
+      pipeline.push({ $limit: limit });
     } else {
-      // Only add relationship lookups when not filtering for orphaned (they're expensive)
-      // These are needed to display relationship information in the UI
+      // OPTIMIZATION: Sort and limit BEFORE expensive lookups
+      // This way we only do lookups on the limited set of documents
+      pipeline.push(getSortStage());
+      pipeline.push({ $limit: limit });
+      
+      // Now add relationship lookups only on the limited documents
       if (type === "relationship") {
         pipeline.push({
           $lookup: {
@@ -590,65 +594,10 @@ const ObjectsPage = () => {
             preserveNullAndEmptyArrays: true,
           },
         });
-      } else {
-        // Add reference counts for non-relationship types
-        // Count references TO this object (where it's the target)
-        pipeline.push({
-          $lookup: {
-            from: "objects",
-            let: { objectId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  isRelationship: true,
-                  $expr: { $eq: ["$relationship.object", "$$objectId"] },
-                },
-              },
-              { $count: "count" },
-            ],
-            as: "referencesToArr",
-          },
-        });
-        // Count references FROM this object (where it's the source)
-        pipeline.push({
-          $lookup: {
-            from: "objects",
-            let: { objectId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  isRelationship: true,
-                  $expr: { $eq: ["$relationship.subject", "$$objectId"] },
-                },
-              },
-              { $count: "count" },
-            ],
-            as: "referencesFromArr",
-          },
-        });
-        // Extract counts from arrays
-        pipeline.push({
-          $addFields: {
-            referencesToCount: {
-              $ifNull: [{ $arrayElemAt: ["$referencesToArr.count", 0] }, 0],
-            },
-            referencesFromCount: {
-              $ifNull: [{ $arrayElemAt: ["$referencesFromArr.count", 0] }, 0],
-            },
-          },
-        });
-        // Clean up temporary arrays
-        pipeline.push({
-          $project: {
-            referencesToArr: 0,
-            referencesFromArr: 0,
-          },
-        });
       }
+      // Skip reference counts for initial load - they're not critical
+      // and cause significant slowdown
     }
-
-    pipeline.push(getSortStage());
-    pipeline.push({ $limit: limit });
 
     return await callResource("mongo", {
       action: "aggregate",
@@ -657,76 +606,25 @@ const ObjectsPage = () => {
     });
   }, [q, getSortStage, getTypeMatch, showOrphanedOnly]);
 
-  // Fetch total counts per type
-  const fetchCounts = useCallback(async () => {
+  // Fetch total counts per type from cached API (no search filter - absolute counts)
+  const fetchCounts = useCallback(async (forceRefresh = false) => {
     setCountsLoading(true);
     try {
-      const searchMatch: Record<string, unknown> = {};
-      if (q.trim()) {
-        searchMatch.$text = { $search: q.trim() };
-      }
-
-      const pipeline = [
-        { $match: searchMatch },
-        {
-          $group: {
-            _id: null,
-            person: { $sum: { $cond: [{ $eq: ["$isPerson", true] }, 1, 0] } },
-            event: { $sum: { $cond: [{ $eq: ["$isEvent", true] }, 1, 0] } },
-            promise: { $sum: { $cond: [{ $eq: ["$isPromise", true] }, 1, 0] } },
-            relationship: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: ["$isRelationship", true] },
-                      { $ne: ["$isPromise", true] },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-            conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
-            other: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $ne: ["$isPerson", true] },
-                      { $ne: ["$isEvent", true] },
-                      { $ne: ["$isRelationship", true] },
-                      { $ne: ["$isPromise", true] },
-                      { $ne: ["$isConversation", true] },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-            total: { $sum: 1 },
-          },
-        },
-      ];
-
-      const result = await callResource("mongo", {
-        action: "aggregate",
-        collection: "objects",
-        pipeline,
+      const result = await callResource("objects", {
+        action: "getCounts",
+        forceRefresh,
       });
 
-      if (result && result.length > 0) {
-        const counts = result[0];
+      if (result) {
         setTotalCounts({
-          person: counts.person || 0,
-          event: counts.event || 0,
-          relationship: counts.relationship || 0,
-          promise: counts.promise || 0,
-          conversation: counts.conversation || 0,
-          other: counts.other || 0,
+          person: result.person || 0,
+          event: result.event || 0,
+          relationship: result.relationship || 0,
+          promise: result.promise || 0,
+          conversation: result.conversation || 0,
+          other: result.other || 0,
         });
+        setOrphanedCount(result.orphaned ?? 0);
       } else {
         setTotalCounts({
           person: 0,
@@ -736,104 +634,18 @@ const ObjectsPage = () => {
           conversation: 0,
           other: 0,
         });
+        setOrphanedCount(0);
       }
     } catch (err) {
       console.error("Failed to fetch counts:", err);
     } finally {
       setCountsLoading(false);
     }
-  }, [q]);
+  }, []);
 
   useEffect(() => {
     fetchCounts();
   }, [fetchCounts]);
-
-  // Fetch orphaned objects count
-  const fetchOrphanedCount = useCallback(async () => {
-    setOrphanedCountLoading(true);
-    try {
-      const searchMatch: Record<string, unknown> = {
-        isRelationship: { $ne: true },
-      };
-      
-      if (q.trim()) {
-        searchMatch.$text = { $search: q.trim() };
-      }
-
-      const pipeline = [
-        { $match: searchMatch },
-        // Check if this object is referenced as subject in any relationship
-        {
-          $lookup: {
-            from: "objects",
-            let: { objectId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  isRelationship: true,
-                  $expr: { $eq: ["$relationship.subject", "$$objectId"] },
-                },
-              },
-              { $limit: 1 },
-            ],
-            as: "referencedAsSubject",
-          },
-        },
-        // Check if this object is referenced as object in any relationship
-        {
-          $lookup: {
-            from: "objects",
-            let: { objectId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  isRelationship: true,
-                  $expr: { $eq: ["$relationship.object", "$$objectId"] },
-                },
-              },
-              { $limit: 1 },
-            ],
-            as: "referencedAsObject",
-          },
-        },
-        // Filter for orphaned objects (not referenced anywhere)
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $eq: [{ $size: { $ifNull: ["$referencedAsSubject", []] } }, 0] },
-                { $eq: [{ $size: { $ifNull: ["$referencedAsObject", []] } }, 0] },
-              ],
-            },
-          },
-        },
-        { $count: "total" },
-      ];
-
-      const result = await callResource("mongo", {
-        action: "aggregate",
-        collection: "objects",
-        pipeline,
-      });
-
-      // $count returns [] if no matches, or [{ total: number }] if matches found
-      if (result && Array.isArray(result) && result.length > 0 && typeof result[0] === 'object' && 'total' in result[0]) {
-        setOrphanedCount(result[0].total as number);
-      } else {
-        // If no results (empty array), count is 0
-        setOrphanedCount(0);
-      }
-    } catch (err) {
-      console.error("Failed to fetch orphaned count:", err);
-      setOrphanedCount(0); // Set to 0 on error
-    } finally {
-      setOrphanedCountLoading(false);
-    }
-  }, [q]);
-
-  useEffect(() => {
-    fetchOrphanedCount();
-  }, [fetchOrphanedCount]);
 
   // Track if we should refetch on focus (only after initial load)
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
@@ -949,11 +761,10 @@ const ObjectsPage = () => {
     if (lastLocationKeyRef.current !== null && lastLocationKeyRef.current !== location.key) {
       refetchCurrentData();
       fetchCounts();
-      fetchOrphanedCount();
     }
     
     lastLocationKeyRef.current = location.key;
-  }, [location.key, hasLoadedOnce, refetchCurrentData, fetchCounts, fetchOrphanedCount]);
+  }, [location.key, hasLoadedOnce, refetchCurrentData, fetchCounts]);
 
   // Also refetch when browser tab regains visibility
   useEffect(() => {
@@ -963,7 +774,6 @@ const ObjectsPage = () => {
       if (document.visibilityState === 'visible') {
         refetchCurrentData();
         fetchCounts();
-        fetchOrphanedCount();
       }
     };
 
@@ -972,7 +782,7 @@ const ObjectsPage = () => {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [hasLoadedOnce, refetchCurrentData, fetchCounts, fetchOrphanedCount]);
+  }, [hasLoadedOnce, refetchCurrentData, fetchCounts]);
 
   // Load more for a specific type
   const loadMore = useCallback(async (type: ObjectType, loadAll = false) => {
@@ -1157,27 +967,21 @@ const ObjectsPage = () => {
               Show Orphaned
             </>
           )}
-          {orphanedCountLoading ? (
-            <Badge variant="secondary" className="text-xs ml-1">
-              ...
-            </Badge>
-          ) : (
-            <Badge variant="secondary" className="text-xs ml-1">
-              {orphanedCount ?? 0}
-            </Badge>
-          )}
+          <Badge variant="secondary" className="text-xs ml-1">
+            {countsLoading ? "..." : (orphanedCount ?? 0)}
+          </Badge>
         </Button>
         
         {/* Refresh counts button */}
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => fetchOrphanedCount()}
-          disabled={orphanedCountLoading}
+          onClick={() => fetchCounts(true)}
+          disabled={countsLoading}
           className="flex items-center gap-1"
-          title="Refresh orphaned count"
+          title="Refresh counts"
         >
-          <RefreshCw className={`w-4 h-4 ${orphanedCountLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 h-4 ${countsLoading ? 'animate-spin' : ''}`} />
         </Button>
 
         <div className="flex items-center gap-2 ml-auto">

@@ -191,6 +191,15 @@ const getTimeRangeSchema = z.object({
   ),
 });
 
+const getCountsSchema = z.object({
+  action: z.literal("getCounts").describe(
+    "Get cached counts per object type. Returns cached values for fast loading."
+  ),
+  forceRefresh: z.boolean().optional().describe(
+    "If true, recalculate counts from database and update cache"
+  ),
+});
+
 const objectsRequestSchema = z.discriminatedUnion("action", [
   createObjectSchema,
   updateObjectSchema,
@@ -201,6 +210,7 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   getHistorySchema,
   exploreTimeRangeSchema,
   getTimeRangeSchema,
+  getCountsSchema,
 ]);
 
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
@@ -230,6 +240,179 @@ export class ObjectsResource
 
   async getRootDB() {
     return getRootDB();
+  }
+
+  // Calculate and cache object counts in the database
+  private async refreshCounts(): Promise<{
+    person: number;
+    event: number;
+    relationship: number;
+    promise: number;
+    conversation: number;
+    other: number;
+    orphaned: number;
+    total: number;
+    updatedAt: Date;
+  }> {
+    const db = await this.getRootDB();
+    const objectsCollection = db.collection("objects");
+
+    // Calculate type counts with a single aggregation
+    const countsPipeline = [
+      {
+        $group: {
+          _id: null,
+          person: { $sum: { $cond: [{ $eq: ["$isPerson", true] }, 1, 0] } },
+          event: { $sum: { $cond: [{ $eq: ["$isEvent", true] }, 1, 0] } },
+          promise: { $sum: { $cond: [{ $eq: ["$isPromise", true] }, 1, 0] } },
+          relationship: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$isRelationship", true] },
+                    { $ne: ["$isPromise", true] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
+          other: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$isPerson", true] },
+                    { $ne: ["$isEvent", true] },
+                    { $ne: ["$isRelationship", true] },
+                    { $ne: ["$isPromise", true] },
+                    { $ne: ["$isConversation", true] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          total: { $sum: 1 },
+        },
+      },
+    ];
+
+    const countsResult = await objectsCollection.aggregate(countsPipeline).toArray();
+    const typeCounts = countsResult[0] || {
+      person: 0,
+      event: 0,
+      relationship: 0,
+      promise: 0,
+      conversation: 0,
+      other: 0,
+      total: 0,
+    };
+
+    // Calculate orphaned count (objects not referenced in any relationship)
+    const orphanedPipeline = [
+      {
+        $match: {
+          isRelationship: { $ne: true },
+        },
+      },
+      {
+        $lookup: {
+          from: "objects",
+          let: { objectId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                isRelationship: true,
+                $expr: {
+                  $or: [
+                    { $eq: ["$relationship.subject", "$$objectId"] },
+                    { $eq: ["$relationship.object", "$$objectId"] },
+                  ],
+                },
+              },
+            },
+            { $limit: 1 },
+          ],
+          as: "references",
+        },
+      },
+      {
+        $match: {
+          references: { $size: 0 },
+        },
+      },
+      { $count: "total" },
+    ];
+
+    const orphanedResult = await objectsCollection.aggregate(orphanedPipeline).toArray();
+    const orphanedCount = orphanedResult[0]?.total ?? 0;
+
+    const stats = {
+      person: typeCounts.person,
+      event: typeCounts.event,
+      relationship: typeCounts.relationship,
+      promise: typeCounts.promise,
+      conversation: typeCounts.conversation,
+      other: typeCounts.other,
+      orphaned: orphanedCount,
+      total: typeCounts.total,
+      updatedAt: new Date(),
+    };
+
+    // Store in cache collection
+    await db.collection("object_stats").updateOne(
+      { _id: "counts" },
+      { $set: stats },
+      { upsert: true }
+    );
+
+    return stats;
+  }
+
+  // Get cached counts, or calculate if not exists
+  private async getCachedCounts(): Promise<{
+    person: number;
+    event: number;
+    relationship: number;
+    promise: number;
+    conversation: number;
+    other: number;
+    orphaned: number;
+    total: number;
+    updatedAt: Date | null;
+    stale?: boolean;
+  } | null> {
+    const db = await this.getRootDB();
+    const cached = await db.collection("object_stats").findOne({ _id: "counts" });
+    if (!cached) return null;
+    return {
+      person: cached.person,
+      event: cached.event,
+      relationship: cached.relationship,
+      promise: cached.promise,
+      conversation: cached.conversation,
+      other: cached.other,
+      orphaned: cached.orphaned,
+      total: cached.total,
+      updatedAt: cached.updatedAt,
+      stale: cached.stale,
+    };
+  }
+
+  // Invalidate counts cache (called after create/update/delete)
+  private async invalidateCountsCache(): Promise<void> {
+    // Just mark as stale by updating a flag, don't recalculate immediately
+    const db = await this.getRootDB();
+    await db.collection("object_stats").updateOne(
+      { _id: "counts" },
+      { $set: { stale: true } },
+      { upsert: true }
+    );
   }
 
   private async recordHistory(
@@ -285,6 +468,9 @@ export class ObjectsResource
           undefined,
           doc,
         );
+
+        // Invalidate counts cache
+        await this.invalidateCountsCache();
 
         return { insertedId: result.insertedId };
       }
@@ -376,6 +562,12 @@ export class ObjectsResource
           input.value,
         );
 
+        // Invalidate counts cache if type-related fields changed
+        const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation"];
+        if (typeFields.includes(input.field) || input.field.startsWith("relationship")) {
+          await this.invalidateCountsCache();
+        }
+
         return result;
       }
 
@@ -406,6 +598,9 @@ export class ObjectsResource
           current,
           undefined,
         );
+
+        // Invalidate counts cache
+        await this.invalidateCountsCache();
 
         return { deletedCount: result.deletedCount };
       }
@@ -879,6 +1074,21 @@ export class ObjectsResource
         return { start: null, end: null };
       }
 
+      case "getCounts": {
+        // Get cached counts or calculate if not available
+        if (input.forceRefresh) {
+          return await this.refreshCounts();
+        }
+
+        const cached = await this.getCachedCounts();
+        if (cached && !cached.stale) {
+          return cached;
+        }
+
+        // Cache doesn't exist or is stale, recalculate
+        return await this.refreshCounts();
+      }
+
       default:
         throw new Error("Unknown action");
     }
@@ -895,6 +1105,7 @@ export class ObjectsResource
       getHistory: ["read"],
       exploreTimeRange: ["read"],
       getTimeRange: ["read"],
+      getCounts: ["read"],
     };
 
     return [
