@@ -116,6 +116,8 @@ export function SummarizeDialog({
     setSelectedPromptId(promptId);
     if (promptId === "custom") {
       setSummarizePrompt("");
+      // Reset model to default when switching to custom prompt
+      setSelectedModel(defaultModel);
     } else {
       const prompt = prompts.find((p) => p._id.toString() === promptId);
       if (prompt) {
@@ -123,6 +125,9 @@ export function SummarizeDialog({
         // If the prompt has a model configured, use it
         if (prompt.model) {
           setSelectedModel(prompt.model);
+        } else {
+          // Reset to default if prompt doesn't have a model configured
+          setSelectedModel(defaultModel);
         }
       }
     }

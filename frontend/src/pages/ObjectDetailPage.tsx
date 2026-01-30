@@ -265,6 +265,26 @@ const ObjectDetailPage = () => {
     }
   }, [object, id, autoSave, scheduleAutoSave]);
 
+  // Handle starring a summary - only one can be starred at a time
+  const handleStarSummary = useCallback((index: number) => {
+    if (!object || !object.summaries) return;
+    
+    // Get current summaries, applying any pending changes
+    const currentSummaries = pendingChanges.summaries || object.summaries;
+    
+    // Create new array with updated starred state
+    const newSummaries = currentSummaries.map((summary: any, i: number) => {
+      if (i === index) {
+        // Toggle the starred state for the selected summary
+        return { ...summary, starred: !summary.starred };
+      }
+      // Unstar all other summaries
+      return { ...summary, starred: false };
+    });
+    
+    handleFieldUpdate("summaries", newSummaries);
+  }, [object, pendingChanges.summaries, handleFieldUpdate]);
+
   // Manual save - saves immediately
   const handleManualSave = useCallback(() => {
     if (saveTimeoutRef.current) {
@@ -456,8 +476,9 @@ const ObjectDetailPage = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Summary - with model selector, generate button, and history navigation */}
           <SummarySection
-            object={object}
+            object={pendingChanges.summaries ? { ...object, summaries: pendingChanges.summaries } : object}
             onSummaryClick={setSelectedSummary}
+            onStarSummary={handleStarSummary}
           />
 
           {/* Player + Transcript - flexible height, expands for long content */}
