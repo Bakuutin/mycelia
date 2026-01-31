@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import type { Object as ObjectModel } from "@/types/objects";
@@ -971,6 +971,27 @@ const ObjectsPage = () => {
       isRefetchingRef.current = false;
     }
   }, [collapsed, fetchedTypes, limits, fetchTypeObjects, fetchStarredObjects, objectsByType]);
+
+  // Track navigation to refetch starred objects when coming back
+  const location = useLocation();
+  const lastLocationKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Skip initial render
+    if (lastLocationKeyRef.current === null) {
+      lastLocationKeyRef.current = location.key;
+      return;
+    }
+
+    // If location key changed, user navigated (e.g., back from detail page)
+    if (lastLocationKeyRef.current !== location.key) {
+      lastLocationKeyRef.current = location.key;
+      // Always refetch starred objects when navigating back (fast query)
+      fetchStarredObjects().then(setStarredObjects).catch(console.error);
+      // Also refetch counts in case they changed
+      fetchCounts();
+    }
+  }, [location.key, fetchStarredObjects, fetchCounts]);
 
   // Track last fetch time to avoid excessive refetches
   const lastFetchTimeRef = useRef<number>(Date.now());
