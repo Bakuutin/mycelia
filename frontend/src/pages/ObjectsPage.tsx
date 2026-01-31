@@ -415,19 +415,16 @@ const ObjectsPage = () => {
     other: ITEMS_PER_TYPE,
   });
 
-  // Collapsed state per type - start collapsed (will auto-expand first type with items)
+  // Collapsed state per type - start expanded by default
   const [collapsed, setCollapsed] = useState<Record<ObjectType, boolean>>({
-    person: true,
-    event: true,
-    relationship: true,
-    promise: true,
-    conversation: true,
-    tag: true,
-    other: true,
+    person: false,
+    event: false,
+    relationship: false,
+    promise: false,
+    conversation: false,
+    tag: false,
+    other: false,
   });
-  
-  // Track if we've initialized the first expanded section
-  const [initializedFirstSection, setInitializedFirstSection] = useState(false);
 
   // Section-specific sort (for conversations: chronological vs recent)
   type SectionSortOption = "default" | "chronological" | "chronological-desc";
@@ -831,20 +828,6 @@ const ObjectsPage = () => {
 
   // Track if we should refetch on focus (only after initial load)
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-
-  // Auto-expand first section with items after counts are loaded
-  useEffect(() => {
-    if (countsLoading || initializedFirstSection) return;
-    
-    // Find first type with items
-    const typeOrder: ObjectType[] = ["person", "event", "relationship", "promise", "conversation", "other"];
-    const firstTypeWithItems = typeOrder.find(type => totalCounts[type] > 0);
-    
-    if (firstTypeWithItems) {
-      setCollapsed(prev => ({ ...prev, [firstTypeWithItems]: false }));
-      setInitializedFirstSection(true);
-    }
-  }, [countsLoading, totalCounts, initializedFirstSection]);
 
   // Fetch objects for a type when it's expanded (lazy loading)
   const fetchTypeIfNeeded = useCallback(async (type: ObjectType) => {
@@ -1258,16 +1241,17 @@ const ObjectsPage = () => {
   }, [totalCounts]);
 
   // Determine which types to show based on filters
+  // Order: conversations first, then people, events, relationships, promises, tags, other
   const visibleTypes = useMemo(() => {
+    const typeOrder: ObjectType[] = ["conversation", "person", "event", "relationship", "promise", "tag", "other"];
+    
     if (activeTypes.size === 0) {
       // Show all types that have items (in database)
-      return (Object.keys(TYPE_CONFIG) as ObjectType[]).filter(
-        (type) => totalCounts[type] > 0
-      );
+      return typeOrder.filter((type) => totalCounts[type] > 0);
     }
     // Show only selected types that have results
-    return Array.from(activeTypes).filter(
-      (type) => totalCounts[type] > 0
+    return typeOrder.filter(
+      (type) => activeTypes.has(type) && totalCounts[type] > 0
     );
   }, [activeTypes, totalCounts]);
 
@@ -1287,7 +1271,20 @@ const ObjectsPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Objects</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold">Objects</h1>
+          {starredObjects.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => document.getElementById('starred-section')?.scrollIntoView({ behavior: 'smooth' })}
+              className="text-yellow-500 hover:text-yellow-600"
+            >
+              <Star className="w-5 h-5 fill-current" />
+              <span className="ml-1">{starredObjects.length}</span>
+            </Button>
+          )}
+        </div>
         <Button asChild>
           <Link to="/objects/create">
             <Plus className="w-4 h-4 mr-2" />
@@ -1445,7 +1442,7 @@ const ObjectsPage = () => {
               open={!starredCollapsed}
               onOpenChange={() => setStarredCollapsed(!starredCollapsed)}
             >
-              <div className="border rounded-lg border-yellow-200 bg-yellow-50/30 dark:border-yellow-900/50 dark:bg-yellow-900/10">
+              <div id="starred-section" className="border rounded-lg border-yellow-200 bg-yellow-50/30 dark:border-yellow-900/50 dark:bg-yellow-900/10">
                 <div className="flex items-center p-4 gap-2">
                   <CollapsibleTrigger asChild>
                     <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
