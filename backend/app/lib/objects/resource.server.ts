@@ -288,6 +288,7 @@ export class ObjectsResource
                     { $ne: ["$isRelationship", true] },
                     { $ne: ["$isPromise", true] },
                     { $ne: ["$isConversation", true] },
+                    { $ne: ["$isTag", true] },
                   ],
                 },
                 1,
@@ -329,9 +330,8 @@ export class ObjectsResource
   }
 
   // Calculate orphaned count (slow - uses $lookup)
-  private async refreshOrphanedCount(): Promise<number> {
-    const db = await this.getRootDB();
-    const objectsCollection = db.collection("objects");
+  private async refreshOrphanedCount(auth: Auth): Promise<number> {
+    const mongo = getMongoResource(auth);
 
     const orphanedPipeline = [
       {
@@ -377,7 +377,7 @@ export class ObjectsResource
   }
 
   // Calculate and cache all counts
-  private async refreshCounts(): Promise<{
+  private async refreshCounts(auth: Auth): Promise<{
     person: number;
     event: number;
     relationship: number;
@@ -389,13 +389,13 @@ export class ObjectsResource
     total: number;
     updatedAt: Date;
   }> {
-    const db = await this.getRootDB();
+    const mongo = getMongoResource(auth);
 
     // Calculate type counts first (fast)
-    const typeCounts = await this.refreshTypeCounts();
+    const typeCounts = await this.refreshTypeCounts(auth);
 
     // Calculate orphaned count (slow)
-    const orphanedCount = await this.refreshOrphanedCount();
+    const orphanedCount = await this.refreshOrphanedCount(auth);
 
     const stats = {
       person: typeCounts.person,
@@ -423,7 +423,7 @@ export class ObjectsResource
   }
 
   // Quick refresh - only type counts, keep existing orphaned from cache
-  private async refreshTypeCountsOnly(): Promise<{
+  private async refreshTypeCountsOnly(auth: Auth): Promise<{
     person: number;
     event: number;
     relationship: number;
@@ -436,14 +436,18 @@ export class ObjectsResource
     updatedAt: Date;
     orphanedLoading?: boolean;
   }> {
-    const db = await this.getRootDB();
+    const mongo = getMongoResource(auth);
 
     // Get existing orphaned count from cache
-    const cached = await db.collection("object_stats").findOne({ _id: "counts" });
+    const cached = await mongo({
+      action: "findOne",
+      collection: "object_stats",
+      query: { _id: "counts" },
+    });
     const existingOrphaned = cached?.orphaned ?? null;
 
     // Calculate type counts (fast)
-    const typeCounts = await this.refreshTypeCounts();
+    const typeCounts = await this.refreshTypeCounts(auth);
 
     const stats = {
       person: typeCounts.person,
@@ -460,9 +464,11 @@ export class ObjectsResource
     };
 
     // Update cache with type counts, preserve orphaned if exists
-    await db.collection("object_stats").updateOne(
-      { _id: "counts" },
-      {
+    await mongo({
+      action: "updateOne",
+      collection: "object_stats",
+      query: { _id: "counts" },
+      update: {
         $set: {
           person: stats.person,
           event: stats.event,
@@ -476,83 +482,18 @@ export class ObjectsResource
           stale: false,
         }
       },
-      { upsert: true }
-    );
+      options: { upsert: true },
+    });
 
     // Calculate orphaned count in background (don't await)
-    this.refreshOrphanedCount().then(async (orphaned) => {
-      await db.collection("object_stats").updateOne(
-        { _id: "counts" },
-        { $set: { orphaned } }
-      );
-    }).catch(err => console.error("Failed to refresh orphaned count:", err));
-
-    return stats;
-  }
-
-  // Quick refresh - only type counts, keep existing orphaned from cache
-  private async refreshTypeCountsOnly(): Promise<{
-    person: number;
-    event: number;
-    relationship: number;
-    promise: number;
-    conversation: number;
-    tag: number;
-    other: number;
-    orphaned: number | null;
-    total: number;
-    updatedAt: Date;
-    orphanedLoading?: boolean;
-  }> {
-    const db = await this.getRootDB();
-
-    // Get existing orphaned count from cache
-    const cached = await db.collection("object_stats").findOne({ _id: "counts" });
-    const existingOrphaned = cached?.orphaned ?? null;
-
-    // Calculate type counts (fast)
-    const typeCounts = await this.refreshTypeCounts();
-
-    const stats = {
-      person: typeCounts.person,
-      event: typeCounts.event,
-      relationship: typeCounts.relationship,
-      promise: typeCounts.promise,
-      conversation: typeCounts.conversation,
-      tag: typeCounts.tag,
-      other: typeCounts.other,
-      orphaned: existingOrphaned,
-      total: typeCounts.total,
-      updatedAt: new Date(),
-      orphanedLoading: existingOrphaned === null,
-    };
-
-    // Update cache with type counts, preserve orphaned if exists
-    await db.collection("object_stats").updateOne(
-      { _id: "counts" },
-      {
-        $set: {
-          person: stats.person,
-          event: stats.event,
-          relationship: stats.relationship,
-          promise: stats.promise,
-          conversation: stats.conversation,
-          tag: stats.tag,
-          other: stats.other,
-          total: stats.total,
-          updatedAt: stats.updatedAt,
-          stale: false,
-        }
-      },
-      { upsert: true }
-    );
-
-    // Calculate orphaned count in background (don't await)
-    this.refreshOrphanedCount().then(async (orphaned) => {
-      await db.collection("object_stats").updateOne(
-        { _id: "counts" },
-        { $set: { orphaned } }
-      );
+    this.refreshOrphanedCount(auth).then(async (orphaned) => {
+      const bgMongo = getMongoResource(auth);
+      await bgMongo({
+        action: "updateOne",
+        collection: "object_stats",
+        query: { _id: "counts" },
+        update: { $set: { orphaned } },
+      });
     }).catch(err => console.error("Failed to refresh orphaned count:", err));
 
     return stats;
@@ -1287,7 +1228,7 @@ export class ObjectsResource
           // If stale, trigger background refresh
           if (cached.stale) {
             // Fire and forget - don't await
-            this.refreshCounts().catch(err =>
+            this.refreshCounts(auth).catch(err =>
               console.error("Background counts refresh failed:", err)
             );
           }

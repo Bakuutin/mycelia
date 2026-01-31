@@ -520,6 +520,7 @@ const ObjectsPage = () => {
           isRelationship: { $ne: true },
           isPromise: { $ne: true },
           isConversation: { $ne: true },
+          isTag: { $ne: true },
         };
     }
   }, []);
@@ -1124,12 +1125,56 @@ const ObjectsPage = () => {
 
       // Show undo toast when removing from starred
       if (!newStarred && removedObject) {
+        // Capture the object data at this moment for the undo action
+        const capturedObject = { ...removedObject };
         toast("Removed from starred", {
           action: {
             label: "Undo",
-            onClick: () => {
-              // Re-star the object
-              toggleStar(objectId, false);
+            onClick: async () => {
+              // Optimistically restore the object to starred
+              setStarredObjects((prev) => [{ ...capturedObject, starred: true }, ...prev]);
+              setObjectsByType((prev) => {
+                const updated = { ...prev };
+                for (const type of Object.keys(updated) as ObjectType[]) {
+                  updated[type] = updated[type].map((obj) =>
+                    obj._id.toString() === objectId
+                      ? { ...obj, starred: true }
+                      : obj
+                  );
+                }
+                return updated;
+              });
+              
+              try {
+                // Get current version and update
+                const current = await callResource("objects", {
+                  action: "get",
+                  id: objectId,
+                });
+                await callResource("objects", {
+                  action: "update",
+                  id: objectId,
+                  version: current.version ?? 0,
+                  field: "starred",
+                  value: true,
+                });
+              } catch (err) {
+                console.error("Failed to undo star removal:", err);
+                // Revert the optimistic update
+                setStarredObjects((prev) => prev.filter((obj) => obj._id.toString() !== objectId));
+                setObjectsByType((prev) => {
+                  const updated = { ...prev };
+                  for (const type of Object.keys(updated) as ObjectType[]) {
+                    updated[type] = updated[type].map((obj) =>
+                      obj._id.toString() === objectId
+                        ? { ...obj, starred: false }
+                        : obj
+                    );
+                  }
+                  return updated;
+                });
+                toast.error("Failed to restore starred status");
+              }
             },
           },
           duration: 5000,
@@ -1140,7 +1185,7 @@ const ObjectsPage = () => {
       revertChanges();
       toast.error("Failed to update starred status");
     }
-  }, [objectsByType, starredObjects]);
+  }, []);
 
   useEffect(() => {
     setLocalQ(q);
