@@ -2,19 +2,18 @@ import type { Request, Response } from "express";
 import { streamText, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { authenticateOr401, type Auth } from "@/lib/auth/core.server.ts";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
 import { ObjectId } from "bson";
-import type { Db } from "mongodb";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
 
 async function generateChatTitle(
-  db: Db,
+  mongo: any,
   chatId: string,
   userMessage: string,
   auth: Auth
@@ -33,10 +32,12 @@ async function generateChatTitle(
 
     const title = completion.choices[0]?.message?.content?.trim();
     if (title && title.length > 0 && title.length < 100) {
-      await db.collection("chats").updateOne(
-        { _id: new ObjectId(chatId) },
-        { $set: { name: title, title: title } }
-      );
+      await mongo({
+        action: "updateOne",
+        collection: "chats",
+        query: { _id: new ObjectId(chatId) },
+        update: { $set: { name: title, title: title } },
+      });
       console.log(`[generateChatTitle] Generated title for chat ${chatId}: "${title}"`);
     }
   } catch (error) {
@@ -56,8 +57,8 @@ export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);
 
   // 2. Load or Create Chat Session (Persistence)
-  const db = await getRootDB();
-  
+  const mongo = await getMongoResource(auth);
+
   let { messages, chatId } = req.body;
   
   // Debug: Log incoming messages to understand the structure
@@ -172,26 +173,34 @@ export async function apiChatHandler(req: Request, res: Response) {
   if (!activeChatId) {
     isNewChat = true;
     const newChatId = new ObjectId();
-    const chatResult = await db.collection("chats").insertOne({
-      _id: newChatId,
-      userId: auth.principal, // Auth object uses principal as user identifier
-      title: 'New Chat', // This might be renamed later by AI or user
-      name: 'New Chat', // Align with new schema 'name'
-      model: "medium",
-      platform: "mycelia",
-      externalId: newChatId.toString(),
-      type: "private",
-      createdAt: new Date(),
-      lastMessageDate: new Date(),
+    const chatResult = await mongo({
+      action: "insertOne",
+      collection: "chats",
+      doc: {
+        _id: newChatId,
+        userId: auth.principal, // Auth object uses principal as user identifier
+        title: 'New Chat', // This might be renamed later by AI or user
+        name: 'New Chat', // Align with new schema 'name'
+        model: "medium",
+        platform: "mycelia",
+        externalId: newChatId.toString(),
+        type: "private",
+        createdAt: new Date(),
+        lastMessageDate: new Date(),
+      },
     });
     activeChatId = chatResult.insertedId.toString();
   } else {
     // Get Chat Model Config & Verify Ownership
-    const chat = await db.collection("chats").findOne({ 
-      _id: new ObjectId(activeChatId.toString()),
-      userId: auth.principal 
+    const chat = await mongo({
+      action: "findOne",
+      collection: "chats",
+      query: {
+        _id: new ObjectId(activeChatId.toString()),
+        userId: auth.principal
+      },
     });
-    
+
     if (!chat) {
        res.status(404).json({ error: "Chat not found or access denied" });
        return;
@@ -214,16 +223,20 @@ export async function apiChatHandler(req: Request, res: Response) {
   });
   const userPersonId = userPersonResult._id;
   
-  await db.collection("messages").insertOne({
-    _id: userMessageId,
-    chatId: new ObjectId(activeChatId),
-    senderId: userPersonId,
-    text: typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content),
-    platform: "mycelia",
-    externalId: userMessageId.toString(),
-    timestamp: new Date(),
-    createdAt: new Date(),
-    raw: { role: "user", content: lastMessage.content }
+  await mongo({
+    action: "insertOne",
+    collection: "messages",
+    doc: {
+      _id: userMessageId,
+      chatId: new ObjectId(activeChatId),
+      senderId: userPersonId,
+      text: typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content),
+      platform: "mycelia",
+      externalId: userMessageId.toString(),
+      timestamp: new Date(),
+      createdAt: new Date(),
+      raw: { role: "user", content: lastMessage.content }
+    },
   });
 
   // Setup tools with approval requirements for destructive operations
@@ -238,7 +251,11 @@ export async function apiChatHandler(req: Request, res: Response) {
   const config = await getServerConfig();
   try {
     if (config.prompts?.chat_system) {
-        const promptDoc = await db.collection("prompts").findOne({ _id: config.prompts.chat_system });
+        const promptDoc = await mongo({
+          action: "findOne",
+          collection: "prompts",
+          query: { _id: config.prompts.chat_system },
+        });
         if (promptDoc && promptDoc.text) {
             systemPrompt = promptDoc.text;
         }
@@ -308,9 +325,9 @@ export async function apiChatHandler(req: Request, res: Response) {
       },
       async onStepFinish(result) {
         const { content, usage: totalUsage } = result as any;
-        
+
         const assistantMessageId = new ObjectId();
-        
+
         // Get or create Person for the AI assistant
         const assistantPersonResult = await getOrCreatePersonByMessengerId({
           platform: "mycelia",
@@ -319,32 +336,38 @@ export async function apiChatHandler(req: Request, res: Response) {
           auth,
         });
         const assistantPersonId = assistantPersonResult._id;
-        
-        await db.collection("messages").insertOne({
-          _id: assistantMessageId,
-          chatId: new ObjectId(activeChatId),
-          senderId: assistantPersonId,
-          text: typeof content === 'string' ? content : JSON.stringify(content),
-          platform: "mycelia",
-          externalId: assistantMessageId.toString(),
-          timestamp: new Date(),
-          createdAt: new Date(),
-          raw: { 
-            role: "assistant",
-            usage: totalUsage,
-            content
-          }
-        });
-        
-        // Update chat timestamp
-        await db.collection("chats").updateOne(
-            { _id: new ObjectId(activeChatId) },
-            {
-              $set: {
-                lastMessageDate: new Date()
-              }
+
+        await mongo({
+          action: "insertOne",
+          collection: "messages",
+          doc: {
+            _id: assistantMessageId,
+            chatId: new ObjectId(activeChatId),
+            senderId: assistantPersonId,
+            text: typeof content === 'string' ? content : JSON.stringify(content),
+            platform: "mycelia",
+            externalId: assistantMessageId.toString(),
+            timestamp: new Date(),
+            createdAt: new Date(),
+            raw: {
+              role: "assistant",
+              usage: totalUsage,
+              content
             }
-        );
+          },
+        });
+
+        // Update chat timestamp
+        await mongo({
+          action: "updateOne",
+          collection: "chats",
+          query: { _id: new ObjectId(activeChatId) },
+          update: {
+            $set: {
+              lastMessageDate: new Date()
+            }
+          },
+        });
 
         // Generate title for new chats after first assistant response
         if (isNewChat) {
@@ -358,7 +381,7 @@ export async function apiChatHandler(req: Request, res: Response) {
                 : "";
             if (userContent.trim()) {
               // Run title generation in background (don't await)
-              void generateChatTitle(db, activeChatId!, userContent.trim(), auth);
+              void generateChatTitle(mongo, activeChatId!, userContent.trim(), auth);
             }
           }
         }
