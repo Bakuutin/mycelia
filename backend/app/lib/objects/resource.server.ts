@@ -245,22 +245,20 @@ export class ObjectsResource
     return getRootDB();
   }
 
-  // Calculate and cache object counts in the database
-  private async refreshCounts(): Promise<{
+  // Calculate type counts (fast)
+  private async refreshTypeCounts(): Promise<{
     person: number;
     event: number;
     relationship: number;
     promise: number;
     conversation: number;
+    tag: number;
     other: number;
-    orphaned: number;
     total: number;
-    updatedAt: Date;
   }> {
     const db = await this.getRootDB();
     const objectsCollection = db.collection("objects");
 
-    // Calculate type counts with a single aggregation
     const countsPipeline = [
       {
         $group: {
@@ -268,6 +266,7 @@ export class ObjectsResource
           person: { $sum: { $cond: [{ $eq: ["$isPerson", true] }, 1, 0] } },
           event: { $sum: { $cond: [{ $eq: ["$isEvent", true] }, 1, 0] } },
           promise: { $sum: { $cond: [{ $eq: ["$isPromise", true] }, 1, 0] } },
+          tag: { $sum: { $cond: [{ $eq: ["$isTag", true] }, 1, 0] } },
           relationship: {
             $sum: {
               $cond: [
@@ -275,6 +274,7 @@ export class ObjectsResource
                   $and: [
                     { $eq: ["$isRelationship", true] },
                     { $ne: ["$isPromise", true] },
+                    { $ne: ["$isTag", true] },
                   ],
                 },
                 1,
@@ -306,17 +306,34 @@ export class ObjectsResource
     ];
 
     const countsResult = await objectsCollection.aggregate(countsPipeline).toArray();
-    const typeCounts = countsResult[0] || {
+    const result = countsResult[0] as {
+      person: number;
+      event: number;
+      relationship: number;
+      promise: number;
+      conversation: number;
+      tag: number;
+      other: number;
+      total: number;
+    } | undefined;
+    
+    return result || {
       person: 0,
       event: 0,
       relationship: 0,
       promise: 0,
       conversation: 0,
+      tag: 0,
       other: 0,
       total: 0,
     };
+  }
 
-    // Calculate orphaned count (objects not referenced in any relationship)
+  // Calculate orphaned count (slow - uses $lookup)
+  private async refreshOrphanedCount(): Promise<number> {
+    const db = await this.getRootDB();
+    const objectsCollection = db.collection("objects");
+
     const orphanedPipeline = [
       {
         $match: {
@@ -353,7 +370,29 @@ export class ObjectsResource
     ];
 
     const orphanedResult = await objectsCollection.aggregate(orphanedPipeline).toArray();
-    const orphanedCount = orphanedResult[0]?.total ?? 0;
+    return orphanedResult[0]?.total ?? 0;
+  }
+
+  // Calculate and cache all counts
+  private async refreshCounts(): Promise<{
+    person: number;
+    event: number;
+    relationship: number;
+    promise: number;
+    conversation: number;
+    tag: number;
+    other: number;
+    orphaned: number;
+    total: number;
+    updatedAt: Date;
+  }> {
+    const db = await this.getRootDB();
+    
+    // Calculate type counts first (fast)
+    const typeCounts = await this.refreshTypeCounts();
+    
+    // Calculate orphaned count (slow)
+    const orphanedCount = await this.refreshOrphanedCount();
 
     const stats = {
       person: typeCounts.person,
@@ -361,6 +400,7 @@ export class ObjectsResource
       relationship: typeCounts.relationship,
       promise: typeCounts.promise,
       conversation: typeCounts.conversation,
+      tag: typeCounts.tag,
       other: typeCounts.other,
       orphaned: orphanedCount,
       total: typeCounts.total,
@@ -377,6 +417,74 @@ export class ObjectsResource
     return stats;
   }
 
+  // Quick refresh - only type counts, keep existing orphaned from cache
+  private async refreshTypeCountsOnly(): Promise<{
+    person: number;
+    event: number;
+    relationship: number;
+    promise: number;
+    conversation: number;
+    tag: number;
+    other: number;
+    orphaned: number | null;
+    total: number;
+    updatedAt: Date;
+    orphanedLoading?: boolean;
+  }> {
+    const db = await this.getRootDB();
+    
+    // Get existing orphaned count from cache
+    const cached = await db.collection("object_stats").findOne({ _id: "counts" });
+    const existingOrphaned = cached?.orphaned ?? null;
+    
+    // Calculate type counts (fast)
+    const typeCounts = await this.refreshTypeCounts();
+
+    const stats = {
+      person: typeCounts.person,
+      event: typeCounts.event,
+      relationship: typeCounts.relationship,
+      promise: typeCounts.promise,
+      conversation: typeCounts.conversation,
+      tag: typeCounts.tag,
+      other: typeCounts.other,
+      orphaned: existingOrphaned,
+      total: typeCounts.total,
+      updatedAt: new Date(),
+      orphanedLoading: existingOrphaned === null,
+    };
+
+    // Update cache with type counts, preserve orphaned if exists
+    await db.collection("object_stats").updateOne(
+      { _id: "counts" },
+      { 
+        $set: {
+          person: stats.person,
+          event: stats.event,
+          relationship: stats.relationship,
+          promise: stats.promise,
+          conversation: stats.conversation,
+          tag: stats.tag,
+          other: stats.other,
+          total: stats.total,
+          updatedAt: stats.updatedAt,
+          stale: false,
+        }
+      },
+      { upsert: true }
+    );
+
+    // Calculate orphaned count in background (don't await)
+    this.refreshOrphanedCount().then(async (orphaned) => {
+      await db.collection("object_stats").updateOne(
+        { _id: "counts" },
+        { $set: { orphaned } }
+      );
+    }).catch(err => console.error("Failed to refresh orphaned count:", err));
+
+    return stats;
+  }
+
   // Get cached counts, or calculate if not exists
   private async getCachedCounts(): Promise<{
     person: number;
@@ -384,6 +492,7 @@ export class ObjectsResource
     relationship: number;
     promise: number;
     conversation: number;
+    tag: number;
     other: number;
     orphaned: number;
     total: number;
@@ -399,6 +508,7 @@ export class ObjectsResource
       relationship: cached.relationship,
       promise: cached.promise,
       conversation: cached.conversation,
+      tag: cached.tag || 0,
       other: cached.other,
       orphaned: cached.orphaned,
       total: cached.total,
@@ -1080,16 +1190,25 @@ export class ObjectsResource
       case "getCounts": {
         // Get cached counts or calculate if not available
         if (input.forceRefresh) {
+          // Full refresh including orphaned count
           return await this.refreshCounts();
         }
 
         const cached = await this.getCachedCounts();
-        if (cached && !cached.stale) {
+        if (cached) {
+          // Return cached data immediately (even if stale)
+          // If stale, trigger background refresh
+          if (cached.stale) {
+            // Fire and forget - don't await
+            this.refreshCounts().catch(err => 
+              console.error("Background counts refresh failed:", err)
+            );
+          }
           return cached;
         }
 
-        // Cache doesn't exist or is stale, recalculate
-        return await this.refreshCounts();
+        // No cache exists - do quick refresh (type counts only, orphaned in background)
+        return await this.refreshTypeCountsOnly();
       }
 
       default:
