@@ -703,7 +703,7 @@ export class ObjectsResource
         );
 
         // Invalidate counts cache if type-related fields changed
-        const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation"];
+        const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation", "isTag"];
         if (typeFields.includes(input.field) || input.field.startsWith("relationship")) {
           await this.invalidateCountsCache(auth);
         }

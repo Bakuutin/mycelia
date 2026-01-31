@@ -1049,13 +1049,20 @@ const ObjectsPage = () => {
   const toggleStar = useCallback(async (objectId: string, currentStarred: boolean) => {
     const newStarred = !currentStarred;
     
-    // Store the removed object for undo
+    // Store the removed object for undo - we'll capture it via functional update
     let removedObject: ObjectWithRelations | undefined;
+    // Store the found object when adding to starred
+    let foundObject: ObjectWithRelations | undefined;
     
     // Optimistically update the UI - update both objectsByType and starredObjects
     setObjectsByType((prev) => {
       const updated = { ...prev };
       for (const type of Object.keys(updated) as ObjectType[]) {
+        // While iterating, find the object if we're adding to starred
+        if (newStarred && !foundObject) {
+          const obj = updated[type].find((o) => o._id.toString() === objectId);
+          if (obj) foundObject = obj;
+        }
         updated[type] = updated[type].map((obj) =>
           obj._id.toString() === objectId
             ? { ...obj, starred: newStarred }
@@ -1067,25 +1074,22 @@ const ObjectsPage = () => {
     
     // Update starred objects list
     if (newStarred) {
-      // Find the object from objectsByType and add to starred
+      // Add to starred using the object found during objectsByType update
+      // Use a small delay to ensure foundObject is captured from the synchronous setObjectsByType callback
       setStarredObjects((prev) => {
         const alreadyExists = prev.some((obj) => obj._id.toString() === objectId);
         if (alreadyExists) return prev;
-        
-        // Find the object in objectsByType
-        for (const type of Object.keys(objectsByType) as ObjectType[]) {
-          const found = objectsByType[type].find((obj) => obj._id.toString() === objectId);
-          if (found) {
-            return [{ ...found, starred: true }, ...prev];
-          }
+        if (foundObject) {
+          return [{ ...foundObject, starred: true }, ...prev];
         }
         return prev;
       });
     } else {
-      // Find and store the object before removing (for undo)
-      removedObject = starredObjects.find((obj) => obj._id.toString() === objectId);
-      // Remove from starred
-      setStarredObjects((prev) => prev.filter((obj) => obj._id.toString() !== objectId));
+      // Find and store the object before removing (for undo) using functional update
+      setStarredObjects((prev) => {
+        removedObject = prev.find((obj) => obj._id.toString() === objectId);
+        return prev.filter((obj) => obj._id.toString() !== objectId);
+      });
     }
 
     // Helper to revert changes
