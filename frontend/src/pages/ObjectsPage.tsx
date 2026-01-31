@@ -191,6 +191,7 @@ interface ObjectCardProps {
     referencesToCount?: number;
     referencesFromCount?: number;
     tags?: Array<{ _id: string; name?: string; icon?: unknown; color?: string }>;
+    linkedObjectsCount?: number; // For tags: number of objects linked to this tag
   };
   searchQuery: string;
   showType?: boolean;
@@ -264,6 +265,12 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
                 {showType && (
                   <Badge variant="outline" className={`text-[10px] px-1 py-0 ${typeConfig.color}`}>
                     {objectType === "other" ? "Object" : objectType}
+                  </Badge>
+                )}
+                {/* Show linked objects count for tags */}
+                {objectType === "tag" && object.linkedObjectsCount !== undefined && (
+                  <Badge variant="secondary" className="text-[10px] px-1 py-0">
+                    {object.linkedObjectsCount} {object.linkedObjectsCount === 1 ? "object" : "objects"}
                   </Badge>
                 )}
               </div>
@@ -379,6 +386,7 @@ type ObjectWithRelations = ObjectModel & {
   referencesToCount?: number;
   referencesFromCount?: number;
   tags?: Array<{ _id: string; name?: string; icon?: unknown; color?: string }>;
+  linkedObjectsCount?: number; // For tags: number of objects linked to this tag
 };
 
 const ITEMS_PER_TYPE = 9; // Initial items per type (3 rows of 3)
@@ -603,7 +611,7 @@ const ObjectsPage = () => {
       pipeline.push({ $limit: limit });
 
       // Now add relationship lookups only on the limited documents
-      if (type === "relationship" || type === "tag") {
+      if (type === "relationship") {
         pipeline.push({
           $lookup: {
             from: "objects",
@@ -630,6 +638,36 @@ const ObjectsPage = () => {
           $unwind: {
             path: "$objectObject",
             preserveNullAndEmptyArrays: true,
+          },
+        });
+      }
+      
+      // For tags, count how many objects are linked to this tag
+      if (type === "tag") {
+        pipeline.push({
+          $lookup: {
+            from: "objects",
+            let: { tagId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  isTag: true,
+                  $expr: { $eq: ["$relationship.subject", "$$tagId"] },
+                },
+              },
+            ],
+            as: "linkedTagRelationships",
+          },
+        });
+        pipeline.push({
+          $addFields: {
+            linkedObjectsCount: { $size: "$linkedTagRelationships" },
+          },
+        });
+        // Clean up the array - we only need the count
+        pipeline.push({
+          $project: {
+            linkedTagRelationships: 0,
           },
         });
       }
