@@ -1309,20 +1309,7 @@ const ObjectsPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold">Objects</h1>
-          {starredObjects.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => document.getElementById('starred-section')?.scrollIntoView({ behavior: 'smooth' })}
-              className="text-yellow-500 hover:text-yellow-600"
-            >
-              <Star className="w-5 h-5 fill-current" />
-              <span className="ml-1">{starredObjects.length}</span>
-            </Button>
-          )}
-        </div>
+        <h1 className="text-3xl font-bold">Objects</h1>
         <Button asChild>
           <Link to="/objects/create">
             <Plus className="w-4 h-4 mr-2" />
