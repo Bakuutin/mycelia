@@ -184,7 +184,6 @@ defineFixture({
     const config = new ConfigResource();
     resource.getRootDB = async () => isolatedDB;
     fs.getRootDB = async () => isolatedDB;
-    objects.getRootDB = async () => isolatedDB;
     defaultResourceManager.registerResource(resource);
     defaultResourceManager.registerResource(fs);
     defaultResourceManager.registerResource(timeline);

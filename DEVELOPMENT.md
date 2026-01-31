@@ -34,6 +34,8 @@ Example:
 NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
 ```
 
+
+
 For more details on networking and SSL setup, see **[NETWORKING.md](docs/NETWORKING.md)**.
 
 ## Frontend Development
@@ -59,6 +61,8 @@ deno task build
 # Preview production build
 deno task preview
 ```
+
+for mycelia url during development use: `http://localhost:3210` (non-https nginx port)
 
 ### Tech Stack
 - **Deno** runtime with npm compatibility

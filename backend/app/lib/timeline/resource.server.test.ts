@@ -26,7 +26,6 @@ Deno.test(
 
     const result = await timeline({
       action: "recalculate",
-      all: false,
       start: new Date("2024-01-01T00:00:00.000Z"),
       end: new Date("2024-01-01T01:00:00.000Z"),
     });
