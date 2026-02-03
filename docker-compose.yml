@@ -8,7 +8,7 @@ services:
       - --bind 0.0.0.0
     volumes:
       - ${REDIS_HOST_PATH:-redis_data}:/data
-    restart: always
+    restart: unless-stopped
     environment:
       - REDIS_PASSWORD
   mongo:
@@ -20,7 +20,7 @@ services:
       - ./misc/mongo/mongod.conf:/etc/mongod.conf:ro
       - ./misc/mongo/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
       - ./misc/mongo/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
-    restart: always
+    restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME
       - MONGO_INITDB_ROOT_PASSWORD
@@ -31,7 +31,7 @@ services:
         limits:
           cpus: '2.0'
           memory: 4G
-    
+
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
   #   entrypoint: ["/mongot-entrypoint.sh"]
@@ -51,7 +51,7 @@ services:
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
     expose:
       - "8080"
-    restart: always
+    restart: unless-stopped
     volumes:
       - ./frontend:/app
       - ./myceliasdk:/app/myceliasdk
@@ -63,7 +63,7 @@ services:
       dockerfile: ./backend/Dockerfile
     expose:
       - "5173"
-    restart: always
+    restart: unless-stopped
     command: deno task ${BACKEND_TASK:-start}
     env_file:
       - .env
@@ -94,7 +94,7 @@ services:
     volumes:
       - ./python:/app
       - ${WORKER_HOST_PATH:-worker_data}:/root/.cache
-    restart: always
+    restart: unless-stopped
     deploy:
       resources:
         limits:
@@ -118,7 +118,7 @@ services:
     depends_on:
       - frontend
       - backend
-    restart: always
+    restart: unless-stopped
 
 
 
