@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
-import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { EJSON } from "bson";
 import { ObjectId } from "mongodb";
 
@@ -75,18 +75,21 @@ interface PipelineStats {
 
 export async function apiAudioPipelineHandler(req: Request, res: Response) {
   try {
-    await authenticateOr401(req, res);
+    const auth = await authenticateOr401(req, res);
 
     const limit = parseInt(req.query.limit as string) || 10;
-    const db = await getRootDB();
+    const mongo = getMongoResource(auth);
 
     // Fetch source files
-    const sourceFiles = await db
-      .collection("source_files")
-      .find({ "metadata.source": "websocket" })
-      .sort({ start: -1 })
-      .limit(limit + 1)
-      .toArray();
+    const sourceFiles = await mongo({
+      action: "find",
+      collection: "source_files",
+      query: { "metadata.source": "websocket" },
+      options: {
+        sort: { start: -1 },
+        limit: limit + 1,
+      },
+    }) as any[];
 
     const hasMore = sourceFiles.length > limit;
     const filesToProcess = sourceFiles.slice(0, limit);
@@ -106,48 +109,61 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
           conversationChunks,
         ] = await Promise.all([
           // Count queries
-          db.collection("audio_chunks").countDocuments({
-            original_id: sourceFileId,
+          mongo({
+            action: "count",
+            collection: "audio_chunks",
+            query: { original_id: sourceFileId },
           }),
-          db.collection("audio_chunks").countDocuments({
-            original_id: sourceFileId,
-            "vad.ran_at": { $exists: true },
+          mongo({
+            action: "count",
+            collection: "audio_chunks",
+            query: {
+              original_id: sourceFileId,
+              "vad.ran_at": { $exists: true },
+            },
           }),
-          db.collection("audio_chunks").countDocuments({
-            original_id: sourceFileId,
-            "vad.has_speech": true,
+          mongo({
+            action: "count",
+            collection: "audio_chunks",
+            query: {
+              original_id: sourceFileId,
+              "vad.has_speech": true,
+            },
           }),
           // Find queries
-          db
-            .collection("transcription_sequences")
-            .find({ original_id: sourceFileId })
-            .sort({ start: -1 })
-            .toArray(),
-          db
-            .collection("transcriptions")
-            .find({ original: sourceFileId })
-            .sort({ start: 1 })
-            .limit(20)
-            .toArray(),
-          db
-            .collection("conversation_chunks")
-            .find({ original_id: sourceFileId })
-            .sort({ createdAt: -1 })
-            .toArray(),
+          mongo({
+            action: "find",
+            collection: "transcription_sequences",
+            query: { original_id: sourceFileId },
+            options: { sort: { start: -1 } },
+          }),
+          mongo({
+            action: "find",
+            collection: "transcriptions",
+            query: { original: sourceFileId },
+            options: { sort: { start: 1 }, limit: 20 },
+          }),
+          mongo({
+            action: "find",
+            collection: "conversation_chunks",
+            query: { original_id: sourceFileId },
+            options: { sort: { createdAt: -1 } },
+          }),
         ]);
 
         // Get conversations for this session via conversation chunks
         const chunkIds = conversationChunks.map((c: any) => c._id.toString());
         const conversations =
           chunkIds.length > 0
-            ? await db
-                .collection("objects")
-                .find({
+            ? await mongo({
+                action: "find",
+                collection: "objects",
+                query: {
                   isConversation: true,
                   "metadata.extractedWith.chunkId": { $in: chunkIds },
-                })
-                .sort({ createdAt: -1 })
-                .toArray()
+                },
+                options: { sort: { createdAt: -1 } },
+              })
             : [];
 
         return {
@@ -213,23 +229,41 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       convChunksProcessing,
       totalConversations,
     ] = await Promise.all([
-      db.collection("audio_chunks").countDocuments({ vad: null }),
-      db
-        .collection("transcription_sequences")
-        .countDocuments({ state: "ready" }),
-      db
-        .collection("transcription_sequences")
-        .countDocuments({ state: "processing" }),
-      db
-        .collection("transcription_sequences")
-        .countDocuments({ state: "error" }),
-      db
-        .collection("conversation_chunks")
-        .countDocuments({ state: "ready" }),
-      db
-        .collection("conversation_chunks")
-        .countDocuments({ state: "processing" }),
-      db.collection("objects").countDocuments({ isConversation: true }),
+      mongo({
+        action: "count",
+        collection: "audio_chunks",
+        query: { vad: null },
+      }),
+      mongo({
+        action: "count",
+        collection: "transcription_sequences",
+        query: { state: "ready" },
+      }),
+      mongo({
+        action: "count",
+        collection: "transcription_sequences",
+        query: { state: "processing" },
+      }),
+      mongo({
+        action: "count",
+        collection: "transcription_sequences",
+        query: { state: "error" },
+      }),
+      mongo({
+        action: "count",
+        collection: "conversation_chunks",
+        query: { state: "ready" },
+      }),
+      mongo({
+        action: "count",
+        collection: "conversation_chunks",
+        query: { state: "processing" },
+      }),
+      mongo({
+        action: "count",
+        collection: "objects",
+        query: { isConversation: true },
+      }),
     ]);
 
     const stats: PipelineStats = {
