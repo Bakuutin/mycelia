@@ -371,3 +371,25 @@ mycelia/
 - **Workers/Jobs**: Asynchronous background processing in isolated processes
 - Workers consume resources via JWT-authenticated HTTP calls
 
+---
+
+### Audio Processing
+
+#### [Speaker Identification](SPEAKER_IDENTIFICATION.md)
+**Purpose**: Guide for enrolling voices and recognizing speakers in recordings
+
+**Contents**:
+- Architecture overview (profiles → diarization → transcripts)
+- Setup steps (GPU deployment, migrations, feature flags)
+- Voice enrollment (recording, uploading samples)
+- Retroactive matching (processing existing recordings)
+- Configuration (similarity threshold, caching)
+- Technical details (embedding model, matching algorithm, database schema)
+- Troubleshooting common issues
+
+**Key Features**:
+- Enroll speaker voices with 10-30 second audio samples
+- Automatic speaker labeling during diarization
+- Named speakers in transcripts instead of "SPEAKER_00"
+- Retroactive matching for historical recordings
+

@@ -16,11 +16,26 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from simple_speaker_recognition.core.audio_backend import AudioBackend
 from simple_speaker_recognition.core.seeded_clustering import SeededAgglomerativeClustering
-from simple_speaker_recognition.api.routers import (
-    enrollment_router,
-    speakers_router,
-    identification_router,
-)
+
+# Load .env from root directory if running locally
+# This allows using HF_TOKEN from the main project .env
+def _load_dotenv():
+    """Try to load .env from project root for local development."""
+    try:
+        from dotenv import load_dotenv
+        # Try project root first (../../.env from this file)
+        root_env = Path(__file__).parent.parent.parent.parent.parent / ".env"
+        if root_env.exists():
+            load_dotenv(root_env)
+            return
+        # Try diarizator root
+        diarizator_env = Path(__file__).parent.parent.parent.parent / ".env"
+        if diarizator_env.exists():
+            load_dotenv(diarizator_env)
+    except ImportError:
+        pass  # python-dotenv not installed, skip
+
+_load_dotenv()
 
 # Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -80,10 +95,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PyAnnote Diarization Service", version="1.0.0", lifespan=lifespan)
 
-# Mount routers for speaker management (previously unmounted/dead code)
-app.include_router(enrollment_router, prefix="/api", tags=["enrollment"])
-app.include_router(speakers_router, prefix="/api", tags=["speakers"])
-app.include_router(identification_router, prefix="/api", tags=["identification"])
+# Note: Speaker profiles are managed via MongoDB in the main Mycelia backend.
+# The legacy SQLite/FAISS routers are not mounted. Only /diarize and /embed are exposed.
 
 
 @app.get("/health")

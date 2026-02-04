@@ -40,17 +40,6 @@ export async function up(db: Db, _client: MongoClient): Promise<void> {
   );
   console.log("  + Created compound index on matched_speaker.profile_id + start");
 
-  // Index for finding unmatched diarizations (for retroactive matching)
-  // This uses a partial filter expression to only index documents where matched_speaker doesn't exist
-  await diarizations.createIndex(
-    { start: 1 },
-    { 
-      name: "start_unmatched",
-      partialFilterExpression: { matched_speaker: { $exists: false } }
-    }
-  );
-  console.log("  + Created partial index for unmatched diarizations");
-
   console.log("✓ diarizations matched_speaker indexes ready");
 }
 
@@ -64,9 +53,6 @@ export async function down(db: Db, _client: MongoClient): Promise<void> {
   });
   await diarizations.dropIndex("matched_speaker_profile_id_start").catch(() => {
     console.log("  - Index matched_speaker_profile_id_start doesn't exist");
-  });
-  await diarizations.dropIndex("start_unmatched").catch(() => {
-    console.log("  - Index start_unmatched doesn't exist");
   });
 
   console.log("✓ matched_speaker indexes dropped");
