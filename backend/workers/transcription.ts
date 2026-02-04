@@ -25,8 +25,15 @@ const capability: JobCapability = {
   inputSchema: z.toJSONSchema(schema),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
-    result: z.literal("transcribed").optional(),
+    result: z.string().optional(),
     reason: z.string().optional(),
+    processed: z.number().optional(),
+    hasMore: z.boolean().optional(),
+    transcriptionId: z.string().nullable().optional(),
+    audioDuration: z.number().optional(),
+    wordCount: z.number().optional(),
+    segmentCount: z.number().optional(),
+    textPreview: z.string().optional(),
   })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
@@ -178,6 +185,9 @@ const capability: JobCapability = {
           textPreview: transcriptionText.slice(0, 100)
         });
 
+        // Calculate word count
+        const wordCount = transcriptionText.split(/\s+/).filter((w: string) => w.length > 0).length;
+
         const transcriptionDoc = {
           original: sequence.original_id,
           start: sequence.start,
@@ -186,14 +196,24 @@ const capability: JobCapability = {
           segments: filteredSegments,
           text: transcriptionText,
           createdAt: new Date(),
+          // Metadata for display
+          metadata: {
+            model: "whisper",
+            processingTimeMs: transcriptDuration,
+            wordCount,
+            segmentCount: filteredSegments.length,
+            language: language || "auto",
+            jobId: job.id,
+          },
         };
 
-        await mongo({
+        const insertResult = await mongo({
           action: "insertOne",
           collection: "transcriptions",
           doc: transcriptionDoc,
         });
-        log("INFO", `Transcription saved`, { sequenceId: seqId });
+        const transcriptionId = insertResult?.insertedId?.toString() || null;
+        log("INFO", `Transcription saved`, { sequenceId: seqId, transcriptionId });
 
         // 8. Mark chunks as transcribed
         // If it's a full sequence (MAX_SEQUENCE_LENGTH chunks), we don't mark the last chunk as transcribed
@@ -236,7 +256,15 @@ const capability: JobCapability = {
         });
 
         await job.updateProgress({ stage: "completed" });
-        return { status: "success", result: "transcribed" };
+        return { 
+          status: "success", 
+          result: "transcribed",
+          transcriptionId,
+          audioDuration: duration,
+          wordCount,
+          segmentCount: filteredSegments.length,
+          textPreview: transcriptionText.slice(0, 200),
+        };
 
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
