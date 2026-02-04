@@ -73,8 +73,12 @@ export async function setupHandler(req: Request, res: Response) {
     });
 
     if (existingKeys && existingKeys.length > 0) {
-      // API keys already exist, refuse to create new ones
-      res.json({ created: false });
+      // API keys already exist, refuse to create new ones via web UI
+      res.status(400).json({ 
+        created: false,
+        error: "keys_exist",
+        message: "API keys already exist. Generate new keys via CLI.",
+      });
       return;
     }
 

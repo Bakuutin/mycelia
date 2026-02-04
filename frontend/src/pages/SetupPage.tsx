@@ -2,12 +2,12 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exchangeApiKeyForJWT } from "@/lib/auth";
-import { Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Terminal, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type SetupStatus = "idle" | "verifying" | "creating_new" | "success" | "error";
+type SetupStatus = "idle" | "verifying" | "creating_new" | "success" | "error" | "keys_exist";
 
 interface SetupResponse {
   created: boolean;
@@ -107,11 +107,17 @@ export default function SetupPage() {
         body: JSON.stringify({ create: true }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
+      const data: SetupResponse = await response.json();
+
+      // Handle keys_exist error specifically
+      if (data.error === "keys_exist") {
+        setStatus("keys_exist");
+        return;
       }
 
-      const data: SetupResponse = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Server returned ${response.status}`);
+      }
 
       if (data.created && data.clientId && data.clientSecret) {
         setClientId(data.clientId);
@@ -132,6 +138,15 @@ export default function SetupPage() {
   };
 
   const isLoading = status === "verifying" || status === "creating_new";
+  const [copiedCommand, setCopiedCommand] = useState(false);
+
+  const copyCommand = async (command: string) => {
+    await navigator.clipboard.writeText(command);
+    setCopiedCommand(true);
+    setTimeout(() => setCopiedCommand(false), 2000);
+  };
+
+  const isRemoteServer = !localEndpoint.includes("localhost") && !localEndpoint.includes("127.0.0.1");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -164,6 +179,82 @@ export default function SetupPage() {
               <p className="text-slate-400 text-sm mt-2">
                 Continuing to next step...
               </p>
+            </div>
+          ) : status === "keys_exist" ? (
+            <div className="space-y-6">
+              <div className="text-center">
+                <Terminal className="w-12 h-12 text-purple-400 mx-auto mb-4" />
+                <h2 className="text-white text-lg font-medium mb-2">
+                  Generate Credentials via CLI
+                </h2>
+                <p className="text-slate-400 text-sm">
+                  API keys already exist on this server. Generate new credentials using the command line.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {isRemoteServer ? (
+                  <>
+                    <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                      <p className="text-amber-300 text-sm">
+                        <strong>Remote server detected.</strong> SSH into your server and run:
+                      </p>
+                    </div>
+                    <div className="relative">
+                      <pre className="bg-slate-900/80 rounded-lg p-4 text-sm font-mono text-slate-300 overflow-x-auto">
+                        <code>cd ~/mycelia && docker compose exec backend deno run -A server.ts token-create</code>
+                      </pre>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="absolute top-2 right-2 text-slate-400 hover:text-white"
+                        onClick={() => copyCommand("cd ~/mycelia && docker compose exec backend deno run -A server.ts token-create")}
+                      >
+                        {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-slate-400 text-sm">
+                      Run this command in your terminal:
+                    </p>
+                    <div className="relative">
+                      <pre className="bg-slate-900/80 rounded-lg p-4 text-sm font-mono text-slate-300 overflow-x-auto">
+                        <code>docker compose exec backend deno run -A server.ts token-create</code>
+                      </pre>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="absolute top-2 right-2 text-slate-400 hover:text-white"
+                        onClick={() => copyCommand("docker compose exec backend deno run -A server.ts token-create")}
+                      >
+                        {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                  </>
+                )}
+
+                <div className="text-slate-400 text-sm space-y-2">
+                  <p>This will output your credentials:</p>
+                  <pre className="bg-slate-900/80 rounded-lg p-3 text-xs font-mono text-slate-500">
+{`MYCELIA_CLIENT_ID=abc123...
+MYCELIA_TOKEN=mycelia_xyz...`}
+                  </pre>
+                </div>
+              </div>
+
+              <div className="border-t border-white/10 pt-4">
+                <Button
+                  type="button"
+                  onClick={() => setStatus("idle")}
+                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-5 rounded-xl"
+                >
+                  I have my credentials
+                </Button>
+              </div>
             </div>
           ) : (
             <form onSubmit={(e) => { e.preventDefault(); verifyAndSaveCredentials(); }}>
@@ -260,15 +351,26 @@ export default function SetupPage() {
                     </>
                   ) : (
                     <>
-                      <Sparkles className="w-5 h-5 mr-2" />
-                      Generate New API Keys
+                      <Terminal className="w-5 h-5 mr-2" />
+                      First-time setup
                     </>
                   )}
                 </Button>
 
-                <p className="text-slate-500 text-xs text-center mt-4">
-                  Find these values in your <code className="text-slate-400">.env</code> file
-                </p>
+                <div className="text-slate-500 text-xs text-center mt-4 space-y-1">
+                  <p>
+                    Find these values in your <code className="text-slate-400">.env</code> file
+                  </p>
+                  <p className="text-slate-600">
+                    Don't have credentials? <button
+                      type="button"
+                      onClick={() => setStatus("keys_exist")}
+                      className="text-purple-400 hover:text-purple-300 underline underline-offset-2"
+                    >
+                      See how to generate them
+                    </button>
+                  </p>
+                </div>
               </div>
             </form>
           )}
