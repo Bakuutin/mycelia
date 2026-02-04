@@ -9,11 +9,21 @@ This guide is for developers who want to contribute to Mycelia or run it in deve
 The fastest way to get a development environment with hot reload:
 
 ```bash
-# Clone and setup
+# Enable dev mode for both frontend and backend
 echo "FRONTEND_MODE=dev" >> .env
+echo "BACKEND_TASK=dev" >> .env
 docker compose build frontend
 docker compose up -d
 ```
+
+#### Development Mode Variables
+
+| Variable | Default | Dev Value | Effect |
+|----------|---------|-----------|--------|
+| `FRONTEND_MODE` | `prod` | `dev` | Enables Vite hot reload instead of nginx static build |
+| `BACKEND_TASK` | `start` | `dev` | Enables file watcher for auto-restart on code changes |
+
+Both variables are optional and default to production mode if not set.
 
 Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` dependencies, you might still need to run `docker compose build` again
 
