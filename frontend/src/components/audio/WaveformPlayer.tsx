@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Play, Pause, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { apiClient } from "@/lib/api";
 
 interface WaveformPlayerProps {
   audioUrl: string;
@@ -18,6 +19,7 @@ export function WaveformPlayer({ audioUrl, duration: initialDuration, className 
   const [error, setError] = useState<string | null>(null);
   
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
 
@@ -28,27 +30,27 @@ export function WaveformPlayer({ audioUrl, duration: initialDuration, className 
       setError(null);
       
       try {
-        // Create audio element for playback
-        const audio = new Audio(audioUrl);
+        // Fetch audio with auth headers
+        const response = await apiClient.fetch(audioUrl);
+        const arrayBuffer = await response.arrayBuffer();
+
+        // Create a blob URL for the Audio element
+        const blob = new Blob([arrayBuffer], { type: response.headers.get("content-type") || "audio/wav" });
+        const blobUrl = URL.createObjectURL(blob);
+        blobUrlRef.current = blobUrl;
+
+        // Create audio element for playback using blob URL
+        const audio = new Audio(blobUrl);
         audioRef.current = audio;
-        
+
         audio.addEventListener("loadedmetadata", () => {
           setDuration(audio.duration);
         });
-        
+
         audio.addEventListener("ended", () => {
           setIsPlaying(false);
           setCurrentTime(0);
         });
-        
-        audio.addEventListener("error", () => {
-          setError("Failed to load audio");
-          setIsLoading(false);
-        });
-        
-        // Fetch and decode audio for waveform
-        const response = await fetch(audioUrl);
-        const arrayBuffer = await response.arrayBuffer();
         
         const audioContext = new AudioContext();
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
@@ -91,6 +93,10 @@ export function WaveformPlayer({ audioUrl, duration: initialDuration, className 
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
+      }
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
       }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
