@@ -9,11 +9,21 @@ This guide is for developers who want to contribute to Mycelia or run it in deve
 The fastest way to get a development environment with hot reload:
 
 ```bash
-# Clone and setup
+# Enable dev mode for both frontend and backend
 echo "FRONTEND_MODE=dev" >> .env
+echo "BACKEND_TASK=dev" >> .env
 docker compose build frontend
 docker compose up -d
 ```
+
+#### Development Mode Variables
+
+| Variable | Default | Dev Value | Effect |
+|----------|---------|-----------|--------|
+| `FRONTEND_MODE` | `prod` | `dev` | Enables Vite hot reload instead of nginx static build |
+| `BACKEND_TASK` | `start` | `dev` | Enables file watcher for auto-restart on code changes |
+
+Both variables are optional and default to production mode if not set.
 
 Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` dependencies, you might still need to run `docker compose build` again
 
@@ -95,59 +105,6 @@ deno task dev
 deno run -A server.ts token-create
 ```
 
-## Python Tooling
-
-The Python services handle audio import, STT, and conversation extraction.
-
-### Audio Import Daemon
-
-```bash
-cd python
-uv run daemon.py
-```
-
-The daemon auto-detects:
-- Apple Voice Memos (if `CloudRecordings.db` exists)
-- Google Drive Easy Voice Recorder
-- Local audio folder (`~/Library/mycelia/audio`)
-
-**Environment variables** (optional, set in `.env`):
-- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
-- `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
-- `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
-- `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
-
-**Logging:** `~/Library/mycelia/logs/daemon.log`
-
-### Speech-to-Text (STT)
-
-```bash
-cd python
-
-# Transcribe queued audio
-uv run stt.py [--server https://your-stt-server.com/]
-
-# Check backlog without processing
-uv run stt.py --count
-```
-
-See [backend/README.md](backend/README.md#speech-to-text-stt) for Whisper server setup.
-
-### Conversation Extraction
-
-```bash
-cd python
-uv run python -m convos.cli \
-  --limit 5 \
-  --model small
-```
-
-**Flags:**
-- `--limit <n>` - Max conversation chunks to process
-- `--not-later-than <unix_ts>` - Only process transcripts before this time
-- `--model <small|medium|large>` - LLM size (default: small)
-
-**Logging:** `~/Library/mycelia/logs/convos.log`
 
 ## Inference Stack (GPU)
 

@@ -54,14 +54,55 @@ your own words.
 git clone https://github.com/mycelia-tech/mycelia.git
 cd mycelia
 
-cp .env.example .env
-docker compose pull
-docker compose up -d
+./scripts/setup.sh --start
 ```
+
+The setup script automatically:
+- Creates `.env` from `.env.example`
+- Generates a secure `SECRET_KEY`
+- Starts all services with Docker Compose
 
 Open [https://localhost:4433](https://localhost:4433) in your browser.
 
+#### CLI/Python Daemon Users
+
+If you need API tokens in `.env` (for Python daemon or CLI access):
+
+```bash
+./scripts/setup.sh --with-tokens --start
+```
+
+This starts MongoDB temporarily to generate `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN`.
+
+#### Syncing After Updates
+
+After pulling updates, new environment variables may be added to `.env.example`:
+
+```bash
+./scripts/sync-env.sh           # Interactive - prompts before adding
+./scripts/sync-env.sh --dry-run # Preview changes without modifying
+```
+
 > **Note**: For local development, Mycelia uses a self-signed certificate. You may need to click "Advanced" and "Proceed" in your browser. See [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and SSL.
+
+### Import Existing Audio Files
+
+```bash
+cd python
+uv run daemon.py
+```
+
+The daemon can import:
+- Apple Voice Memos
+- Google Drive Folders
+- Local Audio Folders
+
+**Environment variables** (optional, set in `.env`):
+- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
+- `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
+- `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
+- `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
+
 
 ### Configuration
 
