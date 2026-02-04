@@ -214,6 +214,9 @@ export default function SetupPage() {
                         {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                       </Button>
                     </div>
+                    <p className="text-slate-500 text-xs">
+                      Server endpoint: <code className="text-purple-400">{localEndpoint}</code>
+                    </p>
                   </>
                 ) : (
                   <>
@@ -222,8 +225,8 @@ export default function SetupPage() {
                     </p>
                     
                     {/* Docker option */}
-                    <div className="space-y-1">
-                      <p className="text-slate-500 text-xs">If running with Docker:</p>
+                    <div className="space-y-2 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
+                      <p className="text-slate-300 text-xs font-medium">Docker (recommended)</p>
                       <div className="relative">
                         <pre className="bg-slate-900/80 rounded-lg p-3 text-sm font-mono text-slate-300 overflow-x-auto">
                           <code>docker compose exec backend deno run -A server.ts token-create --name browser-ui</code>
@@ -238,11 +241,14 @@ export default function SetupPage() {
                           {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                         </Button>
                       </div>
+                      <p className="text-slate-500 text-xs">
+                        Server endpoint: <code className="text-purple-400">https://localhost:4433</code>
+                      </p>
                     </div>
                     
                     {/* Non-Docker option */}
-                    <div className="space-y-1">
-                      <p className="text-slate-500 text-xs">If running with <code className="text-slate-400">deno task dev</code>:</p>
+                    <div className="space-y-2 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
+                      <p className="text-slate-300 text-xs font-medium">Local development (deno task dev)</p>
                       <div className="relative">
                         <pre className="bg-slate-900/80 rounded-lg p-3 text-sm font-mono text-slate-300 overflow-x-auto">
                           <code>cd backend && deno run -A server.ts token-create --name browser-ui</code>
@@ -257,6 +263,9 @@ export default function SetupPage() {
                           {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                         </Button>
                       </div>
+                      <p className="text-slate-500 text-xs">
+                        Server endpoint: <code className="text-purple-400">http://localhost:5173</code>
+                      </p>
                     </div>
                   </>
                 )}
