@@ -234,8 +234,14 @@ class AudioBackend:
         # Get duration for clamping
         file_duration = waveform.shape[1] / 16000.0
         
-        # Crop if start/end specified
-        if start is not None and end is not None:
+        # Crop if start and/or end specified
+        if start is not None or end is not None:
+            # Default start to 0 if only end is provided
+            if start is None:
+                start = 0.0
+            # Default end to file duration if only start is provided
+            if end is None:
+                end = file_duration
             # Clamp segment bounds to file duration
             start_clamped = max(0.0, min(start, file_duration))
             end_clamped = max(start_clamped, min(end, file_duration))
