@@ -76,18 +76,11 @@ def _get_audio_from_base64(data: str) -> bytes:
 
 def _get_audio_from_gridfs(file_id: str, bucket: str = "voice_samples") -> bytes:
     """Retrieve audio data from GridFS bucket."""
-    # #region agent log
-    logger.info(f"[DEBUG] _get_audio_from_gridfs called: file_id={file_id}, bucket={bucket}")
-    # #endregion
     result = call_resource("fs", {
         "action": "download",
         "bucket": bucket,
         "id": file_id,
     })
-    # #region agent log
-    result_info = {"type": str(type(result)), "keys": list(result.keys())[:10] if isinstance(result, dict) else None}
-    logger.info(f"[DEBUG] fs download result: {result_info}")
-    # #endregion
     
     if result is None:
         raise ValueError(f"Voice sample not found in GridFS: {file_id}")
@@ -99,15 +92,12 @@ def _get_audio_from_gridfs(file_id: str, bucket: str = "voice_samples") -> bytes
         return base64.b64decode(result["$binary"]["base64"])
     elif isinstance(result, dict):
         # Uint8Array serialized as dict with numeric string keys: {'0': 82, '1': 73, ...}
-        # Check if keys are numeric strings
         keys = list(result.keys())
         if keys and all(k.isdigit() for k in keys[:10]):
-            # Convert dict with numeric keys to bytes
             max_idx = max(int(k) for k in keys)
             byte_array = bytearray(max_idx + 1)
             for k, v in result.items():
                 byte_array[int(k)] = v
-            logger.info(f"[DEBUG] Converted dict to bytes, length={len(byte_array)}")
             return bytes(byte_array)
         else:
             raise ValueError(f"Unexpected dict format from GridFS: keys sample={keys[:5]}")
