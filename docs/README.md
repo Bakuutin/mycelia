@@ -392,4 +392,3 @@ mycelia/
 - Automatic speaker labeling during diarization
 - Named speakers in transcripts instead of "SPEAKER_00"
 - Retroactive matching for historical recordings
-

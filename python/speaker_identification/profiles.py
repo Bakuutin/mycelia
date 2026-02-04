@@ -41,7 +41,8 @@ def _get_next_color() -> str:
         "query": {},
         "options": {"projection": {"color": 1}},
     })
-    existing_count = len(result.get("data", []))
+    # find returns array directly, not {"data": [...]}
+    existing_count = len(result) if isinstance(result, list) else 0
     return PROFILE_COLORS[existing_count % len(PROFILE_COLORS)]
 
 
@@ -53,52 +54,53 @@ def create_or_update_profile(
 ) -> Dict[str, Any]:
     """
     Create a new speaker profile or update existing via weighted average.
-    
+
     Args:
         name: Speaker name (must be unique)
         embedding: 256-dim speaker embedding (L2-normalized)
         duration: Duration of audio sample in seconds
         is_primary: True if this is the user's primary voice ("my voice")
-    
+
     Returns:
         The created or updated profile document
     """
     logger.info(f"Creating/updating profile: name={name}, duration={duration:.2f}s, is_primary={is_primary}")
-    
+
     # Normalize the embedding
     embedding = _normalize_embedding(embedding)
-    
+
     # Check if profile exists
     result = call_resource("mongo", {
         "action": "findOne",
         "collection": "speaker_profiles",
         "query": {"name": name},
     })
-    
-    existing = result.get("data")
+
+    # findOne returns document directly, not {"data": doc}
+    existing = result
     now = datetime.now(UTC)
-    
+
     if existing:
         # Update existing profile with weighted average
         old_emb = np.array(existing["embedding"], dtype=np.float32)
         new_emb = np.array(embedding, dtype=np.float32)
         old_count = existing.get("sample_count", 1)
         old_duration = existing.get("total_duration", 0.0)
-        
+
         # Weighted average: (old * count + new) / (count + 1)
         merged = (old_emb * old_count + new_emb) / (old_count + 1)
         merged = merged / np.linalg.norm(merged)  # Re-normalize
-        
+
         new_count = old_count + 1
         new_duration = old_duration + duration
-        
+
         update_data = {
             "embedding": merged.tolist(),
             "sample_count": new_count,
             "total_duration": new_duration,
             "updated_at": now,
         }
-        
+
         # If setting as primary, also update that field
         if is_primary:
             # First, unset any other primary profile
@@ -109,22 +111,22 @@ def create_or_update_profile(
                 "update": {"$set": {"is_primary": False}},
             })
             update_data["is_primary"] = True
-        
+
         call_resource("mongo", {
             "action": "updateOne",
             "collection": "speaker_profiles",
             "query": {"_id": existing["_id"]},
             "update": {"$set": update_data},
         })
-        
+
         logger.info(f"Updated profile '{name}': samples={new_count}, duration={new_duration:.2f}s")
-        
+
         return {**existing, **update_data}
-    
+
     else:
         # Create new profile
         color = _get_next_color()
-        
+
         # If setting as primary, unset any other primary profile
         if is_primary:
             call_resource("mongo", {
@@ -133,7 +135,7 @@ def create_or_update_profile(
                 "query": {"is_primary": True},
                 "update": {"$set": {"is_primary": False}},
             })
-        
+
         new_profile = {
             "name": name,
             "embedding": embedding,
@@ -144,16 +146,16 @@ def create_or_update_profile(
             "created_at": now,
             "updated_at": now,
         }
-        
+
         result = call_resource("mongo", {
             "action": "insertOne",
             "collection": "speaker_profiles",
-            "document": new_profile,
+            "doc": new_profile,  # Fixed: schema expects "doc" not "document"
         })
-        
-        new_profile["_id"] = result.get("insertedId")
+
+        new_profile["_id"] = (result or {}).get("insertedId")
         logger.info(f"Created new profile '{name}': id={new_profile['_id']}, color={color}")
-        
+
         return new_profile
 
 
@@ -165,7 +167,8 @@ def get_all_profiles() -> List[Dict[str, Any]]:
         "query": {},
         "options": {"sort": {"created_at": 1}},
     })
-    return result.get("data", [])
+    # find returns array directly
+    return result if isinstance(result, list) else []
 
 
 def get_primary_profile() -> Optional[Dict[str, Any]]:
@@ -175,7 +178,8 @@ def get_primary_profile() -> Optional[Dict[str, Any]]:
         "collection": "speaker_profiles",
         "query": {"is_primary": True},
     })
-    return result.get("data")
+    # findOne returns document directly
+    return result
 
 
 def get_profile_by_id(profile_id: str) -> Optional[Dict[str, Any]]:
@@ -185,7 +189,8 @@ def get_profile_by_id(profile_id: str) -> Optional[Dict[str, Any]]:
         "collection": "speaker_profiles",
         "query": {"_id": ObjectId(profile_id)},
     })
-    return result.get("data")
+    # findOne returns document directly
+    return result
 
 
 def delete_profile(profile_id: str) -> bool:
@@ -195,7 +200,7 @@ def delete_profile(profile_id: str) -> bool:
         "collection": "speaker_profiles",
         "query": {"_id": ObjectId(profile_id)},
     })
-    deleted = result.get("deletedCount", 0) > 0
+    deleted = (result or {}).get("deletedCount", 0) > 0
     if deleted:
         logger.info(f"Deleted profile: {profile_id}")
     return deleted

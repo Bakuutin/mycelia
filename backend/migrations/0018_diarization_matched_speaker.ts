@@ -23,9 +23,9 @@ export async function up(db: Db, _client: MongoClient): Promise<void> {
   // Sparse means documents without matched_speaker won't be in the index
   await diarizations.createIndex(
     { "matched_speaker.profile_id": 1 },
-    { 
+    {
       name: "matched_speaker_profile_id_sparse",
-      sparse: true 
+      sparse: true
     }
   );
   console.log("  + Created sparse index on matched_speaker.profile_id");
@@ -33,9 +33,9 @@ export async function up(db: Db, _client: MongoClient): Promise<void> {
   // Compound index for filtering by speaker and time range
   await diarizations.createIndex(
     { "matched_speaker.profile_id": 1, start: 1 },
-    { 
+    {
       name: "matched_speaker_profile_id_start",
-      sparse: true 
+      sparse: true
     }
   );
   console.log("  + Created compound index on matched_speaker.profile_id + start");
