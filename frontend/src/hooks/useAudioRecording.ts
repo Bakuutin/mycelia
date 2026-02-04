@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useRecordingStore, recordingResources } from "@/stores/recordingStore";
 import { toast } from "sonner";
 
 export type RecordingStep =
@@ -198,8 +199,42 @@ export const useAudioRecording = (): AudioRecordingReturn => {
   }, [canAccessMicrophone, refreshDevices]);
 
   useEffect(() => {
-    refreshDevices();
-  }, [refreshDevices]);
+    const initDevices = async () => {
+      await refreshDevices();
+      // Auto-request permission if no devices detected (likely need permission first)
+      if (canAccessMicrophone && navigator.mediaDevices) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const audioInputs = devices.filter(
+            (d) => d.kind === "audioinput" && d.deviceId !== "",
+          );
+          // If devices have empty labels, we likely need permission
+          if (audioInputs.length === 0 || audioInputs.every((d) => !d.label)) {
+            // Try to get permission silently - will refresh devices on success
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              stream.getTracks().forEach((track) => track.stop());
+              await refreshDevices();
+            } catch {
+              // Permission denied or not available - user will need to click the button
+            }
+          }
+        } catch {
+          // enumerateDevices failed
+        }
+      }
+    };
+
+    initDevices();
+
+    // Auto-refresh when devices change (plug/unplug)
+    const handleDeviceChange = () => refreshDevices();
+    navigator.mediaDevices?.addEventListener("devicechange", handleDeviceChange);
+
+    return () => {
+      navigator.mediaDevices?.removeEventListener("devicechange", handleDeviceChange);
+    };
+  }, [refreshDevices, canAccessMicrophone]);
 
   const getMicrophoneAccess = useCallback(async (): Promise<MediaStream> => {
     if (!canAccessMicrophone) {
@@ -477,6 +512,10 @@ export const useAudioRecording = (): AudioRecordingReturn => {
           channels: 1,
           mode: "streaming",
           timestamp: sessionStartTimestamp,
+          // Include audio processing settings for metadata storage
+          echoCancellation,
+          noiseSuppression,
+          autoGainControl,
         };
 
         const bitDepth = audioFormat.width * 8;
@@ -553,7 +592,41 @@ export const useAudioRecording = (): AudioRecordingReturn => {
     setIsRecording(false);
     setCurrentStep("idle");
     setRecordingDuration(0);
+
+    // Clear global resources
+    recordingResources.stopRecordingFn = null;
+    recordingResources.analyserRef = null;
   }, [isRecording, sendWyomingMessage, cleanup]);
+
+  // Sync state to global store for navbar indicator
+  const globalStore = useRecordingStore();
+  useEffect(() => {
+    globalStore.setIsRecording(isRecording);
+  }, [isRecording, globalStore]);
+
+  useEffect(() => {
+    globalStore.setRecordingDuration(recordingDuration);
+  }, [recordingDuration, globalStore]);
+
+  useEffect(() => {
+    globalStore.setCurrentStep(currentStep);
+  }, [currentStep, globalStore]);
+
+  useEffect(() => {
+    globalStore.setError(error);
+  }, [error, globalStore]);
+
+  // Register stopRecording in global resources so it can be called from anywhere
+  useEffect(() => {
+    if (isRecording) {
+      recordingResources.stopRecordingFn = stopRecording;
+      recordingResources.analyserRef = analyserRef.current;
+      // Set device label for indicator
+      const selectedDevice = availableDevices.find(d => d.deviceId === selectedDeviceId);
+      globalStore.setDeviceLabel(selectedDevice?.label || null);
+      globalStore.setSampleRate(sampleRate);
+    }
+  }, [isRecording, stopRecording, availableDevices, selectedDeviceId, sampleRate, globalStore]);
 
   useEffect(() => {
     return () => {

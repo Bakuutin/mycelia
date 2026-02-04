@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { useJobsListener } from "@/hooks/useJobsListener";
 import { Badge } from "@/components/ui/badge";
 import { NotificationCenter } from "@/components/NotificationCenter";
+import { RecordingIndicator } from "@/components/RecordingIndicator";
 
 const Layout = () => {
   useTheme();
@@ -105,6 +106,7 @@ const Layout = () => {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                <RecordingIndicator />
                 <NotificationCenter />
                 {isPlaying && (
                   <Link to="/audio">
