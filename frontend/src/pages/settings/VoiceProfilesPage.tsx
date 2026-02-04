@@ -1,14 +1,13 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { callResource } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,21 +46,23 @@ const VoiceProfilesPage = () => {
   const { data: profiles, isLoading } = useQuery({
     queryKey: ["speaker_profiles"],
     queryFn: async () => {
-      const response = await api.get<{ data: SpeakerProfile[] }>("/resource/speaker_profiles", {
-        params: { action: "find", query: JSON.stringify({}), options: JSON.stringify({ sort: { created_at: 1 } }) }
+      const result = await callResource("mongo", {
+        action: "find",
+        collection: "speaker_profiles",
+        query: {},
+        options: { sort: { created_at: 1 } },
       });
-      return response.data.data || [];
+      return (result?.data || []) as SpeakerProfile[];
     },
   });
 
   // Enrollment mutation
   const enrollMutation = useMutation({
     mutationFn: async (data: EnrollmentJobData) => {
-      const response = await api.post("/resource/jobs", {
+      return await callResource("jobs", {
         action: "enqueue",
         data: data,
       });
-      return response.data;
     },
     onSuccess: () => {
       toast.success("Voice enrollment started", {
@@ -84,8 +85,9 @@ const VoiceProfilesPage = () => {
   // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: async (profileId: string) => {
-      await api.post("/resource/speaker_profiles", {
+      await callResource("mongo", {
         action: "deleteOne",
+        collection: "speaker_profiles",
         query: { _id: { $oid: profileId } },
       });
     },
@@ -367,29 +369,34 @@ const VoiceProfilesPage = () => {
                       </CardDescription>
                     </div>
                   </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
+                  <Dialog>
+                    <DialogTrigger asChild>
                       <Button variant="ghost" size="icon">
                         <Trash2 className="w-4 h-4" />
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete Profile</AlertDialogTitle>
-                        <AlertDialogDescription>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Delete Profile</DialogTitle>
+                        <DialogDescription>
                           Are you sure you want to delete "{profile.name}"? This will not remove speaker labels from existing transcripts.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => deleteMutation.mutate(profile._id)}
-                        >
-                          Delete
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                        </DialogDescription>
+                      </DialogHeader>
+                      <DialogFooter>
+                        <DialogClose asChild>
+                          <Button variant="outline">Cancel</Button>
+                        </DialogClose>
+                        <DialogClose asChild>
+                          <Button
+                            variant="destructive"
+                            onClick={() => deleteMutation.mutate(profile._id)}
+                          >
+                            Delete
+                          </Button>
+                        </DialogClose>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
                 </div>
               </CardHeader>
             </Card>

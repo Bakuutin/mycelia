@@ -1,9 +1,7 @@
-import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { callResource } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Loader2, UserRound, FlaskConical } from "lucide-react";
 import { toast } from "sonner";
 
@@ -21,19 +19,18 @@ const FeatureFlagsPage = () => {
   const { data: config, isLoading } = useQuery({
     queryKey: ["server_config"],
     queryFn: async () => {
-      const response = await api.get<{ data: ServerConfig }>("/resource/config", {
-        params: { action: "get" }
-      });
-      return response.data.data;
+      return await callResource("config", { action: "get" }) as ServerConfig;
     },
+    staleTime: 30 * 1000, // Cache for 30 seconds
   });
 
-  // Update config mutation
+  // Update config mutation using action: "patch"
   const updateMutation = useMutation({
-    mutationFn: async (features: ServerConfig["features"]) => {
-      await api.post("/resource/config", {
-        action: "update",
-        data: { features },
+    mutationFn: async ({ key, value }: { key: string; value: boolean }) => {
+      await callResource("config", {
+        action: "patch",
+        path: "features",
+        updates: { [key]: value },
       });
     },
     onSuccess: () => {
@@ -46,11 +43,7 @@ const FeatureFlagsPage = () => {
   });
 
   const handleToggle = (key: keyof ServerConfig["features"], value: boolean) => {
-    const newFeatures = {
-      ...config?.features,
-      [key]: value,
-    };
-    updateMutation.mutate(newFeatures);
+    updateMutation.mutate({ key, value });
   };
 
   if (isLoading) {

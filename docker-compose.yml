@@ -91,6 +91,8 @@ services:
       dockerfile: ./python/Dockerfile
     environment:
       MYCELIA_URL: http://backend:5173
+      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://host.docker.internal:8085}
+      SPEAKER_SIMILARITY_THRESHOLD: ${SPEAKER_SIMILARITY_THRESHOLD:-0.35}
     volumes:
       - ./python:/app
       - ${WORKER_HOST_PATH:-worker_data}:/root/.cache
