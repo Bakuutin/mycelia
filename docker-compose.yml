@@ -64,6 +64,9 @@ services:
     expose:
       - "5173"
     restart: unless-stopped
+    depends_on:
+      - mongo
+      - redis
     command: deno task ${BACKEND_TASK:-start}
     env_file:
       - .env

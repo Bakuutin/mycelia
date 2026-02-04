@@ -14,7 +14,7 @@ if (existsSync("../.env")) {
 import "@/lib/telemetry.ts";
 import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
-import { generateApiKey, verifyApiKey } from "@/lib/auth/tokens.ts";
+import { generateApiKeyWithId, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
 import { type Policy } from "@/lib/auth/resources.ts";
@@ -335,20 +335,24 @@ async function configureCli() {
           .option("name", {
             alias: "n",
             type: "string",
-            describe: "The name of the token.",
-            default: `test_${Math.floor(Date.now() / 1000)}`,
+            describe: "The name of the token (e.g. browser-ui, cli, mobile).",
+            default: "default",
           }),
       async (args: ArgumentsCamelCase<{ owner: string; name: string }>) => {
         const owner = String(args.owner);
         const name = String(args.name);
-        console.log(`Owner: ${owner}`);
-        console.log(`Name: ${name}`);
-        console.log("Generating token...");
+        console.log("Generating API key...");
         await setupResources();
-        const key = await generateApiKey(owner, name, [
+        const { apiKey, clientId } = await generateApiKeyWithId(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
-        console.log(`MYCELIA_TOKEN=${key}`);
+        console.log("");
+        console.log(`Created API key "${name}" (owner: ${owner})`);
+        console.log("");
+        console.log(`MYCELIA_CLIENT_ID=${clientId}`);
+        console.log(`MYCELIA_TOKEN=${apiKey}`);
+        console.log("");
+        console.log("Copy these values to your .env file or enter them in the setup page.");
       },
     )
     .command(
