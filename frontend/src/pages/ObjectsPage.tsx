@@ -719,17 +719,16 @@ const ObjectsPage = () => {
     });
   }, [q, getSortStage, getTypeMatch, showOrphanedOnly]);
 
-  // Fetch starred objects
+  // Fetch starred objects - always fetch all starred regardless of search filter
+  // Starred section acts as "favorites" that should always be visible
   const fetchStarredObjects = useCallback(async (): Promise<ObjectWithRelations[]> => {
     const searchMatch: Record<string, unknown> = { starred: true };
-    
-    if (q.trim()) {
-      searchMatch.$text = { $search: q.trim() };
-    }
+    // Note: We intentionally don't apply search filter to starred objects
+    // The starred section should always show all favorites regardless of search
 
     const pipeline: unknown[] = [
       { $match: searchMatch },
-      getSortStage(),
+      { $sort: { updatedAt: -1, _id: -1 } }, // Always sort by most recently updated
       { $limit: 50 }, // Limit starred objects
       // Add relationship lookups for starred relationship objects
       {
@@ -801,7 +800,7 @@ const ObjectsPage = () => {
       collection: "objects",
       pipeline,
     });
-  }, [q, getSortStage]);
+  }, []); // No dependencies - starred objects don't depend on search/sort
 
   // Fetch total counts per type from cached API (no search filter - absolute counts)
   const fetchCounts = useCallback(async (forceRefresh = false) => {
