@@ -1,6 +1,13 @@
 #!/bin/bash
-# Sync .env with .env.example - adds missing variables with their default values
-# Usage: ./scripts/sync-env.sh [--dry-run] [--all]
+# Sync existing .env with .env.example after updates
+# Adds missing variables with their default values (generates secrets where needed)
+#
+# For first-time setup, use: ./scripts/setup.sh
+#
+# Usage:
+#   ./scripts/sync-env.sh           # Interactive - prompts before adding
+#   ./scripts/sync-env.sh --dry-run # Preview changes without modifying
+#   ./scripts/sync-env.sh --all     # Include optional vars (FRONTEND_MODE, BACKEND_TASK)
 
 set -e
 
@@ -49,7 +56,9 @@ fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "Error: .env not found at $ENV_FILE"
-    echo "Hint: Copy .env.example to .env first: cp .env.example .env"
+    echo ""
+    echo "For first-time setup, run: ./scripts/setup.sh"
+    echo "This will create .env and generate required secrets automatically."
     exit 1
 fi
 

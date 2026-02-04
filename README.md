@@ -54,23 +54,34 @@ your own words.
 git clone https://github.com/mycelia-tech/mycelia.git
 cd mycelia
 
-cp .env.example .env
-docker compose pull
-docker compose up -d
+./scripts/setup.sh --start
 ```
 
-#### Syncing Environment Variables
+The setup script automatically:
+- Creates `.env` from `.env.example`
+- Generates a secure `SECRET_KEY`
+- Starts all services with Docker Compose
 
-After pulling updates, new environment variables may be added to `.env.example`. To sync your `.env` with any new variables:
+Open [https://localhost:4433](https://localhost:4433) in your browser.
+
+#### CLI/Python Daemon Users
+
+If you need API tokens in `.env` (for Python daemon or CLI access):
+
+```bash
+./scripts/setup.sh --with-tokens --start
+```
+
+This starts MongoDB temporarily to generate `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN`.
+
+#### Syncing After Updates
+
+After pulling updates, new environment variables may be added to `.env.example`:
 
 ```bash
 ./scripts/sync-env.sh           # Interactive - prompts before adding
 ./scripts/sync-env.sh --dry-run # Preview changes without modifying
 ```
-
-The script will show missing variables, generate secure values where needed (like `SECRET_KEY`), and highlight any legacy variables in your `.env` that are no longer used.
-
-Open [https://localhost:4433](https://localhost:4433) in your browser.
 
 > **Note**: For local development, Mycelia uses a self-signed certificate. You may need to click "Advanced" and "Proceed" in your browser. See [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and SSL.
 
