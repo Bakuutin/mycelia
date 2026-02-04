@@ -23,6 +23,7 @@ class EnrollmentJobData(BaseModel):
     is_primary: bool = False  # True if this is "my voice"
     audio_chunk_id: Optional[str] = None  # If enrolling from existing audio chunk
     audio_data_base64: Optional[str] = None  # If enrolling from uploaded audio (base64)
+    sample_file_id: Optional[str] = None  # If enrolling from saved voice sample in GridFS
     start: Optional[float] = None  # Start time for segment extraction
     end: Optional[float] = None  # End time for segment extraction
 
@@ -35,7 +36,7 @@ def _get_audio_from_chunk(chunk_id: str) -> bytes:
         "query": {"_id": {"$oid": chunk_id}},
     })
     
-    chunk = result.get("data")
+    chunk = (result or {}).get("data")
     if not chunk:
         raise ValueError(f"Audio chunk not found: {chunk_id}")
     
@@ -71,6 +72,31 @@ def _get_audio_from_base64(data: str) -> bytes:
     """Decode base64 audio data."""
     import base64
     return base64.b64decode(data)
+
+
+def _get_audio_from_gridfs(file_id: str, bucket: str = "voice_samples") -> bytes:
+    """Retrieve audio data from GridFS bucket."""
+    result = call_resource("fs", {
+        "action": "download",
+        "bucket": bucket,
+        "id": file_id,
+    })
+    
+    if result is None:
+        raise ValueError(f"Voice sample not found in GridFS: {file_id}")
+    
+    # Result is the raw bytes from GridFS
+    if isinstance(result, dict) and "$binary" in result:
+        # EJSON binary format
+        import base64
+        return base64.b64decode(result["$binary"]["base64"])
+    elif isinstance(result, bytes):
+        return result
+    elif isinstance(result, list):
+        # Sometimes returns as list of ints
+        return bytes(result)
+    else:
+        raise ValueError(f"Unexpected GridFS download result type: {type(result)}")
 
 
 def _extract_embedding(audio_data: bytes, start: Optional[float] = None, end: Optional[float] = None) -> Dict[str, Any]:
@@ -137,8 +163,11 @@ def process_enrollment_job(
         elif data.audio_data_base64:
             logger.info("Loading audio from base64 data")
             audio_data = _get_audio_from_base64(data.audio_data_base64)
+        elif data.sample_file_id:
+            logger.info(f"Loading audio from saved sample: {data.sample_file_id}")
+            audio_data = _get_audio_from_gridfs(data.sample_file_id)
         else:
-            raise ValueError("Either audio_chunk_id or audio_data_base64 must be provided")
+            raise ValueError("Either audio_chunk_id, audio_data_base64, or sample_file_id must be provided")
     except Exception as e:
         logger.error(f"Failed to load audio: {e}")
         raise

@@ -2,20 +2,32 @@
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
+import soundfile as sf
 import torch
-from pyannote.audio import Audio, Pipeline
+from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
-from pyannote.core import Segment
 
 from pyannote.audio.telemetry import set_telemetry_metrics
 
 set_telemetry_metrics(False, save_choice_as_default=True)
 
 logger = logging.getLogger(__name__)
+
+# Audio loading backend selection:
+# - "soundfile": Pure Python, works on Mac without FFmpeg (recommended for local dev)
+# - "torchaudio": Uses torchcodec/FFmpeg, works on GPU servers with FFmpeg installed
+AUDIO_BACKEND = os.environ.get("AUDIO_BACKEND", "soundfile")
+logger.info(f"Audio backend: {AUDIO_BACKEND}")
+
+# Only import torchaudio if needed (it triggers torchcodec loading)
+if AUDIO_BACKEND == "torchaudio":
+    import torchaudio
+    import torchaudio.functional as F
 
 
 class AudioBackend:
@@ -47,8 +59,7 @@ class AudioBackend:
             "pyannote/wespeaker-voxceleb-resnet34-LM", device=device
         )
         logger.debug(f"Embedding model loaded, dimension: {self.embedder.dimension}")
-        self.loader = Audio(sample_rate=16_000, mono="downmix")
-        logger.debug("Audio loader initialized (16kHz, mono)")
+        logger.debug(f"AudioBackend ready (audio backend: {AUDIO_BACKEND})")
 
     def embed(self, wave: torch.Tensor) -> np.ndarray:  # (1, T)
         logger.debug(f"Embedding audio: shape={wave.shape}, device={wave.device}")
@@ -188,11 +199,43 @@ class AudioBackend:
         return await loop.run_in_executor(None, self.diarize, path, min_speakers, max_speakers, collar, min_duration_off)
 
     def load_wave(self, path: Path, start: Optional[float] = None, end: Optional[float] = None) -> torch.Tensor:
-        if start is not None and end is not None:
-            # Get audio file duration to validate segment bounds
-            file_info = self.loader.get_duration(str(path))
-            file_duration = float(file_info)
+        """Load audio file and convert to tensor.
+        
+        Uses soundfile (default) or torchaudio based on AUDIO_BACKEND env var.
+        Soundfile works on Mac without FFmpeg, torchaudio needs FFmpeg/torchcodec.
+        
+        Args:
+            path: Path to the audio file
+            start: Optional start time in seconds for segment extraction
+            end: Optional end time in seconds for segment extraction
             
+        Returns:
+            Tensor of shape (1, 1, T) at 16kHz sample rate
+        """
+        if AUDIO_BACKEND == "soundfile":
+            # Soundfile-based loading (Mac compatible, no FFmpeg needed)
+            waveform, sample_rate = self._load_with_soundfile(path)
+        else:
+            # Torchaudio-based loading (GPU server with FFmpeg)
+            waveform, sample_rate = self._load_with_torchaudio(path)
+        
+        logger.debug(f"Loaded audio: shape={waveform.shape}, sample_rate={sample_rate}")
+        
+        # Convert to mono if needed (average channels)
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+            logger.debug(f"Converted to mono: shape={waveform.shape}")
+        
+        # Resample to 16kHz if needed
+        if sample_rate != 16000:
+            waveform = self._resample(waveform, sample_rate, 16000)
+            logger.debug(f"Resampled to 16kHz: shape={waveform.shape}")
+        
+        # Get duration for clamping
+        file_duration = waveform.shape[1] / 16000.0
+        
+        # Crop if start/end specified
+        if start is not None and end is not None:
             # Clamp segment bounds to file duration
             start_clamped = max(0.0, min(start, file_duration))
             end_clamped = max(start_clamped, min(end, file_duration))
@@ -201,11 +244,52 @@ class AudioBackend:
             if start != start_clamped or end != end_clamped:
                 logger.warning(f"Segment [{start:.6f}s, {end:.6f}s] clamped to [{start_clamped:.6f}s, {end_clamped:.6f}s] for file duration {file_duration:.6f}s")
             
-            seg = Segment(start_clamped, end_clamped)
-            wav, _ = self.loader.crop(str(path), seg)
+            start_sample = int(start_clamped * 16000)
+            end_sample = int(end_clamped * 16000)
+            waveform = waveform[:, start_sample:end_sample]
+            logger.debug(f"Cropped to [{start_clamped:.3f}s, {end_clamped:.3f}s]: shape={waveform.shape}")
+        
+        return waveform.unsqueeze(0)  # (1, 1, T)
+
+    def _load_with_soundfile(self, path: Path) -> tuple:
+        """Load audio using soundfile (pure Python, Mac compatible)."""
+        audio, sample_rate = sf.read(str(path), dtype='float32')
+        
+        # Convert to torch tensor
+        waveform = torch.from_numpy(audio)
+        
+        # Handle mono vs stereo: soundfile returns (samples,) for mono, (samples, channels) for stereo
+        if waveform.ndim == 1:
+            waveform = waveform.unsqueeze(0)  # (1, T)
         else:
-            wav, _ = self.loader(str(path))
-        return wav.unsqueeze(0)  # (1, 1, T)
+            waveform = waveform.T  # (channels, T)
+        
+        return waveform, sample_rate
+
+    def _load_with_torchaudio(self, path: Path) -> tuple:
+        """Load audio using torchaudio (requires FFmpeg/torchcodec)."""
+        waveform, sample_rate = torchaudio.load(str(path))
+        return waveform, sample_rate
+
+    def _resample(self, waveform: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
+        """Resample audio to target sample rate."""
+        if AUDIO_BACKEND == "torchaudio":
+            return F.resample(waveform, orig_sr, target_sr)
+        else:
+            # Use scipy for resampling when using soundfile backend
+            from scipy import signal
+            
+            # Calculate resampling ratio
+            num_samples = int(waveform.shape[1] * target_sr / orig_sr)
+            
+            # Resample each channel
+            resampled = torch.zeros((waveform.shape[0], num_samples), dtype=waveform.dtype)
+            for i in range(waveform.shape[0]):
+                resampled[i] = torch.from_numpy(
+                    signal.resample(waveform[i].numpy(), num_samples).astype(np.float32)
+                )
+            
+            return resampled
 
     @staticmethod
     def match_clusters(embedding: np.ndarray, clusters: List[Dict], threshold: float) -> Optional[Dict]:

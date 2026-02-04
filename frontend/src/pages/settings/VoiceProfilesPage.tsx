@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { callResource } from "@/lib/api";
+import { callResource, apiClient } from "@/lib/api";
+import { convertBlobToWav } from "@/lib/audioUtils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,8 +9,19 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2 } from "lucide-react";
+import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2, Save, FileAudio, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+
+const VOICE_SAMPLES_BUCKET = "voice_samples";
+
+// Helper to extract ID string from EJSON ObjectId or plain string
+const getSampleId = (sample: VoiceSample): string => {
+  if (typeof sample._id === "string") return sample._id;
+  if (sample._id && typeof sample._id === "object" && "$oid" in sample._id) {
+    return sample._id.$oid;
+  }
+  return String(sample._id);
+};
 
 interface SpeakerProfile {
   _id: string;
@@ -22,11 +34,23 @@ interface SpeakerProfile {
   updated_at: string;
 }
 
+interface VoiceSample {
+  _id: { $oid: string } | string;
+  filename: string;
+  metadata?: {
+    speaker_name?: string;
+    duration?: number;
+    uploaded_at?: string;
+  };
+  length: number;
+}
+
 interface EnrollmentJobData {
   type: "enrollment";
   name: string;
   is_primary: boolean;
-  audio_data_base64: string;
+  audio_data_base64?: string;
+  sample_file_id?: string;
 }
 
 const VoiceProfilesPage = () => {
@@ -37,6 +61,8 @@ const VoiceProfilesPage = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -53,6 +79,19 @@ const VoiceProfilesPage = () => {
         options: { sort: { created_at: 1 } },
       });
       return (result?.data || []) as SpeakerProfile[];
+    },
+  });
+
+  // Fetch saved voice samples from GridFS
+  const { data: savedSamples } = useQuery({
+    queryKey: ["voice_samples"],
+    queryFn: async () => {
+      const result = await callResource("fs", {
+        action: "find",
+        bucket: VOICE_SAMPLES_BUCKET,
+        query: {},
+      });
+      return (result || []) as VoiceSample[];
     },
   });
 
@@ -79,6 +118,31 @@ const VoiceProfilesPage = () => {
       toast.error("Enrollment failed", {
         description: error.message,
       });
+    },
+  });
+
+  // Delete sample mutation
+  const deleteSampleMutation = useMutation({
+    mutationFn: async (sampleId: string) => {
+      // Delete from GridFS files collection directly
+      await callResource("mongo", {
+        action: "deleteOne",
+        collection: `${VOICE_SAMPLES_BUCKET}.files`,
+        query: { _id: { $oid: sampleId } },
+      });
+      // Also delete chunks
+      await callResource("mongo", {
+        action: "deleteMany",
+        collection: `${VOICE_SAMPLES_BUCKET}.chunks`,
+        query: { files_id: { $oid: sampleId } },
+      });
+    },
+    onSuccess: () => {
+      toast.success("Sample deleted");
+      queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+    },
+    onError: (error: Error) => {
+      toast.error("Failed to delete sample", { description: error.message });
     },
   });
 
@@ -123,6 +187,7 @@ const VoiceProfilesPage = () => {
       mediaRecorder.start();
       setIsRecording(true);
       setRecordingDuration(0);
+      setSelectedSampleId(null); // Clear selected sample when recording
 
       timerRef.current = window.setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
@@ -151,8 +216,60 @@ const VoiceProfilesPage = () => {
     const file = event.target.files?.[0];
     if (file) {
       setRecordedBlob(file);
+      setSelectedSampleId(null); // Clear selected sample
       // Estimate duration from file size (rough approximation)
       setRecordingDuration(Math.round(file.size / 16000)); // ~16KB per second for compressed audio
+    }
+  };
+
+  // Save current recording to GridFS for later use
+  const saveRecording = async () => {
+    if (!recordedBlob) return;
+
+    setIsSaving(true);
+    try {
+      // Convert to WAV format (16kHz mono) for compatibility with diarization service
+      toast.info("Converting audio format...");
+      const wavBlob = await convertBlobToWav(recordedBlob);
+      
+      // Convert WAV blob to base64
+      const arrayBuffer = await wavBlob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+      );
+
+      // Upload to GridFS via the file upload API
+      await apiClient.post<{ file_id: string; success: boolean }>("/api/files/upload", {
+        file: base64,
+        filename: `voice_sample_${Date.now()}.wav`,
+        mimetype: "audio/wav",
+        bucket: VOICE_SAMPLES_BUCKET,
+        metadata: {
+          speaker_name: newProfileName || "Unknown",
+          duration: recordingDuration,
+        },
+      });
+
+      toast.success("Recording saved", {
+        description: "You can use this sample for enrollment later.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+    } catch (error) {
+      toast.error("Failed to save recording", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Select a saved sample for enrollment
+  const selectSample = (sample: VoiceSample) => {
+    setSelectedSampleId(getSampleId(sample));
+    setRecordedBlob(null); // Clear recorded blob
+    setRecordingDuration(sample.metadata?.duration || 0);
+    if (sample.metadata?.speaker_name && !newProfileName) {
+      setNewProfileName(sample.metadata.speaker_name);
     }
   };
 
@@ -163,23 +280,43 @@ const VoiceProfilesPage = () => {
       return;
     }
 
-    if (!recordedBlob) {
-      toast.error("Please record or upload audio");
+    if (!recordedBlob && !selectedSampleId) {
+      toast.error("Please record, upload audio, or select a saved sample");
       return;
     }
 
-    // Convert blob to base64
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = (reader.result as string).split(",")[1];
+    // If using saved sample, use sample_file_id (already in WAV format)
+    if (selectedSampleId) {
       enrollMutation.mutate({
         type: "enrollment",
         name: newProfileName.trim(),
         is_primary: isPrimary,
-        audio_data_base64: base64,
+        sample_file_id: selectedSampleId,
       });
-    };
-    reader.readAsDataURL(recordedBlob);
+      return;
+    }
+
+    // Convert recorded blob to WAV (16kHz mono) and then to base64
+    try {
+      toast.info("Converting audio format...");
+      const wavBlob = await convertBlobToWav(recordedBlob!);
+      
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        enrollMutation.mutate({
+          type: "enrollment",
+          name: newProfileName.trim(),
+          is_primary: isPrimary,
+          audio_data_base64: base64,
+        });
+      };
+      reader.readAsDataURL(wavBlob);
+    } catch (error) {
+      toast.error("Failed to convert audio", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   };
 
   // Reset form
@@ -188,6 +325,7 @@ const VoiceProfilesPage = () => {
     setIsPrimary(false);
     setRecordedBlob(null);
     setRecordingDuration(0);
+    setSelectedSampleId(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -294,11 +432,84 @@ const VoiceProfilesPage = () => {
                     </Button>
                   </div>
 
-                  {/* Status */}
+                  {/* Status and Save button */}
                   {recordedBlob && !isRecording && (
-                    <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
-                      <Play className="w-4 h-4" />
-                      Audio ready ({formatDuration(recordingDuration)})
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                        <Play className="w-4 h-4" />
+                        Audio ready ({formatDuration(recordingDuration)})
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={saveRecording}
+                        disabled={isSaving}
+                      >
+                        {isSaving ? (
+                          <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                        ) : (
+                          <Save className="w-4 h-4 mr-1" />
+                        )}
+                        Save for later
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Selected saved sample */}
+                  {selectedSampleId && (
+                    <div className="flex items-center justify-between gap-2 p-2 bg-muted rounded">
+                      <div className="flex items-center gap-2 text-sm">
+                        <FileAudio className="w-4 h-4 text-blue-500" />
+                        <span>Using saved sample ({formatDuration(recordingDuration)})</span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedSampleId(null);
+                          setRecordingDuration(0);
+                        }}
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Saved samples list */}
+                  {savedSamples && savedSamples.length > 0 && !selectedSampleId && !recordedBlob && (
+                    <div className="space-y-2">
+                      <div className="text-center text-sm text-muted-foreground">or use saved sample</div>
+                      <div className="max-h-32 overflow-y-auto space-y-1">
+                        {savedSamples.map((sample) => (
+                          <div
+                            key={getSampleId(sample)}
+                            className="flex items-center justify-between p-2 border rounded hover:bg-muted cursor-pointer"
+                            onClick={() => selectSample(sample)}
+                          >
+                            <div className="flex items-center gap-2 text-sm">
+                              <FileAudio className="w-4 h-4" />
+                              <span>{sample.metadata?.speaker_name || "Unknown"}</span>
+                              <span className="text-muted-foreground">
+                                ({formatDuration(sample.metadata?.duration || 0)})
+                              </span>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteSampleMutation.mutate(getSampleId(sample));
+                              }}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -316,7 +527,7 @@ const VoiceProfilesPage = () => {
               </Button>
               <Button
                 onClick={handleSubmit}
-                disabled={enrollMutation.isPending || !recordedBlob || !newProfileName.trim()}
+                disabled={enrollMutation.isPending || (!recordedBlob && !selectedSampleId) || !newProfileName.trim()}
               >
                 {enrollMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Enroll Voice

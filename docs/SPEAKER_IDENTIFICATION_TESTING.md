@@ -16,14 +16,16 @@ Before starting, ensure you have:
 Open a **dedicated terminal** for the diarization service:
 
 ```bash
-cd /path/to/mycelia.diarusation/diarizator
+cd ./diarizator
 
 # Sync dependencies (first time only)
 uv sync --extra cpu
 
-# Start the service
-COMPUTE_MODE=cpu uv run simple-speaker-service
+# Start the service (Mac - uses soundfile backend to avoid FFmpeg dependency)
+COMPUTE_MODE=cpu AUDIO_BACKEND=soundfile uv run simple-speaker-service
 ```
+
+**Note:** The `AUDIO_BACKEND=soundfile` is required on Mac to avoid `torchcodec` FFmpeg dependency issues. On GPU servers with FFmpeg installed, you can use the default `torchaudio` backend.
 
 **Wait for:** `Models ready ✔ – device=cpu` (first run downloads ~1.5GB of models)
 
@@ -126,6 +128,12 @@ Applying migration: 0018_diarization_matched_speaker.ts
 - Look for an "enrollment" job with status "completed"
 - Return to Voice Profiles page - your profile should appear
 
+**Saving recordings for retry:**
+If enrollment fails (e.g., diarization service not running), you don't need to re-record:
+1. After recording, click **"Save for later"** to store the audio
+2. Saved samples appear in the dialog for future enrollment attempts
+3. Fix the issue, then click on a saved sample to use it for enrollment
+
 ---
 
 ## Step 7: Test Live Speaker Identification
@@ -187,7 +195,14 @@ The transcript view will show speaker names alongside the text.
 - **Cause:** Diarization service not running
 - **Fix:** Start the service in Terminal 1:
   ```bash
-  cd diarizator && COMPUTE_MODE=cpu uv run simple-speaker-service
+  cd diarizator && COMPUTE_MODE=cpu AUDIO_BACKEND=soundfile uv run simple-speaker-service
+  ```
+
+### Enrollment job fails with "Could not load libtorchcodec" or "AudioDecoder"
+- **Cause:** Mac doesn't have FFmpeg installed, and torchaudio 2.9+ requires torchcodec
+- **Fix:** Use the soundfile audio backend (no FFmpeg required):
+  ```bash
+  COMPUTE_MODE=cpu AUDIO_BACKEND=soundfile uv run simple-speaker-service
   ```
 
 ### Enrollment job fails with "Audio too short"
@@ -196,7 +211,7 @@ The transcript view will show speaker names alongside the text.
 
 ### No matches found (0 matched)
 - **Cause:** Threshold too high or voice doesn't match
-- **Fix:** 
+- **Fix:**
   1. Try lowering threshold to 0.25-0.30
   2. Re-enroll with a cleaner audio sample
   3. Ensure enrollment audio was clear (no background noise)
@@ -231,8 +246,11 @@ Use this checklist to verify everything works:
 ## Quick Reference Commands
 
 ```bash
-# Start diarization service (Terminal 1)
-cd diarizator && COMPUTE_MODE=cpu uv run simple-speaker-service
+# Start diarization service on Mac (Terminal 1)
+cd diarizator && COMPUTE_MODE=cpu AUDIO_BACKEND=soundfile uv run simple-speaker-service
+
+# Start diarization service on GPU server (uses torchaudio with FFmpeg)
+cd diarizator && COMPUTE_MODE=gpu uv run simple-speaker-service
 
 # Restart Docker services (Terminal 2)
 docker compose up -d
@@ -316,9 +334,11 @@ curl -X POST http://localhost:8085/embed -F "file=@test.wav"
 
 5. **Frontend Pages**
    - Voice Profiles page - enroll and manage speakers
+   - Saved voice samples - record once, retry enrollment if it fails
    - Feature Flags page - toggle speaker identification
 
 6. **Configuration**
    - `enable_speaker_identification` feature flag
    - `DIARIZATION_SERVER_URL` environment variable
    - `SPEAKER_SIMILARITY_THRESHOLD` tuning parameter
+   - `AUDIO_BACKEND` - use `soundfile` for Mac, default `torchaudio` for GPU servers
