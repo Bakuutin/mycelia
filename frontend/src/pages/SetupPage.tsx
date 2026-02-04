@@ -2,10 +2,24 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exchangeApiKeyForJWT } from "@/lib/auth";
-import { Loader2, CheckCircle2, XCircle, Terminal, Copy, Check } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Terminal, Copy, Check, ClipboardPaste } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+type ServerType = "docker" | "deno" | "custom";
+
+const SERVER_ENDPOINTS: Record<Exclude<ServerType, "custom">, string> = {
+  docker: "https://localhost:4433",
+  deno: "http://localhost:5173",
+};
 
 type SetupStatus = "idle" | "verifying" | "creating_new" | "success" | "error" | "keys_exist";
 
@@ -45,11 +59,45 @@ export default function SetupPage() {
     setClientSecret,
   } = useSettingsStore();
 
-  const [localEndpoint, setLocalEndpoint] = useState(apiEndpoint);
+  const [serverType, setServerType] = useState<ServerType>("docker");
+  const [localEndpoint, setLocalEndpoint] = useState(apiEndpoint || SERVER_ENDPOINTS.docker);
   const [localClientId, setLocalClientId] = useState("");
   const [localToken, setLocalToken] = useState("");
+  const [pastedCredentials, setPastedCredentials] = useState("");
   const [status, setStatus] = useState<SetupStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleServerTypeChange = (value: ServerType) => {
+    setServerType(value);
+    if (value !== "custom") {
+      setLocalEndpoint(SERVER_ENDPOINTS[value]);
+    }
+  };
+
+  const parseCredentials = () => {
+    const lines = pastedCredentials.trim().split("\n");
+    let foundClientId = "";
+    let foundToken = "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("MYCELIA_CLIENT_ID=")) {
+        foundClientId = trimmed.replace("MYCELIA_CLIENT_ID=", "").trim();
+      } else if (trimmed.startsWith("MYCELIA_TOKEN=")) {
+        foundToken = trimmed.replace("MYCELIA_TOKEN=", "").trim();
+      }
+    }
+
+    if (foundClientId) setLocalClientId(foundClientId);
+    if (foundToken) setLocalToken(foundToken);
+    
+    if (!foundClientId && !foundToken) {
+      setErrorMessage("Could not find MYCELIA_CLIENT_ID or MYCELIA_TOKEN in the pasted text");
+    } else {
+      setPastedCredentials("");
+      setErrorMessage(null);
+    }
+  };
 
   // Redirect if already configured
   useEffect(() => {
@@ -302,18 +350,77 @@ MYCELIA_TOKEN=mycelia_xyz...`}
 
               <div className="space-y-4 mb-6">
                 <div>
-                  <Label htmlFor="endpoint" className="text-slate-200 mb-2 block">
-                    Server Endpoint
+                  <Label htmlFor="serverType" className="text-slate-200 mb-2 block">
+                    Server Type
                   </Label>
-                  <Input
-                    id="endpoint"
-                    type="url"
-                    value={localEndpoint}
-                    onChange={(e) => setLocalEndpoint(e.target.value)}
-                    placeholder="https://localhost:4433"
+                  <Select value={serverType} onValueChange={(v) => handleServerTypeChange(v as ServerType)}>
+                    <SelectTrigger className="bg-white/10 border-white/20 text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="docker">Docker (default)</SelectItem>
+                      <SelectItem value="deno">Deno (local dev)</SelectItem>
+                      <SelectItem value="custom">Custom server</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {serverType === "custom" && (
+                  <div>
+                    <Label htmlFor="endpoint" className="text-slate-200 mb-2 block">
+                      Server Endpoint
+                    </Label>
+                    <Input
+                      id="endpoint"
+                      type="url"
+                      value={localEndpoint}
+                      onChange={(e) => setLocalEndpoint(e.target.value)}
+                      placeholder="https://your-server.com"
+                      disabled={isLoading}
+                      className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
+                    />
+                  </div>
+                )}
+
+                {serverType !== "custom" && (
+                  <p className="text-slate-500 text-xs">
+                    Server endpoint: <code className="text-purple-400">{localEndpoint}</code>
+                  </p>
+                )}
+
+                {/* Paste credentials section */}
+                <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 space-y-3">
+                  <Label className="text-slate-300 text-xs font-medium block">
+                    Paste credentials
+                  </Label>
+                  <textarea
+                    value={pastedCredentials}
+                    onChange={(e) => setPastedCredentials(e.target.value)}
+                    placeholder={`MYCELIA_CLIENT_ID=abc123...\nMYCELIA_TOKEN=mycelia_xyz...`}
                     disabled={isLoading}
-                    className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
+                    rows={3}
+                    className="w-full bg-slate-900/80 border border-white/10 rounded-lg p-3 text-sm font-mono text-slate-300 placeholder:text-slate-600 focus:border-purple-400 focus:outline-none disabled:opacity-50 resize-none"
                   />
+                  <Button
+                    type="button"
+                    onClick={parseCredentials}
+                    disabled={!pastedCredentials.trim() || isLoading}
+                    variant="outline"
+                    size="sm"
+                    className="w-full border-purple-500/50 text-purple-300 hover:bg-purple-500/20 hover:text-white disabled:opacity-50"
+                  >
+                    <ClipboardPaste className="w-4 h-4 mr-2" />
+                    I have credentials
+                  </Button>
+                </div>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-white/10" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="px-2 bg-transparent text-slate-500">or enter manually</span>
+                  </div>
                 </div>
 
                 <div>
