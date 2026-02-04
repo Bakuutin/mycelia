@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2, Save, FileAudio, RotateCcw, Pencil, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
+import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2, Save, FileAudio, RotateCcw, Pencil, ChevronDown, ChevronRight, AlertTriangle, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import { WaveformPlayer } from "@/components/audio/WaveformPlayer";
 
@@ -292,6 +292,25 @@ const VoiceProfilesPage = () => {
     },
     onError: (error: Error) => {
       toast.error("Delete failed", { description: error.message });
+    },
+  });
+
+  // Detach sample from profile mutation
+  const detachSampleMutation = useMutation({
+    mutationFn: async (sampleId: string) => {
+      await callResource("mongo", {
+        action: "updateOne",
+        collection: `${VOICE_SAMPLES_BUCKET}.files`,
+        query: { _id: { $oid: sampleId } },
+        update: { $unset: { "metadata.profile_id": "" } },
+      });
+    },
+    onSuccess: () => {
+      toast.success("Sample detached from profile");
+      queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+    },
+    onError: (error: Error) => {
+      toast.error("Failed to detach sample", { description: error.message });
     },
   });
 
@@ -762,7 +781,18 @@ const VoiceProfilesPage = () => {
                             <Button
                               variant="ghost"
                               size="icon"
+                              className="text-muted-foreground hover:text-blue-500 shrink-0"
+                              title="Detach from profile"
+                              onClick={() => detachSampleMutation.mutate(getSampleId(sample))}
+                              disabled={detachSampleMutation.isPending}
+                            >
+                              <Unlink className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               className="text-muted-foreground hover:text-destructive shrink-0"
+                              title="Delete sample"
                               onClick={() => setDeletingSample({ sampleId: getSampleId(sample), profileId })}
                             >
                               <Trash2 className="w-4 h-4" />
