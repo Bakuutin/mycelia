@@ -15,7 +15,7 @@ const SettingsLayout = () => {
       name: "API",
       path: "/settings/api",
       icon: Key,
-      description: "API configuration and authentication",
+      description: "API endpoint, credentials & keys",
     },
   ];
 
@@ -32,13 +32,6 @@ const SettingsLayout = () => {
       icon: ScrollText,
       description: "Manage prompt templates",
     },
-    {
-      name: "API Keys",
-      path: "/settings/api-keys",
-      icon: Key,
-      description: "Manage API keys and policies",
-    },
-
     {
       name: "Configuration",
       path: "/settings/config",
