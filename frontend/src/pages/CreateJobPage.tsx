@@ -103,7 +103,12 @@ export default function CreateJobPage() {
           <CardContent>
             <div className="rjsf-container">
               <Form
-                schema={schemas[selectedType].input}
+                schema={(() => {
+                  // Strip $schema to avoid AJV8 draft 2020-12 compatibility issues
+                  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                  const { $schema, ...rest } = schemas[selectedType].input;
+                  return rest;
+                })()}
                 validator={validator}
                 onSubmit={(data: any) => onSubmit(data.formData)}
                 disabled={enqueueMutation.isPending}
