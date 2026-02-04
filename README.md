@@ -59,6 +59,17 @@ docker compose pull
 docker compose up -d
 ```
 
+#### Syncing Environment Variables
+
+After pulling updates, new environment variables may be added to `.env.example`. To sync your `.env` with any new variables:
+
+```bash
+./scripts/sync-env.sh           # Interactive - prompts before adding
+./scripts/sync-env.sh --dry-run # Preview changes without modifying
+```
+
+The script will show missing variables, generate secure values where needed (like `SECRET_KEY`), and highlight any legacy variables in your `.env` that are no longer used.
+
 Open [https://localhost:4433](https://localhost:4433) in your browser.
 
 > **Note**: For local development, Mycelia uses a self-signed certificate. You may need to click "Advanced" and "Proceed" in your browser. See [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and SSL.
