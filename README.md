@@ -63,6 +63,25 @@ Open [https://localhost:4433](https://localhost:4433) in your browser.
 
 > **Note**: For local development, Mycelia uses a self-signed certificate. You may need to click "Advanced" and "Proceed" in your browser. See [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and SSL.
 
+### Import Existing Audio Files
+
+```bash
+cd python
+uv run daemon.py
+```
+
+The daemon can import:
+- Apple Voice Memos
+- Google Drive Folders
+- Local Audio Folders
+
+**Environment variables** (optional, set in `.env`):
+- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
+- `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
+- `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
+- `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
+
+
 ### Configuration
 
 When you first open the frontend, you'll be guided through a setup wizard:
