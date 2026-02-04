@@ -40,9 +40,13 @@ def _load_jobs():
     """Load and register all job types"""
     from jobs.vad import VadJobData, process_vad_job
     from jobs.test_python_integration import TestPythonIntegrationJobData, process_test_python_integration_job
+    from jobs.enrollment import EnrollmentJobData, process_enrollment_job
+    from jobs.speaker_matching import SpeakerMatchingJobData, process_speaker_matching_job
 
     register_job("vad", VadJobData, process_vad_job)
     register_job("testPythonIntegration", TestPythonIntegrationJobData, process_test_python_integration_job)
+    register_job("enrollment", EnrollmentJobData, process_enrollment_job)
+    register_job("speakerMatching", SpeakerMatchingJobData, process_speaker_matching_job)
 
 
 _load_jobs()

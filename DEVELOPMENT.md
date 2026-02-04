@@ -151,14 +151,48 @@ uv run python -m convos.cli \
 
 ## Inference Stack (GPU)
 
-For local GPU inference:
+For local GPU inference (Whisper, Ollama, Diarization):
 
 ```bash
 cd gpu
+
+# Create .env with required tokens
+echo "HF_TOKEN=your_huggingface_token" >> .env
+echo "PROXY_API_KEY=your_api_key" >> .env
+
+# Start all services
 docker compose up -d --build
 ```
 
-See [docs/LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md) for hardware recommendations and model setup.
+See [gpu/README.md](gpu/README.md) for detailed setup and VRAM requirements.
+
+## Speaker Identification
+
+For voice enrollment and speaker recognition:
+
+1. Deploy diarization service on GPU (see above)
+2. Run migrations: `docker compose exec backend deno run -A server.ts migrate-up`
+3. Enable feature flag in Settings → Feature Flags
+4. Enroll voices in Settings → Voice Profiles
+
+See [docs/SPEAKER_IDENTIFICATION.md](docs/SPEAKER_IDENTIFICATION.md) for the full guide.
+
+## Database Migrations
+
+Migrations are in `backend/migrations/`. Apply them with:
+
+```bash
+# Check status
+docker compose exec backend deno run -A server.ts migrate-status
+
+# Apply all pending
+docker compose exec backend deno run -A server.ts migrate-up
+
+# Rollback last migration
+docker compose exec backend deno run -A server.ts migrate-down
+```
+
+See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for details.
 
 ## Troubleshooting
 
