@@ -6,6 +6,9 @@ from .profiles import (
     get_primary_profile,
     get_profile_by_id,
     delete_profile,
+    update_profile,
+    get_profile_samples,
+    delete_sample_and_recalculate,
 )
 from .matching import (
     match_segment_to_profiles,
@@ -21,6 +24,9 @@ __all__ = [
     "get_primary_profile",
     "get_profile_by_id",
     "delete_profile",
+    "update_profile",
+    "get_profile_samples",
+    "delete_sample_and_recalculate",
     # Matching
     "match_segment_to_profiles",
     "match_segments_batch",

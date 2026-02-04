@@ -9,10 +9,25 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2, Save, FileAudio, RotateCcw } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Mic, Upload, Trash2, Plus, Play, Square, UserRound, Loader2, Save, FileAudio, RotateCcw, Pencil, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { WaveformPlayer } from "@/components/audio/WaveformPlayer";
 
 const VOICE_SAMPLES_BUCKET = "voice_samples";
+
+// Pre-defined colors for speaker profiles
+const PROFILE_COLORS = [
+  "#3b82f6",  // Blue
+  "#ef4444",  // Red
+  "#10b981",  // Green
+  "#f59e0b",  // Amber
+  "#8b5cf6",  // Purple
+  "#ec4899",  // Pink
+  "#06b6d4",  // Cyan
+  "#f97316",  // Orange
+];
 
 // Helper to extract ID string from EJSON ObjectId or plain string
 const getSampleId = (sample: VoiceSample): string => {
@@ -23,8 +38,16 @@ const getSampleId = (sample: VoiceSample): string => {
   return String(sample._id);
 };
 
+const getProfileId = (profile: SpeakerProfile): string => {
+  if (typeof profile._id === "string") return profile._id;
+  if (profile._id && typeof profile._id === "object" && "$oid" in (profile._id as object)) {
+    return (profile._id as { $oid: string }).$oid;
+  }
+  return String(profile._id);
+};
+
 interface SpeakerProfile {
-  _id: string;
+  _id: string | { $oid: string };
   name: string;
   sample_count: number;
   total_duration: number;
@@ -41,6 +64,7 @@ interface VoiceSample {
     speaker_name?: string;
     duration?: number;
     uploaded_at?: string;
+    profile_id?: string;
   };
   length: number;
 }
@@ -63,6 +87,21 @@ const VoiceProfilesPage = () => {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(new Set());
+  
+  // Edit profile state
+  const [editingProfile, setEditingProfile] = useState<SpeakerProfile | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editColor, setEditColor] = useState("");
+  const [editIsPrimary, setEditIsPrimary] = useState(false);
+  
+  // Delete sample warning state
+  const [deletingSample, setDeletingSample] = useState<{ sampleId: string; profileId: string } | null>(null);
+  
+  // Attach sample state
+  const [attachingSample, setAttachingSample] = useState<VoiceSample | null>(null);
+  const [attachToProfileId, setAttachToProfileId] = useState<string>("");
+  
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -78,7 +117,6 @@ const VoiceProfilesPage = () => {
         query: {},
         options: { sort: { created_at: 1 } },
       });
-      // find returns array directly, not {data: [...]}
       return (Array.isArray(result) ? result : []) as SpeakerProfile[];
     },
   });
@@ -96,6 +134,14 @@ const VoiceProfilesPage = () => {
     },
   });
 
+  // Get samples attached to a profile
+  const getProfileSamples = (profileId: string) => {
+    return savedSamples?.filter(s => s.metadata?.profile_id === profileId) || [];
+  };
+
+  // Get unattached samples
+  const unattachedSamples = savedSamples?.filter(s => !s.metadata?.profile_id) || [];
+
   // Enrollment mutation
   const enrollMutation = useMutation({
     mutationFn: async (data: EnrollmentJobData) => {
@@ -110,28 +156,59 @@ const VoiceProfilesPage = () => {
       });
       setIsDialogOpen(false);
       resetForm();
-      // Refetch profiles after a delay
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+        queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
       }, 3000);
     },
     onError: (error: Error) => {
-      toast.error("Enrollment failed", {
-        description: error.message,
-      });
+      toast.error("Enrollment failed", { description: error.message });
     },
   });
 
-  // Delete sample mutation
+  // Update profile mutation
+  const updateProfileMutation = useMutation({
+    mutationFn: async ({ profileId, name, color, is_primary }: { profileId: string; name?: string; color?: string; is_primary?: boolean }) => {
+      const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (name !== undefined) update.name = name;
+      if (color !== undefined) update.color = color;
+      if (is_primary !== undefined) {
+        if (is_primary) {
+          // Unset other primary profiles first
+          await callResource("mongo", {
+            action: "updateMany",
+            collection: "speaker_profiles",
+            query: { is_primary: true, _id: { $ne: { $oid: profileId } } },
+            update: { $set: { is_primary: false } },
+          });
+        }
+        update.is_primary = is_primary;
+      }
+      await callResource("mongo", {
+        action: "updateOne",
+        collection: "speaker_profiles",
+        query: { _id: { $oid: profileId } },
+        update: { $set: update },
+      });
+    },
+    onSuccess: () => {
+      toast.success("Profile updated");
+      queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      setEditingProfile(null);
+    },
+    onError: (error: Error) => {
+      toast.error("Update failed", { description: error.message });
+    },
+  });
+
+  // Delete sample mutation (for unattached samples)
   const deleteSampleMutation = useMutation({
     mutationFn: async (sampleId: string) => {
-      // Delete from GridFS files collection directly
       await callResource("mongo", {
         action: "deleteOne",
         collection: `${VOICE_SAMPLES_BUCKET}.files`,
         query: { _id: { $oid: sampleId } },
       });
-      // Also delete chunks
       await callResource("mongo", {
         action: "deleteMany",
         collection: `${VOICE_SAMPLES_BUCKET}.chunks`,
@@ -147,7 +224,60 @@ const VoiceProfilesPage = () => {
     },
   });
 
-  // Delete mutation
+  // Delete attached sample mutation (with profile update)
+  const deleteAttachedSampleMutation = useMutation({
+    mutationFn: async ({ sampleId, profileId }: { sampleId: string; profileId: string }) => {
+      // Delete the sample
+      await callResource("mongo", {
+        action: "deleteOne",
+        collection: `${VOICE_SAMPLES_BUCKET}.files`,
+        query: { _id: { $oid: sampleId } },
+      });
+      await callResource("mongo", {
+        action: "deleteMany",
+        collection: `${VOICE_SAMPLES_BUCKET}.chunks`,
+        query: { files_id: { $oid: sampleId } },
+      });
+      
+      // Check remaining samples for this profile
+      const remainingSamples = await callResource("mongo", {
+        action: "find",
+        collection: `${VOICE_SAMPLES_BUCKET}.files`,
+        query: { "metadata.profile_id": profileId },
+      });
+      
+      const remaining = Array.isArray(remainingSamples) ? remainingSamples : [];
+      
+      if (remaining.length === 0) {
+        // Delete the profile if no samples remain
+        await callResource("mongo", {
+          action: "deleteOne",
+          collection: "speaker_profiles",
+          query: { _id: { $oid: profileId } },
+        });
+        toast.info("Profile deleted (no samples remaining)");
+      } else {
+        // Update sample count
+        await callResource("mongo", {
+          action: "updateOne",
+          collection: "speaker_profiles",
+          query: { _id: { $oid: profileId } },
+          update: { $set: { sample_count: remaining.length, updated_at: new Date().toISOString() } },
+        });
+      }
+    },
+    onSuccess: () => {
+      toast.success("Sample deleted");
+      queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+      queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      setDeletingSample(null);
+    },
+    onError: (error: Error) => {
+      toast.error("Failed to delete sample", { description: error.message });
+    },
+  });
+
+  // Delete profile mutation
   const deleteMutation = useMutation({
     mutationFn: async (profileId: string) => {
       await callResource("mongo", {
@@ -165,7 +295,36 @@ const VoiceProfilesPage = () => {
     },
   });
 
-  // Start recording
+  // Attach sample to profile mutation
+  const attachSampleMutation = useMutation({
+    mutationFn: async ({ sampleId, profileName, isPrimary }: { sampleId: string; profileName: string; isPrimary: boolean }) => {
+      return await callResource("jobs", {
+        action: "enqueue",
+        data: {
+          type: "enrollment",
+          name: profileName,
+          is_primary: isPrimary,
+          sample_file_id: sampleId,
+        },
+      });
+    },
+    onSuccess: () => {
+      toast.success("Attaching sample to profile...", {
+        description: "The voice embedding will be updated.",
+      });
+      setAttachingSample(null);
+      setAttachToProfileId("");
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+        queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+      }, 3000);
+    },
+    onError: (error: Error) => {
+      toast.error("Failed to attach sample", { description: error.message });
+    },
+  });
+
+  // Recording functions
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -174,9 +333,7 @@ const VoiceProfilesPage = () => {
       chunksRef.current = [];
 
       mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = () => {
@@ -188,19 +345,18 @@ const VoiceProfilesPage = () => {
       mediaRecorder.start();
       setIsRecording(true);
       setRecordingDuration(0);
-      setSelectedSampleId(null); // Clear selected sample when recording
+      setSelectedSampleId(null);
 
       timerRef.current = window.setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
-    } catch (error) {
+    } catch {
       toast.error("Microphone access denied", {
         description: "Please allow microphone access to record your voice.",
       });
     }
   };
 
-  // Stop recording
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
@@ -212,34 +368,28 @@ const VoiceProfilesPage = () => {
     }
   };
 
-  // Handle file upload
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       setRecordedBlob(file);
-      setSelectedSampleId(null); // Clear selected sample
-      // Estimate duration from file size (rough approximation)
-      setRecordingDuration(Math.round(file.size / 16000)); // ~16KB per second for compressed audio
+      setSelectedSampleId(null);
+      setRecordingDuration(Math.round(file.size / 16000));
     }
   };
 
-  // Save current recording to GridFS for later use
   const saveRecording = async () => {
     if (!recordedBlob) return;
 
     setIsSaving(true);
     try {
-      // Convert to WAV format (16kHz mono) for compatibility with diarization service
       toast.info("Converting audio format...");
       const wavBlob = await convertBlobToWav(recordedBlob);
       
-      // Convert WAV blob to base64
       const arrayBuffer = await wavBlob.arrayBuffer();
       const base64 = btoa(
         new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
       );
 
-      // Upload to GridFS via the file upload API
       await apiClient.post<{ file_id: string; success: boolean }>("/api/files/upload", {
         file: base64,
         filename: `voice_sample_${Date.now()}.wav`,
@@ -251,9 +401,7 @@ const VoiceProfilesPage = () => {
         },
       });
 
-      toast.success("Recording saved", {
-        description: "You can use this sample for enrollment later.",
-      });
+      toast.success("Recording saved");
       queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
     } catch (error) {
       toast.error("Failed to save recording", {
@@ -264,17 +412,15 @@ const VoiceProfilesPage = () => {
     }
   };
 
-  // Select a saved sample for enrollment
   const selectSample = (sample: VoiceSample) => {
     setSelectedSampleId(getSampleId(sample));
-    setRecordedBlob(null); // Clear recorded blob
+    setRecordedBlob(null);
     setRecordingDuration(sample.metadata?.duration || 0);
     if (sample.metadata?.speaker_name && !newProfileName) {
       setNewProfileName(sample.metadata.speaker_name);
     }
   };
 
-  // Submit enrollment
   const handleSubmit = async () => {
     if (!newProfileName.trim()) {
       toast.error("Please enter a name for the profile");
@@ -286,7 +432,7 @@ const VoiceProfilesPage = () => {
       return;
     }
 
-    // If using saved sample, use sample_file_id (already in WAV format)
+    // If using a saved sample, enroll directly
     if (selectedSampleId) {
       enrollMutation.mutate({
         type: "enrollment",
@@ -297,45 +443,87 @@ const VoiceProfilesPage = () => {
       return;
     }
 
-    // Convert recorded blob to WAV (16kHz mono) and then to base64
+    // For new recordings/uploads, save to GridFS first, then enroll
     try {
-      toast.info("Converting audio format...");
+      toast.info("Saving audio sample...");
       const wavBlob = await convertBlobToWav(recordedBlob!);
       
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        enrollMutation.mutate({
-          type: "enrollment",
-          name: newProfileName.trim(),
-          is_primary: isPrimary,
-          audio_data_base64: base64,
-        });
-      };
-      reader.readAsDataURL(wavBlob);
+      const arrayBuffer = await wavBlob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+      );
+
+      // Save to GridFS first
+      const uploadResult = await apiClient.post<{ file_id: string; success: boolean }>("/api/files/upload", {
+        file: base64,
+        filename: `voice_sample_${Date.now()}.wav`,
+        mimetype: "audio/wav",
+        bucket: VOICE_SAMPLES_BUCKET,
+        metadata: {
+          speaker_name: newProfileName.trim(),
+          duration: recordingDuration,
+        },
+      });
+
+      if (!uploadResult.file_id) {
+        throw new Error("Failed to save audio sample");
+      }
+
+      // Now enroll using the saved sample
+      enrollMutation.mutate({
+        type: "enrollment",
+        name: newProfileName.trim(),
+        is_primary: isPrimary,
+        sample_file_id: uploadResult.file_id,
+      });
     } catch (error) {
-      toast.error("Failed to convert audio", {
+      toast.error("Failed to save audio", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
     }
   };
 
-  // Reset form
   const resetForm = () => {
     setNewProfileName("");
     setIsPrimary(false);
     setRecordedBlob(null);
     setRecordingDuration(0);
     setSelectedSampleId(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // Format duration
+  const openEditDialog = (profile: SpeakerProfile) => {
+    setEditingProfile(profile);
+    setEditName(profile.name);
+    setEditColor(profile.color);
+    setEditIsPrimary(profile.is_primary);
+  };
+
+  const handleEditSubmit = () => {
+    if (!editingProfile) return;
+    updateProfileMutation.mutate({
+      profileId: getProfileId(editingProfile),
+      name: editName !== editingProfile.name ? editName : undefined,
+      color: editColor !== editingProfile.color ? editColor : undefined,
+      is_primary: editIsPrimary !== editingProfile.is_primary ? editIsPrimary : undefined,
+    });
+  };
+
+  const toggleProfileExpanded = (profileId: string) => {
+    setExpandedProfiles(prev => {
+      const next = new Set(prev);
+      if (next.has(profileId)) {
+        next.delete(profileId);
+      } else {
+        next.add(profileId);
+      }
+      return next;
+    });
+  };
+
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
@@ -374,36 +562,21 @@ const VoiceProfilesPage = () => {
               </div>
 
               <div className="flex items-center space-x-2">
-                <Switch
-                  id="primary"
-                  checked={isPrimary}
-                  onCheckedChange={setIsPrimary}
-                />
+                <Switch id="primary" checked={isPrimary} onCheckedChange={setIsPrimary} />
                 <Label htmlFor="primary">This is my voice</Label>
               </div>
 
               <div className="space-y-2">
                 <Label>Audio Sample</Label>
                 <div className="flex flex-col gap-3">
-                  {/* Recording controls */}
                   <div className="flex items-center gap-2">
                     {!isRecording ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={startRecording}
-                        className="flex-1"
-                      >
+                      <Button type="button" variant="outline" onClick={startRecording} className="flex-1">
                         <Mic className="w-4 h-4 mr-2" />
                         Record from Mic
                       </Button>
                     ) : (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        onClick={stopRecording}
-                        className="flex-1"
-                      >
+                      <Button type="button" variant="destructive" onClick={stopRecording} className="flex-1">
                         <Square className="w-4 h-4 mr-2" />
                         Stop Recording ({formatDuration(recordingDuration)})
                       </Button>
@@ -412,7 +585,6 @@ const VoiceProfilesPage = () => {
 
                   <div className="text-center text-sm text-muted-foreground">or</div>
 
-                  {/* File upload */}
                   <div>
                     <input
                       ref={fileInputRef}
@@ -422,71 +594,45 @@ const VoiceProfilesPage = () => {
                       className="hidden"
                       id="audio-upload"
                     />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="w-full"
-                    >
+                    <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} className="w-full">
                       <Upload className="w-4 h-4 mr-2" />
                       Upload Audio File
                     </Button>
                   </div>
 
-                  {/* Status and Save button */}
                   {recordedBlob && !isRecording && (
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
                         <Play className="w-4 h-4" />
                         Audio ready ({formatDuration(recordingDuration)})
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={saveRecording}
-                        disabled={isSaving}
-                      >
-                        {isSaving ? (
-                          <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                        ) : (
-                          <Save className="w-4 h-4 mr-1" />
-                        )}
+                      <Button type="button" variant="ghost" size="sm" onClick={saveRecording} disabled={isSaving}>
+                        {isSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
                         Save for later
                       </Button>
                     </div>
                   )}
 
-                  {/* Selected saved sample */}
                   {selectedSampleId && (
                     <div className="flex items-center justify-between gap-2 p-2 bg-muted rounded">
                       <div className="flex items-center gap-2 text-sm">
                         <FileAudio className="w-4 h-4 text-blue-500" />
                         <span>Using saved sample ({formatDuration(recordingDuration)})</span>
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedSampleId(null);
-                          setRecordingDuration(0);
-                        }}
-                      >
+                      <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedSampleId(null); setRecordingDuration(0); }}>
                         <RotateCcw className="w-4 h-4" />
                       </Button>
                     </div>
                   )}
 
-                  {/* Saved samples list - always visible when samples exist */}
-                  {savedSamples && savedSamples.length > 0 && !selectedSampleId && (
+                  {unattachedSamples.length > 0 && !selectedSampleId && (
                     <div className="space-y-2 pt-2 border-t">
                       <div className="flex items-center justify-between">
                         <Label className="text-sm font-medium">Saved Voice Samples</Label>
-                        <span className="text-xs text-muted-foreground">{savedSamples.length} saved</span>
+                        <span className="text-xs text-muted-foreground">{unattachedSamples.length} saved</span>
                       </div>
                       <div className="max-h-40 overflow-y-auto space-y-1">
-                        {savedSamples.map((sample) => (
+                        {unattachedSamples.map((sample) => (
                           <div
                             key={getSampleId(sample)}
                             className="flex items-center justify-between p-2 border rounded hover:bg-muted cursor-pointer transition-colors"
@@ -495,22 +641,8 @@ const VoiceProfilesPage = () => {
                             <div className="flex items-center gap-2 text-sm">
                               <FileAudio className="w-4 h-4 text-blue-500" />
                               <span className="font-medium">{sample.metadata?.speaker_name || "Unknown"}</span>
-                              <span className="text-muted-foreground">
-                                ({formatDuration(sample.metadata?.duration || 0)})
-                              </span>
+                              <span className="text-muted-foreground">({formatDuration(sample.metadata?.duration || 0)})</span>
                             </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteSampleMutation.mutate(getSampleId(sample));
-                              }}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
                           </div>
                         ))}
                       </div>
@@ -521,19 +653,8 @@ const VoiceProfilesPage = () => {
               </div>
             </div>
             <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setIsDialogOpen(false);
-                  resetForm();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleSubmit}
-                disabled={enrollMutation.isPending || (!recordedBlob && !selectedSampleId) || !newProfileName.trim()}
-              >
+              <Button variant="outline" onClick={() => { setIsDialogOpen(false); resetForm(); }}>Cancel</Button>
+              <Button onClick={handleSubmit} disabled={enrollMutation.isPending || (!recordedBlob && !selectedSampleId) || !newProfileName.trim()}>
                 {enrollMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Enroll Voice
               </Button>
@@ -542,6 +663,7 @@ const VoiceProfilesPage = () => {
         </Dialog>
       </div>
 
+      {/* Profiles List */}
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -551,9 +673,7 @@ const VoiceProfilesPage = () => {
           <CardContent className="py-12 text-center">
             <UserRound className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
             <h3 className="text-lg font-medium mb-2">No voice profiles</h3>
-            <p className="text-muted-foreground mb-4">
-              Enroll your voice to start identifying speakers in your recordings.
-            </p>
+            <p className="text-muted-foreground mb-4">Enroll your voice to start identifying speakers.</p>
             <Button onClick={() => setIsDialogOpen(true)}>
               <Plus className="w-4 h-4 mr-2" />
               Enroll My Voice
@@ -562,73 +682,270 @@ const VoiceProfilesPage = () => {
         </Card>
       ) : (
         <div className="grid gap-4">
-          {profiles?.map((profile) => (
-            <Card key={profile._id}>
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-10 h-10 rounded-full flex items-center justify-center"
-                      style={{ backgroundColor: profile.color }}
-                    >
-                      <UserRound className="w-5 h-5 text-white" />
+          {profiles?.map((profile) => {
+            const profileId = getProfileId(profile);
+            const profileSamples = getProfileSamples(profileId);
+            const isExpanded = expandedProfiles.has(profileId);
+
+            return (
+              <Card key={profileId}>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer"
+                        style={{ backgroundColor: profile.color }}
+                        onClick={() => openEditDialog(profile)}
+                      >
+                        <UserRound className="w-5 h-5 text-white" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          {profile.name}
+                          {profile.is_primary && <Badge variant="secondary">My Voice</Badge>}
+                        </CardTitle>
+                        <CardDescription>
+                          {profile.sample_count} sample{profile.sample_count !== 1 ? "s" : ""} • {Math.round(profile.total_duration)}s total
+                        </CardDescription>
+                      </div>
                     </div>
-                    <div>
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        {profile.name}
-                        {profile.is_primary && (
-                          <Badge variant="secondary">My Voice</Badge>
-                        )}
-                      </CardTitle>
-                      <CardDescription>
-                        {profile.sample_count} sample{profile.sample_count !== 1 ? "s" : ""} • {Math.round(profile.total_duration)}s total
-                      </CardDescription>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openEditDialog(profile)}>
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button variant="ghost" size="icon">
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Delete Profile</DialogTitle>
+                            <DialogDescription>
+                              Are you sure you want to delete "{profile.name}"? This will not remove speaker labels from existing transcripts.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <DialogFooter>
+                            <DialogClose asChild>
+                              <Button variant="outline">Cancel</Button>
+                            </DialogClose>
+                            <DialogClose asChild>
+                              <Button variant="destructive" onClick={() => deleteMutation.mutate(profileId)}>Delete</Button>
+                            </DialogClose>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
                     </div>
                   </div>
-                  <Dialog>
-                    <DialogTrigger asChild>
-                      <Button variant="ghost" size="icon">
-                        <Trash2 className="w-4 h-4" />
+                </CardHeader>
+
+                {/* Expandable samples section */}
+                {profileSamples.length > 0 && (
+                  <Collapsible open={isExpanded} onOpenChange={() => toggleProfileExpanded(profileId)}>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="w-full justify-start px-6 py-2 text-muted-foreground">
+                        {isExpanded ? <ChevronDown className="w-4 h-4 mr-2" /> : <ChevronRight className="w-4 h-4 mr-2" />}
+                        {profileSamples.length} voice sample{profileSamples.length !== 1 ? "s" : ""}
                       </Button>
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Delete Profile</DialogTitle>
-                        <DialogDescription>
-                          Are you sure you want to delete "{profile.name}"? This will not remove speaker labels from existing transcripts.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <DialogFooter>
-                        <DialogClose asChild>
-                          <Button variant="outline">Cancel</Button>
-                        </DialogClose>
-                        <DialogClose asChild>
-                          <Button
-                            variant="destructive"
-                            onClick={() => deleteMutation.mutate(profile._id)}
-                          >
-                            Delete
-                          </Button>
-                        </DialogClose>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <CardContent className="pt-0 space-y-2">
+                        {profileSamples.map((sample) => (
+                          <div key={getSampleId(sample)} className="flex items-center gap-2 p-2 border rounded">
+                            <div className="flex-1">
+                              <WaveformPlayer
+                                audioUrl={`/api/files/${getSampleId(sample)}?bucket=${VOICE_SAMPLES_BUCKET}`}
+                                duration={sample.metadata?.duration}
+                              />
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-muted-foreground hover:text-destructive shrink-0"
+                              onClick={() => setDeletingSample({ sampleId: getSampleId(sample), profileId })}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
+
+      {/* Unattached Samples Section */}
+      {unattachedSamples.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Unattached Voice Samples</CardTitle>
+            <CardDescription>
+              These samples are not linked to any profile. Attach them to an existing profile or use them to create a new one.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {unattachedSamples.map((sample) => (
+              <div key={getSampleId(sample)} className="flex items-center gap-3 p-3 border rounded">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium mb-1">{sample.metadata?.speaker_name || "Unknown"}</div>
+                  <WaveformPlayer
+                    audioUrl={`/api/files/${getSampleId(sample)}?bucket=${VOICE_SAMPLES_BUCKET}`}
+                    duration={sample.metadata?.duration}
+                  />
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {profiles && profiles.length > 0 && (
+                    <Button variant="outline" size="sm" onClick={() => setAttachingSample(sample)}>
+                      Attach
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteSampleMutation.mutate(getSampleId(sample))}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Edit Profile Dialog */}
+      <Dialog open={!!editingProfile} onOpenChange={(open) => !open && setEditingProfile(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+            <DialogDescription>Update the profile name, color, or settings.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Name</Label>
+              <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Color</Label>
+              <div className="flex gap-2 flex-wrap">
+                {PROFILE_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`w-8 h-8 rounded-full border-2 transition-all ${editColor === color ? "border-foreground scale-110" : "border-transparent"}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => setEditColor(color)}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Switch id="edit-primary" checked={editIsPrimary} onCheckedChange={setEditIsPrimary} />
+              <Label htmlFor="edit-primary">This is my voice</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingProfile(null)}>Cancel</Button>
+            <Button onClick={handleEditSubmit} disabled={updateProfileMutation.isPending}>
+              {updateProfileMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Attached Sample Warning Dialog */}
+      <Dialog open={!!deletingSample} onOpenChange={(open) => !open && setDeletingSample(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Delete Voice Sample
+            </DialogTitle>
+            <DialogDescription>
+              This sample is attached to a voice profile. Deleting it will update the profile's sample count.
+              If this is the only sample, the profile will be deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingSample(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deletingSample && deleteAttachedSampleMutation.mutate(deletingSample)}
+              disabled={deleteAttachedSampleMutation.isPending}
+            >
+              {deleteAttachedSampleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete Sample
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Attach Sample Dialog */}
+      <Dialog open={!!attachingSample} onOpenChange={(open) => !open && setAttachingSample(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Attach Sample to Profile</DialogTitle>
+            <DialogDescription>
+              Select a profile to attach this voice sample to. The profile's voice embedding will be updated.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Select value={attachToProfileId} onValueChange={setAttachToProfileId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a profile" />
+              </SelectTrigger>
+              <SelectContent>
+                {profiles?.map((profile) => (
+                  <SelectItem key={getProfileId(profile)} value={getProfileId(profile)}>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: profile.color }} />
+                      {profile.name}
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAttachingSample(null)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (attachingSample && attachToProfileId) {
+                  const profile = profiles?.find(p => getProfileId(p) === attachToProfileId);
+                  if (profile) {
+                    attachSampleMutation.mutate({
+                      sampleId: getSampleId(attachingSample),
+                      profileName: profile.name,
+                      isPrimary: profile.is_primary,
+                    });
+                  }
+                }
+              }}
+              disabled={!attachToProfileId || attachSampleMutation.isPending}
+            >
+              {attachSampleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Attach
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Help text */}
       <Card className="bg-muted/50">
         <CardContent className="py-4">
           <h4 className="font-medium mb-2">Tips for better voice identification</h4>
           <ul className="text-sm text-muted-foreground space-y-1">
-            <li>• Record 10-30 seconds of clear, natural speech</li>
-            <li>• Avoid background noise and overlapping speakers</li>
-            <li>• Add multiple samples to improve accuracy</li>
-            <li>• Use the "Run Matching" job to identify speakers in past recordings</li>
+            <li>* Record 10-30 seconds of clear, natural speech</li>
+            <li>* Avoid background noise and overlapping speakers</li>
+            <li>* Add multiple samples to improve accuracy</li>
+            <li>* Use the "Run Matching" job to identify speakers in past recordings</li>
           </ul>
         </CardContent>
       </Card>

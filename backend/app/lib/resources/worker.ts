@@ -215,18 +215,30 @@ export class JobsResource
   }
 
   private async enqueue(input: z.infer<typeof EnqueueJobSchema>, auth: Auth) {
+    // #region agent log
+    fetch('http://127.0.0.1:7249/ingest/b679e847-cad3-44bf-84b7-b823ce3a922e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.ts:enqueue',message:'enqueue called',data:{inputData:input.data,inputType:input.data?.type},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     // Access already checked by ResourceManager - escalate to server auth
     const serverAuth = await getServerAuth();
     const options: EnqueueJobOptions = {
       priority: input.priority,
       trigger: input.trigger,
     };
-    const job = await enqueueJob(input.data, options, serverAuth);
-
-    return {
-      success: true,
-      jobId: job.id,
-    };
+    try {
+      const job = await enqueueJob(input.data, options, serverAuth);
+      // #region agent log
+      fetch('http://127.0.0.1:7249/ingest/b679e847-cad3-44bf-84b7-b823ce3a922e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.ts:enqueue',message:'enqueue success',data:{jobId:job.id},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      return {
+        success: true,
+        jobId: job.id,
+      };
+    } catch (err: any) {
+      // #region agent log
+      fetch('http://127.0.0.1:7249/ingest/b679e847-cad3-44bf-84b7-b823ce3a922e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'worker.ts:enqueue',message:'enqueue error',data:{error:err?.message,stack:err?.stack?.slice(0,500)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      throw err;
+    }
   }
 
   private async cancel(input: z.infer<typeof CancelJobSchema>, auth: Auth) {
