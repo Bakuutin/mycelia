@@ -78,7 +78,8 @@ const VoiceProfilesPage = () => {
         query: {},
         options: { sort: { created_at: 1 } },
       });
-      return (result?.data || []) as SpeakerProfile[];
+      // find returns array directly, not {data: [...]}
+      return (Array.isArray(result) ? result : []) as SpeakerProfile[];
     },
   });
 
@@ -477,20 +478,23 @@ const VoiceProfilesPage = () => {
                     </div>
                   )}
 
-                  {/* Saved samples list */}
-                  {savedSamples && savedSamples.length > 0 && !selectedSampleId && !recordedBlob && (
-                    <div className="space-y-2">
-                      <div className="text-center text-sm text-muted-foreground">or use saved sample</div>
-                      <div className="max-h-32 overflow-y-auto space-y-1">
+                  {/* Saved samples list - always visible when samples exist */}
+                  {savedSamples && savedSamples.length > 0 && !selectedSampleId && (
+                    <div className="space-y-2 pt-2 border-t">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">Saved Voice Samples</Label>
+                        <span className="text-xs text-muted-foreground">{savedSamples.length} saved</span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto space-y-1">
                         {savedSamples.map((sample) => (
                           <div
                             key={getSampleId(sample)}
-                            className="flex items-center justify-between p-2 border rounded hover:bg-muted cursor-pointer"
+                            className="flex items-center justify-between p-2 border rounded hover:bg-muted cursor-pointer transition-colors"
                             onClick={() => selectSample(sample)}
                           >
                             <div className="flex items-center gap-2 text-sm">
-                              <FileAudio className="w-4 h-4" />
-                              <span>{sample.metadata?.speaker_name || "Unknown"}</span>
+                              <FileAudio className="w-4 h-4 text-blue-500" />
+                              <span className="font-medium">{sample.metadata?.speaker_name || "Unknown"}</span>
                               <span className="text-muted-foreground">
                                 ({formatDuration(sample.metadata?.duration || 0)})
                               </span>
@@ -499,7 +503,7 @@ const VoiceProfilesPage = () => {
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="h-6 w-6"
+                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 deleteSampleMutation.mutate(getSampleId(sample));
@@ -510,6 +514,7 @@ const VoiceProfilesPage = () => {
                           </div>
                         ))}
                       </div>
+                      <p className="text-xs text-muted-foreground">Click a sample to use it for enrollment</p>
                     </div>
                   )}
                 </div>

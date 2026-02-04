@@ -17,13 +17,17 @@ import { NetworkJobCapability } from "./python.ts";
 export const schema = z.object({
   type: z.literal("speakerMatching"),
   /** Maximum number of segments to process */
-  limit: z.number().int().positive().default(10000),
+  limit: z.number().int().positive().default(10000)
+    .describe("Maximum number of diarization segments to process in this job run"),
   /** Batch size for MongoDB queries */
-  batch_size: z.number().int().positive().default(500),
-  /** Override default similarity threshold (0.35) */
-  threshold: z.number().min(0).max(1).optional(),
+  batch_size: z.number().int().positive().default(500)
+    .describe("Number of segments to fetch and process per batch"),
+  /** Similarity threshold for speaker matching */
+  threshold: z.number().min(0).max(1).default(0.35)
+    .describe("Minimum cosine similarity (0-1) to accept a speaker match. Higher = stricter matching"),
   /** Only match for specific profile ID (for re-matching) */
-  profile_id: z.string().optional(),
+  profile_id: z.string().optional()
+    .describe("Optional: Only match segments against this specific speaker profile ID (for targeted re-matching)"),
 });
 
 const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
