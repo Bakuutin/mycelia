@@ -1034,7 +1034,28 @@ export default function JobsPage() {
                       {formatDuration(job.processedOn, job.finishedOn)}
                     </TableCell>
                     <TableCell>
-                      {job.progress ? (
+                      {/* Transcription job - show transcription-specific info */}
+                      {job.type === "transcription" && job.result?.transcriptionId ? (
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            {job.result.wordCount && (
+                              <span className="text-muted-foreground">
+                                {job.result.wordCount} words
+                              </span>
+                            )}
+                            {job.result.audioDuration && (
+                              <span className="text-muted-foreground">
+                                {job.result.audioDuration.toFixed(1)}s
+                              </span>
+                            )}
+                          </div>
+                          {job.result.textPreview && (
+                            <div className="text-xs text-muted-foreground line-clamp-2 max-w-xs">
+                              "{job.result.textPreview.slice(0, 80)}..."
+                            </div>
+                          )}
+                        </div>
+                      ) : job.progress ? (
                         <div className="space-y-2">
                           {(() => {
                             const percentage = getProgressPercentage(job.progress);

@@ -12,9 +12,34 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban } from "lucide-react";
+import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
+
+interface TranscriptionDoc {
+    _id: string;
+    original: string;
+    start: string;
+    end: string;
+    duration: number;
+    text: string;
+    segments: Array<{ start: number; end: number; text: string }>;
+    metadata?: {
+        model?: string;
+        processingTimeMs?: number;
+        wordCount?: number;
+        segmentCount?: number;
+        language?: string;
+        jobId?: string;
+    };
+    chunk_id?: string;
+    createdAt: string;
+}
+
+interface ConversationChunk {
+    _id: string;
+    text?: string;
+}
 
 const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
     const result: Array<[string, any]> = [];
@@ -141,6 +166,48 @@ export default function JobDetailPage() {
         enabled: !!id,
     });
 
+    const job = cachedJob || fetchedJob;
+    const isTranscriptionJob = job?.type === "transcription";
+
+    // Fetch transcriptions created by this job
+    const { data: transcriptions = [], isLoading: isTranscriptionsLoading } = useQuery({
+        queryKey: ["job-transcriptions", id],
+        queryFn: async () => {
+            if (!id) return [];
+            const response = await api.callResource("mongo", {
+                action: "find",
+                collection: "transcriptions",
+                query: { "metadata.jobId": id },
+                options: {
+                    sort: { createdAt: -1 },
+                    limit: 10,
+                },
+            });
+            return response as TranscriptionDoc[];
+        },
+        enabled: !!id && isTranscriptionJob,
+    });
+
+    // Fetch conversation chunks linked to transcriptions
+    const transcriptionChunkIds = transcriptions
+        .map(t => t.chunk_id)
+        .filter((id): id is string => !!id);
+    
+    const { data: conversationChunks = [] } = useQuery({
+        queryKey: ["transcription-chunks", transcriptionChunkIds],
+        queryFn: async () => {
+            if (transcriptionChunkIds.length === 0) return [];
+            const response = await api.callResource("mongo", {
+                action: "find",
+                collection: "conversation_chunks",
+                query: { _id: { $in: transcriptionChunkIds } },
+                options: { limit: 10 },
+            });
+            return response as ConversationChunk[];
+        },
+        enabled: transcriptionChunkIds.length > 0,
+    });
+
     useWebSocketSubscription(
         `jobs:${id}:logs`,
         (event) => {
@@ -183,7 +250,6 @@ export default function JobDetailPage() {
         cancelJobMutation.mutate();
     };
 
-    const job = cachedJob || fetchedJob;
     const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const getStatusColor = (status: string) => {
@@ -372,6 +438,131 @@ export default function JobDetailPage() {
                     </Card>
                 )}
             </div>
+
+            {/* Transcription Details Section */}
+            {isTranscriptionJob && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <FileText className="h-5 w-5" />
+                            Transcription Details
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {isTranscriptionsLoading ? (
+                            <Skeleton className="h-32 w-full" />
+                        ) : transcriptions.length === 0 ? (
+                            <div className="text-sm text-muted-foreground">
+                                {job.state === "completed" 
+                                    ? "No transcriptions were created by this job (possibly empty audio or filtered out)"
+                                    : "Transcription not yet available"}
+                            </div>
+                        ) : (
+                            <div className="space-y-6">
+                                {transcriptions.map((transcription) => {
+                                    const linkedChunk = conversationChunks.find(
+                                        c => c._id === transcription.chunk_id
+                                    );
+                                    const meta = transcription.metadata;
+                                    
+                                    return (
+                                        <div key={transcription._id} className="space-y-4 border-b border-border/50 pb-6 last:border-b-0 last:pb-0">
+                                            {/* Metadata Grid */}
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                                <div className="flex items-center gap-2">
+                                                    <Clock className="h-4 w-4 text-muted-foreground" />
+                                                    <div>
+                                                        <div className="text-xs text-muted-foreground">Audio Duration</div>
+                                                        <div className="text-sm font-medium">
+                                                            {transcription.duration ? `${transcription.duration.toFixed(1)}s` : "-"}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Hash className="h-4 w-4 text-muted-foreground" />
+                                                    <div>
+                                                        <div className="text-xs text-muted-foreground">Word Count</div>
+                                                        <div className="text-sm font-medium">
+                                                            {meta?.wordCount ?? transcription.text.split(/\s+/).filter(w => w.length > 0).length}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                                                    <div>
+                                                        <div className="text-xs text-muted-foreground">Segments</div>
+                                                        <div className="text-sm font-medium">
+                                                            {meta?.segmentCount ?? transcription.segments?.length ?? 0}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Clock className="h-4 w-4 text-muted-foreground" />
+                                                    <div>
+                                                        <div className="text-xs text-muted-foreground">Processing Time</div>
+                                                        <div className="text-sm font-medium">
+                                                            {meta?.processingTimeMs 
+                                                                ? `${(meta.processingTimeMs / 1000).toFixed(1)}s`
+                                                                : "-"}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Model and Language */}
+                                            <div className="flex flex-wrap gap-2">
+                                                {meta?.model && (
+                                                    <Badge variant="outline">
+                                                        Model: {meta.model}
+                                                    </Badge>
+                                                )}
+                                                {meta?.language && (
+                                                    <Badge variant="outline">
+                                                        Language: {meta.language}
+                                                    </Badge>
+                                                )}
+                                            </div>
+
+                                            {/* Timeline Link */}
+                                            {transcription.start && (
+                                                <div className="flex items-center gap-2">
+                                                    <Link 
+                                                        to={`/timeline?t=${new Date(transcription.start).getTime()}`}
+                                                        className="flex items-center gap-1 text-sm text-blue-500 hover:text-blue-600 hover:underline"
+                                                    >
+                                                        <ExternalLink className="h-4 w-4" />
+                                                        View on Timeline ({format(new Date(transcription.start), "PPpp")})
+                                                    </Link>
+                                                </div>
+                                            )}
+
+                                            {/* Linked Conversation Chunk */}
+                                            {linkedChunk && (
+                                                <div>
+                                                    <div className="text-xs text-muted-foreground mb-1">Linked to Conversation Chunk</div>
+                                                    <Badge variant="secondary" className="font-mono text-xs">
+                                                        {linkedChunk._id}
+                                                    </Badge>
+                                                </div>
+                                            )}
+
+                                            {/* Transcription Text */}
+                                            <div>
+                                                <div className="text-sm text-muted-foreground mb-2">Transcription Text</div>
+                                                <div className="bg-muted/50 rounded-lg p-4 max-h-64 overflow-y-auto">
+                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">
+                                                        {transcription.text || "No text available"}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
 
             <Card>
                 <CardHeader>
