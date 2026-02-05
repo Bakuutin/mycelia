@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exchangeApiKeyForJWT } from "@/lib/auth";
-import { Loader2, CheckCircle2, XCircle, Terminal, Copy, Check, ClipboardPaste } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Terminal, Copy, Check, ClipboardPaste, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +22,7 @@ const SERVER_ENDPOINTS: Record<Exclude<ServerType, "custom">, string> = {
 };
 
 type SetupStatus = "idle" | "verifying" | "creating_new" | "success" | "error" | "keys_exist";
+type ServerTestStatus = "idle" | "testing" | "success" | "error";
 
 interface SetupResponse {
   created: boolean;
@@ -66,11 +67,81 @@ export default function SetupPage() {
   const [pastedCredentials, setPastedCredentials] = useState("");
   const [status, setStatus] = useState<SetupStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [serverTestStatus, setServerTestStatus] = useState<ServerTestStatus>("idle");
+  const [serverTestError, setServerTestError] = useState<string | null>(null);
 
   const handleServerTypeChange = (value: ServerType) => {
     setServerType(value);
     if (value !== "custom") {
       setLocalEndpoint(SERVER_ENDPOINTS[value]);
+    }
+    setServerTestStatus("idle");
+    setServerTestError(null);
+  };
+
+  const handleEndpointChange = (value: string) => {
+    setLocalEndpoint(value);
+    setServerTestStatus("idle");
+    setServerTestError(null);
+    // Auto-switch to custom if endpoint doesn't match presets
+    if (value === SERVER_ENDPOINTS.docker) {
+      setServerType("docker");
+    } else if (value === SERVER_ENDPOINTS.deno) {
+      setServerType("deno");
+    } else if (serverType !== "custom") {
+      setServerType("custom");
+    }
+  };
+
+  // Auto-test server when endpoint changes
+  useEffect(() => {
+    if (!localEndpoint) return;
+
+    // Validate URL format first
+    try {
+      new URL(localEndpoint);
+    } catch {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      testServerConnection();
+    }, 500);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localEndpoint]);
+
+  const testServerConnection = async () => {
+    setServerTestStatus("testing");
+    setServerTestError(null);
+
+    try {
+      const response = await fetch(`${localEndpoint}/api/setup`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5000),
+      });
+
+      // Any response means server is reachable (even 4xx/5xx)
+      // 502 specifically means proxy can't reach backend
+      if (response.status === 502) {
+        setServerTestStatus("error");
+        setServerTestError("Backend server is not running.");
+      } else {
+        setServerTestStatus("success");
+        setServerTestError(null);
+      }
+    } catch (error) {
+      setServerTestStatus("error");
+      if (error instanceof Error) {
+        if (error.name === "TimeoutError") {
+          setServerTestError("Connection timed out. Server may not be running.");
+        } else if (error.message.includes("Failed to fetch")) {
+          setServerTestError("Could not reach server. Check if it's running.");
+        } else {
+          setServerTestError(error.message);
+        }
+      }
     }
   };
 
@@ -90,7 +161,7 @@ export default function SetupPage() {
 
     if (foundClientId) setLocalClientId(foundClientId);
     if (foundToken) setLocalToken(foundToken);
-    
+
     if (!foundClientId && !foundToken) {
       setErrorMessage("Could not find MYCELIA_CLIENT_ID or MYCELIA_TOKEN in the pasted text");
     } else {
@@ -141,10 +212,25 @@ export default function SetupPage() {
     }
   };
 
+  const getBrowserName = (): string => {
+    const ua = navigator.userAgent;
+    if (ua.includes("Firefox")) return "Firefox";
+    if (ua.includes("Edg")) return "Edge";
+    if (ua.includes("Chrome")) return "Chrome";
+    if (ua.includes("Safari")) return "Safari";
+    if (ua.includes("Opera") || ua.includes("OPR")) return "Opera";
+    return "Browser";
+  };
+
   const createNewCredentials = async () => {
     setStatus("creating_new");
     setErrorMessage(null);
     setApiEndpoint(localEndpoint);
+
+    // Generate a name with browser info and timestamp
+    const browser = getBrowserName();
+    const timestamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const tokenName = `${browser}-${timestamp}`;
 
     try {
       const response = await fetch(`${localEndpoint}/api/setup`, {
@@ -152,8 +238,18 @@ export default function SetupPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ create: true }),
+        body: JSON.stringify({ create: true, name: tokenName }),
       });
+
+      // Handle non-JSON responses (e.g., 502 proxy errors)
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(
+          response.status === 502
+            ? "Backend server is not running. Please start the backend service."
+            : `Server error (${response.status}). Please try again.`
+        );
+      }
 
       const data: SetupResponse = await response.json();
 
@@ -195,6 +291,9 @@ export default function SetupPage() {
   };
 
   const isRemoteServer = !localEndpoint.includes("localhost") && !localEndpoint.includes("127.0.0.1");
+
+  // Generate suggested token name with browser info
+  const suggestedTokenName = `${getBrowserName()}-${new Date().toISOString().slice(0, 10)}`;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -250,14 +349,14 @@ export default function SetupPage() {
                     </div>
                     <div className="relative">
                       <pre className="bg-slate-900/80 rounded-lg p-4 text-sm font-mono text-slate-300 overflow-x-auto">
-                        <code>docker compose exec backend deno run -A server.ts token-create --name browser-ui</code>
+                        <code>docker compose exec backend deno run -A server.ts token-create --name {suggestedTokenName}</code>
                       </pre>
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
                         className="absolute top-2 right-2 text-slate-400 hover:text-white"
-                        onClick={() => copyCommand("docker compose exec backend deno run -A server.ts token-create --name browser-ui")}
+                        onClick={() => copyCommand(`docker compose exec backend deno run -A server.ts token-create --name ${suggestedTokenName}`)}
                       >
                         {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                       </Button>
@@ -271,20 +370,20 @@ export default function SetupPage() {
                     <p className="text-slate-400 text-sm">
                       Run one of these commands in your terminal:
                     </p>
-                    
+
                     {/* Docker option */}
                     <div className="space-y-2 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
                       <p className="text-slate-300 text-xs font-medium">Docker (recommended)</p>
                       <div className="relative">
                         <pre className="bg-slate-900/80 rounded-lg p-3 text-sm font-mono text-slate-300 overflow-x-auto">
-                          <code>docker compose exec backend deno run -A server.ts token-create --name browser-ui</code>
+                          <code>docker compose exec backend deno run -A server.ts token-create --name {suggestedTokenName}</code>
                         </pre>
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
                           className="absolute top-2 right-2 text-slate-400 hover:text-white"
-                          onClick={() => copyCommand("docker compose exec backend deno run -A server.ts token-create --name browser-ui")}
+                          onClick={() => copyCommand(`docker compose exec backend deno run -A server.ts token-create --name ${suggestedTokenName}`)}
                         >
                           {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                         </Button>
@@ -293,20 +392,20 @@ export default function SetupPage() {
                         Server endpoint: <code className="text-purple-400">https://localhost:4433</code>
                       </p>
                     </div>
-                    
+
                     {/* Non-Docker option */}
                     <div className="space-y-2 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
                       <p className="text-slate-300 text-xs font-medium">Local development (deno task dev)</p>
                       <div className="relative">
                         <pre className="bg-slate-900/80 rounded-lg p-3 text-sm font-mono text-slate-300 overflow-x-auto">
-                          <code>cd backend && deno run -A server.ts token-create --name browser-ui</code>
+                          <code>cd backend && deno run -A server.ts token-create --name {suggestedTokenName}</code>
                         </pre>
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
                           className="absolute top-2 right-2 text-slate-400 hover:text-white"
-                          onClick={() => copyCommand("cd backend && deno run -A server.ts token-create --name browser-ui")}
+                          onClick={() => copyCommand(`cd backend && deno run -A server.ts token-create --name ${suggestedTokenName}`)}
                         >
                           {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                         </Button>
@@ -318,22 +417,88 @@ export default function SetupPage() {
                   </>
                 )}
 
-                <div className="text-slate-400 text-sm space-y-2">
-                  <p>This will output your credentials:</p>
-                  <pre className="bg-slate-900/80 rounded-lg p-3 text-xs font-mono text-slate-500">
-{`MYCELIA_CLIENT_ID=abc123...
-MYCELIA_TOKEN=mycelia_xyz...`}
-                  </pre>
+                <div className="space-y-3">
+                  <p className="text-slate-400 text-sm">Paste the output here:</p>
+                  <textarea
+                    value={pastedCredentials}
+                    onChange={(e) => setPastedCredentials(e.target.value)}
+                    placeholder={`MYCELIA_CLIENT_ID=abc123...\nMYCELIA_TOKEN=mycelia_xyz...`}
+                    disabled={isLoading}
+                    rows={3}
+                    className="w-full bg-slate-900/80 border border-white/10 rounded-lg p-3 text-sm font-mono text-slate-300 placeholder:text-slate-600 focus:border-purple-400 focus:outline-none disabled:opacity-50 resize-none"
+                  />
+                  {errorMessage && (
+                    <p className="text-red-400 text-xs">{getFriendlyAuthError(errorMessage)}</p>
+                  )}
                 </div>
               </div>
 
-              <div className="border-t border-white/10 pt-4">
+              <div className="border-t border-white/10 pt-4 space-y-3">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    // Parse and connect directly
+                    const lines = pastedCredentials.trim().split("\n");
+                    let foundClientId = "";
+                    let foundToken = "";
+                    for (const line of lines) {
+                      const trimmed = line.trim();
+                      if (trimmed.startsWith("MYCELIA_CLIENT_ID=")) {
+                        foundClientId = trimmed.replace("MYCELIA_CLIENT_ID=", "").trim();
+                      } else if (trimmed.startsWith("MYCELIA_TOKEN=")) {
+                        foundToken = trimmed.replace("MYCELIA_TOKEN=", "").trim();
+                      }
+                    }
+                    if (foundClientId && foundToken) {
+                      setLocalClientId(foundClientId);
+                      setLocalToken(foundToken);
+                      setPastedCredentials("");
+                      // Trigger verification
+                      setStatus("verifying");
+                      setErrorMessage(null);
+                      setApiEndpoint(localEndpoint);
+                      exchangeApiKeyForJWT(localEndpoint, foundClientId, foundToken)
+                        .then((result) => {
+                          if (result.jwt) {
+                            setClientId(foundClientId);
+                            setClientSecret(foundToken);
+                            setStatus("success");
+                            setTimeout(() => navigate("/setup/inference", { replace: true }), 1500);
+                          } else {
+                            setErrorMessage(result.error || "Invalid credentials");
+                            setStatus("keys_exist");
+                          }
+                        })
+                        .catch((error) => {
+                          setErrorMessage(error instanceof Error ? error.message : "Verification failed");
+                          setStatus("keys_exist");
+                        });
+                    } else {
+                      setErrorMessage("Could not find MYCELIA_CLIENT_ID or MYCELIA_TOKEN in the pasted text");
+                    }
+                  }}
+                  disabled={!pastedCredentials.trim() || isLoading}
+                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-5 rounded-xl disabled:opacity-50"
+                >
+                  {status === "verifying" ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-5 h-5 mr-2" />
+                      Connect
+                    </>
+                  )}
+                </Button>
                 <Button
                   type="button"
                   onClick={() => setStatus("idle")}
-                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-5 rounded-xl"
+                  variant="ghost"
+                  className="w-full text-slate-400 hover:text-white"
                 >
-                  I have my credentials
+                  Enter manually instead
                 </Button>
               </div>
             </div>
@@ -365,28 +530,58 @@ MYCELIA_TOKEN=mycelia_xyz...`}
                   </Select>
                 </div>
 
-                {serverType === "custom" && (
-                  <div>
-                    <Label htmlFor="endpoint" className="text-slate-200 mb-2 block">
-                      Server Endpoint
-                    </Label>
+                <div>
+                  <Label htmlFor="endpoint" className="text-slate-200 mb-2 block">
+                    Server Endpoint
+                  </Label>
+                  <div className="flex gap-2">
                     <Input
                       id="endpoint"
                       type="url"
                       value={localEndpoint}
-                      onChange={(e) => setLocalEndpoint(e.target.value)}
+                      onChange={(e) => handleEndpointChange(e.target.value)}
                       placeholder="https://your-server.com"
                       disabled={isLoading}
-                      className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
+                      className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50 flex-1"
                     />
+                    <Button
+                      type="button"
+                      onClick={testServerConnection}
+                      disabled={isLoading || serverTestStatus === "testing"}
+                      variant="outline"
+                      size="icon"
+                      className={`border-white/20 shrink-0 ${
+                        serverTestStatus === "success"
+                          ? "border-green-500/50 text-green-400 hover:bg-green-500/20"
+                          : serverTestStatus === "error"
+                          ? "border-red-500/50 text-red-400 hover:bg-red-500/20"
+                          : "text-slate-400 hover:bg-white/10 hover:text-white"
+                      }`}
+                      title="Test server connection"
+                    >
+                      {serverTestStatus === "testing" ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : serverTestStatus === "success" ? (
+                        <Wifi className="w-4 h-4" />
+                      ) : serverTestStatus === "error" ? (
+                        <WifiOff className="w-4 h-4" />
+                      ) : (
+                        <Wifi className="w-4 h-4" />
+                      )}
+                    </Button>
                   </div>
-                )}
-
-                {serverType !== "custom" && (
-                  <p className="text-slate-500 text-xs">
-                    Server endpoint: <code className="text-purple-400">{localEndpoint}</code>
+                  <p className="text-xs mt-1 h-4">
+                    {serverTestStatus === "testing" && (
+                      <span className="text-slate-400">Testing connection...</span>
+                    )}
+                    {serverTestStatus === "success" && (
+                      <span className="text-green-400">Server is reachable</span>
+                    )}
+                    {serverTestStatus === "error" && serverTestError && (
+                      <span className="text-red-400">{serverTestError}</span>
+                    )}
                   </p>
-                )}
+                </div>
 
                 {/* Paste credentials section */}
                 <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 space-y-3">
@@ -419,7 +614,7 @@ MYCELIA_TOKEN=mycelia_xyz...`}
                     <div className="w-full border-t border-white/10" />
                   </div>
                   <div className="relative flex justify-center text-xs">
-                    <span className="px-2 bg-transparent text-slate-500">or enter manually</span>
+                    <span className="px-2 bg-slate-800/90 text-slate-400">or enter manually</span>
                   </div>
                 </div>
 
@@ -473,7 +668,7 @@ MYCELIA_TOKEN=mycelia_xyz...`}
                     <div className="w-full border-t border-white/20" />
                   </div>
                   <div className="relative flex justify-center text-sm">
-                    <span className="px-2 bg-transparent text-slate-400">or</span>
+                    <span className="px-2 bg-slate-800/90 text-slate-400">or</span>
                   </div>
                 </div>
 
