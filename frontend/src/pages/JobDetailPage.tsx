@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink } from "lucide-react";
+import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
 
@@ -523,17 +524,14 @@ export default function JobDetailPage() {
                                                 )}
                                             </div>
 
-                                            {/* Timeline Link */}
+                                            {/* Audio Player */}
                                             {transcription.start && (
-                                                <div className="flex items-center gap-2">
-                                                    <Link 
-                                                        to={`/timeline?t=${new Date(transcription.start).getTime()}`}
-                                                        className="flex items-center gap-1 text-sm text-blue-500 hover:text-blue-600 hover:underline"
-                                                    >
-                                                        <ExternalLink className="h-4 w-4" />
-                                                        View on Timeline ({format(new Date(transcription.start), "PPpp")})
-                                                    </Link>
-                                                </div>
+                                                <ObjectAudioPlayer 
+                                                    timeRange={{
+                                                        start: transcription.start,
+                                                        end: transcription.end || new Date(new Date(transcription.start).getTime() + (transcription.duration || 60) * 1000).toISOString()
+                                                    }}
+                                                />
                                             )}
 
                                             {/* Linked Conversation Chunk */}

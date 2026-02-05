@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -98,10 +98,14 @@ function isEmptyJobResult(job: JobInfo): boolean {
     case "transcription_sequence_creator":
       return (result.processed ?? 0) === 0;
     case "transcription":
-      return (
-        (result.processed ?? 0) === 0 ||
-        (progress.processed === 0 && progress.total === 0)
-      );
+      // Empty if: result is explicitly "empty", or wordCount is explicitly 0
+      // Note: don't mark as empty if wordCount is undefined (missing data)
+      if (result.result === "empty") return true;
+      if (result.wordCount != null && result.wordCount === 0) return true;
+      // If we have wordCount > 0, it's not empty
+      if (result.wordCount != null && result.wordCount > 0) return false;
+      // If wordCount is undefined, we don't know - don't mark as empty
+      return false;
     default: {
       const processed = progress.processed ?? result.processed ?? -1;
       const total = progress.total ?? result.total ?? -1;
@@ -238,11 +242,15 @@ export default function JobsPage() {
 
   // Job counts by status
   const jobCounts = useMemo(() => {
-    const counts = { active: 0, waiting: 0, failed: 0, completed: 0, delayed: 0, total: 0 };
+    const counts = { active: 0, waiting: 0, failed: 0, completed: 0, delayed: 0, total: 0, emptyTranscriptions: 0 };
     for (const job of jobs) {
       counts.total++;
       if (job.state in counts) {
         counts[job.state as keyof typeof counts]++;
+      }
+      // Count empty transcriptions
+      if (job.type === "transcription" && job.state === "completed" && isEmptyJobResult(job)) {
+        counts.emptyTranscriptions++;
       }
     }
     return counts;
@@ -474,6 +482,29 @@ export default function JobsPage() {
 
   const selectOnlyStatus = (status: string) => {
     setFilterStatuses(new Set([status]));
+  };
+
+  // Check if any filters are active
+  const hasActiveFilters = useMemo(() => {
+    return (
+      quickFilter !== "all" ||
+      !allTypesSelected ||
+      filterStatuses.size !== ALL_STATUSES.length ||
+      searchQuery !== "" ||
+      hideEmpty
+    );
+  }, [quickFilter, allTypesSelected, filterStatuses.size, searchQuery, hideEmpty, ALL_STATUSES.length]);
+
+  // Clear all filters
+  const clearFilters = () => {
+    setQuickFilter("all");
+    setAllTypesSelected(true);
+    setFilterTypes(new Set());
+    setFilterStatuses(new Set(ALL_STATUSES));
+    setSearchQuery("");
+    if (hideEmpty) {
+      toggleHideEmpty();
+    }
   };
 
   const getTypesLabel = () => {
@@ -812,6 +843,14 @@ export default function JobsPage() {
           <CheckCircle className="h-3.5 w-3.5 mr-1" />
           Completed ({jobCounts.completed})
         </Button>
+        {/* Empty transcriptions indicator */}
+        {jobCounts.emptyTranscriptions > 0 && (
+          <div className="flex items-center text-xs text-amber-500 ml-2">
+            <span className="px-2 py-1 bg-amber-500/10 rounded">
+              {jobCounts.emptyTranscriptions} empty transcription{jobCounts.emptyTranscriptions !== 1 ? "s" : ""}
+            </span>
+          </div>
+        )}
       </div>
 
       <Card>
@@ -930,6 +969,19 @@ export default function JobsPage() {
               </SelectContent>
             </Select>
           </div>
+
+          {/* Clear filters button */}
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearFilters}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear filters
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -1017,7 +1069,13 @@ export default function JobsPage() {
                         </Badge>
                       </Link>
                     </TableCell>
-                    <TableCell className="font-medium">{job.type}</TableCell>
+                    <TableCell 
+                      className="font-medium cursor-pointer hover:text-primary hover:underline"
+                      onClick={() => selectOnlyType(job.type)}
+                      title={`Filter by ${job.type}`}
+                    >
+                      {job.type}
+                    </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       <Link
                         to={`/jobs/${job.id}`}
@@ -1035,25 +1093,74 @@ export default function JobsPage() {
                     </TableCell>
                     <TableCell>
                       {/* Transcription job - show transcription-specific info */}
-                      {job.type === "transcription" && job.result?.transcriptionId ? (
+                      {job.type === "transcription" && job.state === "completed" ? (
                         <div className="space-y-1">
-                          <div className="flex flex-wrap gap-2 text-xs">
-                            {job.result.wordCount && (
-                              <span className="text-muted-foreground">
-                                {job.result.wordCount} words
-                              </span>
+                          {/* Show empty indicator only if result is explicitly "empty" or wordCount is explicitly 0 */}
+                          {(job.result?.result === "empty" || (job.result?.wordCount != null && job.result.wordCount === 0)) ? (
+                            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
+                              Empty
+                            </Badge>
+                          ) : (
+                            <>
+                              {/* Show the date this transcription is for - link to timeline */}
+                              {job.result?.sequenceStart && (
+                                <Link
+                                  to={`/timeline?start=${new Date(job.result.sequenceStart).getTime()}&end=${new Date(job.result.sequenceStart).getTime() + (job.result.audioDuration || 60) * 1000 + 60000}`}
+                                  className="text-xs text-primary hover:underline"
+                                >
+                                  {format(new Date(job.result.sequenceStart), "MMM d, HH:mm")}
+                                </Link>
+                              )}
+                              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                {job.result?.audioDuration != null && (
+                                  <span>{job.result.audioDuration.toFixed(1)}s</span>
+                                )}
+                                {job.result?.wordCount != null ? (
+                                  <span>{job.result.wordCount} words</span>
+                                ) : (
+                                  <span className="opacity-50">— words</span>
+                                )}
+                                {job.result?.segmentCount != null && (
+                                  <span>{job.result.segmentCount} segments</span>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : job.type === "transcription" && job.progress?.stage ? (
+                        /* Transcription job in progress - show stage info */
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+                              {job.progress.stage === "processing" && "Processing"}
+                              {job.progress.stage === "fetching_chunks" && "Fetching chunks"}
+                              {job.progress.stage === "combining_audio" && "Combining audio"}
+                              {job.progress.stage === "transcribing" && "Transcribing"}
+                              {job.progress.stage === "saving_result" && "Saving"}
+                              {job.progress.stage === "empty_result" && "Empty result"}
+                              {!["processing", "fetching_chunks", "combining_audio", "transcribing", "saving_result", "empty_result"].includes(job.progress.stage) && job.progress.stage}
+                            </Badge>
+                          </div>
+                          {/* Show the date this transcription is for - link to timeline */}
+                          {job.progress.sequenceStart && (
+                            <Link
+                              to={`/timeline?start=${new Date(job.progress.sequenceStart).getTime()}&end=${new Date(job.progress.sequenceStart).getTime() + 120000}`}
+                              className="text-xs text-primary hover:underline"
+                            >
+                              {format(new Date(job.progress.sequenceStart), "MMM d, HH:mm")}
+                            </Link>
+                          )}
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            {job.progress.chunkCount != null && (
+                              <span>{job.progress.chunkCount} chunks</span>
                             )}
-                            {job.result.audioDuration && (
-                              <span className="text-muted-foreground">
-                                {job.result.audioDuration.toFixed(1)}s
-                              </span>
+                            {job.progress.audioSize != null && (
+                              <span>{(job.progress.audioSize / 1024).toFixed(0)} KB</span>
+                            )}
+                            {job.progress.duration != null && (
+                              <span>{job.progress.duration.toFixed(1)}s audio</span>
                             )}
                           </div>
-                          {job.result.textPreview && (
-                            <div className="text-xs text-muted-foreground line-clamp-2 max-w-xs">
-                              "{job.result.textPreview.slice(0, 80)}..."
-                            </div>
-                          )}
                         </div>
                       ) : job.progress ? (
                         <div className="space-y-2">
