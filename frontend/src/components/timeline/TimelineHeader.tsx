@@ -1,7 +1,6 @@
 import { TimelineToolbar } from "./TimelineToolbar";
 import { TimelineSelectionActions } from "./TimelineSelectionActions";
 import { TrackVisibilityButton } from "./controls/TrackVisibilityPanel";
-import { TimelinePlayerControls } from "./TimelinePlayerControls";
 
 interface TimelineHeaderProps {
   hasTimeSelection: boolean;
@@ -27,28 +26,23 @@ export function TimelineHeader({
   onClearTimeSelection,
 }: TimelineHeaderProps) {
   return (
-    <div className="flex items-start justify-between gap-2">
-      {/* Player Controls - Left side */}
-      <TimelinePlayerControls />
-
-      {/* Right side controls */}
-      <div className="flex items-start gap-2">
-        {hasTimeSelection && timeSelectionStart && timeSelectionEnd && (
-          <TimelineSelectionActions
-            startDate={timeSelectionStart}
-            endDate={timeSelectionEnd}
-            isShortRange={isShortRange}
-            onZoomToSelection={onZoomToSelection}
-            onCreateEvent={onCreateEvent}
-            onClearSelection={onClearTimeSelection}
-          />
-        )}
-        <TimelineToolbar
-          onZoomToFit={onZoomToFit}
-          onTimeRangeSelect={onTimeRangeSelect}
+    <div className="flex items-start justify-end gap-2">
+      {/* Selection and toolbar controls */}
+      {hasTimeSelection && timeSelectionStart && timeSelectionEnd && (
+        <TimelineSelectionActions
+          startDate={timeSelectionStart}
+          endDate={timeSelectionEnd}
+          isShortRange={isShortRange}
+          onZoomToSelection={onZoomToSelection}
+          onCreateEvent={onCreateEvent}
+          onClearSelection={onClearTimeSelection}
         />
-        <TrackVisibilityButton />
-      </div>
+      )}
+      <TimelineToolbar
+        onZoomToFit={onZoomToFit}
+        onTimeRangeSelect={onTimeRangeSelect}
+      />
+      <TrackVisibilityButton />
     </div>
   );
 }

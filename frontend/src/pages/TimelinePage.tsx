@@ -2,9 +2,11 @@ import { useEffect, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
+import { TimelinePlayerBar } from "@/components/timeline/TimelinePlayerBar";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
 import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibilityPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AudioPlayer } from "@/modules/audio/player";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
@@ -193,6 +195,16 @@ const TimelinePage = () => {
           <div className="border rounded-lg p-2">
             <MultiTrackTimeline timeline={timeline} />
           </div>
+
+          {/* Audio player bar with waveform scrubber */}
+          <TimelinePlayerBar
+            scale={timeline.timeScale}
+            transform={timeline.transform}
+            width={timeline.width}
+          />
+
+          {/* Hidden audio player component that handles actual playback */}
+          <AudioPlayer />
 
           <SelectedObjectsPanel
             selectedObjects={panelObjects}

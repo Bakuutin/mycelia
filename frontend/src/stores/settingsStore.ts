@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 
 type Theme = "light" | "dark" | "system";
 
+type WaveformScope = "full" | "playhead";
+
 type TimeFormat =
   | "gregorian-local-natural"
   | "gregorian-local-iso"
@@ -30,6 +32,7 @@ interface SettingsState {
   playbackRate: number;
   volume: number;
   autoSave: boolean;
+  waveformScope: WaveformScope;
   setApiEndpoint: (endpoint: string) => void;
   setClientId: (id: string) => void;
   setClientSecret: (secret: string) => void;
@@ -43,6 +46,7 @@ interface SettingsState {
   setPlaybackRate: (rate: number) => void;
   setVolume: (volume: number) => void;
   setAutoSave: (enabled: boolean) => void;
+  setWaveformScope: (scope: WaveformScope) => void;
   clearSettings: () => void;
 }
 
@@ -55,6 +59,7 @@ const DEFAULT_TIME_FORMAT: TimeFormat = "gregorian-local-natural";
 const DEFAULT_TRANSCRIPT_THRESHOLD_HOURS = 12;
 const DEFAULT_PLAYBACK_RATE = 1;
 const DEFAULT_VOLUME = 1;
+const DEFAULT_WAVEFORM_SCOPE: WaveformScope = "full";
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -72,6 +77,7 @@ export const useSettingsStore = create<SettingsState>()(
       playbackRate: DEFAULT_PLAYBACK_RATE,
       volume: DEFAULT_VOLUME,
       autoSave: true,
+      waveformScope: DEFAULT_WAVEFORM_SCOPE,
       setApiEndpoint: (endpoint) => set({ apiEndpoint: endpoint }),
       setClientId: (id) => set({ clientId: id }),
       setClientSecret: (secret) => set({ clientSecret: secret }),
@@ -87,6 +93,7 @@ export const useSettingsStore = create<SettingsState>()(
       setPlaybackRate: (rate) => set({ playbackRate: rate }),
       setVolume: (volume) => set({ volume }),
       setAutoSave: (enabled) => set({ autoSave: enabled }),
+      setWaveformScope: (scope) => set({ waveformScope: scope }),
       clearSettings: () =>
         set({
           apiEndpoint: DEFAULT_API_ENDPOINT,
@@ -102,6 +109,7 @@ export const useSettingsStore = create<SettingsState>()(
           playbackRate: DEFAULT_PLAYBACK_RATE,
           volume: DEFAULT_VOLUME,
           autoSave: true,
+          waveformScope: DEFAULT_WAVEFORM_SCOPE,
         }),
     }),
     {
@@ -110,4 +118,4 @@ export const useSettingsStore = create<SettingsState>()(
   ),
 );
 
-export type { TimeFormat };
+export type { TimeFormat, WaveformScope };

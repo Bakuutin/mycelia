@@ -5,7 +5,6 @@ import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
 import { TimeLayer } from "@/modules/time";
 import { ObjectsLayer } from "@/modules/objects";
 import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
-import { AudioLayer } from "@/modules/audio/index";
 import {
   VoiceDetectionTrack,
   DataPresenceTrack,
@@ -26,7 +25,6 @@ import type { useTimeline } from "@/hooks/useTimeline";
 const TIME_LAYER = TimeLayer();
 const PROCESSING_LAYER = ProcessingLayer();
 const OBJECTS_LAYER = ObjectsLayer();
-const AUDIO_LAYER = AudioLayer();
 
 interface MultiTrackTimelineProps {
   timeline: ReturnType<typeof useTimeline>;
@@ -75,7 +73,6 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
   const TimeLayerComponent = TIME_LAYER.component;
   const ProcessingLayerComponent = PROCESSING_LAYER.component;
   const ObjectsLayerComponent = OBJECTS_LAYER.component;
-  const AudioLayerComponent = AUDIO_LAYER.component;
 
   const visibleHistogramTracks = useMemo(
     () => HISTOGRAM_TRACK_IDS.filter((id) => visibleTracks.includes(id)),
@@ -142,13 +139,6 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
             />
           </div>
         )}
-
-        {/* Audio layer (always visible at bottom) */}
-        <AudioLayerComponent
-          scale={timeScale}
-          transform={transform}
-          width={width}
-        />
       </div>
     </div>
   );
