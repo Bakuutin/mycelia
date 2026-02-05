@@ -1,3 +1,5 @@
+name: mycelia
+
 services:
   redis:
     image: redis:8-alpine
@@ -65,8 +67,10 @@ services:
       - "5173"
     restart: unless-stopped
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_started
+      redis:
+        condition: service_started
     command: deno task ${BACKEND_TASK:-start}
     env_file:
       - .env
@@ -78,6 +82,12 @@ services:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk
       - ./docs:/docs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -121,8 +131,10 @@ services:
       - ./misc/nginx/ssl:/etc/nginx/ssl
       - ./misc/nginx/nginx-entrypoint.sh:/nginx-entrypoint.sh:ro
     depends_on:
-      - frontend
-      - backend
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 

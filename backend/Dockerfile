@@ -1,6 +1,6 @@
 FROM denoland/deno:2.6.3
 
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 5173
 WORKDIR /app
