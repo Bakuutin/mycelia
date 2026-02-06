@@ -365,24 +365,27 @@ export const AudioPlayer: React.FC = () => {
     }
 
     if (!isPlaying && sourceNode) {
-      // Save current position so resume re-fetches from here instead of
-      // skipping to the next chunk (which may be 10+ seconds later)
-      const pausedDate = useAudioPlayer.getState().currentDate;
+      const state = useAudioPlayer.getState();
+      const pausedDate = state.currentDate;
+      // Re-insert the currently-playing chunk so resume can seek within it
+      // (AudioBuffers are reusable data; only AudioBufferSourceNodes are single-use)
+      const reinsertChunks = state.currentChunk
+        ? [state.currentChunk, ...state.chunks]
+        : [...state.chunks];
       // #region agent log
-      _dbg('mainEffect:stop', 'pausing - saving position & clearing chunks', { seekGen: useAudioPlayer.getState().seekGeneration, pausedDate: pausedDate?.toISOString(), chunksLeft: chunks.length });
+      _dbg('mainEffect:stop', 'pausing - reinserting currentChunk', { seekGen: state.seekGeneration, pausedDate: pausedDate?.toISOString(), currentChunkStart: state.currentChunk?.start?.toISOString(), chunksAfterReinsert: reinsertChunks.length });
       // #endregion
       sourceNode.onended = null; // Prevent async callback
       sourceNode.stop();
       sourceNode.disconnect();
       setSourceNode(null);
       setIsCreatingSource(false);
-      // Clear chunks/baselines and set seekTarget so resume re-fetches from paused position
+      // Keep chunks intact, set seekTarget so createBufferSource seeks within the right chunk
       useAudioPlayer.getState().update({
         seekTarget: pausedDate,
-        chunks: [],
+        chunks: reinsertChunks,
         baselineStartDate: null,
         baselineStartCtxTime: null,
-        seekGeneration: useAudioPlayer.getState().seekGeneration + 1,
       });
     }
   }, [isPlaying, chunks, sourceNode, audioContext]);
