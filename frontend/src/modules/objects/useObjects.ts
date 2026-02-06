@@ -31,6 +31,20 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
       return;
     }
 
+    // Skip refetch if new range is a subset of the already-loaded range
+    // (e.g. zooming in). The cached objects already cover the view.
+    const buffer = (end.getTime() - start.getTime()) * 0.1;
+    const bufferedStart = start.getTime() - buffer;
+    const bufferedEnd = end.getTime() + buffer;
+    if (
+      state.currentRange &&
+      bufferedStart >= state.currentRange.start.getTime() &&
+      bufferedEnd <= state.currentRange.end.getTime()
+    ) {
+      set({ requestedRange: { start, end } });
+      return;
+    }
+
     try {
       set({ loading: true, error: null, requestedRange: { start, end } });
       const objects = await fetchObjects(start, end);
@@ -53,6 +67,7 @@ async function fetchObjects(start: Date, end: Date): Promise<Object[]> {
   return callResource("objects", {
     action: "list",
     options: {
+      limit: 300,
       hasTimeRanges: true,
       includeRelationships: true,
       sort: { earliestStart: -1, duration: -1 },

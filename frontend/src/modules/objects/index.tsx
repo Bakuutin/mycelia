@@ -480,11 +480,32 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
   const chevronOffset = 8;
   const showEndChevron = range.hasNoEnd || endOffScreen;
 
+  // For small objects, render a simple rect to minimize DOM nodes
+  if (isSmall) {
+    return (
+      <rect
+        x={x}
+        y={y}
+        width={rangeWidth}
+        height={height}
+        rx={2}
+        fill={object.color as string || "#6b7280"}
+        stroke={selected ? "#2563eb" : "none"}
+        strokeWidth={selected ? 2 : 0}
+        opacity={0.7}
+        style={{ cursor: "pointer" }}
+        onClick={handleClick}
+      />
+    );
+  }
+
   const clipPathId = `clip-${range.object._id.toString()}-${range.rangeIndex}`;
-  const filterId = `blur-${range.object._id.toString()}-${range.rangeIndex}`;
 
   const leftBoundaryPath = getLeftBoundaryPath(x, y, rangeWidth, height, startOffScreen, cornerRadius, chevronOffset);
   const rightBoundaryPath = getRightBoundaryPath(x, y, rangeWidth, height, showEndChevron, cornerRadius, chevronOffset);
+
+  // Skip foreignObject labels for very narrow objects (unreadable)
+  const showLabel = rangeWidth > 40;
 
   return (
     <g
@@ -498,11 +519,6 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
         <clipPath id={clipPathId}>
           <path d={rightBoundaryPath} clipPath={`url(#${clipPathId}-left)`} />
         </clipPath>
-        {isSmall && (
-          <filter id={filterId}>
-            <feGaussianBlur stdDeviation="1.5" />
-          </filter>
-        )}
       </defs>
 
       {/* Background rectangle */}
@@ -515,12 +531,10 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
         stroke={selected ? "#2563eb" : "none"}
         strokeWidth={selected ? 3 : 0}
         clipPath={`url(#${clipPathId})`}
-        filter={isSmall ? `url(#${filterId})` : undefined}
-        opacity={isSmall ? 0.7 : 1}
       />
 
-      {/* Content container - only show for non-small objects */}
-      {!isSmall && (
+      {/* Content container - only show for objects wide enough to read */}
+      {showLabel && (
         <foreignObject
           width={rangeWidth}
           height={laneHeight - 2}
@@ -641,7 +655,7 @@ export const ObjectsLayer: () => Layer = () => {
           {/* Object ranges - viewport culled for performance */}
           {layout.placed
             .filter((range: PlacedObjectRange) => range.endX >= 0 && range.startX <= width)
-            .slice(0, 200)
+            .slice(0, 100)
             .map((range: PlacedObjectRange) => (
               <CategoryAwareRangeBox
                 key={`${range.object._id.toString()}-${range.rangeIndex}`}

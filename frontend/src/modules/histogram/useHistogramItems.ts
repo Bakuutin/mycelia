@@ -61,7 +61,7 @@ export function useHistogramItems(start: Date, end: Date) {
       return data[resolution]?.items ?? [];
     }
     idx.tsDim.filterRange([queryStart.getTime(), queryEnd.getTime()]);
-    const rows = idx.tsDim.top(Infinity) as HistogramItem[];
+    const rows = idx.tsDim.top(2000) as HistogramItem[];
     idx.tsDim.filterAll();
     return rows;
   }, [
