@@ -22,6 +22,7 @@ export interface DateStore {
   sourceNode: AudioBufferSourceNode | null;
   gainNode: GainNode | null;
   isCreatingSource: boolean;
+  isManuallyStopped: boolean; // Track if we manually stopped the source
   rafId: number | null;
   baselineStartDate: Date | null;
   baselineStartCtxTime: number | null;
@@ -55,6 +56,7 @@ export const useAudioPlayer = create<DateStore>((set) => ({
   sourceNode: null,
   gainNode: null,
   isCreatingSource: false,
+  isManuallyStopped: false,
   rafId: null,
   baselineStartDate: null,
   baselineStartCtxTime: null,
@@ -63,6 +65,9 @@ export const useAudioPlayer = create<DateStore>((set) => ({
   updateDate: (date: Date) => set({ currentDate: date }),
   resetDate(date: Date | null) {
     const state = useAudioPlayer.getState();
+
+    // Mark as manually stopped before stopping source to prevent onended callback issues
+    set({ isManuallyStopped: true });
 
     if (state.sourceNode) {
       try {
@@ -88,7 +93,8 @@ export const useAudioPlayer = create<DateStore>((set) => ({
       baselineStartCtxTime: null,
       sourceNode: null,
       rafId: null,
-      isCreatingSource: false
+      isCreatingSource: false,
+      isManuallyStopped: false, // Reset after cleanup
     });
   },
   appendChunks(chunks: Chunk[], generation: number) {
@@ -298,16 +304,22 @@ export const AudioPlayer: React.FC = () => {
     updateDate(actualStartDate);
 
     bufferSource.onended = () => {
-      setSourceNode(null);
-      setIsCreatingSource(false);
+      // Only handle natural endings, not manual stops
+      const { isManuallyStopped } = useAudioPlayer.getState();
+      if (!isManuallyStopped) {
+        setSourceNode(null);
+        setIsCreatingSource(false);
+      }
     };
-    // Note: setIsCreatingSource(false) is only called in onended to prevent race conditions
   };
 
   useEffect(() => {
     if (sourceNode) {
+      // Mark as manually stopped to prevent onended callback issues
+      useAudioPlayer.getState().update({ isManuallyStopped: true });
       sourceNode.stop();
       setSourceNode(null);
+      useAudioPlayer.getState().update({ isManuallyStopped: false, isCreatingSource: false });
     }
   }, [startDate]);
 
@@ -319,8 +331,12 @@ export const AudioPlayer: React.FC = () => {
     }
 
     if (!isPlaying && sourceNode) {
+      // Mark as manually stopped to prevent onended callback from triggering new source
+      useAudioPlayer.getState().update({ isManuallyStopped: true });
       sourceNode.stop();
       setSourceNode(null);
+      // Reset the flag after cleanup
+      useAudioPlayer.getState().update({ isManuallyStopped: false, isCreatingSource: false });
     }
   }, [isPlaying, chunks, sourceNode, audioContext]);
 

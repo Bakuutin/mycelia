@@ -1,10 +1,16 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Maximize2,
   CircleOff,
@@ -12,6 +18,9 @@ import {
   Wand2,
   Play,
   Star,
+  StarOff,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
@@ -36,10 +45,43 @@ export function TimelineSelectionActions({
 }: TimelineSelectionActionsProps) {
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isRunJobOpen, setIsRunJobOpen] = useState(false);
-  const addMarkedRange = useMarkedRangesStore((s) => s.addRange);
+  const [isMarkPopoverOpen, setIsMarkPopoverOpen] = useState(false);
+  const [editingLabel, setEditingLabel] = useState("");
+  
+  const { ranges, addRange, removeRange, updateRange } = useMarkedRangesStore();
+
+  // Check if current selection matches an existing marked range
+  const matchingRange = useMemo(() => {
+    return ranges.find(
+      (r) =>
+        Math.abs(r.start.getTime() - startDate.getTime()) < 1000 &&
+        Math.abs(r.end.getTime() - endDate.getTime()) < 1000
+    );
+  }, [ranges, startDate, endDate]);
 
   const handleMarkRange = () => {
-    addMarkedRange(startDate, endDate);
+    if (matchingRange) {
+      // Open popover to edit/delete
+      setEditingLabel(matchingRange.label || "");
+      setIsMarkPopoverOpen(true);
+    } else {
+      // Create new marked range
+      addRange(startDate, endDate);
+    }
+  };
+
+  const handleSaveLabel = () => {
+    if (matchingRange) {
+      updateRange(matchingRange.id, { label: editingLabel || undefined });
+      setIsMarkPopoverOpen(false);
+    }
+  };
+
+  const handleDeleteRange = () => {
+    if (matchingRange) {
+      removeRange(matchingRange.id);
+      setIsMarkPopoverOpen(false);
+    }
   };
 
   return (
@@ -133,21 +175,74 @@ export function TimelineSelectionActions({
       </div>
 
       <div className="flex flex-col items-center gap-1">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              onClick={handleMarkRange}
-              variant="outline"
-              size="icon"
-            >
-              <Star className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>Mark/favorite this range</p>
-          </TooltipContent>
-        </Tooltip>
-        <span className="text-xs text-muted-foreground">Mark</span>
+        {matchingRange ? (
+          // Existing marked range - show popover for edit/delete
+          <Popover open={isMarkPopoverOpen} onOpenChange={setIsMarkPopoverOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="border-yellow-500"
+                    style={{ borderColor: matchingRange.color }}
+                  >
+                    <Star className="w-4 h-4 fill-current" style={{ color: matchingRange.color }} />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Edit marked range</p>
+              </TooltipContent>
+            </Tooltip>
+            <PopoverContent className="w-64" align="start">
+              <div className="space-y-3">
+                <div className="font-medium text-sm">Edit Marked Range</div>
+                <div className="space-y-2">
+                  <label className="text-xs text-muted-foreground">Label</label>
+                  <Input
+                    value={editingLabel}
+                    onChange={(e) => setEditingLabel(e.target.value)}
+                    placeholder="Enter label..."
+                    className="h-8"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSaveLabel();
+                    }}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveLabel} className="flex-1">
+                    <Pencil className="w-3 h-3 mr-1" />
+                    Save
+                  </Button>
+                  <Button size="sm" variant="destructive" onClick={handleDeleteRange}>
+                    <Trash2 className="w-3 h-3 mr-1" />
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        ) : (
+          // No existing range - simple mark button
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={handleMarkRange}
+                variant="outline"
+                size="icon"
+              >
+                <Star className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Mark/favorite this range</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        <span className="text-xs text-muted-foreground">
+          {matchingRange ? "Marked" : "Mark"}
+        </span>
       </div>
 
       <div className="flex flex-col items-center gap-1">
