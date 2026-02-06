@@ -61,10 +61,13 @@ export const TimelineAudioScrubber = memo(function TimelineAudioScrubber({
   const bars = useMemo(() => {
     const waveformHeight = height - 20; // Leave space for handle
     
-    // Find max speech probability for normalization
-    let maxProb = 0.1; // Minimum to avoid division by zero
+    // Find max count and max speech probability for normalization
+    let maxCount = 1; // Minimum to avoid division by zero
+    let maxProb = 0.1;
     for (const item of items) {
+      const count = item.totals.audio_chunks?.count ?? 0;
       const prob = item.totals.audio_chunks?.speech_probability_avg ?? 0;
+      if (count > maxCount) maxCount = count;
       if (prob > maxProb) maxProb = prob;
     }
 
@@ -85,18 +88,32 @@ export const TimelineAudioScrubber = memo(function TimelineAudioScrubber({
       const itemEnd = item.end;
       const barWidth = Math.max(rescaledScale(itemEnd) - x, 1);
       
-      // Use speech probability for height, or has_speech count as fallback
+      // Get audio data - use count as primary indicator (always available)
+      const count = item.totals.audio_chunks?.count ?? 0;
       const hasSpeech = item.totals.audio_chunks?.has_speech ?? 0;
       const speechProb = item.totals.audio_chunks?.speech_probability_avg ?? 0;
-      const count = item.totals.audio_chunks?.count ?? 0;
       
-      // Normalize intensity: combine speech probability and presence
-      let intensity = speechProb / maxProb;
-      if (count > 0 && hasSpeech > 0) {
-        intensity = Math.max(intensity, 0.3); // Minimum height if there's speech
+      // Calculate intensity: prefer speech probability, fallback to count
+      let intensity = 0;
+      if (count > 0) {
+        // Base intensity from audio presence (at least 20% if any audio)
+        intensity = Math.max(0.2, count / maxCount);
+        
+        // Boost based on speech probability if available
+        if (speechProb > 0) {
+          intensity = Math.max(intensity, speechProb / maxProb);
+        }
+        
+        // Extra boost if speech detected
+        if (hasSpeech > 0) {
+          intensity = Math.max(intensity, 0.4);
+        }
       }
       
-      const barHeight = Math.max(2, intensity * waveformHeight * 0.8);
+      // Minimum bar height of 4px for any audio, 2px baseline
+      const barHeight = count > 0 
+        ? Math.max(4, intensity * waveformHeight * 0.8)
+        : 2;
       
       return {
         id: item.id,

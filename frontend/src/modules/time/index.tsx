@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect } from "react";
 import { Layer, LayerComponentProps } from "@/core/core.ts";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore.ts";
+import { useMarkedRangesStore, MarkedRange } from "@/stores/markedRangesStore.ts";
 
 import { Formatter, Label } from "./formatters/types.ts";
 
@@ -22,6 +23,7 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { selection, setSelection } = useTimelineSelectionStore();
+      const { ranges: markedRanges } = useMarkedRangesStore();
       const svgRef = useRef<SVGSVGElement>(null);
       const isSelectingRef = useRef(false);
       const selectionStartXRef = useRef<number | null>(null);
@@ -191,6 +193,30 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
         return { left, width: rectWidth, start: selection.start, end: selection.end };
       }, [selection, scale, transform]);
 
+      // Calculate marked range positions
+      const markedRangeRects = useMemo(() => {
+        const rescaledScale = transform.rescaleX(scale);
+        return markedRanges.map((range) => {
+          const x1 = rescaledScale(range.start);
+          const x2 = rescaledScale(range.end);
+          const left = Math.min(x1, x2);
+          const rectWidth = Math.abs(x2 - x1);
+          return {
+            ...range,
+            left,
+            width: rectWidth,
+            visible: left < width && left + rectWidth > 0,
+          };
+        }).filter((r) => r.visible);
+      }, [markedRanges, scale, transform, width]);
+
+      // Handle click on marked range to select it
+      const handleMarkedRangeClick = (range: MarkedRange) => {
+        if (setSelection) {
+          setSelection({ start: range.start, end: range.end });
+        }
+      };
+
       const formatSelectionDate = (date: Date) => {
         const now = new Date();
         const isToday = date.toDateString() === now.toDateString();
@@ -257,6 +283,79 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
             ry={6}
             pointerEvents="none"
           />
+
+          {/* Marked/favorite ranges */}
+          {markedRangeRects.map((range) => (
+            <g key={range.id}>
+              {/* Semi-transparent fill between the lines */}
+              <rect
+                x={range.left}
+                y={0}
+                width={range.width}
+                height={40}
+                fill={range.color || "#ef4444"}
+                opacity={0.1}
+                pointerEvents="none"
+              />
+              {/* Left border line */}
+              <line
+                x1={range.left}
+                y1={0}
+                x2={range.left}
+                y2={40}
+                stroke={range.color || "#ef4444"}
+                strokeWidth={2}
+                strokeDasharray="4 2"
+                pointerEvents="none"
+              />
+              {/* Right border line */}
+              <line
+                x1={range.left + range.width}
+                y1={0}
+                x2={range.left + range.width}
+                y2={40}
+                stroke={range.color || "#ef4444"}
+                strokeWidth={2}
+                strokeDasharray="4 2"
+                pointerEvents="none"
+              />
+              {/* Label at top of left line */}
+              {range.width > 30 && (
+                <foreignObject
+                  x={range.left + 4}
+                  y={2}
+                  width={Math.min(range.width - 8, 100)}
+                  height={16}
+                  style={{ pointerEvents: "none" }}
+                >
+                  <div 
+                    className="text-[10px] font-medium truncate px-1 rounded"
+                    style={{ 
+                      backgroundColor: range.color || "#ef4444",
+                      color: "white",
+                      opacity: 0.9,
+                    }}
+                  >
+                    {range.label || "★"}
+                  </div>
+                </foreignObject>
+              )}
+              {/* Clickable hit area for the entire marked range */}
+              <rect
+                x={range.left}
+                y={0}
+                width={range.width}
+                height={40}
+                fill="transparent"
+                style={{ cursor: "pointer" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMarkedRangeClick(range);
+                }}
+              />
+            </g>
+          ))}
+
           {selectionRect && (
             <>
               {/* Dim overlay for non-selected area BEFORE selection */}

@@ -33,6 +33,7 @@ interface SettingsState {
   volume: number;
   autoSave: boolean;
   waveformScope: WaveformScope;
+  followPlayback: boolean;
   setApiEndpoint: (endpoint: string) => void;
   setClientId: (id: string) => void;
   setClientSecret: (secret: string) => void;
@@ -47,6 +48,7 @@ interface SettingsState {
   setVolume: (volume: number) => void;
   setAutoSave: (enabled: boolean) => void;
   setWaveformScope: (scope: WaveformScope) => void;
+  setFollowPlayback: (enabled: boolean) => void;
   clearSettings: () => void;
 }
 
@@ -78,6 +80,7 @@ export const useSettingsStore = create<SettingsState>()(
       volume: DEFAULT_VOLUME,
       autoSave: true,
       waveformScope: DEFAULT_WAVEFORM_SCOPE,
+      followPlayback: false,
       setApiEndpoint: (endpoint) => set({ apiEndpoint: endpoint }),
       setClientId: (id) => set({ clientId: id }),
       setClientSecret: (secret) => set({ clientSecret: secret }),
@@ -94,6 +97,7 @@ export const useSettingsStore = create<SettingsState>()(
       setVolume: (volume) => set({ volume }),
       setAutoSave: (enabled) => set({ autoSave: enabled }),
       setWaveformScope: (scope) => set({ waveformScope: scope }),
+      setFollowPlayback: (enabled) => set({ followPlayback: enabled }),
       clearSettings: () =>
         set({
           apiEndpoint: DEFAULT_API_ENDPOINT,
@@ -110,6 +114,7 @@ export const useSettingsStore = create<SettingsState>()(
           volume: DEFAULT_VOLUME,
           autoSave: true,
           waveformScope: DEFAULT_WAVEFORM_SCOPE,
+          followPlayback: false,
         }),
     }),
     {

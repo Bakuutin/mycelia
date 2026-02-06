@@ -301,8 +301,7 @@ export const AudioPlayer: React.FC = () => {
       setSourceNode(null);
       setIsCreatingSource(false);
     };
-
-    setIsCreatingSource(false);
+    // Note: setIsCreatingSource(false) is only called in onended to prevent race conditions
   };
 
   useEffect(() => {

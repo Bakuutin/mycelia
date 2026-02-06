@@ -11,9 +11,11 @@ import {
   CalendarPlus,
   Wand2,
   Play,
+  Star,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
+import { useMarkedRangesStore } from "@/stores/markedRangesStore";
 
 interface TimelineSelectionActionsProps {
   startDate: Date;
@@ -34,6 +36,11 @@ export function TimelineSelectionActions({
 }: TimelineSelectionActionsProps) {
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isRunJobOpen, setIsRunJobOpen] = useState(false);
+  const addMarkedRange = useMarkedRangesStore((s) => s.addRange);
+
+  const handleMarkRange = () => {
+    addMarkedRange(startDate, endDate);
+  };
 
   return (
     <div className="flex items-start gap-3 mr-auto">
@@ -123,6 +130,24 @@ export function TimelineSelectionActions({
           </TooltipContent>
         </Tooltip>
         <span className="text-xs text-muted-foreground">Create</span>
+      </div>
+
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={handleMarkRange}
+              variant="outline"
+              size="icon"
+            >
+              <Star className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Mark/favorite this range</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Mark</span>
       </div>
 
       <div className="flex flex-col items-center gap-1">

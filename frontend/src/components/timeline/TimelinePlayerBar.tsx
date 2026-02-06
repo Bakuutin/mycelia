@@ -1,7 +1,7 @@
 import { memo, useEffect } from "react";
 import type { ZoomTransform } from "d3-zoom";
 import type { ScaleTime } from "d3-scale";
-import { Pause, Play, Volume2, VolumeX, Maximize2, Focus } from "lucide-react";
+import { Pause, Play, Volume2, VolumeX, Maximize2, Focus, Navigation } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -63,7 +63,7 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
   className,
 }: TimelinePlayerBarProps) {
   const { isPlaying, toggleIsPlaying, currentDate } = useAudioPlayer();
-  const { volume, setVolume, playbackRate, setPlaybackRate, waveformScope, setWaveformScope } = useSettingsStore();
+  const { volume, setVolume, playbackRate, setPlaybackRate, waveformScope, setWaveformScope, followPlayback, setFollowPlayback } = useSettingsStore();
 
   const isMuted = volume === 0;
   const showFullWaveform = waveformScope === "full";
@@ -194,6 +194,26 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
 
         {/* Spacer */}
         <div className="flex-1" />
+
+        {/* Follow Playback Toggle */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={followPlayback ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setFollowPlayback(!followPlayback)}
+            >
+              <Navigation className={cn("h-4 w-4", followPlayback && "text-primary")} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{followPlayback ? "Following playhead" : "Follow playhead"}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        {/* Divider */}
+        <div className="h-6 w-px bg-border" />
 
         {/* Waveform Scope Toggle */}
         <div className="flex items-center gap-1">

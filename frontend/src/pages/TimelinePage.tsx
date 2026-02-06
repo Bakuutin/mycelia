@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useMemo } from "react";
+import { useEffect, useCallback, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
@@ -6,13 +6,14 @@ import { TimelinePlayerBar } from "@/components/timeline/TimelinePlayerBar";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
 import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibilityPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AudioPlayer } from "@/modules/audio/player";
+import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore";
 import { useTimeline } from "@/hooks/useTimeline";
 import { useTimelineRange } from "@/stores/timelineRange";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { api } from "@/lib/api";
 
 const TimelinePage = () => {
@@ -21,7 +22,7 @@ const TimelinePage = () => {
   const { error, objects } = useObjects();
   const { clearSelection: clearObjectSelection, selectedIds } =
     useObjectSelectionStore();
-  const { selection: timeSelection, clearSelection: clearTimeSelection } =
+  const { selection: timeSelection, clearSelection: clearTimeSelection, initFromURL: initSelectionFromURL } =
     useTimelineSelectionStore();
   const spanningObjects = useSpanningObjectsStore(
     (state) => state.spanningObjects,
@@ -32,8 +33,11 @@ const TimelinePage = () => {
 
   const timeline = useTimeline();
   const { zoomTo } = timeline;
-  const setRange = useTimelineRange((s) => s.setRange);
+  const { start: rangeStart, end: rangeEnd, setRange } = useTimelineRange();
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
+  const { currentDate, isPlaying } = useAudioPlayer();
+  const followPlayback = useSettingsStore((s) => s.followPlayback);
+  const lastFollowTimeRef = useRef<number>(0);
 
   // Apply start/end from URL when navigating to timeline with ?start=&end= (e.g. "View on timeline" from object)
   useEffect(() => {
@@ -48,6 +52,43 @@ const TimelinePage = () => {
     if (endParam && Number.isNaN(end.getTime())) return;
     setRange(start, end);
   }, [location.search, setRange]);
+
+  // Initialize selection from URL on mount
+  useEffect(() => {
+    initSelectionFromURL();
+  }, [initSelectionFromURL]);
+
+  // Follow playback: edge-trigger mode - recenter when playhead reaches edge
+  useEffect(() => {
+    if (!followPlayback || !isPlaying || !currentDate || !rangeStart || !rangeEnd) {
+      return;
+    }
+
+    const now = Date.now();
+    // Throttle to avoid excessive updates (max once per 500ms)
+    if (now - lastFollowTimeRef.current < 500) {
+      return;
+    }
+
+    const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
+    const playheadMs = currentDate.getTime();
+    const startMs = rangeStart.getTime();
+    const endMs = rangeEnd.getTime();
+
+    // Check if playhead is within 10% of either edge
+    const edgeThreshold = rangeMs * 0.1;
+    const isNearStart = playheadMs < startMs + edgeThreshold;
+    const isNearEnd = playheadMs > endMs - edgeThreshold;
+
+    if (isNearStart || isNearEnd) {
+      // Recenter the range on the playhead
+      const halfRange = rangeMs / 2;
+      const newStart = new Date(playheadMs - halfRange);
+      const newEnd = new Date(playheadMs + halfRange);
+      setRange(newStart, newEnd);
+      lastFollowTimeRef.current = now;
+    }
+  }, [followPlayback, isPlaying, currentDate, rangeStart, rangeEnd, setRange]);
 
   const isShortRange =
     timeSelection.start &&

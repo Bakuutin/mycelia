@@ -5,6 +5,7 @@ import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
 import { TimeLayer } from "@/modules/time";
 import { ObjectsLayer } from "@/modules/objects";
 import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
+import { PlayheadCursor } from "./PlayheadCursor";
 import {
   VoiceDetectionTrack,
   DataPresenceTrack,
@@ -83,6 +84,13 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
 
   return (
     <div ref={containerRef} className={`relative ${className || ""}`}>
+      {/* Playhead cursor overlay - spans all tracks */}
+      <PlayheadCursor
+        scale={timeScale}
+        transform={transform}
+        width={width}
+      />
+
       <div className="flex flex-col gap-0.5">
         {/* Processing overlay layer */}
         <ProcessingLayerComponent
