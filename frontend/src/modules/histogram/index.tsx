@@ -7,14 +7,7 @@ export const HistogramLayer = (): Layer => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
       const { start, end } = useTimelineRange();
-      const { items, resolution } = useHistogramItems(start, end);
-
-      console.log("HistogramLayer rendering", {
-        itemsCount: items.length,
-        resolution,
-        start: start.toISOString(),
-        end: end.toISOString(),
-      });
+      const { items } = useHistogramItems(start, end);
 
       return (
         <HistogramBars

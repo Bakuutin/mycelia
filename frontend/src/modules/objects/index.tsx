@@ -139,12 +139,11 @@ function useLaneLayout(
   layoutMode: "mixed" | "by-category",
   visibleCategories: ObjectCategory[],
 ) {
-  // Use current time only for determining if ongoing objects should be shown
-  // No need to update every second - use visibleEnd as the display endpoint for ongoing objects
-  const now = useMemo(() => new Date(), []);
-  const nowIsVisible = now >= visibleStart && now <= visibleEnd;
-
   return useMemo(() => {
+    // Use current time for ongoing objects - computed once per memo run
+    const now = new Date();
+    const nowIsVisible = now >= visibleStart && now <= visibleEnd;
+
     const spanningObjects: Object[] = [];
     const ongoingObjects: Object[] = [];
 
@@ -350,7 +349,7 @@ function useLaneLayout(
       spanningObjects,
       ongoingObjects,
     };
-  }, [ranges, xFor, width, now, visibleStart, visibleEnd, layoutMode, visibleCategories]);
+  }, [ranges, xFor, width, visibleStart, visibleEnd, layoutMode, visibleCategories]);
 }
 
 // Category header component
@@ -639,16 +638,19 @@ export const ObjectsLayer: () => Layer = () => {
             />
           ))}
 
-          {/* Object ranges - limit rendered count for performance */}
-          {layout.placed.slice(0, 500).map((range: PlacedObjectRange) => (
-            <CategoryAwareRangeBox
-              key={`${range.object._id.toString()}-${range.rangeIndex}`}
-              range={range}
-              width={width}
-              categorySections={layout.categorySections}
-              layoutMode={objectsLayoutMode}
-            />
-          ))}
+          {/* Object ranges - viewport culled for performance */}
+          {layout.placed
+            .filter((range: PlacedObjectRange) => range.endX >= 0 && range.startX <= width)
+            .slice(0, 200)
+            .map((range: PlacedObjectRange) => (
+              <CategoryAwareRangeBox
+                key={`${range.object._id.toString()}-${range.rangeIndex}`}
+                range={range}
+                width={width}
+                categorySections={layout.categorySections}
+                layoutMode={objectsLayoutMode}
+              />
+            ))}
 
           {loading && (
             <g className="loading-indicator" opacity={0.6}>

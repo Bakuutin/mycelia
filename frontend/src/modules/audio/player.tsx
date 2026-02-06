@@ -370,19 +370,25 @@ export const AudioPlayer: React.FC = () => {
     if (!audioContext) return;
 
     let frameId: number | null = null;
+    let lastUpdateTime = 0;
+    const UPDATE_INTERVAL = 50; // Update at ~20fps instead of 60fps for performance
 
     if (!isPlaying) {
       if (frameId) cancelAnimationFrame(frameId);
       return;
     }
 
-    const tick = () => {
-      const { baselineStartDate, baselineStartCtxTime } = useAudioPlayer.getState();
-      const currentPlaybackRate = useSettingsStore.getState().playbackRate;
-      if (baselineStartDate && baselineStartCtxTime !== null) {
-        const elapsed = audioContext.currentTime - baselineStartCtxTime;
-        const newDate = new Date(baselineStartDate.getTime() + elapsed * currentPlaybackRate * 1000);
-        updateDate(newDate);
+    const tick = (timestamp: number) => {
+      // Throttle updates to reduce re-renders
+      if (timestamp - lastUpdateTime >= UPDATE_INTERVAL) {
+        const { baselineStartDate, baselineStartCtxTime } = useAudioPlayer.getState();
+        const currentPlaybackRate = useSettingsStore.getState().playbackRate;
+        if (baselineStartDate && baselineStartCtxTime !== null) {
+          const elapsed = audioContext.currentTime - baselineStartCtxTime;
+          const newDate = new Date(baselineStartDate.getTime() + elapsed * currentPlaybackRate * 1000);
+          updateDate(newDate);
+        }
+        lastUpdateTime = timestamp;
       }
       frameId = requestAnimationFrame(tick);
     };

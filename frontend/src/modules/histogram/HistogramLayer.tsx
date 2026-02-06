@@ -1,3 +1,4 @@
+import React, { useMemo } from "react";
 import * as d3 from "d3";
 import type { HistogramItem } from "./useHistogramCache";
 
@@ -9,44 +10,7 @@ interface HistogramBarsProps {
   height?: number;
 }
 
-const HistogramBar = ({
-  item,
-  scale,
-  maxCount,
-  height,
-}: {
-  item: HistogramItem;
-  scale: d3.ScaleTime<number, number>;
-  maxCount: number;
-  height: number;
-}) => {
-  const startX = scale(item.start);
-  const endX = scale(item.end);
-  const width = Math.max(endX - startX, 1);
-
-  const count = item.totals.audio_chunks?.count || 0;
-  const barHeight = maxCount > 0 ? (count / maxCount) * height : 0;
-
-  const speechCount = item.totals.audio_chunks?.has_speech || 0;
-  const speechRatio = count > 0 ? speechCount / count : 0;
-
-  const baseColor = item.stale ? "rgb(255, 182, 193)" : "rgb(59, 130, 246)";
-  const opacity = 0.3 + speechRatio * 0.7;
-
-  return (
-    <rect
-      x={startX}
-      y={height - barHeight}
-      width={width}
-      height={barHeight}
-      fill={baseColor}
-      opacity={opacity}
-      className="histogram-bar"
-    />
-  );
-};
-
-export const HistogramBars = ({
+export const HistogramBars = React.memo(({
   items,
   scale,
   transform,
@@ -55,12 +19,44 @@ export const HistogramBars = ({
 }: HistogramBarsProps) => {
   const newScale = transform.rescaleX(scale);
 
-  const maxCount = items.length > 0
-    ? Math.max(
-        ...items.map((item) => item.totals.audio_chunks?.count || 0),
-        1,
-      )
-    : 1;
+  // Compute bars with viewport culling in a single pass
+  const { bars, maxCount } = useMemo(() => {
+    let max = 1;
+    const barData: Array<{
+      id: string;
+      x: number;
+      w: number;
+      count: number;
+      speechRatio: number;
+      stale: boolean;
+    }> = [];
+
+    for (const item of items) {
+      const x = newScale(item.start);
+      const endX = newScale(item.end);
+      const w = Math.max(endX - x, 1);
+
+      // Viewport culling - skip bars outside visible area
+      if (x + w < 0 || x > width) continue;
+
+      const count = item.totals.audio_chunks?.count || 0;
+      if (count > max) max = count;
+
+      const speechCount = item.totals.audio_chunks?.has_speech || 0;
+      const speechRatio = count > 0 ? speechCount / count : 0;
+
+      barData.push({
+        id: item.id,
+        x,
+        w,
+        count,
+        speechRatio,
+        stale: item.stale,
+      });
+    }
+
+    return { bars: barData, maxCount: max };
+  }, [items, newScale, width]);
 
   return (
     <svg className="w-full zoomable" width={width} height={height}>
@@ -80,16 +76,25 @@ export const HistogramBars = ({
         </pattern>
       </defs>
       <g>
-        {items.map((item) => (
-          <HistogramBar
-            key={item.id}
-            item={item}
-            scale={newScale}
-            maxCount={maxCount}
-            height={height}
-          />
-        ))}
+        {bars.map((bar) => {
+          const barHeight = maxCount > 0 ? (bar.count / maxCount) * height : 0;
+          const baseColor = bar.stale ? "rgb(255, 182, 193)" : "rgb(59, 130, 246)";
+          const opacity = 0.3 + bar.speechRatio * 0.7;
+
+          return (
+            <rect
+              key={bar.id}
+              x={bar.x}
+              y={height - barHeight}
+              width={bar.w}
+              height={barHeight}
+              fill={baseColor}
+              opacity={opacity}
+              className="histogram-bar"
+            />
+          );
+        })}
       </g>
     </svg>
   );
-};
+});
