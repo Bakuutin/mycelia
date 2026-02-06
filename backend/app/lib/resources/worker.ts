@@ -506,6 +506,39 @@ export class JobsResource
     const mongo = await getMongoResource(auth);
     // TODO: worker specific logic should belong to the worker file
 
+    // Get overall counts by status (across ALL jobs, not limited)
+    const statusCountsPipeline = [
+      {
+        $group: {
+          _id: "$state",
+          count: { $sum: 1 }
+        }
+      }
+    ];
+
+    const statusCounts = await mongo({
+      action: "aggregate",
+      collection: "jobs",
+      pipeline: statusCountsPipeline,
+    });
+
+    // Convert to a map
+    const byStatus: Record<string, number> = {
+      active: 0,
+      waiting: 0,
+      completed: 0,
+      failed: 0,
+      delayed: 0,
+      cancelled: 0,
+    };
+    let total = 0;
+    for (const item of statusCounts) {
+      if (item._id) {
+        byStatus[item._id] = item.count;
+        total += item.count;
+      }
+    }
+
     // Aggregate job statistics by type
     const pipeline = [
       {
@@ -656,7 +689,13 @@ export class JobsResource
       };
     });
 
-    return { stats: result };
+    return {
+      stats: result,
+      totals: {
+        ...byStatus,
+        total,
+      },
+    };
   }
 
   private async persistWorkerConfig(

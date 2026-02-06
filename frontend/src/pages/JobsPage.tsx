@@ -668,6 +668,15 @@ export default function JobsPage() {
           successRate: number;
           avgFrequency: string;
         }>;
+        totals: {
+          active: number;
+          waiting: number;
+          completed: number;
+          failed: number;
+          delayed: number;
+          cancelled: number;
+          total: number;
+        };
       };
     },
     staleTime: 30000, // Refresh every 30 seconds
@@ -889,6 +898,7 @@ export default function JobsPage() {
 
   const refetch = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+    queryClient.invalidateQueries({ queryKey: ["job-stats"] });
   };
 
   const handleSort = (column: string) => {
@@ -1295,7 +1305,7 @@ export default function JobsPage() {
           size="sm"
           onClick={() => setQuickFilter("all")}
         >
-          All ({jobCounts.total})
+          All ({jobStatsResponse?.totals?.total ?? jobCounts.total})
         </Button>
         <Button
           variant={quickFilter === "active" ? "default" : "outline"}
@@ -1304,7 +1314,7 @@ export default function JobsPage() {
           className={quickFilter !== "active" ? "text-blue-500 hover:text-blue-600" : ""}
         >
           <Activity className="h-3.5 w-3.5 mr-1" />
-          Active ({jobCounts.active})
+          Active ({jobStatsResponse?.totals?.active ?? jobCounts.active})
         </Button>
         <Button
           variant={quickFilter === "waiting" ? "default" : "outline"}
@@ -1313,7 +1323,7 @@ export default function JobsPage() {
           className={quickFilter !== "waiting" ? "text-yellow-500 hover:text-yellow-600" : ""}
         >
           <Clock className="h-3.5 w-3.5 mr-1" />
-          Waiting ({jobCounts.waiting})
+          Waiting ({jobStatsResponse?.totals?.waiting ?? jobCounts.waiting})
         </Button>
         <Button
           variant={quickFilter === "failed" ? "default" : "outline"}
@@ -1322,7 +1332,7 @@ export default function JobsPage() {
           className={quickFilter !== "failed" ? "text-red-500 hover:text-red-600 border-red-500/30" : ""}
         >
           <AlertCircle className="h-3.5 w-3.5 mr-1" />
-          Errors ({jobCounts.failed})
+          Errors ({jobStatsResponse?.totals?.failed ?? jobCounts.failed})
         </Button>
         <Button
           variant={quickFilter === "completed" ? "default" : "outline"}
@@ -1331,7 +1341,7 @@ export default function JobsPage() {
           className={quickFilter !== "completed" ? "text-green-500 hover:text-green-600" : ""}
         >
           <CheckCircle className="h-3.5 w-3.5 mr-1" />
-          Completed ({jobCounts.completed})
+          Completed ({jobStatsResponse?.totals?.completed ?? jobCounts.completed})
         </Button>
 
       </div>
