@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Markdown } from "@/components/Markdown";
@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChevronLeft, ChevronRight, Wand2, Star, GitCompare } from "lucide-react";
+import { ChevronLeft, ChevronRight, Wand2, Star, GitCompare, Copy, Check as CheckIcon, Code } from "lucide-react";
 import { formatRelativeTime } from "@/lib/formatTime";
 import type { Object } from "@/types/objects";
 
@@ -19,11 +19,16 @@ interface SummarySectionProps {
   object: Object;
   onSummaryClick?: (summary: NonNullable<Object["summaries"]>[number]) => void;
   onStarSummary?: (index: number) => void;
+  onUpdateSummaryText?: (index: number, text: string) => void;
 }
 
-export function SummarySection({ object, onSummaryClick, onStarSummary }: SummarySectionProps) {
+export function SummarySection({ object, onSummaryClick, onStarSummary, onUpdateSummaryText }: SummarySectionProps) {
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
+  const [showRawMarkdown, setShowRawMarkdown] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState("");
 
   const summaries = object.summaries || [];
   const hasSummaries = summaries.length > 0;
@@ -57,33 +62,138 @@ export function SummarySection({ object, onSummaryClick, onStarSummary }: Summar
     setCurrentIndex((prev) => (prev < summaries.length - 1 ? prev + 1 : 0));
   };
 
+  const handleCopy = useCallback(() => {
+    if (!currentSummary?.text) return;
+    navigator.clipboard.writeText(currentSummary.text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [currentSummary?.text]);
+
   return (
     <div className="border rounded-lg p-4 bg-muted/30 min-h-[400px] max-h-[800px] flex flex-col">
       {/* Header with title, model selector, and generate button */}
       <div className="flex items-center justify-between gap-2 mb-3 flex-shrink-0">
         <h3 className="text-sm font-semibold text-muted-foreground">Summary</h3>
 
-        {/* Generate Summary Button */}
-        {canGenerateSummary && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8"
-            onClick={() => setIsSummarizeOpen(true)}
-          >
-            <Wand2 className="w-4 h-4 mr-1" />
-            Generate
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {/* Raw markdown / Copy buttons - only when summary exists */}
+          {hasSummaries && currentSummary && (
+            <>
+              <Button
+                variant={showRawMarkdown ? "secondary" : "ghost"}
+                size="sm"
+                className="h-8 px-2"
+                onClick={() => {
+                  if (isEditing) {
+                    setIsEditing(false);
+                    setShowRawMarkdown(false);
+                  } else {
+                    setShowRawMarkdown(!showRawMarkdown);
+                  }
+                }}
+                aria-label={showRawMarkdown ? "Show rendered" : "Show raw markdown"}
+                title={showRawMarkdown ? "Show rendered" : "Show raw markdown"}
+              >
+                <Code className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2"
+                onClick={handleCopy}
+                aria-label="Copy summary"
+                title="Copy summary"
+              >
+                {copied ? (
+                  <CheckIcon className="w-4 h-4 text-green-500" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+              </Button>
+              {showRawMarkdown && onUpdateSummaryText && (
+                isEditing ? (
+                  <>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => {
+                        onUpdateSummaryText(currentIndex, editText);
+                        setIsEditing(false);
+                      }}
+                      title="Save changes"
+                    >
+                      <CheckIcon className="w-4 h-4 mr-1" />
+                      Save
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => {
+                        setIsEditing(false);
+                        setEditText("");
+                      }}
+                      title="Cancel editing"
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => {
+                      setEditText(currentSummary?.text || "");
+                      setIsEditing(true);
+                    }}
+                    title="Edit summary"
+                  >
+                    Edit
+                  </Button>
+                )
+              )}
+            </>
+          )}
+
+          {/* Generate Summary Button */}
+          {canGenerateSummary && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8"
+              onClick={() => setIsSummarizeOpen(true)}
+            >
+              <Wand2 className="w-4 h-4 mr-1" />
+              Generate
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Summary Content */}
       {hasSummaries && currentSummary ? (
         <>
           <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
-            <div className="prose prose-sm max-w-none pr-3">
-              <Markdown>{currentSummary.text}</Markdown>
-            </div>
+            {showRawMarkdown ? (
+              isEditing ? (
+                <textarea
+                  className="w-full h-full min-h-[300px] text-sm font-mono bg-transparent border rounded-md p-2 pr-3 resize-none focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                />
+              ) : (
+                <pre className="text-sm whitespace-pre-wrap font-mono text-muted-foreground pr-3 select-all">
+                  {currentSummary.text}
+                </pre>
+              )
+            ) : (
+              <div className="prose prose-sm max-w-none pr-3">
+                <Markdown>{currentSummary.text}</Markdown>
+              </div>
+            )}
           </ScrollArea>
 
           {/* Summary metadata and navigation footer */}

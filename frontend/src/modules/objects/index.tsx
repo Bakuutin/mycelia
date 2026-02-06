@@ -139,12 +139,14 @@ function useLaneLayout(
   layoutMode: "mixed" | "by-category",
   visibleCategories: ObjectCategory[],
 ) {
-  const now = useNow(1000);
+  // Use current time only for determining if ongoing objects should be shown
+  // No need to update every second - use visibleEnd as the display endpoint for ongoing objects
+  const now = useMemo(() => new Date(), []);
+  const nowIsVisible = now >= visibleStart && now <= visibleEnd;
 
   return useMemo(() => {
     const spanningObjects: Object[] = [];
     const ongoingObjects: Object[] = [];
-    const nowIsVisible = now >= visibleStart && now <= visibleEnd;
 
     // Filter and classify ranges
     const classifiedRanges: Array<ExtractedObjectRange & {

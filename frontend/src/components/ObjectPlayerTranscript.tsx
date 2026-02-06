@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { Play, FileText, Link2, Link2Off, Volume2, Calendar } from "lucide-react";
+import { Play, FileText, Link2, Link2Off, Volume2, Calendar, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -179,6 +179,7 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
   const [error, setError] = useState<string | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(true);
   const [userScrolling, setUserScrolling] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const currentSegmentRef = useRef<HTMLDivElement>(null);
   const lastScrolledIndex = useRef<number>(-1);
@@ -261,6 +262,16 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
 
     fetchTranscripts();
   }, [startDate, endDate]);
+
+  // Copy all transcript text to clipboard
+  const handleCopyTranscript = useCallback(() => {
+    if (segments.length === 0) return;
+    const text = segments.map((seg) => seg.text).join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [segments]);
 
   // Find current segment
   const currentSegmentIndex = segments.findIndex(seg =>
@@ -509,6 +520,21 @@ export function ObjectPlayerTranscript({ timeRange, height, minHeight = 300, max
           )}
           {syncEnabled && userScrolling && (
             <span className="text-xs text-muted-foreground">Paused</span>
+          )}
+          {segments.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopyTranscript}
+              title="Copy transcript"
+              className="h-7 px-2"
+            >
+              {copied ? (
+                <Check className="w-3.5 h-3.5 text-green-500" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+            </Button>
           )}
           <Button
             variant={syncEnabled ? "secondary" : "ghost"}

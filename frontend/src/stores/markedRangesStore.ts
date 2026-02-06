@@ -60,7 +60,7 @@ export const useMarkedRangesStore = create<MarkedRangesState>()(
       try {
         const data = await apiClient.get("/data/marked-ranges") as { ranges: any[] };
         if (data?.ranges) {
-          set({
+      set({
             ranges: data.ranges.map(parseRange),
             loaded: true,
           });

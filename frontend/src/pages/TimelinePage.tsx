@@ -235,6 +235,7 @@ const TimelinePage = () => {
             onZoomToFit={handleZoomToFit}
             onTimeRangeSelect={handleTimeRangeSelect}
             onZoomToSelection={handleZoomToSelection}
+            onZoomToRange={zoomTo}
             onCreateEvent={handleCreateEvent}
             onClearTimeSelection={clearTimeSelection}
           />

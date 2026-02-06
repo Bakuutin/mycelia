@@ -10,6 +10,7 @@ interface TimelineHeaderProps {
   onZoomToFit: () => void;
   onTimeRangeSelect: (range: string) => void;
   onZoomToSelection: () => void;
+  onZoomToRange?: (start: Date, end: Date) => void;
   onCreateEvent: () => void;
   onClearTimeSelection: () => void;
 }
@@ -22,6 +23,7 @@ export function TimelineHeader({
   onZoomToFit,
   onTimeRangeSelect,
   onZoomToSelection,
+  onZoomToRange,
   onCreateEvent,
   onClearTimeSelection,
 }: TimelineHeaderProps) {
@@ -41,6 +43,7 @@ export function TimelineHeader({
       <TimelineToolbar
         onZoomToFit={onZoomToFit}
         onTimeRangeSelect={onTimeRangeSelect}
+        onZoomToRange={onZoomToRange}
       />
       <TrackVisibilityButton />
     </div>

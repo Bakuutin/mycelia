@@ -286,6 +286,17 @@ const ObjectDetailPage = () => {
     handleFieldUpdate("summaries", newSummaries);
   }, [object, pendingChanges.summaries, handleFieldUpdate]);
 
+  // Handle updating summary text
+  const handleUpdateSummaryText = useCallback((index: number, text: string) => {
+    if (!object || !object.summaries) return;
+    const currentSummaries = pendingChanges.summaries || object.summaries;
+    const newSummaries = currentSummaries.map((summary: any, i: number) => {
+      if (i === index) return { ...summary, text };
+      return summary;
+    });
+    handleFieldUpdate("summaries", newSummaries);
+  }, [object, pendingChanges.summaries, handleFieldUpdate]);
+
   // Manual save - saves immediately
   const handleManualSave = useCallback(() => {
     if (saveTimeoutRef.current) {
@@ -492,6 +503,7 @@ const ObjectDetailPage = () => {
             object={pendingChanges.summaries ? { ...object, summaries: pendingChanges.summaries } : object}
             onSummaryClick={setSelectedSummary}
             onStarSummary={handleStarSummary}
+            onUpdateSummaryText={handleUpdateSummaryText}
           />
 
           {/* Player + Transcript - flexible height, expands for long content */}

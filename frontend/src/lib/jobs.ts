@@ -36,6 +36,23 @@ export function parseJobError(failedReason?: string): { label: string; detail: s
   if (r.includes("ECONNREFUSED") || r.includes("ECONNRESET") || r.includes("ENOTFOUND") || r.includes("fetch failed")) {
     return { label: "Connection error", detail: "Failed to connect to service" };
   }
+  // LLM API errors - specific patterns first
+  if (r.includes("no healthy deployments") || r.includes("There are no healthy deployments")) {
+    const modelMatch = r.match(/for model "([^"]+)"/);
+    const model = modelMatch ? modelMatch[1] : "unknown";
+    return {
+      label: "Model unavailable",
+      detail: `No servers available for model "${model}" — check LLM proxy config`,
+    };
+  }
+  if (r.includes("Model Group") && r.includes("not found")) {
+    const modelMatch = r.match(/Model Group[=\s]+(\w+)/i);
+    const model = modelMatch ? modelMatch[1] : "unknown";
+    return {
+      label: "Model not found",
+      detail: `Model "${model}" is not configured in the LLM proxy`,
+    };
+  }
   // LLM API errors (generic)
   if (r.includes("LLM API error")) {
     const statusMatch = r.match(/LLM API error \((\d+)\)/);
