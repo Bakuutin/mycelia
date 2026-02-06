@@ -66,35 +66,47 @@ const TimelinePage = () => {
     }
   }, [loadMarkedRanges, markedRangesLoaded]);
 
-  // Follow playback: edge-trigger mode - recenter when playhead reaches edge.
-  // Uses an interval + getState() to avoid subscribing to currentDate (which fires at ~20fps).
+  // Follow playback: immediately center on playhead when enabled,
+  // then keep it in view while playing.
+  useEffect(() => {
+    if (!followPlayback) return;
+    // Immediately center the timeline on the current playhead position
+    const currentDate = useAudioPlayer.getState().currentDate;
+    if (!currentDate) return;
+    const { start, end } = useTimelineRange.getState();
+    const duration = end.getTime() - start.getTime();
+    const newStart = new Date(currentDate.getTime() - duration / 2);
+    const newEnd = new Date(currentDate.getTime() + duration / 2);
+    setRange(newStart, newEnd);
+  }, [followPlayback, setRange]);
+
+  // While playing + following, keep playhead in view via interval
   useEffect(() => {
     if (!followPlayback || !isPlaying) return;
 
     const intervalId = setInterval(() => {
       const currentDate = useAudioPlayer.getState().currentDate;
-      if (!currentDate || !rangeStart || !rangeEnd) return;
+      if (!currentDate) return;
+      const { start, end } = useTimelineRange.getState();
+      const duration = end.getTime() - start.getTime();
+      const playheadTime = currentDate.getTime();
 
-      const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
-      const playheadMs = currentDate.getTime();
-      const startMs = rangeStart.getTime();
-      const endMs = rangeEnd.getTime();
+      // Recenter if playhead is off-screen or within 10% of either edge
+      const threshold = duration * 0.1;
+      const isOffScreen = playheadTime < start.getTime() || playheadTime > end.getTime();
+      const nearEdge =
+        playheadTime - start.getTime() < threshold ||
+        end.getTime() - playheadTime < threshold;
 
-      // Check if playhead is within 10% of either edge
-      const edgeThreshold = rangeMs * 0.1;
-      const isNearStart = playheadMs < startMs + edgeThreshold;
-      const isNearEnd = playheadMs > endMs - edgeThreshold;
-
-      if (isNearStart || isNearEnd) {
-        const halfRange = rangeMs / 2;
-        const newStart = new Date(playheadMs - halfRange);
-        const newEnd = new Date(playheadMs + halfRange);
-        setRange(newStart, newEnd);
+      if (isOffScreen || nearEdge) {
+        const newStart = new Date(playheadTime - duration / 2);
+        const newEnd = new Date(playheadTime + duration / 2);
+        useTimelineRange.getState().setRange(newStart, newEnd);
       }
     }, 500);
 
     return () => clearInterval(intervalId);
-  }, [followPlayback, isPlaying, rangeStart, rangeEnd, setRange]);
+  }, [followPlayback, isPlaying]);
 
   const isShortRange =
     timeSelection.start &&
