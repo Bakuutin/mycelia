@@ -627,7 +627,7 @@ export const ObjectsLayer: () => Layer = () => {
         : topMargin + layout.lanes * laneHeight + 10;
 
       return (
-        <svg className="w-full h-full zoomable" width={width} height={Math.max(height, 50)}>
+        <svg className="w-full h-full zoomable" width={width} height={Math.max(height, 50)} data-no-seek>
           {/* Category headers in by-category mode */}
           {objectsLayoutMode === "by-category" && layout.categorySections.map((section) => (
             <CategoryHeader

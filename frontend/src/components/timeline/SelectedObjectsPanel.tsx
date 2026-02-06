@@ -5,12 +5,15 @@ interface SelectedObjectsPanelProps {
   selectedObjects: any[];
   onClear: () => void;
   hasSelections?: boolean;
+  /** IDs of objects currently selected on the timeline */
+  selectedIds?: Set<string>;
 }
 
 export function SelectedObjectsPanel({
   selectedObjects,
   onClear,
   hasSelections = true,
+  selectedIds,
 }: SelectedObjectsPanelProps) {
   if (selectedObjects.length === 0) {
     return null;
@@ -27,7 +30,11 @@ export function SelectedObjectsPanel({
       )}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
         {selectedObjects.map((object) => (
-          <ObjectTile key={object._id.toString()} object={object} />
+          <ObjectTile
+            key={object._id.toString()}
+            object={object}
+            isSelected={selectedIds?.has(object._id.toString())}
+          />
         ))}
       </div>
     </div>

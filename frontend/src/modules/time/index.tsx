@@ -269,6 +269,7 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
           height={40}
           className="overflow-visible rounded-md"
           style={{ cursor: "crosshair" }}
+          data-no-seek
         >
           {/* Selection area background - indicates where users can drag to select */}
           <rect

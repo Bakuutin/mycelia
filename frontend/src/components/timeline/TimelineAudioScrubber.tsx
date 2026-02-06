@@ -4,40 +4,25 @@ import type { ScaleTime } from "d3-scale";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useHistogramItems } from "@/modules/histogram/useHistogramItems";
 import { useAudioPlayer } from "@/modules/audio/player";
-import { PlayheadHandle } from "./PlayheadHandle";
 import { cn } from "@/lib/utils";
 
 interface TimelineAudioScrubberProps {
-  /** D3 time scale */
   scale: ScaleTime<number, number>;
-  /** D3 zoom transform */
   transform: ZoomTransform;
-  /** Width of the container in pixels */
   width: number;
-  /** Height of the scrubber in pixels */
   height?: number;
-  /** Whether to show full waveform or just around playhead */
-  showFullWaveform?: boolean;
-  /** Minutes around playhead to show when not in full mode */
-  playheadWindowMinutes?: number;
   className?: string;
 }
 
 /**
- * TimelineAudioScrubber - An integrated audio scrubber with waveform visualization.
- * Uses histogram audio_chunks data to render a waveform-like display.
- * Features:
- * - Waveform visualization based on speech probability
- * - Draggable playhead handle
- * - Click-to-seek anywhere on the waveform
+ * TimelineAudioScrubber - Simple centered waveform with click-to-seek.
+ * Uses the same histogram audio_chunks count data as AudioChunksTrack.
  */
 export const TimelineAudioScrubber = memo(function TimelineAudioScrubber({
   scale,
   transform,
   width,
   height = 48,
-  showFullWaveform = true,
-  playheadWindowMinutes = 5,
   className,
 }: TimelineAudioScrubberProps) {
   const containerRef = useRef<SVGSVGElement>(null);
@@ -45,89 +30,32 @@ export const TimelineAudioScrubber = memo(function TimelineAudioScrubber({
   const { items } = useHistogramItems(start, end);
   const { currentDate, resetDate, setIsPlaying, isPlaying } = useAudioPlayer();
 
-  // Create rescaled scale for current transform
   const rescaledScale = useMemo(
     () => transform.rescaleX(scale),
     [scale, transform]
   );
 
-  // Calculate playhead position
-  const playheadPosition = useMemo(() => {
+  const playheadX = useMemo(() => {
     if (!currentDate) return null;
     return transform.applyX(scale(currentDate));
   }, [currentDate, scale, transform]);
 
-  // Calculate waveform bars from histogram data
-  const bars = useMemo(() => {
-    const waveformHeight = height - 20; // Leave space for handle
-    
-    // Find max count and max speech probability for normalization
-    let maxCount = 1; // Minimum to avoid division by zero
-    let maxProb = 0.1;
-    for (const item of items) {
+  // Simple bar calculation - same approach as HistogramTrack
+  const { bars, maxCount } = useMemo(() => {
+    let max = 1;
+    const barData = items.map((item) => {
       const count = item.totals.audio_chunks?.count ?? 0;
-      const prob = item.totals.audio_chunks?.speech_probability_avg ?? 0;
-      if (count > maxCount) maxCount = count;
-      if (prob > maxProb) maxProb = prob;
-    }
-
-    // If in playhead mode, filter to window around playhead
-    let filteredItems = items;
-    if (!showFullWaveform && currentDate) {
-      const windowMs = playheadWindowMinutes * 60 * 1000;
-      const windowStart = currentDate.getTime() - windowMs;
-      const windowEnd = currentDate.getTime() + windowMs;
-      filteredItems = items.filter((item) => {
-        const itemTime = item.start.getTime();
-        return itemTime >= windowStart && itemTime <= windowEnd;
-      });
-    }
-
-    return filteredItems.map((item) => {
-      const x = rescaledScale(item.start);
-      const itemEnd = item.end;
-      const barWidth = Math.max(rescaledScale(itemEnd) - x, 1);
-      
-      // Get audio data - use count as primary indicator (always available)
-      const count = item.totals.audio_chunks?.count ?? 0;
-      const hasSpeech = item.totals.audio_chunks?.has_speech ?? 0;
-      const speechProb = item.totals.audio_chunks?.speech_probability_avg ?? 0;
-      
-      // Calculate intensity: prefer speech probability, fallback to count
-      let intensity = 0;
-      if (count > 0) {
-        // Base intensity from audio presence (at least 20% if any audio)
-        intensity = Math.max(0.2, count / maxCount);
-        
-        // Boost based on speech probability if available
-        if (speechProb > 0) {
-          intensity = Math.max(intensity, speechProb / maxProb);
-        }
-        
-        // Extra boost if speech detected
-        if (hasSpeech > 0) {
-          intensity = Math.max(intensity, 0.4);
-        }
-      }
-      
-      // Minimum bar height of 4px for any audio, 2px baseline
-      const barHeight = count > 0 
-        ? Math.max(4, intensity * waveformHeight * 0.8)
-        : 2;
-      
+      if (count > max) max = count;
       return {
         id: item.id,
-        x,
-        width: barWidth,
-        height: barHeight,
-        intensity,
-        hasAudio: count > 0,
-        hasSpeech: hasSpeech > 0,
+        x: rescaledScale(item.start),
+        w: Math.max(rescaledScale(item.end) - rescaledScale(item.start), 1),
+        count,
       };
     });
-  }, [items, rescaledScale, height, showFullWaveform, currentDate, playheadWindowMinutes]);
+    return { bars: barData, maxCount: max };
+  }, [items, rescaledScale]);
 
-  // Handle click to seek
   const handleClick = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
       if (!containerRef.current) return;
@@ -140,118 +68,72 @@ export const TimelineAudioScrubber = memo(function TimelineAudioScrubber({
     [rescaledScale, resetDate, setIsPlaying]
   );
 
-  // Handle right-click to stop
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      setIsPlaying(false);
-      resetDate(null);
-    },
-    [setIsPlaying, resetDate]
-  );
-
-  // Handle playhead drag
-  const handlePlayheadDrag = useCallback(
-    (x: number) => {
-      const draggedDate = rescaledScale.invert(x);
-      resetDate(draggedDate);
-    },
-    [rescaledScale, resetDate]
-  );
-
-  const handlePlayheadDragStart = useCallback(() => {
-    setIsPlaying(false);
-  }, [setIsPlaying]);
-
-  const handlePlayheadDragEnd = useCallback(() => {
-    setIsPlaying(true);
-  }, [setIsPlaying]);
-
-  const waveformY = 20; // Start below handle area
-  const waveformHeight = height - waveformY;
+  const midY = height / 2;
 
   return (
     <svg
       ref={containerRef}
-      className={cn(
-        "w-full cursor-pointer select-none",
-        "bg-muted/30 rounded-md",
-        className
-      )}
+      className={cn("w-full cursor-pointer select-none", className)}
       width={width}
       height={height}
       onClick={handleClick}
-      onContextMenu={handleContextMenu}
     >
-      {/* Background track */}
-      <rect
-        x={0}
-        y={waveformY}
-        width={width}
-        height={waveformHeight}
-        fill="hsl(var(--muted) / 0.5)"
-        rx={4}
-      />
+      {/* Background */}
+      <rect x={0} y={0} width={width} height={height} fill="hsl(var(--muted))" rx={4} opacity={0.3} />
 
-      {/* Waveform bars */}
-      <g>
-        {bars.map((bar) => {
-          const y = waveformY + (waveformHeight - bar.height) / 2;
-          const isBeforePlayhead = playheadPosition !== null && bar.x < playheadPosition;
-          
-          return (
-            <rect
-              key={bar.id}
-              x={bar.x}
-              y={y}
-              width={Math.max(bar.width - 1, 1)}
-              height={bar.height}
-              rx={1}
-              fill={
-                isBeforePlayhead
-                  ? "hsl(var(--primary) / 0.7)"
-                  : bar.hasSpeech
-                  ? "hsl(var(--muted-foreground) / 0.5)"
-                  : "hsl(var(--muted-foreground) / 0.2)"
-              }
-              className="transition-colors duration-100"
+      {/* Center line */}
+      <line x1={0} y1={midY} x2={width} y2={midY} stroke="currentColor" strokeWidth={0.5} opacity={0.15} />
+
+      {/* Waveform bars (centered/mirrored) */}
+      {bars.map((bar) => {
+        if (bar.count === 0) return null;
+        const ratio = bar.count / maxCount;
+        const barH = Math.max(4, ratio * (height - 4));
+        const y = midY - barH / 2;
+        const beforePlayhead = playheadX !== null && bar.x + bar.w <= playheadX;
+
+        return (
+          <rect
+            key={bar.id}
+            x={bar.x}
+            y={y}
+            width={Math.max(bar.w - 0.5, 0.5)}
+            height={barH}
+            rx={0.5}
+            fill={beforePlayhead ? "hsl(var(--primary))" : "hsl(199, 89%, 48%)"}
+            opacity={beforePlayhead ? 0.8 : 0.6}
+          />
+        );
+      })}
+
+      {/* Playhead line */}
+      {playheadX !== null && playheadX >= 0 && playheadX <= width && (
+        <>
+          <line
+            x1={playheadX}
+            y1={0}
+            x2={playheadX}
+            y2={height}
+            stroke="hsl(var(--primary))"
+            strokeWidth={2}
+          />
+          {/* Small triangle at top */}
+          <polygon
+            points={`${playheadX - 5},0 ${playheadX + 5},0 ${playheadX},6`}
+            fill="hsl(var(--primary))"
+          />
+          {isPlaying && (
+            <circle
+              cx={playheadX}
+              cy={3}
+              r={2}
+              fill="hsl(var(--primary))"
+              className="animate-ping"
+              opacity={0.5}
             />
-          );
-        })}
-      </g>
-
-      {/* Playhead handle */}
-      {playheadPosition !== null && playheadPosition >= 0 && playheadPosition <= width && (
-        <PlayheadHandle
-          position={playheadPosition}
-          height={height}
-          isPlaying={isPlaying}
-          containerRef={containerRef as React.RefObject<HTMLElement>}
-          onDragStart={handlePlayheadDragStart}
-          onDrag={handlePlayheadDrag}
-          onDragEnd={handlePlayheadDragEnd}
-        />
+          )}
+        </>
       )}
-
-      {/* Time markers at edges (optional visual enhancement) */}
-      <line
-        x1={0}
-        y1={waveformY}
-        x2={0}
-        y2={height}
-        stroke="hsl(var(--border))"
-        strokeWidth={1}
-        opacity={0.5}
-      />
-      <line
-        x1={width}
-        y1={waveformY}
-        x2={width}
-        y2={height}
-        stroke="hsl(var(--border))"
-        strokeWidth={1}
-        opacity={0.5}
-      />
     </svg>
   );
 });

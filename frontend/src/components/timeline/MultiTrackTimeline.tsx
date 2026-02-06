@@ -1,7 +1,8 @@
-import React, { useMemo, memo } from "react";
+import React, { useMemo, useCallback, memo } from "react";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useHistogramItems } from "@/modules/histogram/useHistogramItems";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
+import { useAudioPlayer } from "@/modules/audio/player";
 import { TimeLayer } from "@/modules/time";
 import { ObjectsLayer } from "@/modules/objects";
 import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
@@ -70,6 +71,7 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
   const { start, end } = useTimelineRange();
   const { items } = useHistogramItems(start, end);
   const { visibleTracks, trackHeights } = useTrackVisibilityStore();
+  const { resetDate, setIsPlaying } = useAudioPlayer();
 
   // Use pre-created layer components
   const TimeLayerComponent = TIME_LAYER.component;
@@ -81,10 +83,43 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
     [visibleTracks]
   );
 
+  const rescaledScale = useMemo(
+    () => transform.rescaleX(timeScale),
+    [timeScale, transform]
+  );
+
+  // Click anywhere on the timeline to set playhead and start playing
+  const handleTimelineClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      // Don't seek if clicking on an object, button, selection handle, or track header
+      const target = e.target as HTMLElement;
+      if (
+        target.closest("[data-no-seek]") ||
+        target.closest("button") ||
+        target.closest("a") ||
+        target.closest(".track-header")
+      ) {
+        return;
+      }
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const clickedDate = rescaledScale.invert(x);
+      resetDate(clickedDate);
+      setIsPlaying(true);
+    },
+    [rescaledScale, resetDate, setIsPlaying]
+  );
+
   const showObjects = visibleTracks.includes("objects");
 
   return (
-    <div ref={containerRef} className={`relative ${className || ""}`}>
+    <div
+      ref={containerRef}
+      className={`relative ${className || ""}`}
+      style={{ cursor: "crosshair" }}
+      onClick={handleTimelineClick}
+    >
       {/* Time grid lines overlay - spans all tracks */}
       <TimeGridLines
         scale={timeScale}
@@ -147,18 +182,9 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           );
         })}
 
-        {/* Objects layer */}
+        {/* Objects layer — category headers inside SVG serve as labels */}
         {showObjects && (
           <div className="relative border-b border-border/30">
-            <TrackHeader
-              config={{
-                id: "objects",
-                label: "Objects",
-                defaultVisible: true,
-                defaultHeight: 120,
-                color: "#6b7280",
-              }}
-            />
             <ObjectsLayerComponent
               scale={timeScale}
               transform={transform}

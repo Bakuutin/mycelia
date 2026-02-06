@@ -15,7 +15,7 @@ interface PlayheadCursorProps {
 /**
  * PlayheadCursor - A vertical line that spans all timeline tracks
  * to show the current playhead position. This is an overlay component
- * that renders on top of all tracks.
+ * that renders on top of all tracks (pointer-events-none so clicks pass through).
  */
 export const PlayheadCursor = memo(function PlayheadCursor({
   scale,
@@ -38,10 +38,7 @@ export const PlayheadCursor = memo(function PlayheadCursor({
   const handleSize = 10;
 
   return (
-    <div
-      className="absolute inset-0 pointer-events-none z-20"
-      style={{ overflow: "hidden" }}
-    >
+    <div className="absolute inset-0 pointer-events-none z-20">
       {/* Vertical line spanning full height */}
       <div
         className="absolute top-0 bottom-0"
@@ -73,7 +70,7 @@ export const PlayheadCursor = memo(function PlayheadCursor({
         </svg>
       </div>
 
-      {/* Optional: playing indicator pulse at handle */}
+      {/* Playing indicator pulse at handle */}
       {isPlaying && (
         <div
           className="absolute rounded-full animate-ping"

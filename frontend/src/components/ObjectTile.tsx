@@ -1,6 +1,9 @@
-import { Link } from "react-router-dom";
-import { ArrowLeftRight, ArrowRight } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { ArrowLeftRight, ArrowRight, Pencil, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime";
+import { useDeleteObject } from "@/hooks/useObjectQueries";
+import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import type { Object } from "@/types/objects";
 
 type IconData = { text?: string; base64?: string };
@@ -15,11 +18,14 @@ const renderIcon = (icon: string | IconData | null | undefined) => {
 
 type ObjectTileProps = {
   object: Object & { subjectObject?: Object; objectObject?: Object };
+  isSelected?: boolean;
 };
 
-const renderDefaultDetails = (
-  object: Object & { subjectObject?: Object; objectObject?: Object },
-) => {
+export function ObjectTile({ object, isSelected }: ObjectTileProps) {
+  const navigate = useNavigate();
+  const deleteObject = useDeleteObject();
+  const { removeFromSelection } = useObjectSelectionStore();
+
   const timeRange = object.timeRanges?.[0];
   const hasRelationshipData = object.isRelationship &&
     object.relationship &&
@@ -27,9 +33,17 @@ const renderDefaultDetails = (
     object.objectObject;
   const title = (object as { summary?: string }).summary || object.name;
   const description = object.details;
+  const objectId = object._id.toString();
+
+  const handleDelete = () => {
+    if (!globalThis.confirm(`Delete "${object.name}"?`)) return;
+    deleteObject.mutate(objectId, {
+      onSuccess: () => removeFromSelection(object._id),
+    });
+  };
 
   return (
-    <div className="rounded-lg border p-4 flex flex-col gap-3">
+    <div className={`rounded-lg border p-4 flex flex-col gap-3 transition-colors ${isSelected ? "border-primary ring-2 ring-primary/30 bg-primary/5" : ""}`}>
       <div className="flex items-start gap-3 min-w-0">
         <span className="text-2xl leading-none flex-shrink-0">{renderIcon(object.icon)}</span>
         <div className="min-w-0 flex-1 space-y-2">
@@ -55,7 +69,7 @@ const renderDefaultDetails = (
             </div>
           )}
           <Link
-            to={`/objects/${object._id.toString()}`}
+            to={`/objects/${objectId}`}
             className="font-medium hover:text-primary transition-colors block"
           >
             {title}
@@ -65,6 +79,29 @@ const renderDefaultDetails = (
               {description}
             </div>
           )}
+        </div>
+
+        {/* Edit / Delete actions */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-primary"
+            onClick={() => navigate(`/objects/${objectId}`)}
+            title="Edit"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+            onClick={handleDelete}
+            disabled={deleteObject.isPending}
+            title="Delete"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
       {timeRange && (
@@ -87,8 +124,4 @@ const renderDefaultDetails = (
       )}
     </div>
   );
-};
-
-export function ObjectTile({ object }: ObjectTileProps) {
-  return renderDefaultDetails(object);
 }

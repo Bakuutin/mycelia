@@ -251,6 +251,7 @@ const TimelinePage = () => {
             selectedObjects={panelObjects}
             onClear={clearObjectSelection}
             hasSelections={selectedIds.size > 0}
+            selectedIds={selectedIds}
           />
         </div>
 

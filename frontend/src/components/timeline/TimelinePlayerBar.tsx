@@ -1,7 +1,7 @@
 import { memo, useEffect } from "react";
 import type { ZoomTransform } from "d3-zoom";
 import type { ScaleTime } from "d3-scale";
-import { Pause, Play, Volume2, VolumeX, Maximize2, Focus, Navigation } from "lucide-react";
+import { Pause, Play, Volume2, VolumeX, Navigation } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -43,18 +43,14 @@ function formatDate(date: Date | null): string {
 }
 
 interface TimelinePlayerBarProps {
-  /** D3 time scale */
   scale: ScaleTime<number, number>;
-  /** D3 zoom transform */
   transform: ZoomTransform;
-  /** Width of the container in pixels */
   width: number;
   className?: string;
 }
 
 /**
- * TimelinePlayerBar - Combined audio scrubber with waveform and player controls.
- * Positioned below the timeline tracks.
+ * TimelinePlayerBar - Waveform scrubber + player controls below the timeline.
  */
 export const TimelinePlayerBar = memo(function TimelinePlayerBar({
   scale,
@@ -63,15 +59,13 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
   className,
 }: TimelinePlayerBarProps) {
   const { isPlaying, toggleIsPlaying, currentDate } = useAudioPlayer();
-  const { volume, setVolume, playbackRate, setPlaybackRate, waveformScope, setWaveformScope, followPlayback, setFollowPlayback } = useSettingsStore();
+  const { volume, setVolume, playbackRate, setPlaybackRate, followPlayback, setFollowPlayback } = useSettingsStore();
 
   const isMuted = volume === 0;
-  const showFullWaveform = waveformScope === "full";
 
-  // Keyboard shortcut for play/pause (Space)
+  // Space to play/pause
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input
       if (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement
@@ -85,9 +79,7 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
     };
 
     globalThis.addEventListener("keydown", handleKeyDown);
-    return () => {
-      globalThis.removeEventListener("keydown", handleKeyDown);
-    };
+    return () => globalThis.removeEventListener("keydown", handleKeyDown);
   }, [toggleIsPlaying]);
 
   return (
@@ -97,157 +89,75 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
         scale={scale}
         transform={transform}
         width={width}
-        height={56}
-        showFullWaveform={showFullWaveform}
-        playheadWindowMinutes={5}
+        height={48}
       />
 
       {/* Controls bar */}
-      <div className="flex items-center gap-3 px-3 py-2 border-t bg-muted/30">
-        {/* Play/Pause Button */}
+      <div className="flex items-center gap-3 px-3 py-1.5 border-t bg-muted/30">
+        {/* Play/Pause */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              onClick={() => toggleIsPlaying()}
-            >
-              {isPlaying ? (
-                <Pause className="h-5 w-5" />
-              ) : (
-                <Play className="h-5 w-5" />
-              )}
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleIsPlaying()}>
+              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>
-            <p>{isPlaying ? "Pause" : "Play"} (Space)</p>
-          </TooltipContent>
+          <TooltipContent><p>{isPlaying ? "Pause" : "Play"} (Space)</p></TooltipContent>
         </Tooltip>
 
-        {/* Current Time Display */}
+        {/* Current Time */}
         <div className="flex flex-col items-start min-w-[100px]">
-          <span className="text-sm font-mono font-medium">
-            {formatTime(currentDate)}
-          </span>
-          <span className="text-[10px] text-muted-foreground">
-            {formatDate(currentDate)}
-          </span>
+          <span className="text-sm font-mono font-medium">{formatTime(currentDate)}</span>
+          <span className="text-[10px] text-muted-foreground">{formatDate(currentDate)}</span>
         </div>
 
-        {/* Divider */}
         <div className="h-6 w-px bg-border" />
 
-        {/* Volume Control */}
+        {/* Volume */}
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setVolume(isMuted ? 1 : 0)}
-              >
-                {isMuted ? (
-                  <VolumeX className="h-4 w-4" />
-                ) : (
-                  <Volume2 className="h-4 w-4" />
-                )}
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setVolume(isMuted ? 1 : 0)}>
+                {isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>
-              <p>{isMuted ? "Unmute" : "Mute"}</p>
-            </TooltipContent>
+            <TooltipContent><p>{isMuted ? "Unmute" : "Mute"}</p></TooltipContent>
           </Tooltip>
-          <Slider
-            value={[volume]}
-            onValueChange={([v]) => setVolume(v)}
-            min={0}
-            max={2}
-            step={0.05}
-            className="w-20"
-          />
+          <Slider value={[volume]} onValueChange={([v]) => setVolume(v)} min={0} max={2} step={0.05} className="w-20" />
         </div>
 
-        {/* Divider */}
         <div className="h-6 w-px bg-border" />
 
-        {/* Playback Speed */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Speed:</span>
-          <Select
-            value={String(playbackRate)}
-            onValueChange={(v) => setPlaybackRate(parseFloat(v))}
-          >
-            <SelectTrigger className="h-8 w-[70px] text-xs">
+        {/* Speed */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Speed</span>
+          <Select value={String(playbackRate)} onValueChange={(v) => setPlaybackRate(parseFloat(v))}>
+            <SelectTrigger className="h-7 w-[60px] text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {PLAYBACK_RATES.map((rate) => (
-                <SelectItem key={rate} value={String(rate)}>
-                  {rate}x
-                </SelectItem>
+                <SelectItem key={rate} value={String(rate)}>{rate}x</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
-        {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Follow Playback Toggle */}
+        {/* Follow Playback */}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant={followPlayback ? "secondary" : "ghost"}
               size="icon"
-              className="h-8 w-8"
+              className="h-7 w-7"
               onClick={() => setFollowPlayback(!followPlayback)}
             >
-              <Navigation className={cn("h-4 w-4", followPlayback && "text-primary")} />
+              <Navigation className={cn("h-3.5 w-3.5", followPlayback && "text-primary")} />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>
-            <p>{followPlayback ? "Following playhead" : "Follow playhead"}</p>
-          </TooltipContent>
+          <TooltipContent><p>{followPlayback ? "Following playhead" : "Follow playhead"}</p></TooltipContent>
         </Tooltip>
-
-        {/* Divider */}
-        <div className="h-6 w-px bg-border" />
-
-        {/* Waveform Scope Toggle */}
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={showFullWaveform ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setWaveformScope("full")}
-              >
-                <Maximize2 className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Full range waveform</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={!showFullWaveform ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setWaveformScope("playhead")}
-              >
-                <Focus className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Around playhead (+/- 5 min)</p>
-            </TooltipContent>
-          </Tooltip>
-        </div>
       </div>
     </div>
   );
