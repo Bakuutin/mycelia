@@ -14,7 +14,7 @@ import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
-import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore";
+
 import { useTimeline } from "@/hooks/useTimeline";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -22,7 +22,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const TimelinePage = () => {
-  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(true);
   const location = useLocation();
   const navigate = useNavigate();
   const { error, objects } = useObjects();
@@ -30,12 +30,6 @@ const TimelinePage = () => {
     useObjectSelectionStore();
   const { selection: timeSelection, clearSelection: clearTimeSelection, initFromURL: initSelectionFromURL } =
     useTimelineSelectionStore();
-  const spanningObjects = useSpanningObjectsStore(
-    (state) => state.spanningObjects,
-  );
-  const ongoingObjects = useSpanningObjectsStore(
-    (state) => state.ongoingObjects,
-  );
 
   const timeline = useTimeline();
   const { zoomTo } = timeline;
@@ -110,21 +104,18 @@ const TimelinePage = () => {
     };
   }, [clearObjectSelection, clearTimeSelection]);
 
-  const selectedObjects = useMemo(() => {
-    if (!objects || selectedIds.size === 0) return [];
-    return objects.filter((object) => selectedIds.has(object._id.toString()));
-  }, [objects, selectedIds]);
-
-  const panelObjects = useMemo(() => {
-    const excludedIds = new Set([
-      ...spanningObjects.map((o) => o._id.toString()),
-      ...ongoingObjects.map((o) => o._id.toString()),
-    ]);
-    const selectedNotExcluded = selectedObjects.filter(
-      (o) => !excludedIds.has(o._id.toString()),
-    );
-    return [...ongoingObjects, ...spanningObjects, ...selectedNotExcluded];
-  }, [spanningObjects, ongoingObjects, selectedObjects]);
+  // Objects visible in the current timeline range
+  const visibleObjects = useMemo(() => {
+    if (!objects || !rangeStart || !rangeEnd) return [];
+    return objects.filter((object) => {
+      if (!object.timeRanges || object.timeRanges.length === 0) return false;
+      return object.timeRanges.some((range: { start: Date | string; end?: Date | string | null }) => {
+        const start = new Date(range.start).getTime();
+        const end = range.end ? new Date(range.end).getTime() : Date.now();
+        return start < rangeEnd.getTime() && end > rangeStart.getTime();
+      });
+    });
+  }, [objects, rangeStart, rangeEnd]);
 
   const handleZoomToSelection = () => {
     if (timeSelection.start && timeSelection.end) {
@@ -239,7 +230,7 @@ const TimelinePage = () => {
             onClearTimeSelection={clearTimeSelection}
           />
 
-          <div className="border rounded-lg p-2">
+          <div className="border rounded-lg p-2 overflow-visible">
             <TimelinePlayerBar
               scale={timeline.timeScale}
               transform={timeline.transform}
@@ -252,39 +243,42 @@ const TimelinePage = () => {
           {/* Hidden audio player component that handles actual playback */}
           <AudioPlayer />
 
-          {/* Collapsible transcript panel synced with player */}
-          <Collapsible open={transcriptOpen} onOpenChange={setTranscriptOpen}>
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-between px-3 py-2 h-auto text-muted-foreground hover:text-foreground"
-              >
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <FileText className="w-4 h-4" />
-                  Transcript
-                </span>
-                <ChevronDown className={cn(
-                  "w-4 h-4 transition-transform duration-200",
-                  transcriptOpen && "rotate-180"
-                )} />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              {rangeStart && rangeEnd && (
-                <ObjectTranscriptPanel
-                  timeRange={{ start: rangeStart, end: rangeEnd }}
-                />
-              )}
-            </CollapsibleContent>
-          </Collapsible>
+          {/* Transcript (left) and Objects (right) side by side */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Collapsible transcript panel synced with player */}
+            <Collapsible open={transcriptOpen} onOpenChange={setTranscriptOpen}>
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-between px-3 py-2 h-auto text-muted-foreground hover:text-foreground"
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <FileText className="w-4 h-4" />
+                    Transcript
+                  </span>
+                  <ChevronDown className={cn(
+                    "w-4 h-4 transition-transform duration-200",
+                    transcriptOpen && "rotate-180"
+                  )} />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                {rangeStart && rangeEnd && (
+                  <ObjectTranscriptPanel
+                    timeRange={{ start: rangeStart, end: rangeEnd }}
+                  />
+                )}
+              </CollapsibleContent>
+            </Collapsible>
 
-          <SelectedObjectsPanel
-            selectedObjects={panelObjects}
-            onClear={clearObjectSelection}
-            hasSelections={selectedIds.size > 0}
-            selectedIds={selectedIds}
-          />
+            <SelectedObjectsPanel
+              selectedObjects={visibleObjects}
+              onClear={clearObjectSelection}
+              hasSelections={selectedIds.size > 0}
+              selectedIds={selectedIds}
+            />
+          </div>
         </div>
 
         {/* Side panel for track visibility */}

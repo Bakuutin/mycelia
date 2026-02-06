@@ -8,6 +8,7 @@ import { ObjectsLayer } from "@/modules/objects";
 import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
 import { PlayheadCursor } from "./PlayheadCursor";
 import { TimeGridLines } from "./TimeGridLines";
+import { AudioSourcesTrack } from "./AudioSourcesTrack";
 import {
   VoiceDetectionTrack,
   DataPresenceTrack,
@@ -116,7 +117,7 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
   return (
     <div
       ref={containerRef}
-      className={`relative ${className || ""}`}
+      className={`relative overflow-visible ${className || ""}`}
       style={{ cursor: "crosshair" }}
       onClick={handleTimelineClick}
     >
@@ -134,7 +135,7 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
         width={width}
       />
 
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-col gap-0.5 overflow-visible">
         {/* Processing overlay layer */}
         <ProcessingLayerComponent
           scale={timeScale}
@@ -143,7 +144,7 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
         />
 
         {/* Time axis layer (always visible) with header */}
-        <div className="relative border-b border-border/30">
+        <div className="relative border-b border-border/30 overflow-visible pt-5">
           <TrackHeader
             config={{
               id: "time-selection" as any,
@@ -159,6 +160,13 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
             width={width}
           />
         </div>
+
+        {/* Audio sources track (only shows when multiple sources exist) */}
+        <AudioSourcesTrack
+          scale={timeScale}
+          transform={transform}
+          width={width}
+        />
 
         {/* Data tracks */}
         {visibleHistogramTracks.map((trackId) => {

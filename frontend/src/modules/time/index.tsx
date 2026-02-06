@@ -271,6 +271,13 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
           style={{ cursor: "crosshair" }}
           data-no-seek
         >
+          {/* Clip path to keep range elements within timeline bounds */}
+          <defs>
+            <clipPath id="timeline-clip">
+              <rect x={0} y={0} width={width} height={40} />
+            </clipPath>
+          </defs>
+
           {/* Selection area background - indicates where users can drag to select */}
           <rect
             x={0}
@@ -285,134 +292,147 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
             pointerEvents="none"
           />
 
-          {/* Marked/favorite ranges */}
-          {markedRangeRects.map((range) => (
-            <g key={range.id}>
-              {/* Semi-transparent fill between the lines */}
-              <rect
-                x={range.left}
-                y={0}
-                width={range.width}
-                height={40}
-                fill={range.color || "#ef4444"}
-                opacity={0.1}
-                pointerEvents="none"
-              />
-              {/* Left border line */}
-              <line
-                x1={range.left}
-                y1={0}
-                x2={range.left}
-                y2={40}
-                stroke={range.color || "#ef4444"}
-                strokeWidth={2}
-                strokeDasharray="4 2"
-                pointerEvents="none"
-              />
-              {/* Right border line */}
-              <line
-                x1={range.left + range.width}
-                y1={0}
-                x2={range.left + range.width}
-                y2={40}
-                stroke={range.color || "#ef4444"}
-                strokeWidth={2}
-                strokeDasharray="4 2"
-                pointerEvents="none"
-              />
-              {/* Label at top of left line */}
-              {range.width > 30 && (
-                <foreignObject
-                  x={range.left + 4}
-                  y={2}
-                  width={Math.min(range.width - 8, 100)}
-                  height={16}
-                  style={{ pointerEvents: "none" }}
+          {/* Marked/favorite ranges - clipped to timeline bounds */}
+          <g clipPath="url(#timeline-clip)">
+            {markedRangeRects.map((range) => (
+              <g key={range.id}>
+                {/* Semi-transparent fill between the lines */}
+                <rect
+                  x={range.left}
+                  y={0}
+                  width={range.width}
+                  height={40}
+                  fill={range.color || "#ef4444"}
+                  opacity={0.1}
+                  pointerEvents="none"
+                />
+                {/* Left border line */}
+                <line
+                  x1={range.left}
+                  y1={0}
+                  x2={range.left}
+                  y2={40}
+                  stroke={range.color || "#ef4444"}
+                  strokeWidth={2}
+                  strokeDasharray="4 2"
+                  pointerEvents="none"
+                />
+                {/* Right border line */}
+                <line
+                  x1={range.left + range.width}
+                  y1={0}
+                  x2={range.left + range.width}
+                  y2={40}
+                  stroke={range.color || "#ef4444"}
+                  strokeWidth={2}
+                  strokeDasharray="4 2"
+                  pointerEvents="none"
+                />
+                {/* Clickable hit area for the entire marked range */}
+                <rect
+                  x={range.left}
+                  y={0}
+                  width={range.width}
+                  height={40}
+                  fill="transparent"
+                  style={{ cursor: "pointer" }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleMarkedRangeClick(range);
+                  }}
+                />
+              </g>
+            ))}
+          </g>
+          {/* Marked range labels - outside clip so they can overflow vertically */}
+          {markedRangeRects.map((range) => {
+            const clampedLeft = Math.max(0, range.left);
+            const clampedRight = Math.min(range.left + range.width, width);
+            const clampedWidth = clampedRight - clampedLeft;
+            if (clampedWidth < 30) return null;
+            return (
+              <foreignObject
+                key={`label-${range.id}`}
+                x={clampedLeft + 4}
+                y={-18}
+                width={Math.min(clampedWidth - 8, 100)}
+                height={16}
+                style={{ pointerEvents: "none" }}
+              >
+                <div
+                  className="text-[10px] font-medium truncate px-1 rounded"
+                  style={{
+                    backgroundColor: range.color || "#ef4444",
+                    color: "white",
+                    opacity: 0.9,
+                  }}
                 >
-                  <div 
-                    className="text-[10px] font-medium truncate px-1 rounded"
-                    style={{ 
-                      backgroundColor: range.color || "#ef4444",
-                      color: "white",
-                      opacity: 0.9,
-                    }}
-                  >
-                    {range.label || "★"}
-                  </div>
-                </foreignObject>
-              )}
-              {/* Clickable hit area for the entire marked range */}
-              <rect
-                x={range.left}
-                y={0}
-                width={range.width}
-                height={40}
-                fill="transparent"
-                style={{ cursor: "pointer" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleMarkedRangeClick(range);
-                }}
-              />
-            </g>
-          ))}
+                  {range.label || "★"}
+                </div>
+              </foreignObject>
+            );
+          })}
 
           {selectionRect && (
             <>
-              {/* Dim overlay for non-selected area BEFORE selection */}
-              <rect
-                x={0}
-                y={0}
-                width={selectionRect.left}
-                height={40}
-                fill="rgba(255, 255, 255, 0.5)"
-                pointerEvents="none"
-              />
-              {/* Dim overlay for non-selected area AFTER selection */}
-              <rect
-                x={selectionRect.left + selectionRect.width}
-                y={0}
-                width={width - (selectionRect.left + selectionRect.width)}
-                height={40}
-                fill="rgba(255, 255, 255, 0.5)"
-                pointerEvents="none"
-              />
-              <rect
-                x={selectionRect.left}
-                y={0}
-                width={selectionRect.width}
-                height={40}
-                fill="transparent"
-                stroke="rgba(59, 130, 246, 0.5)"
-                strokeWidth={1}
-                pointerEvents="none"
-              />
+              {/* Selection overlays and handles - clipped to timeline bounds */}
+              <g clipPath="url(#timeline-clip)">
+                {/* Dim overlay for non-selected area BEFORE selection */}
+                <rect
+                  x={0}
+                  y={0}
+                  width={selectionRect.left}
+                  height={40}
+                  fill="rgba(255, 255, 255, 0.5)"
+                  pointerEvents="none"
+                />
+                {/* Dim overlay for non-selected area AFTER selection */}
+                <rect
+                  x={selectionRect.left + selectionRect.width}
+                  y={0}
+                  width={width - (selectionRect.left + selectionRect.width)}
+                  height={40}
+                  fill="rgba(255, 255, 255, 0.5)"
+                  pointerEvents="none"
+                />
+                <rect
+                  x={selectionRect.left}
+                  y={0}
+                  width={selectionRect.width}
+                  height={40}
+                  fill="transparent"
+                  stroke="rgba(59, 130, 246, 0.5)"
+                  strokeWidth={1}
+                  pointerEvents="none"
+                />
+                
+                {/* Visual Handles */}
+                <rect
+                  x={selectionRect.left - 2}
+                  y={0}
+                  width={4}
+                  height={40}
+                  fill="rgba(59, 130, 246, 0.8)"
+                  stroke="rgba(59, 130, 246, 1)"
+                  strokeWidth={1}
+                  pointerEvents="none"
+                />
+                <rect
+                  x={selectionRect.left + selectionRect.width - 2}
+                  y={0}
+                  width={4}
+                  height={40}
+                  fill="rgba(59, 130, 246, 0.8)"
+                  stroke="rgba(59, 130, 246, 1)"
+                  strokeWidth={1}
+                  pointerEvents="none"
+                />
+              </g>
               
-              {/* Visual Handles */}
-              <rect
-                x={selectionRect.left - 2}
-                y={0}
-                width={4}
-                height={40}
-                fill="rgba(59, 130, 246, 0.8)"
-                stroke="rgba(59, 130, 246, 1)"
-                strokeWidth={1}
-                pointerEvents="none"
-              />
-              <rect
-                x={selectionRect.left + selectionRect.width - 2}
-                y={0}
-                width={4}
-                height={40}
-                fill="rgba(59, 130, 246, 0.8)"
-                stroke="rgba(59, 130, 246, 1)"
-                strokeWidth={1}
-                pointerEvents="none"
-              />
-              
+              {/* Selection labels - outside clip so they can overflow vertically */}
               {/* Start date/time label */}
               <foreignObject
-                x={selectionRect.left - 60}
+                x={Math.max(0, selectionRect.left - 60)}
                 y={42}
                 width={120}
                 height={20}
@@ -427,7 +447,7 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
               
               {/* End date/time label */}
               <foreignObject
-                x={selectionRect.left + selectionRect.width - 60}
+                x={Math.min(width - 120, selectionRect.left + selectionRect.width - 60)}
                 y={42}
                 width={120}
                 height={20}

@@ -1,7 +1,7 @@
 import { memo, useEffect } from "react";
 import type { ZoomTransform } from "d3-zoom";
 import type { ScaleTime } from "d3-scale";
-import { Pause, Play, Volume2, VolumeX, Navigation } from "lucide-react";
+import { Pause, Play, Volume2, VolumeX, Navigation, Radio, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -58,7 +58,7 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
   width,
   className,
 }: TimelinePlayerBarProps) {
-  const { isPlaying, toggleIsPlaying, currentDate } = useAudioPlayer();
+  const { isPlaying, toggleIsPlaying, currentDate, originalId, setOriginalId } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, followPlayback, setFollowPlayback } = useSettingsStore();
 
   const isMuted = volume === 0;
@@ -141,6 +141,28 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
             </SelectContent>
           </Select>
         </div>
+
+        {/* Active audio source indicator */}
+        {originalId && (
+          <>
+            <div className="h-6 w-px bg-border" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={() => setOriginalId(null)}
+                >
+                  <Radio className="h-3 w-3 text-primary" />
+                  <span className="max-w-[80px] truncate">Source: {originalId.slice(-6)}</span>
+                  <X className="h-3 w-3 opacity-50" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent><p>Click to play all sources (currently filtered)</p></TooltipContent>
+            </Tooltip>
+          </>
+        )}
 
         <div className="flex-1" />
 

@@ -4,10 +4,6 @@ import _ from "lodash";
 import { apiClient } from "@/lib/api.ts";
 import { useSettingsStore } from "@/stores/settingsStore.ts";
 
-// #region agent log
-const _dbg = (loc: string, msg: string, data: Record<string, unknown>) => console.warn(`[DBG] ${loc} | ${msg}`, JSON.stringify(data));
-// #endregion
-
 export interface Chunk {
   start: Date;
   buffer: AudioBuffer;
@@ -29,6 +25,9 @@ export interface DateStore {
   rafId: number | null;
   baselineStartDate: Date | null;
   baselineStartCtxTime: number | null;
+  /** Filter playback to a specific audio source (original_id). null = auto/any */
+  originalId: string | null;
+  setOriginalId: (id: string | null) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   toggleIsPlaying: () => void;
   updateDate: (date: Date) => void;
@@ -52,6 +51,8 @@ export const useAudioPlayer = create<DateStore>((set) => ({
   startDate: null,
   seekTarget: null,
   seekGeneration: 0,
+  originalId: null,
+  setOriginalId: (id: string | null) => set({ originalId: id }),
   chunks: [],
   currentChunk: null,
   isPlaying: false,
@@ -63,12 +64,7 @@ export const useAudioPlayer = create<DateStore>((set) => ({
   baselineStartDate: null,
   baselineStartCtxTime: null,
   setIsPlaying: (isPlaying: boolean) => set({ isPlaying }),
-  toggleIsPlaying: () => set((state) => {
-    // #region agent log
-    _dbg('toggleIsPlaying', 'toggling', { from: state.isPlaying, to: !state.isPlaying });
-    // #endregion
-    return { isPlaying: !state.isPlaying };
-  }),
+  toggleIsPlaying: () => set((state) => ({ isPlaying: !state.isPlaying })),
   updateDate: (date: Date) => set({ currentDate: date }),
   resetDate(date: Date | null) {
     const state = useAudioPlayer.getState();
@@ -201,10 +197,11 @@ export const AudioPlayer: React.FC = () => {
     try {
       loadingRef.current = true
       const lastId = prev ? prev._id : null;
+      const selectedOriginalId = useAudioPlayer.getState().originalId;
       const resp = await apiClient.get(
         `/data/audio?start=${start.getTime()}&limit=${preloadLimit}${
           lastId ? `&lastId=${lastId}` : ""
-        }`,
+        }${selectedOriginalId ? `&original_id=${selectedOriginalId}` : ""}`,
       );
 
       if (useAudioPlayer.getState().seekGeneration !== currentGeneration) {
@@ -264,17 +261,9 @@ export const AudioPlayer: React.FC = () => {
     // from React StrictMode double-invocation or rapid re-renders
     const storeIsCreating = useAudioPlayer.getState().isCreatingSource;
 
-    // #region agent log
-    _dbg('createBufferSource:entry', 'called', { chunksLen: chunks.length, isCreatingSource: storeIsCreating, closureIsCreating: isCreatingSource, hasSourceNode: !!sourceNode, seekGen: useAudioPlayer.getState().seekGeneration });
-    // #endregion
-
     if (
       !audioContext || chunks.length === 0 || storeIsCreating
     ) return;
-
-    // #region agent log
-    _dbg('createBufferSource:proceed', 'passed guard', { seekGen: useAudioPlayer.getState().seekGeneration });
-    // #endregion
 
     setIsCreatingSource(true);
 
@@ -314,28 +303,16 @@ export const AudioPlayer: React.FC = () => {
       }
     }
 
-    // #region agent log
-    _dbg('createBufferSource:seek', 'seek calculation', { seekTarget: seekTarget?.toISOString(), chunkStart: chunk.start.toISOString(), chunkDuration: Math.round(chunk.buffer.duration * 1000) / 1000, offset: Math.round(offset * 1000) / 1000, actualStartDate: actualStartDate.toISOString(), seekTargetMs: seekTarget?.getTime(), chunkStartMs: chunk.start.getTime(), diff: seekTarget ? seekTarget.getTime() - chunk.start.getTime() : null });
-    // #endregion
-
     bufferSource.start(when, offset);
 
     useAudioPlayer.getState().setBaselines(actualStartDate, when);
     useAudioPlayer.getState().update({ seekTarget: null });
     updateDate(actualStartDate);
 
-    // #region agent log
-    const _srcId = Math.random().toString(36).slice(2, 8);
-    _dbg('createBufferSource:started', 'source STARTED', { _srcId, seekGen: useAudioPlayer.getState().seekGeneration });
-    // #endregion
-
     bufferSource.onended = () => {
       // Only act if this source is still the current one (identity check).
       // If a new source was created or we manually stopped, this is a no-op.
       const currentSrc = useAudioPlayer.getState().sourceNode;
-      // #region agent log
-      _dbg('onended', 'onended fired', { _srcId, isSameSource: currentSrc === bufferSource, hasCurrentSource: !!currentSrc, seekGen: useAudioPlayer.getState().seekGeneration });
-      // #endregion
       if (currentSrc === bufferSource) {
         setSourceNode(null);
         setIsCreatingSource(false);
@@ -356,10 +333,6 @@ export const AudioPlayer: React.FC = () => {
   useEffect(() => {
     if (!audioContext) return;
 
-    // #region agent log
-    _dbg('mainEffect', 'main playback effect', { isPlaying, chunksLen: chunks.length, hasSourceNode: !!sourceNode, isCreatingSource, seekGen: useAudioPlayer.getState().seekGeneration });
-    // #endregion
-
     if (isPlaying && chunks.length && !sourceNode) {
       createBufferSource();
     }
@@ -372,9 +345,6 @@ export const AudioPlayer: React.FC = () => {
       const reinsertChunks = state.currentChunk
         ? [state.currentChunk, ...state.chunks]
         : [...state.chunks];
-      // #region agent log
-      _dbg('mainEffect:stop', 'pausing - reinserting currentChunk', { seekGen: state.seekGeneration, pausedDate: pausedDate?.toISOString(), currentChunkStart: state.currentChunk?.start?.toISOString(), chunksAfterReinsert: reinsertChunks.length });
-      // #endregion
       sourceNode.onended = null; // Prevent async callback
       sourceNode.stop();
       sourceNode.disconnect();
@@ -406,18 +376,12 @@ export const AudioPlayer: React.FC = () => {
       return;
     }
 
-    // #region agent log
-    let _tickCount = 0;
-    // #endregion
     const tick = () => {
       const { baselineStartDate, baselineStartCtxTime } = useAudioPlayer.getState();
       const currentPlaybackRate = useSettingsStore.getState().playbackRate;
       if (baselineStartDate && baselineStartCtxTime !== null) {
         const elapsed = audioContext.currentTime - baselineStartCtxTime;
         const newDate = new Date(baselineStartDate.getTime() + elapsed * currentPlaybackRate * 1000);
-        // #region agent log
-        if (_tickCount < 3) { _dbg('tick', 'position update', { elapsed: Math.round(elapsed * 1000) / 1000, ctxTime: Math.round(audioContext.currentTime * 1000) / 1000, baseCtxTime: Math.round(baselineStartCtxTime * 1000) / 1000, baseDate: baselineStartDate.toISOString(), newDate: newDate.toISOString() }); _tickCount++; }
-        // #endregion
         updateDate(newDate);
       }
       frameId = requestAnimationFrame(tick);

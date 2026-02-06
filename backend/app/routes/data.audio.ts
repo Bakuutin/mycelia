@@ -70,7 +70,20 @@ export async function dataAudioHandler(req: Request, res: Response) {
 
     let segments: any[] = [];
 
+    const originalIdParam = req.query.original_id as string | undefined;
+    let filterOriginalId: ObjectId | undefined;
+    if (originalIdParam) {
+      try {
+        filterOriginalId = new ObjectId(originalIdParam);
+      } catch {
+        // ignore invalid original_id
+      }
+    }
+
     const filter: any = { start: { $gte: startDate } };
+    if (filterOriginalId) {
+      filter.original_id = filterOriginalId;
+    }
 
     if (queryParams.lastId) {
       const prevSegment = await mongoResource({
