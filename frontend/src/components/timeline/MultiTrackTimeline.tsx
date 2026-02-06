@@ -144,7 +144,7 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
         />
 
         {/* Time axis layer (always visible) with header */}
-        <div className="relative border-b border-border/30 overflow-visible pt-5">
+        <div className="relative border-b border-border/30 overflow-visible pt-7">
           <TrackHeader
             config={{
               id: "time-selection" as any,

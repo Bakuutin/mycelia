@@ -7,7 +7,7 @@ import { TimelinePlayerBar } from "@/components/timeline/TimelinePlayerBar";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
 import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibilityPanel";
 import { ObjectTranscriptPanel } from "@/components/ObjectTranscriptPanel";
-import { Button } from "@/components/ui/button";
+
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player";
@@ -246,24 +246,20 @@ const TimelinePage = () => {
           {/* Transcript (left) and Objects (right) side by side */}
           <div className="grid grid-cols-2 gap-4">
             {/* Collapsible transcript panel synced with player */}
-            <Collapsible open={transcriptOpen} onOpenChange={setTranscriptOpen}>
+            <Collapsible open={transcriptOpen} onOpenChange={setTranscriptOpen} className="border rounded-lg p-4">
               <CollapsibleTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-between px-3 py-2 h-auto text-muted-foreground hover:text-foreground"
-                >
-                  <span className="flex items-center gap-2 text-sm font-medium">
+                <button className="flex items-center justify-between w-full cursor-pointer">
+                  <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
                     <FileText className="w-4 h-4" />
                     Transcript
-                  </span>
+                  </h3>
                   <ChevronDown className={cn(
-                    "w-4 h-4 transition-transform duration-200",
+                    "w-4 h-4 text-muted-foreground transition-transform duration-200",
                     transcriptOpen && "rotate-180"
                   )} />
-                </Button>
+                </button>
               </CollapsibleTrigger>
-              <CollapsibleContent>
+              <CollapsibleContent className="mt-3">
                 {rangeStart && rangeEnd && (
                   <ObjectTranscriptPanel
                     timeRange={{ start: rangeStart, end: rangeEnd }}

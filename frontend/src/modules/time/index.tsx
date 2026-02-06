@@ -344,7 +344,7 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
               </g>
             ))}
           </g>
-          {/* Marked range labels - outside clip so they can overflow vertically */}
+          {/* Marked range labels - positioned in padding area above time axis */}
           {markedRangeRects.map((range) => {
             const clampedLeft = Math.max(0, range.left);
             const clampedRight = Math.min(range.left + range.width, width);
@@ -354,17 +354,16 @@ export const TimeLayer: (options?: TimeLayerOptions) => Layer = (
               <foreignObject
                 key={`label-${range.id}`}
                 x={clampedLeft + 4}
-                y={-18}
-                width={Math.min(clampedWidth - 8, 100)}
-                height={16}
-                style={{ pointerEvents: "none" }}
+                y={-24}
+                width={Math.min(clampedWidth - 8, 120)}
+                height={20}
+                style={{ pointerEvents: "none", overflow: "visible" }}
               >
                 <div
-                  className="text-[10px] font-medium truncate px-1 rounded"
+                  className="text-[11px] font-medium truncate px-1.5 py-0.5 rounded shadow-sm"
                   style={{
                     backgroundColor: range.color || "#ef4444",
                     color: "white",
-                    opacity: 0.9,
                   }}
                 >
                   {range.label || "★"}

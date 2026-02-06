@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { Play, FileText, Link2, Link2Off } from "lucide-react";
+import { Play, Link2, Link2Off } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -141,54 +141,30 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
 
   if (loading) {
     return (
-      <div className="border rounded-lg p-4 bg-muted/30">
-        <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
-          <FileText className="w-4 h-4" />
-          Transcript
-        </h3>
-        <div className="space-y-3">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-        </div>
+      <div className="space-y-3">
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
       </div>
     );
   }
 
   if (error) {
-    return (
-      <div className="border rounded-lg p-4 bg-muted/30">
-        <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
-          <FileText className="w-4 h-4" />
-          Transcript
-        </h3>
-        <p className="text-sm text-red-500">{error}</p>
-      </div>
-    );
+    return <p className="text-sm text-red-500">{error}</p>;
   }
 
   if (segments.length === 0) {
     return (
-      <div className="border rounded-lg p-4 bg-muted/30">
-        <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
-          <FileText className="w-4 h-4" />
-          Transcript
-        </h3>
-        <p className="text-sm text-muted-foreground text-center py-4">
-          No transcript available for this time range
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground text-center py-4">
+        No transcript available for this time range
+      </p>
     );
   }
 
   return (
-    <div className="border rounded-lg p-4 bg-muted/30">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-          <FileText className="w-4 h-4" />
-          Transcript
-          <span className="text-xs font-normal">({segments.length} segments)</span>
-        </h3>
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-muted-foreground">{segments.length} segments</span>
         <Button
           variant={syncEnabled ? "secondary" : "ghost"}
           size="sm"
@@ -205,8 +181,8 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
         </Button>
       </div>
 
-      <ScrollArea className="h-[400px] pr-3">
-        <div className="space-y-1">
+      <ScrollArea className="h-[400px]">
+        <div className="space-y-1 pr-3">
           {segments.map((seg, idx) => {
             const isCurrentSegment = syncEnabled && idx === currentSegmentIndex;
             return (
