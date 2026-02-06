@@ -173,7 +173,7 @@ export const AudioPlayer: React.FC = () => {
     startDate,
     updateDate,
   } = useAudioPlayer();
-  
+
   // Get volume and playbackRate from settings store
   const { volume, playbackRate } = useSettingsStore();
   const preloadLimit = 20; // Number of segments to preload
@@ -201,9 +201,6 @@ export const AudioPlayer: React.FC = () => {
     try {
       loadingRef.current = true
       const lastId = prev ? prev._id : null;
-      // #region agent log
-      _dbg('fetchAndDecode:request', 'API request', { startMs: start.getTime(), startISO: start.toISOString(), hasPrev: !!prev, seekTarget: useAudioPlayer.getState().seekTarget?.toISOString(), currentDate: currentDate?.toISOString(), seekGen: currentGeneration });
-      // #endregion
       const resp = await apiClient.get(
         `/data/audio?start=${start.getTime()}&limit=${preloadLimit}${
           lastId ? `&lastId=${lastId}` : ""
@@ -219,9 +216,6 @@ export const AudioPlayer: React.FC = () => {
         Array.isArray((resp as { segments: any[] }).segments)
       ) {
         const segments: any[] = (resp as { segments: any[] }).segments;
-        // #region agent log
-        _dbg('fetchAndDecode:response', 'API response segments', { count: segments.length, firstStart: segments[0] ? new Date(segments[0].start).toISOString() : null, lastStart: segments[segments.length - 1] ? new Date(segments[segments.length - 1].start).toISOString() : null, requestedStart: start.toISOString() });
-        // #endregion
 
         for (const segment of segments) {
           audioContext.decodeAudioData(base64ToArrayBuffer(segment.data)).then(
@@ -258,7 +252,7 @@ export const AudioPlayer: React.FC = () => {
   useEffect(() => {
     if (sourceNode && audioContext && sourceNode.playbackRate.value !== playbackRate) {
       sourceNode.playbackRate.value = playbackRate;
-      
+
       // if (isPlaying && currentDate && audioContext) {
       //   setBaselines(currentDate, audioContext.currentTime);
       // }

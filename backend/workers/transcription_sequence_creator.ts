@@ -3,6 +3,7 @@ import { ObjectId } from "mongodb";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
+import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
 import { MAX_SEQUENCE_LENGTH, MAX_GAP_MS } from "@/lib/transcription-constants.ts";
 import { mongoCursor } from "@/lib/mongo/cursor.ts";
@@ -10,6 +11,8 @@ import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
 export const schema = z.object({
   type: z.literal("transcription_sequence_creator"),
+  start: zDateOrString().optional().describe("Only process chunks starting from this time"),
+  end: zDateOrString().optional().describe("Only process chunks up to this time"),
 });
 
 
@@ -35,22 +38,32 @@ function getMinIndex(seq: SpeechSequence): number {
 
 async function* getSpeechSequences(
   mongo: any,
-  limit: number | null = null
+  limit: number | null = null,
+  timeRange?: { start?: Date; end?: Date },
 ): AsyncIterableIterator<SpeechSequence> {
   const sequencesById = new Map<string, SpeechSequence>();
   let yielded = 0;
 
+  const query: Record<string, any> = {
+    "vad.has_speech": true,
+    transcribed_at: { $eq: null },
+    transcription_sequence_id: { $exists: false },
+  };
+
+  // Apply optional time range filter
+  if (timeRange?.start || timeRange?.end) {
+    query.start = {};
+    if (timeRange.start) query.start.$gte = timeRange.start;
+    if (timeRange.end) query.start.$lte = timeRange.end;
+  }
+
   const cursor = mongoCursor(
     mongo,
     "audio_chunks",
-    {
-      "vad.has_speech": true,
-      transcribed_at: { $eq: null },
-      transcription_sequence_id: { $exists: false },
-    },
+    query,
     {
       sort: { start: -1 }, // DESCENDING - newest first
-      hint: "audio_chunks_pending_work",
+      hint: timeRange?.start || timeRange?.end ? undefined : "audio_chunks_pending_work",
       projection: { _id: 1, original_id: 1, start: 1, index: 1, vad: 1, transcription_sequence_id: 1 },
     },
     200 // batch size
@@ -246,18 +259,24 @@ const capability: JobCapability = {
   ],
   maxConcurrency: 1,
   use: async (job) => {
+    const { start, end } = job.data as z.infer<typeof schema>;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
 
-    console.log(`[transcription_sequence_creator] Job ${job.id}: starting`);
+    const timeRange = (start || end) ? {
+      start: start ? new Date(start) : undefined,
+      end: end ? new Date(end) : undefined,
+    } : undefined;
+
+    console.log(`[transcription_sequence_creator] Job ${job.id}: starting${timeRange ? ` (range: ${timeRange.start?.toISOString()} - ${timeRange.end?.toISOString()})` : ""}`);
 
     let processedCount = 0;
     let sequencesCreated = 0;
     let hasMore = false;
     const maxSequences = 30;
 
-    for await (const seq of getSpeechSequences(mongo, maxSequences + 1)) {
+    for await (const seq of getSpeechSequences(mongo, maxSequences + 1, timeRange)) {
       if (sequencesCreated >= maxSequences) {
         hasMore = true;
         break;
