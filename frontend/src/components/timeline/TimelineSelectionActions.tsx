@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
-import { useMarkedRangesStore } from "@/stores/markedRangesStore";
+import { useMarkedRangesStore, MARKED_RANGE_COLORS } from "@/stores/markedRangesStore";
 
 interface TimelineSelectionActionsProps {
   startDate: Date;
@@ -47,6 +47,7 @@ export function TimelineSelectionActions({
   const [isRunJobOpen, setIsRunJobOpen] = useState(false);
   const [isMarkPopoverOpen, setIsMarkPopoverOpen] = useState(false);
   const [editingLabel, setEditingLabel] = useState("");
+  const [editingColor, setEditingColor] = useState<string | undefined>(undefined);
   
   const { ranges, addRange, removeRange, updateRange } = useMarkedRangesStore();
 
@@ -63,6 +64,7 @@ export function TimelineSelectionActions({
     if (matchingRange) {
       // Open popover to edit/delete
       setEditingLabel(matchingRange.label || "");
+      setEditingColor(matchingRange.color);
       setIsMarkPopoverOpen(true);
     } else {
       // Create new marked range
@@ -70,9 +72,13 @@ export function TimelineSelectionActions({
     }
   };
 
-  const handleSaveLabel = () => {
+  const handleSave = () => {
     if (matchingRange) {
-      updateRange(matchingRange.id, { label: editingLabel || undefined });
+      const updates: { label?: string; color?: string } = { label: editingLabel || undefined };
+      if (editingColor && editingColor !== matchingRange.color) {
+        updates.color = editingColor;
+      }
+      updateRange(matchingRange.id, updates);
       setIsMarkPopoverOpen(false);
     }
   };
@@ -177,7 +183,13 @@ export function TimelineSelectionActions({
       <div className="flex flex-col items-center gap-1">
         {matchingRange ? (
           // Existing marked range - show popover for edit/delete
-          <Popover open={isMarkPopoverOpen} onOpenChange={setIsMarkPopoverOpen}>
+          <Popover open={isMarkPopoverOpen} onOpenChange={(open) => {
+            setIsMarkPopoverOpen(open);
+            if (open) {
+              setEditingLabel(matchingRange.label || "");
+              setEditingColor(matchingRange.color);
+            }
+          }}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <PopoverTrigger asChild>
@@ -206,12 +218,29 @@ export function TimelineSelectionActions({
                     placeholder="Enter label..."
                     className="h-8"
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSaveLabel();
+                      if (e.key === "Enter") handleSave();
                     }}
                   />
                 </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-muted-foreground">Color</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {MARKED_RANGE_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        className="w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 cursor-pointer"
+                        style={{
+                          backgroundColor: c,
+                          borderColor: editingColor === c ? "white" : "transparent",
+                          boxShadow: editingColor === c ? `0 0 0 2px ${c}` : "none",
+                        }}
+                        onClick={() => setEditingColor(c)}
+                      />
+                    ))}
+                  </div>
+                </div>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveLabel} className="flex-1">
+                  <Button size="sm" onClick={handleSave} className="flex-1">
                     <Pencil className="w-3 h-3 mr-1" />
                     Save
                   </Button>

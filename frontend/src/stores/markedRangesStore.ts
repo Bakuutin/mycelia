@@ -22,7 +22,7 @@ interface MarkedRangesState {
 }
 
 // Default colors for marked ranges (cycle through these)
-const DEFAULT_COLORS = [
+export const MARKED_RANGE_COLORS = [
   "#ef4444", // red
   "#f97316", // orange
   "#eab308", // yellow
@@ -35,7 +35,7 @@ const DEFAULT_COLORS = [
 
 let colorIndex = 0;
 function getNextColor(): string {
-  const color = DEFAULT_COLORS[colorIndex % DEFAULT_COLORS.length];
+  const color = MARKED_RANGE_COLORS[colorIndex % MARKED_RANGE_COLORS.length];
   colorIndex++;
   return color;
 }
