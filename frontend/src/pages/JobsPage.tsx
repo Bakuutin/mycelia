@@ -114,6 +114,412 @@ function isEmptyJobResult(job: JobInfo): boolean {
   }
 }
 
+/**
+ * Renders a date range link to the timeline from job data start/end fields.
+ */
+function JobDateRange({ job }: { job: JobInfo }) {
+  const start = job.data?.start ? new Date(job.data.start) : null;
+  const end = job.data?.end ? new Date(job.data.end) : null;
+  if (!start) return null;
+  const endTs = end ? end.getTime() : start.getTime() + 86400000;
+  const isSameDay = end && start.toDateString() === end.toDateString();
+  return (
+    <Link
+      to={`/timeline?start=${start.getTime()}&end=${endTs}`}
+      className="text-xs text-primary hover:underline"
+    >
+      {isSameDay
+        ? `${format(start, "MMM d, HH:mm")}–${format(end, "HH:mm")}`
+        : end
+          ? `${format(start, "MMM d, HH:mm")} — ${format(end, "MMM d, HH:mm")}`
+          : `from ${format(start, "MMM d, HH:mm")}`
+      }
+    </Link>
+  );
+}
+
+/**
+ * Renders the Progress column content for a job row.
+ * Handles all job types with type-specific displays.
+ */
+function JobProgressCell({ job }: { job: JobInfo }) {
+  const result = job.result || {};
+  const progress = job.progress || {};
+  const isCompleted = job.state === "completed";
+  const isActive = job.state === "active";
+
+  // --- Transcription ---
+  if (job.type === "transcription") {
+    if (isCompleted) {
+      if (result.result === "empty" || (result.wordCount != null && result.wordCount === 0)) {
+        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+      }
+      return (
+        <div className="space-y-1">
+          {result.sequenceStart && (
+            <Link
+              to={`/timeline?start=${new Date(result.sequenceStart).getTime()}&end=${new Date(result.sequenceStart).getTime() + (result.audioDuration || 60) * 1000 + 60000}`}
+              className="text-xs text-primary hover:underline"
+            >
+              {format(new Date(result.sequenceStart), "MMM d, HH:mm")}
+            </Link>
+          )}
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.audioDuration != null && <span>{result.audioDuration.toFixed(1)}s</span>}
+            {result.wordCount != null ? <span>{result.wordCount} words</span> : <span className="opacity-50">— words</span>}
+            {result.segmentCount != null && <span>{result.segmentCount} segments</span>}
+          </div>
+        </div>
+      );
+    }
+    if (progress.stage) {
+      const stageLabels: Record<string, string> = {
+        processing: "Processing", fetching_chunks: "Fetching chunks", combining_audio: "Combining audio",
+        transcribing: "Transcribing", saving_result: "Saving", empty_result: "Empty result",
+      };
+      return (
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+            {stageLabels[progress.stage] ?? progress.stage}
+          </Badge>
+          {progress.sequenceStart && (
+            <Link
+              to={`/timeline?start=${new Date(progress.sequenceStart).getTime()}&end=${new Date(progress.sequenceStart).getTime() + 120000}`}
+              className="text-xs text-primary hover:underline"
+            >
+              {format(new Date(progress.sequenceStart), "MMM d, HH:mm")}
+            </Link>
+          )}
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.chunkCount != null && <span>{progress.chunkCount} chunks</span>}
+            {progress.audioSize != null && <span>{(progress.audioSize / 1024).toFixed(0)} KB</span>}
+            {progress.duration != null && <span>{progress.duration.toFixed(1)}s audio</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- VAD ---
+  if (job.type === "vad") {
+    if (isCompleted) {
+      if ((result.hasSpeech ?? 0) === 0 && (result.processed ?? 0) === 0) {
+        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+      }
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.processed != null && result.total != null && <span>{result.processed}/{result.total} processed</span>}
+            {result.hasSpeech != null && <span>{result.hasSpeech} with speech</span>}
+            {result.duration != null && <span>{result.duration.toFixed(1)}s</span>}
+          </div>
+        </div>
+      );
+    }
+    if (isActive && progress) {
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.processed != null && progress.total != null && <span>{progress.processed}/{progress.total} processed</span>}
+            {progress.hasSpeech != null && <span>{progress.hasSpeech} with speech</span>}
+          </div>
+          {progress.currentTimestamp && (
+            <div className="text-xs text-muted-foreground/70">
+              at {format(new Date(progress.currentTimestamp), "MMM d, HH:mm")}
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
+
+  // --- Conversation Chunk Creator ---
+  if (job.type === "conversation_chunk_creator") {
+    if (isCompleted) {
+      if ((result.finalized ?? 0) === 0 && (result.streamed ?? 0) === 0 && (result.chunksCreated ?? 0) === 0) {
+        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+      }
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.chunksCreated != null && <span>{result.chunksCreated} chunks</span>}
+            {result.finalized != null && <span>{result.finalized} finalized</span>}
+            {result.streamed != null && result.streamed > 0 && <span>{result.streamed} streamed</span>}
+            {result.backfilled != null && result.backfilled > 0 && <span>{result.backfilled} backfilled</span>}
+          </div>
+        </div>
+      );
+    }
+    if (isActive && progress.stage) {
+      const stageLabels: Record<string, string> = {
+        finalizing_stale: "Finalizing", streaming: "Streaming", backfilling: "Backfilling",
+      };
+      return (
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+            {stageLabels[progress.stage] ?? progress.stage}
+          </Badge>
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.finalized != null && <span>{progress.finalized} finalized</span>}
+            {progress.streamed != null && <span>{progress.streamed} streamed</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- Conversation Extractor ---
+  if (job.type === "conversation_extractor") {
+    if (isCompleted) {
+      if ((result.conversationsCreated ?? 0) === 0 && (result.chunksProcessed ?? 0) === 0) {
+        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+      }
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.conversationsCreated != null && <span>{result.conversationsCreated} conversations</span>}
+            {result.chunksProcessed != null && <span>{result.chunksProcessed} chunks</span>}
+            {result.errors?.length > 0 && <span className="text-red-400">{result.errors.length} errors</span>}
+          </div>
+        </div>
+      );
+    }
+    if (progress.stage) {
+      const stageLabels: Record<string, string> = {
+        processing_chunk: "Processing chunk", segmenting: "Segmenting", extracting_metadata: "Extracting metadata",
+      };
+      return (
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+            {stageLabels[progress.stage] ?? progress.stage}
+          </Badge>
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.chunksProcessed != null && <span>{progress.chunksProcessed} chunks</span>}
+            {progress.totalSegments != null && <span>{progress.segment ?? 0}/{progress.totalSegments} segments</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- Transcription Sequence Creator ---
+  if (job.type === "transcription_sequence_creator") {
+    if (isCompleted) {
+      if ((result.processed ?? 0) === 0) {
+        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+      }
+      return (
+        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          <span>{result.processed} processed</span>
+          {result.hasMore && <span className="text-amber-400">has more</span>}
+        </div>
+      );
+    }
+    if (progress.processed != null || progress.sequencesCreated != null) {
+      return (
+        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {progress.processed != null && <span>{progress.processed} processed</span>}
+          {progress.sequencesCreated != null && <span>{progress.sequencesCreated} sequences</span>}
+        </div>
+      );
+    }
+  }
+
+  // --- Tagger ---
+  if (job.type === "tagger") {
+    if (isCompleted) {
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.conversationsProcessed != null && <span>{result.conversationsProcessed} conversations</span>}
+            {result.tagsApplied != null && <span>{result.tagsApplied} tags</span>}
+            {result.errors?.length > 0 && <span className="text-red-400">{result.errors.length} errors</span>}
+          </div>
+        </div>
+      );
+    }
+    if (isActive && progress) {
+      return (
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+            Tagging
+          </Badge>
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.current != null && progress.total != null && <span>{progress.current}/{progress.total}</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- Summarization ---
+  if (job.type === "summarization") {
+    if (isCompleted) {
+      const start = result.start ? new Date(result.start) : null;
+      const end = result.end ? new Date(result.end) : null;
+      return (
+        <div className="space-y-1">
+          {start && end && (
+            <Link
+              to={`/timeline?start=${start.getTime()}&end=${end.getTime()}`}
+              className="text-xs text-primary hover:underline"
+            >
+              {format(start, "MMM d, HH:mm")} — {format(end, "HH:mm")}
+            </Link>
+          )}
+          {result.title && (
+            <div className="text-xs text-muted-foreground truncate max-w-[200px]" title={result.title}>
+              {result.title}
+            </div>
+          )}
+          {result.objectId && (
+            <Link to={`/objects/${result.objectId}`} className="text-xs text-primary hover:underline">
+              view conversation
+            </Link>
+          )}
+        </div>
+      );
+    }
+  }
+
+  // --- Diarization ---
+  if (job.type === "diarization") {
+    if (isCompleted) {
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.sequences_processed != null && <span>{result.sequences_processed} sequences</span>}
+            {result.chunks_processed != null && <span>{result.chunks_processed} chunks</span>}
+            {result.segments_created != null && <span>{result.segments_created} segments</span>}
+            {result.errors != null && result.errors > 0 && <span className="text-red-400">{result.errors} errors</span>}
+          </div>
+        </div>
+      );
+    }
+    if (isActive && progress.stage) {
+      const stageLabels: Record<string, string> = { counting: "Counting", processing: "Processing" };
+      return (
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+            {stageLabels[progress.stage] ?? progress.stage}
+          </Badge>
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.sequences_processed != null && <span>{progress.sequences_processed} sequences</span>}
+            {progress.chunks_processed != null && <span>{progress.chunks_processed} chunks</span>}
+            {progress.segments_created != null && <span>{progress.segments_created} segments</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- Hist Recalculation ---
+  if (job.type === "histRecalculation") {
+    if (isCompleted) {
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.processed != null && <span>{result.processed} processed</span>}
+            {result.marked != null && <span>{result.marked} marked stale</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- Speaker Matching ---
+  if (job.type === "speakerMatching") {
+    if (isCompleted) {
+      return (
+        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {result.processed != null && <span>{result.processed} processed</span>}
+          {result.matched != null && <span>{result.matched} matched</span>}
+          {result.profiles_count != null && <span>{result.profiles_count} profiles</span>}
+        </div>
+      );
+    }
+    if (isActive && progress) {
+      const stageLabels: Record<string, string> = {
+        loading_profiles: "Loading profiles", loading_segments: "Loading segments", matching: "Matching",
+      };
+      return (
+        <div className="space-y-1">
+          {progress.stage && (
+            <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+              {stageLabels[progress.stage] ?? progress.stage}
+            </Badge>
+          )}
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.processed != null && progress.total != null && <span>{progress.processed}/{progress.total}</span>}
+            {progress.matched != null && <span>{progress.matched} matched</span>}
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // --- Enrollment ---
+  if (job.type === "enrollment") {
+    if (isCompleted) {
+      return (
+        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {result.profile_name && <span>{result.profile_name}</span>}
+          {result.sample_count != null && <span>{result.sample_count} samples</span>}
+          {result.total_duration != null && <span>{result.total_duration.toFixed(1)}s</span>}
+        </div>
+      );
+    }
+    if (isActive && progress.stage) {
+      const stageLabels: Record<string, string> = {
+        loading_audio: "Loading audio", extracting_embedding: "Extracting", saving_profile: "Saving",
+      };
+      return (
+        <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+          {stageLabels[progress.stage] ?? progress.stage}
+        </Badge>
+      );
+    }
+  }
+
+  // --- Generic fallback for any job with progress ---
+  if (job.progress && typeof job.progress === "object") {
+    const percentage = (() => {
+      const p = job.progress;
+      if (typeof p.progress === "number") return p.progress;
+      if (typeof p.processed === "number" && typeof p.total === "number" && p.total > 0)
+        return (p.processed / p.total) * 100;
+      if (typeof p.iteration === "number" && typeof p.total === "number" && p.total > 0)
+        return (p.iteration / p.total) * 100;
+      return null;
+    })();
+    return (
+      <div className="space-y-2">
+        {percentage !== null && <Progress value={percentage} className="h-2" />}
+        <div className="text-xs space-y-1">
+          {Object.entries(job.progress).slice(0, 3).map(([k, v]) => (
+            <div key={k}>
+              <span className="opacity-70">{k}:</span> {String(v)}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return <span className="text-muted-foreground">-</span>;
+}
+
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
   const [quickFilter, setQuickFilter] = useState<string>("all");
@@ -554,18 +960,6 @@ export default function JobsPage() {
     const minutes = Math.floor(ms / 60000);
     const seconds = Math.floor((ms % 60000) / 1000);
     return `${minutes}m ${seconds}s`;
-  };
-
-  const getProgressPercentage = (progress: any): number | null => {
-    if (!progress || typeof progress !== "object") return null;
-    if (typeof progress.progress === "number") return progress.progress;
-    if (typeof progress.processed === "number" && typeof progress.total === "number") {
-      return progress.total > 0 ? (progress.processed / progress.total) * 100 : 0;
-    }
-    if (typeof progress.iteration === "number" && typeof progress.total === "number") {
-      return progress.total > 0 ? (progress.iteration / progress.total) * 100 : 0;
-    }
-    return null;
   };
 
   const handleCancelAll = async () => {
@@ -1092,175 +1486,7 @@ export default function JobsPage() {
                       {formatDuration(job.processedOn, job.finishedOn)}
                     </TableCell>
                     <TableCell>
-                      {/* Transcription job - show transcription-specific info */}
-                      {job.type === "transcription" && job.state === "completed" ? (
-                        <div className="space-y-1">
-                          {/* Show empty indicator only if result is explicitly "empty" or wordCount is explicitly 0 */}
-                          {(job.result?.result === "empty" || (job.result?.wordCount != null && job.result.wordCount === 0)) ? (
-                            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
-                              Empty
-                            </Badge>
-                          ) : (
-                            <>
-                              {/* Show the date this transcription is for - link to timeline */}
-                              {job.result?.sequenceStart && (
-                                <Link
-                                  to={`/timeline?start=${new Date(job.result.sequenceStart).getTime()}&end=${new Date(job.result.sequenceStart).getTime() + (job.result.audioDuration || 60) * 1000 + 60000}`}
-                                  className="text-xs text-primary hover:underline"
-                                >
-                                  {format(new Date(job.result.sequenceStart), "MMM d, HH:mm")}
-                                </Link>
-                              )}
-                              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                                {job.result?.audioDuration != null && (
-                                  <span>{job.result.audioDuration.toFixed(1)}s</span>
-                                )}
-                                {job.result?.wordCount != null ? (
-                                  <span>{job.result.wordCount} words</span>
-                                ) : (
-                                  <span className="opacity-50">— words</span>
-                                )}
-                                {job.result?.segmentCount != null && (
-                                  <span>{job.result.segmentCount} segments</span>
-                                )}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ) : job.type === "transcription" && job.progress?.stage ? (
-                        /* Transcription job in progress - show stage info */
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
-                              {job.progress.stage === "processing" && "Processing"}
-                              {job.progress.stage === "fetching_chunks" && "Fetching chunks"}
-                              {job.progress.stage === "combining_audio" && "Combining audio"}
-                              {job.progress.stage === "transcribing" && "Transcribing"}
-                              {job.progress.stage === "saving_result" && "Saving"}
-                              {job.progress.stage === "empty_result" && "Empty result"}
-                              {!["processing", "fetching_chunks", "combining_audio", "transcribing", "saving_result", "empty_result"].includes(job.progress.stage) && job.progress.stage}
-                            </Badge>
-                          </div>
-                          {/* Show the date this transcription is for - link to timeline */}
-                          {job.progress.sequenceStart && (
-                            <Link
-                              to={`/timeline?start=${new Date(job.progress.sequenceStart).getTime()}&end=${new Date(job.progress.sequenceStart).getTime() + 120000}`}
-                              className="text-xs text-primary hover:underline"
-                            >
-                              {format(new Date(job.progress.sequenceStart), "MMM d, HH:mm")}
-                            </Link>
-                          )}
-                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                            {job.progress.chunkCount != null && (
-                              <span>{job.progress.chunkCount} chunks</span>
-                            )}
-                            {job.progress.audioSize != null && (
-                              <span>{(job.progress.audioSize / 1024).toFixed(0)} KB</span>
-                            )}
-                            {job.progress.duration != null && (
-                              <span>{job.progress.duration.toFixed(1)}s audio</span>
-                            )}
-                          </div>
-                        </div>
-                      ) : job.type === "conversation_extractor" && job.state === "completed" ? (
-                        /* Conversation extractor - show result summary */
-                        <div className="space-y-1">
-                          {(job.result?.conversationsCreated ?? 0) === 0 && (job.result?.chunksProcessed ?? 0) === 0 ? (
-                            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
-                              Empty
-                            </Badge>
-                          ) : (
-                            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                              {job.result?.conversationsCreated != null && (
-                                <span>{job.result.conversationsCreated} conversations</span>
-                              )}
-                              {job.result?.chunksProcessed != null && (
-                                <span>{job.result.chunksProcessed} chunks</span>
-                              )}
-                              {job.result?.errors?.length > 0 && (
-                                <span className="text-red-400">{job.result.errors.length} errors</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ) : job.type === "conversation_extractor" && job.progress?.stage ? (
-                        /* Conversation extractor in progress */
-                        <div className="space-y-1">
-                          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
-                            {job.progress.stage === "processing_chunk" && "Processing chunk"}
-                            {job.progress.stage === "segmenting" && "Segmenting"}
-                            {job.progress.stage === "extracting_metadata" && "Extracting metadata"}
-                            {!["processing_chunk", "segmenting", "extracting_metadata"].includes(job.progress.stage) && job.progress.stage}
-                          </Badge>
-                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                            {job.progress.chunksProcessed != null && (
-                              <span>{job.progress.chunksProcessed} chunks</span>
-                            )}
-                            {job.progress.totalSegments != null && (
-                              <span>{job.progress.segment ?? 0}/{job.progress.totalSegments} segments</span>
-                            )}
-                          </div>
-                        </div>
-                      ) : job.type === "transcription_sequence_creator" && job.state === "completed" ? (
-                        /* Transcription sequence creator - show result summary */
-                        <div className="space-y-1">
-                          {(job.result?.processed ?? 0) === 0 ? (
-                            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
-                              Empty
-                            </Badge>
-                          ) : (
-                            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                              {job.result?.processed != null && (
-                                <span>{job.result.processed} processed</span>
-                              )}
-                              {job.result?.hasMore && (
-                                <span className="text-amber-400">has more</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ) : job.type === "transcription_sequence_creator" && job.progress ? (
-                        /* Transcription sequence creator in progress */
-                        <div className="space-y-1">
-                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                            {job.progress.processed != null && (
-                              <span>{job.progress.processed} processed</span>
-                            )}
-                            {job.progress.sequencesCreated != null && (
-                              <span>{job.progress.sequencesCreated} sequences</span>
-                            )}
-                          </div>
-                        </div>
-                      ) : job.progress ? (
-                        <div className="space-y-2">
-                          {(() => {
-                            const percentage = getProgressPercentage(job.progress);
-                            return (
-                              <>
-                                {percentage !== null && (
-                                  <Progress value={percentage} className="h-2" />
-                                )}
-                                <div className="text-xs space-y-1">
-                                  {typeof job.progress === "object" ? (
-                                    Object.entries(job.progress)
-                                      .slice(0, 3)
-                                      .map(([k, v]) => (
-                                        <div key={k}>
-                                          <span className="opacity-70">{k}:</span>{" "}
-                                          {String(v)}
-                                        </div>
-                                      ))
-                                  ) : (
-                                    <span>{String(job.progress)}</span>
-                                  )}
-                                </div>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      ) : (
-                        "-"
-                      )}
+                      <JobProgressCell job={job} />
                     </TableCell>
                   </TableRow>
                 ))

@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle, Volume2, Tag, BarChart3, type LucideIcon } from "lucide-react";
 import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
@@ -87,6 +87,18 @@ const formatValue = (value: any): string => {
     }
     return String(value);
 };
+
+function MetricCell({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string | number | boolean | null | undefined }) {
+    return (
+        <div className="flex items-center gap-2">
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            <div>
+                <div className="text-xs text-muted-foreground">{label}</div>
+                <div className="text-sm font-medium">{value}</div>
+            </div>
+        </div>
+    );
+}
 
 function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
     if (fields.length === 0) {
@@ -470,44 +482,10 @@ export default function JobDetailPage() {
                                         <div key={transcription._id} className="space-y-4 border-b border-border/50 pb-6 last:border-b-0 last:pb-0">
                                             {/* Metadata Grid */}
                                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                                <div className="flex items-center gap-2">
-                                                    <Clock className="h-4 w-4 text-muted-foreground" />
-                                                    <div>
-                                                        <div className="text-xs text-muted-foreground">Audio Duration</div>
-                                                        <div className="text-sm font-medium">
-                                                            {transcription.duration ? `${transcription.duration.toFixed(1)}s` : "-"}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <Hash className="h-4 w-4 text-muted-foreground" />
-                                                    <div>
-                                                        <div className="text-xs text-muted-foreground">Word Count</div>
-                                                        <div className="text-sm font-medium">
-                                                            {meta?.wordCount ?? transcription.text.split(/\s+/).filter(w => w.length > 0).length}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                                                    <div>
-                                                        <div className="text-xs text-muted-foreground">Segments</div>
-                                                        <div className="text-sm font-medium">
-                                                            {meta?.segmentCount ?? transcription.segments?.length ?? 0}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <Clock className="h-4 w-4 text-muted-foreground" />
-                                                    <div>
-                                                        <div className="text-xs text-muted-foreground">Processing Time</div>
-                                                        <div className="text-sm font-medium">
-                                                            {meta?.processingTimeMs 
-                                                                ? `${(meta.processingTimeMs / 1000).toFixed(1)}s`
-                                                                : "-"}
-                                                        </div>
-                                                    </div>
-                                                </div>
+                                                <MetricCell icon={Clock} label="Audio Duration" value={transcription.duration ? `${transcription.duration.toFixed(1)}s` : "-"} />
+                                                <MetricCell icon={Hash} label="Word Count" value={meta?.wordCount ?? transcription.text.split(/\s+/).filter(w => w.length > 0).length} />
+                                                <MetricCell icon={MessageSquare} label="Segments" value={meta?.segmentCount ?? transcription.segments?.length ?? 0} />
+                                                <MetricCell icon={Clock} label="Processing Time" value={meta?.processingTimeMs ? `${(meta.processingTimeMs / 1000).toFixed(1)}s` : "-"} />
                                             </div>
 
                                             {/* Model and Language */}
@@ -562,117 +540,168 @@ export default function JobDetailPage() {
                 </Card>
             )}
 
-            {/* Conversation Extractor Details Section */}
-            {job.type === "conversation_extractor" && job.state === "completed" && job.result && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Users className="h-5 w-5" />
-                            Conversation Extractor Details
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <div className="flex items-center gap-2">
-                                <Clock className="h-4 w-4 text-muted-foreground" />
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Processing Time</div>
-                                    <div className="text-sm font-medium">
-                                        {formatDuration(job.processedOn, job.finishedOn)}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Conversations Created</div>
-                                    <div className="text-sm font-medium">
-                                        {job.result.conversationsCreated ?? 0}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Layers className="h-4 w-4 text-muted-foreground" />
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Chunks Processed</div>
-                                    <div className="text-sm font-medium">
-                                        {job.result.chunksProcessed ?? 0}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Hash className="h-4 w-4 text-muted-foreground" />
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Has More</div>
-                                    <div className="text-sm font-medium">
-                                        {job.result.hasMore ? "Yes" : "No"}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+            {/* Job-type-specific details sections (non-transcription) */}
+            {job.state === "completed" && job.result && job.type !== "transcription" && (() => {
+                const r = job.result;
+                const processingTime = formatDuration(job.processedOn, job.finishedOn);
+                const dateRange = job.data?.start && job.data?.end
+                    ? `${format(new Date(job.data.start), "PPp")} — ${format(new Date(job.data.end), "PPp")}`
+                    : job.data?.start
+                        ? `from ${format(new Date(job.data.start), "PPp")}`
+                        : null;
 
-                        {/* Errors */}
-                        {job.result.errors?.length > 0 && (
-                            <div>
-                                <div className="flex items-center gap-2 text-sm text-red-500 mb-2">
-                                    <AlertTriangle className="h-4 w-4" />
-                                    {job.result.errors.length} error{job.result.errors.length !== 1 ? "s" : ""}
-                                </div>
-                                <div className="bg-red-500/5 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
-                                    {job.result.errors.map((err: any, idx: number) => (
-                                        <div key={idx} className="text-xs text-red-400">
-                                            <span className="font-medium">{err.type}:</span> {err.message}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-            )}
+                const configs: Record<string, { icon: LucideIcon; title: string; metrics: Array<{ icon: LucideIcon; label: string; value: React.ReactNode }>; errors?: any[] }> = {
+                    vad: {
+                        icon: Volume2, title: "VAD Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Hash, label: "Processed", value: `${r.processed ?? 0} / ${r.total ?? 0}` },
+                            { icon: Volume2, label: "With Speech", value: r.hasSpeech ?? 0 },
+                            { icon: Clock, label: "Duration", value: r.duration != null ? `${r.duration.toFixed(1)}s` : "-" },
+                        ],
+                    },
+                    conversation_chunk_creator: {
+                        icon: Layers, title: "Chunk Creator Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Layers, label: "Chunks Created", value: r.chunksCreated ?? 0 },
+                            { icon: Hash, label: "Finalized", value: r.finalized ?? 0 },
+                            { icon: Hash, label: "Streamed", value: r.streamed ?? 0 },
+                            ...(r.backfilled ? [{ icon: Hash as LucideIcon, label: "Backfilled", value: r.backfilled }] : []),
+                        ],
+                    },
+                    conversation_extractor: {
+                        icon: Users, title: "Conversation Extractor Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: MessageSquare, label: "Conversations Created", value: r.conversationsCreated ?? 0 },
+                            { icon: Layers, label: "Chunks Processed", value: r.chunksProcessed ?? 0 },
+                            { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                        ],
+                        errors: r.errors,
+                    },
+                    transcription_sequence_creator: {
+                        icon: Layers, title: "Sequence Creator Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Hash, label: "Chunks Processed", value: r.processed ?? 0 },
+                            { icon: Layers, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                        ],
+                    },
+                    tagger: {
+                        icon: Tag, title: "Tagger Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: MessageSquare, label: "Conversations Processed", value: r.conversationsProcessed ?? 0 },
+                            { icon: Tag, label: "Tags Applied", value: r.tagsApplied ?? 0 },
+                            { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                        ],
+                        errors: r.errors,
+                    },
+                    summarization: {
+                        icon: FileText, title: "Summarization Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            ...(r.title ? [{ icon: FileText as LucideIcon, label: "Title", value: r.title }] : []),
+                            ...(r.start && r.end ? [{ icon: Clock as LucideIcon, label: "Time Range", value: `${format(new Date(r.start), "PPp")} — ${format(new Date(r.end), "PPp")}` }] : []),
+                        ],
+                    },
+                    diarization: {
+                        icon: Users, title: "Diarization Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Layers, label: "Sequences Processed", value: r.sequences_processed ?? 0 },
+                            { icon: Hash, label: "Chunks Processed", value: r.chunks_processed ?? 0 },
+                            { icon: Users, label: "Segments Created", value: r.segments_created ?? 0 },
+                            ...(r.errors != null && r.errors > 0 ? [{ icon: AlertTriangle as LucideIcon, label: "Errors", value: r.errors }] : []),
+                        ],
+                    },
+                    histRecalculation: {
+                        icon: BarChart3, title: "Histogram Recalculation Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Hash, label: "Processed", value: r.processed ?? 0 },
+                            ...(r.marked != null ? [{ icon: BarChart3 as LucideIcon, label: "Marked Stale", value: r.marked }] : []),
+                        ],
+                    },
+                    speakerMatching: {
+                        icon: Users, title: "Speaker Matching Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Hash, label: "Processed", value: r.processed ?? 0 },
+                            { icon: Users, label: "Matched", value: r.matched ?? 0 },
+                            { icon: Users, label: "Profiles", value: r.profiles_count ?? 0 },
+                        ],
+                    },
+                    enrollment: {
+                        icon: Users, title: "Enrollment Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            ...(r.profile_name ? [{ icon: Users as LucideIcon, label: "Profile", value: r.profile_name }] : []),
+                            { icon: Hash, label: "Samples", value: r.sample_count ?? 0 },
+                            { icon: Clock, label: "Total Duration", value: r.total_duration != null ? `${r.total_duration.toFixed(1)}s` : "-" },
+                        ],
+                    },
+                };
 
-            {/* Transcription Sequence Creator Details Section */}
-            {job.type === "transcription_sequence_creator" && job.state === "completed" && job.result && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Layers className="h-5 w-5" />
-                            Sequence Creator Details
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                            <div className="flex items-center gap-2">
-                                <Clock className="h-4 w-4 text-muted-foreground" />
+                const config = configs[job.type];
+                if (!config) return null;
+                const IconComponent = config.icon;
+
+                return (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <IconComponent className="h-5 w-5" />
+                                {config.title}
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            {dateRange && (
+                                <div className="text-sm text-muted-foreground">
+                                    <span className="text-xs uppercase tracking-wide">Date Range:</span> {dateRange}
+                                </div>
+                            )}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                {config.metrics.map((m) => (
+                                    <MetricCell key={m.label} icon={m.icon} label={m.label} value={m.value} />
+                                ))}
+                            </div>
+                            {config.errors?.length > 0 && (
                                 <div>
-                                    <div className="text-xs text-muted-foreground">Processing Time</div>
-                                    <div className="text-sm font-medium">
-                                        {formatDuration(job.processedOn, job.finishedOn)}
+                                    <div className="flex items-center gap-2 text-sm text-red-500 mb-2">
+                                        <AlertTriangle className="h-4 w-4" />
+                                        {config.errors.length} error{config.errors.length !== 1 ? "s" : ""}
+                                    </div>
+                                    <div className="bg-red-500/5 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
+                                        {config.errors.map((err: any, idx: number) => (
+                                            <div key={idx} className="text-xs text-red-400">
+                                                <span className="font-medium">{err.type}:</span> {err.message}
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Hash className="h-4 w-4 text-muted-foreground" />
+                            )}
+                            {job.type === "summarization" && r.objectId && (
+                                <Link to={`/objects/${r.objectId}`}>
+                                    <Button size="sm" variant="outline" className="mt-2">
+                                        <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                                        View Conversation
+                                    </Button>
+                                </Link>
+                            )}
+                            {job.type === "summarization" && r.description && (
                                 <div>
-                                    <div className="text-xs text-muted-foreground">Chunks Processed</div>
-                                    <div className="text-sm font-medium">
-                                        {job.result.processed ?? 0}
+                                    <div className="text-sm text-muted-foreground mb-2">Description</div>
+                                    <div className="bg-muted/50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{r.description}</p>
                                     </div>
                                 </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Layers className="h-4 w-4 text-muted-foreground" />
-                                <div>
-                                    <div className="text-xs text-muted-foreground">Has More</div>
-                                    <div className="text-sm font-medium">
-                                        {job.result.hasMore ? "Yes" : "No"}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
+                            )}
+                        </CardContent>
+                    </Card>
+                );
+            })()}
 
             <Card>
                 <CardHeader>
