@@ -100,13 +100,11 @@ function isEmptyJobResult(job: JobInfo): boolean {
     case "transcription_sequence_creator":
       return (result.processed ?? 0) === 0;
     case "transcription":
-      // Empty if: result is explicitly "empty", or wordCount is explicitly 0
-      // Note: don't mark as empty if wordCount is undefined (missing data)
       if (result.result === "empty") return true;
       if (result.wordCount != null && result.wordCount === 0) return true;
-      // If we have wordCount > 0, it's not empty
+      // No sequence was processed (processed: 0 with no transcriptionId)
+      if (result.processed === 0 && !result.transcriptionId) return true;
       if (result.wordCount != null && result.wordCount > 0) return false;
-      // If wordCount is undefined, we don't know - don't mark as empty
       return false;
     default: {
       const processed = progress.processed ?? result.processed ?? -1;
@@ -147,8 +145,10 @@ function JobDateRange({ job }: { job: JobInfo }) {
 function JobProgressCell({ job }: { job: JobInfo }) {
   const result = job.result || {};
   const progress = job.progress || {};
-  const isCompleted = job.state === "completed";
-  const isActive = job.state === "active";
+  // Treat as completed if state is completed, OR if active but result already populated
+  const hasResult = job.result && typeof job.result === "object" && Object.keys(job.result).length > 0;
+  const isCompleted = job.state === "completed" || (job.state === "active" && hasResult);
+  const isActive = job.state === "active" && !hasResult;
 
   // --- Failed jobs: show parsed error ---
   if (job.state === "failed" && job.failedReason) {
@@ -170,8 +170,25 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   // --- Transcription ---
   if (job.type === "transcription") {
     if (isCompleted) {
-      if (result.result === "empty" || (result.wordCount != null && result.wordCount === 0)) {
-        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+      const isEmpty = result.result === "empty"
+        || (result.wordCount != null && result.wordCount === 0)
+        || (result.processed === 0 && !result.transcriptionId);
+      if (isEmpty) {
+        // Use sequenceStart from result, progress, or fall back to job creation time
+        const seqStart = result.sequenceStart || progress.sequenceStart || (job.timestamp ? new Date(job.timestamp).toISOString() : null);
+        return (
+          <div className="space-y-1">
+            {seqStart && (
+              <Link
+                to={`/timeline?start=${new Date(seqStart).getTime()}&end=${new Date(seqStart).getTime() + (result.audioDuration || 60) * 1000 + 60000}`}
+                className="text-xs text-primary hover:underline"
+              >
+                {format(new Date(seqStart), "MMM d, HH:mm")}
+              </Link>
+            )}
+            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>
+          </div>
+        );
       }
       return (
         <div className="space-y-1">
@@ -201,6 +218,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
       const stageLabels: Record<string, string> = {
         processing: "Processing", fetching_chunks: "Fetching chunks", combining_audio: "Combining audio",
         transcribing: "Transcribing", saving_result: "Saving", empty_result: "Empty result",
+        completed: "Finishing",
       };
       return (
         <div className="space-y-1">
@@ -574,18 +592,22 @@ function JobProgressCell({ job }: { job: JobInfo }) {
 
 export default function JobsPage() {
   const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const hideEmpty = searchParams.get("hideEmpty") === "true";
+  const typeParam = searchParams.get("type");
   const [quickFilter, setQuickFilter] = useState<string>("all");
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(new Set(ALL_STATUSES));
-  const [filterTypes, setFilterTypes] = useState<Set<string>>(new Set());
-  const [allTypesSelected, setAllTypesSelected] = useState(true);
+  const [filterTypes, setFilterTypes] = useState<Set<string>>(() => {
+    if (typeParam) return new Set(typeParam.split(",").filter(Boolean));
+    return new Set();
+  });
+  const [allTypesSelected, setAllTypesSelected] = useState(!typeParam);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [limit, setLimit] = useState<number>(50);
   const [sortColumn, setSortColumn] = useState<string>("timestamp");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const queryClient = useQueryClient();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const hideEmpty = searchParams.get("hideEmpty") === "true";
 
   const toggleHideEmpty = () => {
     const newParams = new URLSearchParams(searchParams);
@@ -593,6 +615,16 @@ export default function JobsPage() {
       newParams.delete("hideEmpty");
     } else {
       newParams.set("hideEmpty", "true");
+    }
+    setSearchParams(newParams);
+  };
+
+  const syncTypeToUrl = (types: Set<string>, allSelected: boolean) => {
+    const newParams = new URLSearchParams(searchParams);
+    if (allSelected || types.size === 0) {
+      newParams.delete("type");
+    } else {
+      newParams.set("type", Array.from(types).join(","));
     }
     setSearchParams(newParams);
   };
@@ -894,10 +926,10 @@ export default function JobsPage() {
 
   const toggleType = (type: string) => {
     if (allTypesSelected) {
-      // Deselect this one type, keep all others
       setAllTypesSelected(false);
       const allExceptThis = new Set(allTypes.filter(t => t !== type));
       setFilterTypes(allExceptThis);
+      syncTypeToUrl(allExceptThis, false);
     } else {
       setFilterTypes(prev => {
         const next = new Set(prev);
@@ -906,11 +938,12 @@ export default function JobsPage() {
         } else {
           next.add(type);
         }
-        // If all are now selected, switch back to allTypesSelected mode
         if (next.size === allTypes.length) {
           setAllTypesSelected(true);
+          syncTypeToUrl(new Set(), true);
           return new Set();
         }
+        syncTypeToUrl(next, false);
         return next;
       });
     }
@@ -919,16 +952,20 @@ export default function JobsPage() {
   const selectAllTypes = () => {
     setAllTypesSelected(true);
     setFilterTypes(new Set());
+    syncTypeToUrl(new Set(), true);
   };
 
   const selectNoTypes = () => {
     setAllTypesSelected(false);
     setFilterTypes(new Set());
+    syncTypeToUrl(new Set(), false);
   };
 
   const selectOnlyType = (type: string) => {
     setAllTypesSelected(false);
-    setFilterTypes(new Set([type]));
+    const types = new Set([type]);
+    setFilterTypes(types);
+    syncTypeToUrl(types, false);
   };
 
   const selectOnlyStatus = (status: string) => {
@@ -953,9 +990,10 @@ export default function JobsPage() {
     setFilterTypes(new Set());
     setFilterStatuses(new Set(ALL_STATUSES));
     setSearchQuery("");
-    if (hideEmpty) {
-      toggleHideEmpty();
-    }
+    const newParams = new URLSearchParams(searchParams);
+    newParams.delete("type");
+    newParams.delete("hideEmpty");
+    setSearchParams(newParams);
   };
 
   const getTypesLabel = () => {
