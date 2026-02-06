@@ -545,6 +545,15 @@ export class JobsResource
         $group: {
           _id: "$type",
           totalRuns: { $sum: 1 },
+          active: {
+            $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] }
+          },
+          waiting: {
+            $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] }
+          },
+          delayed: {
+            $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] }
+          },
           completed: {
             $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] }
           },
@@ -633,6 +642,9 @@ export class JobsResource
           _id: 0,
           type: "$_id",
           totalRuns: 1,
+          active: 1,
+          waiting: 1,
+          delayed: 1,
           completed: 1,
           failed: 1,
           emptyRuns: 1,
@@ -680,11 +692,14 @@ export class JobsResource
 
       return {
         type: stat.type,
-        totalRuns: stat.totalRuns,
-        completed: stat.completed,
-        failed: stat.failed,
-        emptyRuns: stat.emptyRuns,
-        successRate: stat.successRate,
+        totalRuns: stat.totalRuns ?? 0,
+        active: stat.active ?? 0,
+        waiting: stat.waiting ?? 0,
+        delayed: stat.delayed ?? 0,
+        completed: stat.completed ?? 0,
+        failed: stat.failed ?? 0,
+        emptyRuns: stat.emptyRuns ?? 0,
+        successRate: stat.successRate ?? 0,
         avgFrequency,
       };
     });

@@ -178,6 +178,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         const seqStart = result.sequenceStart || progress.sequenceStart || (job.timestamp ? new Date(job.timestamp).toISOString() : null);
         return (
           <div className="space-y-1">
+            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>
             {seqStart && (
               <Link
                 to={`/timeline?start=${new Date(seqStart).getTime()}&end=${new Date(seqStart).getTime() + (result.audioDuration || 60) * 1000 + 60000}`}
@@ -186,7 +187,6 @@ function JobProgressCell({ job }: { job: JobInfo }) {
                 {format(new Date(seqStart), "MMM d, HH:mm")}
               </Link>
             )}
-            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>
           </div>
         );
       }
@@ -629,7 +629,9 @@ export default function JobsPage() {
     setSearchParams(newParams);
   };
 
-  const { jobs, isLoading } = useJobsListener();
+  const { jobs, isLoading } = useJobsListener({
+    types: !allTypesSelected && filterTypes.size > 0 ? Array.from(filterTypes) : undefined,
+  });
 
   const { data: schemas, isLoading: isLoadingSchemas } = useQuery({
     queryKey: ["job-schemas"],
@@ -662,6 +664,9 @@ export default function JobsPage() {
         stats: Array<{
           type: string;
           totalRuns: number;
+          active: number;
+          waiting: number;
+          delayed: number;
           completed: number;
           failed: number;
           emptyRuns: number;
@@ -740,10 +745,16 @@ export default function JobsPage() {
     return Object.values(workerStatus.workers).some(w => w.paused);
   }, [workerStatus]);
 
-  // Job counts by status
+  // Job counts by status (respects type filter)
   const jobCounts = useMemo(() => {
     const counts = { active: 0, waiting: 0, failed: 0, completed: 0, delayed: 0, total: 0, emptyTranscriptions: 0 };
-    for (const job of jobs) {
+
+    // Filter jobs by type if type filter is active
+    const typeFilteredJobs = allTypesSelected
+      ? jobs
+      : jobs.filter(j => filterTypes.has(j.type));
+
+    for (const job of typeFilteredJobs) {
       counts.total++;
       if (job.state in counts) {
         counts[job.state as keyof typeof counts]++;
@@ -754,27 +765,70 @@ export default function JobsPage() {
       }
     }
     return counts;
-  }, [jobs]);
+  }, [jobs, allTypesSelected, filterTypes]);
 
-  // Job counts per worker type
-  const workerJobCounts = useMemo(() => {
-    const counts: Record<string, { active: number; waiting: number; failed: number }> = {};
-    for (const job of jobs) {
-      if (!counts[job.type]) {
-        counts[job.type] = { active: 0, waiting: 0, failed: 0 };
+  // Aggregate backend stats for selected types (accurate totals when filtering)
+  const filteredTypeTotals = useMemo(() => {
+    if (!jobStatsResponse?.stats || allTypesSelected) return null;
+
+    const totals = { active: 0, waiting: 0, completed: 0, failed: 0, delayed: 0, total: 0, emptyRuns: 0 };
+    for (const stat of jobStatsResponse.stats) {
+      if (filterTypes.has(stat.type)) {
+        totals.active += stat.active || 0;
+        totals.waiting += stat.waiting || 0;
+        totals.delayed += stat.delayed || 0;
+        totals.completed += stat.completed || 0;
+        totals.failed += stat.failed || 0;
+        totals.total += stat.totalRuns || 0;
+        totals.emptyRuns += stat.emptyRuns || 0;
       }
-      if (job.state === "active") counts[job.type].active++;
-      else if (job.state === "waiting") counts[job.type].waiting++;
-      else if (job.state === "failed") counts[job.type].failed++;
     }
-    return counts;
-  }, [jobs]);
+    return totals;
+  }, [jobStatsResponse, allTypesSelected, filterTypes]);
+
+  // Calculate total empty runs from backend stats (for adjusting counts when hideEmpty is on)
+  const totalEmptyRuns = useMemo(() => {
+    if (!jobStatsResponse?.stats) return 0;
+    return jobStatsResponse.stats.reduce((sum, stat) => sum + (stat.emptyRuns || 0), 0);
+  }, [jobStatsResponse]);
+
+  // Get display counts adjusted for hideEmpty filter
+  const displayCounts = useMemo(() => {
+    if (allTypesSelected) {
+      const totals = jobStatsResponse?.totals;
+      if (!totals) return jobCounts;
+
+      const emptyAdjust = hideEmpty ? totalEmptyRuns : 0;
+      return {
+        active: totals.active ?? jobCounts.active,
+        waiting: totals.waiting ?? jobCounts.waiting,
+        failed: totals.failed ?? jobCounts.failed,
+        // Empty jobs are completed, so subtract from completed and total
+        completed: (totals.completed ?? jobCounts.completed) - emptyAdjust,
+        delayed: totals.delayed ?? jobCounts.delayed,
+        total: (totals.total ?? jobCounts.total) - emptyAdjust,
+      };
+    } else {
+      const totals = filteredTypeTotals;
+      if (!totals) return jobCounts;
+
+      const emptyAdjust = hideEmpty ? totals.emptyRuns : 0;
+      return {
+        active: totals.active,
+        waiting: totals.waiting,
+        failed: totals.failed,
+        completed: totals.completed - emptyAdjust,
+        delayed: totals.delayed,
+        total: totals.total - emptyAdjust,
+      };
+    }
+  }, [allTypesSelected, jobStatsResponse, filteredTypeTotals, jobCounts, hideEmpty, totalEmptyRuns]);
 
   // Get workers sorted by pipeline order, with unknown workers at the end
   const sortedWorkers = useMemo(() => {
     const pipelineOrder = new Map<string, number>(WORKER_PIPELINE.map((w, i) => [w.type, i]));
     const pipelineDescriptions = new Map<string, string>(WORKER_PIPELINE.map(w => [w.type, w.description]));
-    
+
     return [...allTypes].sort((a, b) => {
       const orderA = pipelineOrder.get(a) ?? 999;
       const orderB = pipelineOrder.get(b) ?? 999;
@@ -808,7 +862,7 @@ export default function JobsPage() {
 
   const filteredJobs = useMemo(() => {
     let result = jobs;
-    
+
     // Apply quick filter first
     if (quickFilter !== "all") {
       result = result.filter(j => j.state === quickFilter);
@@ -820,7 +874,7 @@ export default function JobsPage() {
         result = [];
       }
     }
-    
+
     // Apply type filter
     if (!allTypesSelected) {
       if (filterTypes.size === 0) {
@@ -829,7 +883,7 @@ export default function JobsPage() {
         result = result.filter(j => filterTypes.has(j.type));
       }
     }
-    
+
     // Apply search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -897,7 +951,8 @@ export default function JobsPage() {
   }, [jobs, quickFilter, allTypesSelected, filterTypes, filterStatuses, searchQuery, limit, sortColumn, sortDirection, hideEmpty]);
 
   const refetch = () => {
-    queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+    // Invalidate all jobs queries (both "all" and "filtered" variants)
+    queryClient.invalidateQueries({ queryKey: ["jobs"] });
     queryClient.invalidateQueries({ queryKey: ["job-stats"] });
   };
 
@@ -1197,8 +1252,8 @@ export default function JobsPage() {
               <TableHeader>
                 <TableRow className="h-8">
                   <TableHead className="w-[40px] pl-4">On</TableHead>
-                  <TableHead>Worker</TableHead>
                   <TableHead className="w-[40px]"></TableHead>
+                  <TableHead>Worker</TableHead>
                   <TableHead className="text-center w-[50px]">Active</TableHead>
                   <TableHead className="text-center w-[50px]">Queue</TableHead>
                   <TableHead className="text-center w-[50px]">Err</TableHead>
@@ -1212,10 +1267,9 @@ export default function JobsPage() {
                 {sortedWorkers.map((worker) => {
                   const isPaused = workerStatus?.workers[worker.type]?.paused ?? false;
                   const isMutating = pauseWorkerMutation.isPending || resumeWorkerMutation.isPending;
-                  const counts = workerJobCounts[worker.type] || { active: 0, waiting: 0, failed: 0 };
                   const stats = jobTypeStats.find(s => s.type === worker.type);
                   return (
-                    <TableRow 
+                    <TableRow
                       key={worker.type}
                       className={`h-9 ${isPaused ? "bg-amber-500/5" : ""}`}
                     >
@@ -1226,13 +1280,6 @@ export default function JobsPage() {
                           disabled={isMutating}
                           className="cursor-pointer"
                         />
-                      </TableCell>
-                      <TableCell className="py-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs text-muted-foreground w-4">{worker.order < 999 ? worker.order : ""}</span>
-                          <span className={`text-sm ${isPaused ? "text-muted-foreground" : ""}`}>{worker.type}</span>
-                          <span className="text-xs text-muted-foreground hidden lg:inline">— {worker.description}</span>
-                        </div>
                       </TableCell>
                       <TableCell className="py-1">
                         <Tooltip>
@@ -1246,23 +1293,30 @@ export default function JobsPage() {
                           <TooltipContent>Run {worker.type} job</TooltipContent>
                         </Tooltip>
                       </TableCell>
+                      <TableCell className="py-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-muted-foreground w-4">{worker.order < 999 ? worker.order : ""}</span>
+                          <span className={`text-sm ${isPaused ? "text-muted-foreground" : ""}`}>{worker.type}</span>
+                          <span className="text-xs text-muted-foreground hidden lg:inline">— {worker.description}</span>
+                        </div>
+                      </TableCell>
                       <TableCell className="text-center py-1">
-                        {counts.active > 0 ? (
-                          <span className="text-blue-500 text-sm font-medium">{counts.active}</span>
+                        {(stats?.active ?? 0) > 0 ? (
+                          <span className="text-blue-500 text-sm font-medium">{stats?.active}</span>
                         ) : (
                           <span className="text-muted-foreground/50">-</span>
                         )}
                       </TableCell>
                       <TableCell className="text-center py-1">
-                        {counts.waiting > 0 ? (
-                          <span className="text-yellow-500 text-sm font-medium">{counts.waiting}</span>
+                        {(stats?.waiting ?? 0) > 0 ? (
+                          <span className="text-yellow-500 text-sm font-medium">{stats?.waiting}</span>
                         ) : (
                           <span className="text-muted-foreground/50">-</span>
                         )}
                       </TableCell>
                       <TableCell className="text-center py-1">
-                        {counts.failed > 0 ? (
-                          <span className="text-red-500 text-sm font-medium">{counts.failed}</span>
+                        {(stats?.failed ?? 0) > 0 ? (
+                          <span className="text-red-500 text-sm font-medium">{stats?.failed}</span>
                         ) : (
                           <span className="text-muted-foreground/50">-</span>
                         )}
@@ -1305,7 +1359,7 @@ export default function JobsPage() {
           size="sm"
           onClick={() => setQuickFilter("all")}
         >
-          All ({jobStatsResponse?.totals?.total ?? jobCounts.total})
+          All ({displayCounts.total})
         </Button>
         <Button
           variant={quickFilter === "active" ? "default" : "outline"}
@@ -1314,7 +1368,7 @@ export default function JobsPage() {
           className={quickFilter !== "active" ? "text-blue-500 hover:text-blue-600" : ""}
         >
           <Activity className="h-3.5 w-3.5 mr-1" />
-          Active ({jobStatsResponse?.totals?.active ?? jobCounts.active})
+          Active ({displayCounts.active})
         </Button>
         <Button
           variant={quickFilter === "waiting" ? "default" : "outline"}
@@ -1323,7 +1377,7 @@ export default function JobsPage() {
           className={quickFilter !== "waiting" ? "text-yellow-500 hover:text-yellow-600" : ""}
         >
           <Clock className="h-3.5 w-3.5 mr-1" />
-          Waiting ({jobStatsResponse?.totals?.waiting ?? jobCounts.waiting})
+          Waiting ({displayCounts.waiting})
         </Button>
         <Button
           variant={quickFilter === "failed" ? "default" : "outline"}
@@ -1332,7 +1386,7 @@ export default function JobsPage() {
           className={quickFilter !== "failed" ? "text-red-500 hover:text-red-600 border-red-500/30" : ""}
         >
           <AlertCircle className="h-3.5 w-3.5 mr-1" />
-          Errors ({jobStatsResponse?.totals?.failed ?? jobCounts.failed})
+          Errors ({displayCounts.failed})
         </Button>
         <Button
           variant={quickFilter === "completed" ? "default" : "outline"}
@@ -1341,7 +1395,7 @@ export default function JobsPage() {
           className={quickFilter !== "completed" ? "text-green-500 hover:text-green-600" : ""}
         >
           <CheckCircle className="h-3.5 w-3.5 mr-1" />
-          Completed ({jobStatsResponse?.totals?.completed ?? jobCounts.completed})
+          Completed ({displayCounts.completed})
         </Button>
 
       </div>
