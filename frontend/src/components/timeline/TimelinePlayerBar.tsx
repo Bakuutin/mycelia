@@ -1,4 +1,4 @@
-import { memo, useEffect } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { ZoomTransform } from "d3-zoom";
 import type { ScaleTime } from "d3-scale";
 import { Pause, Play, Volume2, VolumeX, Navigation, Radio, X } from "lucide-react";
@@ -58,7 +58,24 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
   width,
   className,
 }: TimelinePlayerBarProps) {
-  const { isPlaying, toggleIsPlaying, currentDate, originalId, setOriginalId } = useAudioPlayer();
+  const isPlaying = useAudioPlayer((s) => s.isPlaying);
+  const toggleIsPlaying = useAudioPlayer((s) => s.toggleIsPlaying);
+  const originalId = useAudioPlayer((s) => s.originalId);
+  const setOriginalId = useAudioPlayer((s) => s.setOriginalId);
+  const timeRef = useRef<HTMLSpanElement>(null);
+  const dateRef = useRef<HTMLSpanElement>(null);
+
+  // Update time display via DOM — avoids re-rendering the whole bar at ~20fps
+  useEffect(() => {
+    const update = () => {
+      const d = useAudioPlayer.getState().currentDate;
+      if (timeRef.current) timeRef.current.textContent = formatTime(d);
+      if (dateRef.current) dateRef.current.textContent = formatDate(d);
+    };
+    update();
+    const unsub = useAudioPlayer.subscribe(update);
+    return unsub;
+  }, []);
   const { volume, setVolume, playbackRate, setPlaybackRate, followPlayback, setFollowPlayback } = useSettingsStore();
 
   const isMuted = volume === 0;
@@ -106,8 +123,8 @@ export const TimelinePlayerBar = memo(function TimelinePlayerBar({
 
         {/* Current Time */}
         <div className="flex flex-col items-start min-w-[100px]">
-          <span className="text-sm font-mono font-medium">{formatTime(currentDate)}</span>
-          <span className="text-[10px] text-muted-foreground">{formatDate(currentDate)}</span>
+          <span ref={timeRef} className="text-sm font-mono font-medium">{formatTime(null)}</span>
+          <span ref={dateRef} className="text-[10px] text-muted-foreground">{formatDate(null)}</span>
         </div>
 
         <div className="h-6 w-px bg-border" />

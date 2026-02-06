@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { FileText, ChevronDown } from "lucide-react";
 import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
@@ -36,9 +36,8 @@ const TimelinePage = () => {
   const { zoomTo } = timeline;
   const { start: rangeStart, end: rangeEnd, setRange } = useTimelineRange();
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
-  const { currentDate, isPlaying } = useAudioPlayer();
+  const isPlaying = useAudioPlayer((s) => s.isPlaying);
   const followPlayback = useSettingsStore((s) => s.followPlayback);
-  const lastFollowTimeRef = useRef<number>(0);
 
   // Apply start/end from URL when navigating to timeline with ?start=&end= (e.g. "View on timeline" from object)
   useEffect(() => {
@@ -67,37 +66,35 @@ const TimelinePage = () => {
     }
   }, [loadMarkedRanges, markedRangesLoaded]);
 
-  // Follow playback: edge-trigger mode - recenter when playhead reaches edge
+  // Follow playback: edge-trigger mode - recenter when playhead reaches edge.
+  // Uses an interval + getState() to avoid subscribing to currentDate (which fires at ~20fps).
   useEffect(() => {
-    if (!followPlayback || !isPlaying || !currentDate || !rangeStart || !rangeEnd) {
-      return;
-    }
+    if (!followPlayback || !isPlaying) return;
 
-    const now = Date.now();
-    // Throttle to avoid excessive updates (max once per 500ms)
-    if (now - lastFollowTimeRef.current < 500) {
-      return;
-    }
+    const intervalId = setInterval(() => {
+      const currentDate = useAudioPlayer.getState().currentDate;
+      if (!currentDate || !rangeStart || !rangeEnd) return;
 
-    const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
-    const playheadMs = currentDate.getTime();
-    const startMs = rangeStart.getTime();
-    const endMs = rangeEnd.getTime();
+      const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
+      const playheadMs = currentDate.getTime();
+      const startMs = rangeStart.getTime();
+      const endMs = rangeEnd.getTime();
 
-    // Check if playhead is within 10% of either edge
-    const edgeThreshold = rangeMs * 0.1;
-    const isNearStart = playheadMs < startMs + edgeThreshold;
-    const isNearEnd = playheadMs > endMs - edgeThreshold;
+      // Check if playhead is within 10% of either edge
+      const edgeThreshold = rangeMs * 0.1;
+      const isNearStart = playheadMs < startMs + edgeThreshold;
+      const isNearEnd = playheadMs > endMs - edgeThreshold;
 
-    if (isNearStart || isNearEnd) {
-      // Recenter the range on the playhead
-      const halfRange = rangeMs / 2;
-      const newStart = new Date(playheadMs - halfRange);
-      const newEnd = new Date(playheadMs + halfRange);
-      setRange(newStart, newEnd);
-      lastFollowTimeRef.current = now;
-    }
-  }, [followPlayback, isPlaying, currentDate, rangeStart, rangeEnd, setRange]);
+      if (isNearStart || isNearEnd) {
+        const halfRange = rangeMs / 2;
+        const newStart = new Date(playheadMs - halfRange);
+        const newEnd = new Date(playheadMs + halfRange);
+        setRange(newStart, newEnd);
+      }
+    }, 500);
+
+    return () => clearInterval(intervalId);
+  }, [followPlayback, isPlaying, rangeStart, rangeEnd, setRange]);
 
   const isShortRange =
     timeSelection.start &&

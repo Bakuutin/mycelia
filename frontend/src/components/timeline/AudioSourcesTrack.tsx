@@ -33,7 +33,10 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
 }: AudioSourcesTrackProps) {
   const { start, end } = useTimelineRange();
   const { sources, loading } = useAudioSources(start, end);
-  const { originalId, setOriginalId, resetDate, setIsPlaying, currentDate } = useAudioPlayer();
+  const originalId = useAudioPlayer((s) => s.originalId);
+  const setOriginalId = useAudioPlayer((s) => s.setOriginalId);
+  const resetDate = useAudioPlayer((s) => s.resetDate);
+  const setIsPlaying = useAudioPlayer((s) => s.setIsPlaying);
 
   const rescaledScale = useMemo(
     () => transform.rescaleX(scale),
@@ -48,13 +51,14 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
       } else {
         setOriginalId(source.originalId);
         // If we have a current position, restart from there on the new source
+        const currentDate = useAudioPlayer.getState().currentDate;
         if (currentDate) {
           resetDate(currentDate);
           setIsPlaying(true);
         }
       }
     },
-    [originalId, setOriginalId, resetDate, setIsPlaying, currentDate]
+    [originalId, setOriginalId, resetDate, setIsPlaying]
   );
 
   if (sources.length <= 1 && !loading) {

@@ -249,12 +249,8 @@ export const AudioPlayer: React.FC = () => {
   useEffect(() => {
     if (sourceNode && audioContext && sourceNode.playbackRate.value !== playbackRate) {
       sourceNode.playbackRate.value = playbackRate;
-
-      // if (isPlaying && currentDate && audioContext) {
-      //   setBaselines(currentDate, audioContext.currentTime);
-      // }
     }
-  }, [playbackRate, sourceNode, isPlaying, currentDate, audioContext]);
+  }, [playbackRate, sourceNode, audioContext]);
 
   const createBufferSource = async () => {
     // Read isCreatingSource from store (not closure) to prevent race conditions
