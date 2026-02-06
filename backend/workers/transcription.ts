@@ -25,8 +25,18 @@ const capability: JobCapability = {
   inputSchema: z.toJSONSchema(schema),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
-    result: z.literal("transcribed").optional(),
+    result: z.string().optional(),
     reason: z.string().optional(),
+    processed: z.number().optional(),
+    hasMore: z.boolean().optional(),
+    transcriptionId: z.string().nullable().optional(),
+    audioDuration: z.number().optional(),
+    audioSize: z.number().optional(),
+    wordCount: z.number().optional(),
+    textLength: z.number().optional(),
+    segmentCount: z.number().optional(),
+    textPreview: z.string().optional(),
+    sequenceStart: z.string().optional(),
   })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
@@ -55,7 +65,12 @@ const capability: JobCapability = {
         toIndex: sequence?.toIndex
       });
 
-      await job.updateProgress({ stage: "processing", sequenceId: sequence._id.toString() });
+      await job.updateProgress({ 
+        stage: "processing", 
+        sequenceId: sequence._id.toString(),
+        sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+        chunkCount: sequence.chunk_count,
+      });
 
       // Mark sequence as processing (unless already done atomically)
       if (!skipStateUpdate) {
@@ -68,7 +83,12 @@ const capability: JobCapability = {
       }
 
       try {
-        await job.updateProgress({ stage: "fetching_chunks", sequenceId: sequence._id.toString() });
+        await job.updateProgress({ 
+          stage: "fetching_chunks", 
+          sequenceId: sequence._id.toString(),
+          sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+          chunkCount: sequence.chunk_count,
+        });
         // 3. Get all chunks for this sequence using the range
         log("INFO", `Fetching chunks for sequence`, {
           sequenceId: seqId,
@@ -94,13 +114,21 @@ const capability: JobCapability = {
           throw new Error("No chunks found for sequence range");
         }
 
-        await job.updateProgress({ stage: "combining_audio", chunkCount: chunks.length });
+        await job.updateProgress({ 
+          stage: "combining_audio", 
+          chunkCount: chunks.length,
+          sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+        });
         // 4. Combine chunks into one audio file
         log("INFO", `Combining audio chunks`, { sequenceId: seqId, chunkCount: chunks.length });
         const combinedAudio = await combineChunks(chunks);
         log("INFO", `Audio combined`, { sequenceId: seqId, audioBytes: combinedAudio.length });
 
-        await job.updateProgress({ stage: "transcribing", audioSize: combinedAudio.length });
+        await job.updateProgress({ 
+          stage: "transcribing", 
+          audioSize: combinedAudio.length,
+          sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+        });
         // 5. Call transcription API
         // Language can be configured via TRANSCRIPTION_LANGUAGE env var (default: "auto")
         // This prevents faster-whisper from failing on language detection with short audio
@@ -153,7 +181,7 @@ const capability: JobCapability = {
 
         if (filteredSegments.length === 0) {
           log("WARN", `No speech detected after filtering`, { sequenceId: seqId, rawSegmentCount: segments.length });
-          await job.updateProgress({ stage: "empty_result" });
+          await job.updateProgress({ stage: "empty_result", sequenceStart: sequence.start?.toISOString?.() || sequence.start });
           // No speech detected after filtering
           await mongo({
             action: "updateOne",
@@ -162,11 +190,23 @@ const capability: JobCapability = {
             update: { $set: { state: "empty", updatedAt: new Date() } },
           });
 
-          return { status: "success", result: "empty" };
+          return { 
+            status: "success", 
+            result: "empty",
+            transcriptionId: null,
+            audioDuration: 0,
+            wordCount: 0,
+            segmentCount: 0,
+            sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+          };
         }
 
         const duration = filteredSegments[filteredSegments.length - 1].end;
-        await job.updateProgress({ stage: "saving_result", duration });
+        await job.updateProgress({ 
+          stage: "saving_result", 
+          duration,
+          sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+        });
 
         // 7. Save transcription result
         const transcriptionText = filteredSegments.map((s: any) => s.text).join(" ");
@@ -178,6 +218,9 @@ const capability: JobCapability = {
           textPreview: transcriptionText.slice(0, 100)
         });
 
+        // Calculate word count
+        const wordCount = transcriptionText.split(/\s+/).filter((w: string) => w.length > 0).length;
+
         const transcriptionDoc = {
           original: sequence.original_id,
           start: sequence.start,
@@ -186,14 +229,24 @@ const capability: JobCapability = {
           segments: filteredSegments,
           text: transcriptionText,
           createdAt: new Date(),
+          // Metadata for display
+          metadata: {
+            model: "whisper",
+            processingTimeMs: transcriptDuration,
+            wordCount,
+            segmentCount: filteredSegments.length,
+            language: language || "auto",
+            jobId: job.id,
+          },
         };
 
-        await mongo({
+        const insertResult = await mongo({
           action: "insertOne",
           collection: "transcriptions",
           doc: transcriptionDoc,
         });
-        log("INFO", `Transcription saved`, { sequenceId: seqId });
+        const transcriptionId = insertResult?.insertedId?.toString() || null;
+        log("INFO", `Transcription saved`, { sequenceId: seqId, transcriptionId });
 
         // 8. Mark chunks as transcribed
         // If it's a full sequence (MAX_SEQUENCE_LENGTH chunks), we don't mark the last chunk as transcribed
@@ -236,7 +289,18 @@ const capability: JobCapability = {
         });
 
         await job.updateProgress({ stage: "completed" });
-        return { status: "success", result: "transcribed" };
+        return { 
+          status: "success", 
+          result: "transcribed",
+          transcriptionId,
+          audioDuration: duration,
+          audioSize: combinedAudio.length,
+          wordCount,
+          textLength: transcriptionText.length,
+          segmentCount: filteredSegments.length,
+          textPreview: transcriptionText.slice(0, 200),
+          sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+        };
 
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -320,21 +384,18 @@ const capability: JobCapability = {
         remainingCount
       });
 
-      let processedCount = 0;
-
       if (sequence) {
         // Sequence state is already set to "processing" by findOneAndUpdate
         // Skip the state update in processSequenceCore
         const result = await processSequenceCore(mongo, transcriptionResource, job, sequence, true);
-        if (result.status === "success") {
-          processedCount++;
-        }
+        log("INFO", `Job completed`, { hasMore, result: result.status });
+        // Return the detailed result, adding hasMore flag
+        return { ...result, hasMore };
       } else {
         log("INFO", `No sequences to process`);
+        log("INFO", `Job completed`, { processed: 0, hasMore });
+        return { status: "success", processed: 0, hasMore };
       }
-
-      log("INFO", `Job completed`, { processedCount, hasMore });
-      return { status: "success", processed: processedCount, hasMore };
     }
   },
   triggers: {

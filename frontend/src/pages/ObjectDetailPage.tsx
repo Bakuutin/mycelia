@@ -20,6 +20,7 @@ import {
   Package,
   Save,
   Clock,
+  Star,
 } from "lucide-react";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SmartBackButton } from "@/components/SmartBackButton";
@@ -367,7 +368,19 @@ const ObjectDetailPage = () => {
       {/* Sticky Header with navigation and actions */}
       <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b pb-3 -mx-4 px-4 pt-2">
         <div className="flex items-center justify-between">
-          <SmartBackButton defaultPath="/objects" />
+          <div className="flex items-center gap-2">
+            <SmartBackButton defaultPath="/objects" />
+            {/* Star toggle button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleFieldUpdate("starred", !object.starred)}
+              className={object.starred ? "text-yellow-500 hover:text-yellow-600" : "text-muted-foreground hover:text-yellow-500"}
+              title={object.starred ? "Remove from starred" : "Add to starred"}
+            >
+              <Star className={`w-5 h-5 ${object.starred ? "fill-current" : ""}`} />
+            </Button>
+          </div>
           <div className="flex items-center gap-3">
             {/* Status indicator */}
             <div className="flex items-center gap-1.5 text-sm">
