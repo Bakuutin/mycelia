@@ -6,6 +6,7 @@ import { TimeLayer } from "@/modules/time";
 import { ObjectsLayer } from "@/modules/objects";
 import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
 import { PlayheadCursor } from "./PlayheadCursor";
+import { TimeGridLines } from "./TimeGridLines";
 import {
   VoiceDetectionTrack,
   DataPresenceTrack,
@@ -84,6 +85,13 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
 
   return (
     <div ref={containerRef} className={`relative ${className || ""}`}>
+      {/* Time grid lines overlay - spans all tracks */}
+      <TimeGridLines
+        scale={timeScale}
+        transform={transform}
+        width={width}
+      />
+
       {/* Playhead cursor overlay - spans all tracks */}
       <PlayheadCursor
         scale={timeScale}
@@ -99,12 +107,23 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           width={width}
         />
 
-        {/* Time axis layer (always visible) */}
-        <TimeLayerComponent
-          scale={timeScale}
-          transform={transform}
-          width={width}
-        />
+        {/* Time axis layer (always visible) with header */}
+        <div className="relative border-b border-border/30">
+          <TrackHeader
+            config={{
+              id: "time-selection" as any,
+              label: "Time / Selection",
+              defaultVisible: true,
+              defaultHeight: 40,
+              color: "#6b7280",
+            }}
+          />
+          <TimeLayerComponent
+            scale={timeScale}
+            transform={transform}
+            width={width}
+          />
+        </div>
 
         {/* Data tracks */}
         {visibleHistogramTracks.map((trackId) => {
