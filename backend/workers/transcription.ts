@@ -181,7 +181,7 @@ const capability: JobCapability = {
 
         if (filteredSegments.length === 0) {
           log("WARN", `No speech detected after filtering`, { sequenceId: seqId, rawSegmentCount: segments.length });
-          await job.updateProgress({ stage: "empty_result" });
+          await job.updateProgress({ stage: "empty_result", sequenceStart: sequence.start?.toISOString?.() || sequence.start });
           // No speech detected after filtering
           await mongo({
             action: "updateOne",
@@ -190,7 +190,15 @@ const capability: JobCapability = {
             update: { $set: { state: "empty", updatedAt: new Date() } },
           });
 
-          return { status: "success", result: "empty" };
+          return { 
+            status: "success", 
+            result: "empty",
+            transcriptionId: null,
+            audioDuration: 0,
+            wordCount: 0,
+            segmentCount: 0,
+            sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+          };
         }
 
         const duration = filteredSegments[filteredSegments.length - 1].end;
