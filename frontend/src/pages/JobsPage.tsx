@@ -17,7 +17,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X, Copy, Check } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -168,7 +169,13 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.audioDuration != null && <span>{result.audioDuration.toFixed(1)}s</span>}
             {result.wordCount != null ? <span>{result.wordCount} words</span> : <span className="opacity-50">— words</span>}
             {result.segmentCount != null && <span>{result.segmentCount} segments</span>}
+            {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
+          {result.textPreview && (
+            <div className="text-xs text-muted-foreground/70 truncate max-w-[250px]" title={result.textPreview}>
+              {result.textPreview}
+            </div>
+          )}
         </div>
       );
     }
@@ -213,6 +220,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.processed != null && result.total != null && <span>{result.processed}/{result.total} processed</span>}
             {result.hasSpeech != null && <span>{result.hasSpeech} with speech</span>}
             {result.duration != null && <span>{result.duration.toFixed(1)}s</span>}
+            {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
         </div>
       );
@@ -249,6 +257,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.finalized != null && <span>{result.finalized} finalized</span>}
             {result.streamed != null && result.streamed > 0 && <span>{result.streamed} streamed</span>}
             {result.backfilled != null && result.backfilled > 0 && <span>{result.backfilled} backfilled</span>}
+            {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
         </div>
       );
@@ -285,6 +294,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.conversationsCreated != null && <span>{result.conversationsCreated} conversations</span>}
             {result.chunksProcessed != null && <span>{result.chunksProcessed} chunks</span>}
             {result.errors?.length > 0 && <span className="text-red-400">{result.errors.length} errors</span>}
+            {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
         </div>
       );
@@ -341,6 +351,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.conversationsProcessed != null && <span>{result.conversationsProcessed} conversations</span>}
             {result.tagsApplied != null && <span>{result.tagsApplied} tags</span>}
             {result.errors?.length > 0 && <span className="text-red-400">{result.errors.length} errors</span>}
+            {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
         </div>
       );
@@ -363,6 +374,14 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   // --- Summarization ---
   if (job.type === "summarization") {
     if (isCompleted) {
+      if (!result.success) {
+        return (
+          <div className="space-y-1">
+            <Badge variant="secondary" className="bg-red-500/10 text-red-500 text-xs">Failed</Badge>
+            {result.message && <div className="text-xs text-red-400 truncate max-w-[200px]">{result.message}</div>}
+          </div>
+        );
+      }
       const start = result.start ? new Date(result.start) : null;
       const end = result.end ? new Date(result.end) : null;
       return (
@@ -393,6 +412,9 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   // --- Diarization ---
   if (job.type === "diarization") {
     if (isCompleted) {
+      if (result.message && (result.sequences_processed ?? 0) === 0) {
+        return <span className="text-xs text-muted-foreground">{result.message}</span>;
+      }
       return (
         <div className="space-y-1">
           <JobDateRange job={job} />
@@ -414,6 +436,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
           </Badge>
           <JobDateRange job={job} />
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {progress.total_chunks != null && <span>{progress.total_chunks} total chunks</span>}
             {progress.sequences_processed != null && <span>{progress.sequences_processed} sequences</span>}
             {progress.chunks_processed != null && <span>{progress.chunks_processed} chunks</span>}
             {progress.segments_created != null && <span>{progress.segments_created} segments</span>}
@@ -432,6 +455,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             {result.processed != null && <span>{result.processed} processed</span>}
             {result.marked != null && <span>{result.marked} marked stale</span>}
+            {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
         </div>
       );
@@ -442,10 +466,14 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   if (job.type === "speakerMatching") {
     if (isCompleted) {
       return (
-        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {result.processed != null && <span>{result.processed} processed</span>}
-          {result.matched != null && <span>{result.matched} matched</span>}
-          {result.profiles_count != null && <span>{result.profiles_count} profiles</span>}
+        <div className="space-y-1">
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.processed != null && <span>{result.processed} processed</span>}
+            {result.matched != null && <span>{result.matched} matched</span>}
+            {result.profiles_count != null && <span>{result.profiles_count} profiles</span>}
+            {result.duration != null && <span>{result.duration.toFixed(1)}s</span>}
+            {result.has_more && <span className="text-amber-400">has more</span>}
+          </div>
         </div>
       );
     }
@@ -473,10 +501,13 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   if (job.type === "enrollment") {
     if (isCompleted) {
       return (
-        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {result.profile_name && <span>{result.profile_name}</span>}
-          {result.sample_count != null && <span>{result.sample_count} samples</span>}
-          {result.total_duration != null && <span>{result.total_duration.toFixed(1)}s</span>}
+        <div className="space-y-1">
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {result.profile_name && <span>{result.profile_name}</span>}
+            {result.sample_count != null && <span>{result.sample_count} samples</span>}
+            {result.total_duration != null && <span>{result.total_duration.toFixed(1)}s</span>}
+            {result.is_primary && <Badge variant="secondary" className="bg-green-500/10 text-green-500 text-xs">primary</Badge>}
+          </div>
         </div>
       );
     }
@@ -485,9 +516,12 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         loading_audio: "Loading audio", extracting_embedding: "Extracting", saving_profile: "Saving",
       };
       return (
-        <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
-          {stageLabels[progress.stage] ?? progress.stage}
-        </Badge>
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+            {stageLabels[progress.stage] ?? progress.stage}
+          </Badge>
+          {progress.message && <div className="text-xs text-muted-foreground">{progress.message}</div>}
+        </div>
       );
     }
   }
@@ -530,6 +564,7 @@ export default function JobsPage() {
   const [limit, setLimit] = useState<number>(50);
   const [sortColumn, setSortColumn] = useState<string>("timestamp");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const hideEmpty = searchParams.get("hideEmpty") === "true";
@@ -709,14 +744,6 @@ export default function JobsPage() {
       resumeWorkerMutation.mutate(workerType);
     } else {
       pauseWorkerMutation.mutate(workerType);
-    }
-  };
-
-  const handleToggleAll = () => {
-    if (allPaused) {
-      resumeAllMutation.mutate();
-    } else {
-      pauseAllMutation.mutate();
     }
   };
 
@@ -1035,22 +1062,22 @@ export default function JobsPage() {
             </Link>
           </Button>
           <Button
-            variant={allPaused ? "default" : "secondary"}
+            variant="default"
             size="sm"
-            onClick={handleToggleAll}
-            disabled={pauseAllMutation.isPending || resumeAllMutation.isPending}
+            onClick={() => resumeAllMutation.mutate()}
+            disabled={resumeAllMutation.isPending || allPaused === false}
           >
-            {allPaused ? (
-              <>
-                <PlayCircle className="h-4 w-4 mr-2" />
-                Resume All
-              </>
-            ) : (
-              <>
-                <PauseCircle className="h-4 w-4 mr-2" />
-                Pause All
-              </>
-            )}
+            <PlayCircle className="h-4 w-4 mr-2" />
+            Resume All
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => pauseAllMutation.mutate()}
+            disabled={pauseAllMutation.isPending || allPaused === true}
+          >
+            <PauseCircle className="h-4 w-4 mr-2" />
+            Pause All
           </Button>
           <Button
             variant="destructive"
@@ -1105,7 +1132,8 @@ export default function JobsPage() {
                 <TableRow className="h-8">
                   <TableHead className="w-[40px] pl-4">On</TableHead>
                   <TableHead>Worker</TableHead>
-                  <TableHead className="text-center w-[50px]">Run</TableHead>
+                  <TableHead className="w-[40px]"></TableHead>
+                  <TableHead className="text-center w-[50px]">Active</TableHead>
                   <TableHead className="text-center w-[50px]">Queue</TableHead>
                   <TableHead className="text-center w-[50px]">Err</TableHead>
                   <TableHead className="text-center w-[60px]">Runs</TableHead>
@@ -1139,6 +1167,18 @@ export default function JobsPage() {
                           <span className={`text-sm ${isPaused ? "text-muted-foreground" : ""}`}>{worker.type}</span>
                           <span className="text-xs text-muted-foreground hidden lg:inline">— {worker.description}</span>
                         </div>
+                      </TableCell>
+                      <TableCell className="py-1">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Link to={`/jobs/new?type=${worker.type}`}>
+                              <Button variant="ghost" size="icon" className="h-7 w-7">
+                                <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                              </Button>
+                            </Link>
+                          </TooltipTrigger>
+                          <TooltipContent>Run {worker.type} job</TooltipContent>
+                        </Tooltip>
                       </TableCell>
                       <TableCell className="text-center py-1">
                         {counts.active > 0 ? (
@@ -1237,28 +1277,22 @@ export default function JobsPage() {
           <CheckCircle className="h-3.5 w-3.5 mr-1" />
           Completed ({jobCounts.completed})
         </Button>
-        {/* Empty transcriptions indicator */}
-        {jobCounts.emptyTranscriptions > 0 && (
-          <div className="flex items-center text-xs text-amber-500 ml-2">
-            <span className="px-2 py-1 bg-amber-500/10 rounded">
-              {jobCounts.emptyTranscriptions} empty transcription{jobCounts.emptyTranscriptions !== 1 ? "s" : ""}
-            </span>
-          </div>
-        )}
+
       </div>
 
       <Card>
-        <CardContent className="flex flex-wrap items-center gap-4 mt-6">
-          <div className="relative w-full sm:w-[300px]">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="Search by ID or type..."
-              className="pl-8"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
+        <CardContent className="space-y-3 mt-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative w-[220px]">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="Search by ID or type..."
+                className="pl-8"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -1285,7 +1319,7 @@ export default function JobsPage() {
                   <DropdownMenuItem
                     key={type}
                     onSelect={(e) => e.preventDefault()}
-                    onClick={() => selectOnlyType(type)}
+                    onClick={() => toggleType(type)}
                     className="cursor-pointer"
                   >
                     <Checkbox
@@ -1338,18 +1372,6 @@ export default function JobsPage() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Hide Empty Toggle */}
-          <div className="flex items-center gap-2">
-            <Switch
-              id="hide-empty"
-              checked={hideEmpty}
-              onCheckedChange={toggleHideEmpty}
-            />
-            <Label htmlFor="hide-empty" className="text-sm cursor-pointer">
-              Hide empty
-            </Label>
-          </div>
-
           <div className="w-[120px]">
             <Select value={limit.toString()} onValueChange={(v) => setLimit(parseInt(v))}>
               <SelectTrigger>
@@ -1363,19 +1385,30 @@ export default function JobsPage() {
               </SelectContent>
             </Select>
           </div>
-
-          {/* Clear filters button */}
-          {hasActiveFilters && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={clearFilters}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-4 w-4 mr-1" />
-              Clear filters
-            </Button>
-          )}
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="hide-empty"
+                checked={hideEmpty}
+                onCheckedChange={toggleHideEmpty}
+              />
+              <Label htmlFor="hide-empty" className="text-sm cursor-pointer">
+                Hide empty
+              </Label>
+            </div>
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearFilters}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4 mr-1" />
+                Clear filters
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -1404,15 +1437,6 @@ export default function JobsPage() {
                 </TableHead>
                 <TableHead
                   className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort("id")}
-                >
-                  <div className="flex items-center">
-                    Job ID
-                    <SortIcon column="id" />
-                  </div>
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50 select-none"
                   onClick={() => handleSort("timestamp")}
                 >
                   <div className="flex items-center">
@@ -1430,24 +1454,25 @@ export default function JobsPage() {
                   </div>
                 </TableHead>
                 <TableHead>Progress</TableHead>
+                <TableHead className="w-[80px] text-right">ID</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
+                  <TableCell colSpan={6} className="text-center py-8">
                     Loading jobs...
                   </TableCell>
                 </TableRow>
               ) : filteredJobs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
+                  <TableCell colSpan={6} className="text-center py-8">
                     No jobs found
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredJobs.map((job) => (
-                  <TableRow 
+                  <TableRow
                     key={job.id}
                     className={job.state === "failed" ? "bg-red-500/5 border-l-2 border-l-red-500" : ""}
                   >
@@ -1463,19 +1488,12 @@ export default function JobsPage() {
                         </Badge>
                       </Link>
                     </TableCell>
-                    <TableCell 
+                    <TableCell
                       className="font-medium cursor-pointer hover:text-primary hover:underline"
                       onClick={() => selectOnlyType(job.type)}
                       title={`Filter by ${job.type}`}
                     >
                       {job.type}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      <Link
-                        to={`/jobs/${job.id}`}
-                      >
-                        {job.id}
-                      </Link>
                     </TableCell>
                     <TableCell className="text-sm">
                       {job.timestamp
@@ -1487,6 +1505,28 @@ export default function JobsPage() {
                     </TableCell>
                     <TableCell>
                       <JobProgressCell job={job} />
+                    </TableCell>
+                    <TableCell className="w-[80px] text-right p-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(job.id);
+                              setCopiedId(job.id);
+                              setTimeout(() => setCopiedId(null), 2000);
+                            }}
+                            className="font-mono text-xs text-muted-foreground hover:text-foreground cursor-pointer inline-flex items-center gap-1"
+                          >
+                            <span className="truncate max-w-[50px]">{job.id.slice(-6)}</span>
+                            {copiedId === job.id ? (
+                              <Check className="h-3 w-3 text-green-500" />
+                            ) : (
+                              <Copy className="h-3 w-3 opacity-50" />
+                            )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{job.id}</TooltipContent>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))
