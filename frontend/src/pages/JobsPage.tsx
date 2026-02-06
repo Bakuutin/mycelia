@@ -31,6 +31,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
+import { parseJobError } from "@/lib/jobs";
 
 type WorkerStatus = {
   workers: Record<string, { paused: boolean }>;
@@ -148,6 +149,23 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   const progress = job.progress || {};
   const isCompleted = job.state === "completed";
   const isActive = job.state === "active";
+
+  // --- Failed jobs: show parsed error ---
+  if (job.state === "failed" && job.failedReason) {
+    const error = parseJobError(job.failedReason);
+    if (error) {
+      return (
+        <div className="space-y-1">
+          <Badge variant="secondary" className="bg-red-500/10 text-red-500 text-xs">
+            {error.label}
+          </Badge>
+          <div className="text-xs text-red-400/80 truncate max-w-[250px]" title={error.detail}>
+            {error.detail}
+          </div>
+        </div>
+      );
+    }
+  }
 
   // --- Transcription ---
   if (job.type === "transcription") {

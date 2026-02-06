@@ -16,6 +16,7 @@ import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Use
 import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
+import { parseJobError } from "@/lib/jobs";
 
 interface TranscriptionDoc {
     _id: string;
@@ -396,10 +397,29 @@ export default function JobDetailPage() {
                                 </>
                             )}
 
-                        {job.failedReason && (
-                            <div className="text-sm text-red-500">{job.failedReason}</div>
-
-                        )}
+                        {job.failedReason && (() => {
+                            const parsed = parseJobError(job.failedReason);
+                            return (
+                                <div className="space-y-2">
+                                    {parsed && (
+                                        <div className="flex items-center gap-2">
+                                            <Badge className="bg-red-500/10 text-red-500">
+                                                {parsed.label}
+                                            </Badge>
+                                            <span className="text-sm text-red-400">{parsed.detail}</span>
+                                        </div>
+                                    )}
+                                    <details className="group">
+                                        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                                            Full error message
+                                        </summary>
+                                        <div className="mt-2 bg-red-500/5 rounded-lg p-3 max-h-48 overflow-y-auto">
+                                            <pre className="text-xs text-red-400 whitespace-pre-wrap break-words">{job.failedReason}</pre>
+                                        </div>
+                                    </details>
+                                </div>
+                            );
+                        })()}
 
 <div>
                             <div className="text-sm text-muted-foreground mb-1">Created</div>
