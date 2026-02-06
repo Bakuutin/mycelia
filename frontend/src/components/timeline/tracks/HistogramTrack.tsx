@@ -54,19 +54,18 @@ const HistogramTrackInner = memo(function HistogramTrackInner({
 
   const { bars, maxCount } = useMemo(() => {
     let max = 1;
-    const barData = items.map((item) => {
+    const barData: Array<{ id: string; x: number; width: number; count: number; stale: boolean }> = [];
+    for (const item of items) {
+      const x = rescaledScale(item.start);
+      const w = Math.max(rescaledScale(item.end) - rescaledScale(item.start), 1);
+      // Viewport culling: skip bars entirely outside visible area
+      if (x + w < 0 || x > width) continue;
       const count = item.totals[dataKey]?.count ?? 0;
       if (count > max) max = count;
-      return {
-        id: item.id,
-        x: rescaledScale(item.start),
-        width: Math.max(rescaledScale(item.end) - rescaledScale(item.start), 1),
-        count,
-        stale: item.stale,
-      };
-    });
+      barData.push({ id: item.id, x, width: w, count, stale: item.stale });
+    }
     return { bars: barData, maxCount: max };
-  }, [items, rescaledScale, dataKey]);
+  }, [items, rescaledScale, dataKey, width]);
 
   return (
     <BaseTrack

@@ -24,24 +24,22 @@ export const VoiceDetectionTrack = memo(function VoiceDetectionTrack({
   );
 
   const bars = useMemo(() => {
-    return items.map((item) => {
+    const result: Array<{ id: string; x: number; width: number; opacity: number; hasSpeech: boolean }> = [];
+    for (const item of items) {
       const startX = rescaledScale(item.start);
       const endX = rescaledScale(item.end);
       const barWidth = Math.max(endX - startX, 1);
+      // Viewport culling
+      if (startX + barWidth < 0 || startX > width) continue;
 
       const speechProb = item.totals.audio_chunks?.speech_probability_avg ?? 0;
       const opacity = 0.15 + speechProb * 0.85;
       const hasSpeech = (item.totals.audio_chunks?.has_speech ?? 0) > 0;
 
-      return {
-        id: item.id,
-        x: startX,
-        width: barWidth,
-        opacity,
-        hasSpeech,
-      };
-    });
-  }, [items, rescaledScale]);
+      result.push({ id: item.id, x: startX, width: barWidth, opacity, hasSpeech });
+    }
+    return result;
+  }, [items, rescaledScale, width]);
 
   return (
     <BaseTrack

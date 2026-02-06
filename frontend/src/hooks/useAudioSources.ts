@@ -52,8 +52,15 @@ export function useAudioSources(start: Date, end: Date) {
       }
     };
 
-    // Debounce to avoid excessive fetches during zoom/pan
-    const timer = setTimeout(fetchSources, 300);
+    // Debounce: longer delay for wider ranges (aggregation is heavier)
+    const rangeMs = end.getTime() - start.getTime();
+    // Skip fetch for very wide ranges (>90 days) - aggregation too slow
+    if (rangeMs > 90 * 24 * 60 * 60 * 1000) {
+      setSources([]);
+      return;
+    }
+    const debounceMs = rangeMs > 7 * 24 * 60 * 60 * 1000 ? 800 : 400;
+    const timer = setTimeout(fetchSources, debounceMs);
     return () => {
       clearTimeout(timer);
       controller.abort();

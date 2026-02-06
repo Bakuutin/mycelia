@@ -24,18 +24,19 @@ export const DataPresenceTrack = memo(function DataPresenceTrack({
   );
 
   const segments = useMemo(() => {
-    return items
-      .filter((item) => {
-        const audioCount = item.totals.audio_chunks?.count ?? 0;
-        const transcriptCount = item.totals.transcriptions?.count ?? 0;
-        return audioCount > 0 || transcriptCount > 0;
-      })
-      .map((item) => ({
-        id: item.id,
-        x: rescaledScale(item.start),
-        width: Math.max(rescaledScale(item.end) - rescaledScale(item.start), 2),
-      }));
-  }, [items, rescaledScale]);
+    const result: Array<{ id: string; x: number; width: number }> = [];
+    for (const item of items) {
+      const audioCount = item.totals.audio_chunks?.count ?? 0;
+      const transcriptCount = item.totals.transcriptions?.count ?? 0;
+      if (audioCount === 0 && transcriptCount === 0) continue;
+      const x = rescaledScale(item.start);
+      const w = Math.max(rescaledScale(item.end) - rescaledScale(item.start), 2);
+      // Viewport culling
+      if (x + w < 0 || x > width) continue;
+      result.push({ id: item.id, x, width: w });
+    }
+    return result;
+  }, [items, rescaledScale, width]);
 
   return (
     <BaseTrack

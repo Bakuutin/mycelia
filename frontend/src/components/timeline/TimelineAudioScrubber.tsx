@@ -40,21 +40,21 @@ export const TimelineAudioScrubber = memo(function TimelineAudioScrubber({
     return transform.applyX(scale(currentDate));
   }, [currentDate, scale, transform]);
 
-  // Simple bar calculation - same approach as HistogramTrack
+  // Simple bar calculation with viewport culling
   const { bars, maxCount } = useMemo(() => {
     let max = 1;
-    const barData = items.map((item) => {
+    const barData: Array<{ id: string; x: number; w: number; count: number }> = [];
+    for (const item of items) {
+      const x = rescaledScale(item.start);
+      const w = Math.max(rescaledScale(item.end) - rescaledScale(item.start), 1);
+      // Skip bars entirely outside visible area
+      if (x + w < 0 || x > width) continue;
       const count = item.totals.audio_chunks?.count ?? 0;
       if (count > max) max = count;
-      return {
-        id: item.id,
-        x: rescaledScale(item.start),
-        w: Math.max(rescaledScale(item.end) - rescaledScale(item.start), 1),
-        count,
-      };
-    });
+      barData.push({ id: item.id, x, w, count });
+    }
     return { bars: barData, maxCount: max };
-  }, [items, rescaledScale]);
+  }, [items, rescaledScale, width]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {

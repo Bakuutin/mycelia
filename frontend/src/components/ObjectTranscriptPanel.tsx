@@ -50,13 +50,21 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
     currentDate < seg.endTime
   );
 
-  // Auto-scroll to current segment when it changes (only if sync enabled)
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to current segment within the ScrollArea only (not the page)
   useEffect(() => {
     if (syncEnabled && currentSegmentIndex >= 0 && currentSegmentIndex !== lastScrolledIndex.current) {
       lastScrolledIndex.current = currentSegmentIndex;
-      // Small delay to ensure DOM is updated
       setTimeout(() => {
-        currentSegmentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        const el = currentSegmentRef.current;
+        const viewport = scrollAreaRef.current?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+        if (!el || !viewport) return;
+        const elRect = el.getBoundingClientRect();
+        const vpRect = viewport.getBoundingClientRect();
+        // Scroll only the ScrollArea viewport, not the page
+        const targetScrollTop = viewport.scrollTop + (elRect.top - vpRect.top) - vpRect.height / 2 + elRect.height / 2;
+        viewport.scrollTo({ top: targetScrollTop, behavior: "smooth" });
       }, 100);
     }
   }, [currentSegmentIndex, syncEnabled]);
@@ -181,7 +189,7 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
         </Button>
       </div>
 
-      <ScrollArea className="h-[400px]">
+      <ScrollArea className="h-[400px]" ref={scrollAreaRef}>
         <div className="space-y-1 pr-3">
           {segments.map((seg, idx) => {
             const isCurrentSegment = syncEnabled && idx === currentSegmentIndex;

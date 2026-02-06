@@ -19,8 +19,11 @@ export function useHistogramItems(start: Date, end: Date) {
   const resolution = getResolutionForDuration(duration);
 
   const binSize = RESOLUTION_TO_MS[resolution];
-  const queryStart = new Date(start.getTime() - duration - binSize);
-  const queryEnd = new Date(end.getTime() + duration + binSize);
+  // Buffer: 10% of visible range each side, capped at 1 day.
+  // Previously fetched full duration on each side (3x total), very slow for wide ranges.
+  const buffer = Math.min(duration * 0.1, 24 * 60 * 60 * 1000);
+  const queryStart = new Date(start.getTime() - buffer - binSize);
+  const queryEnd = new Date(end.getTime() + buffer + binSize);
 
   const debouncedFetchMissingRanges = useCallback(
     _.debounce((resolution, start, end) => {

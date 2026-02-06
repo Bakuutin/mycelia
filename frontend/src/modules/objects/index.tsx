@@ -637,8 +637,8 @@ export const ObjectsLayer: () => Layer = () => {
             />
           ))}
 
-          {/* Object ranges */}
-          {layout.placed.map((range: PlacedObjectRange) => (
+          {/* Object ranges - limit rendered count for performance */}
+          {layout.placed.slice(0, 500).map((range: PlacedObjectRange) => (
             <CategoryAwareRangeBox
               key={`${range.object._id.toString()}-${range.rangeIndex}`}
               range={range}
