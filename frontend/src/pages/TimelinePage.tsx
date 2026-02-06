@@ -1,10 +1,14 @@
-import { useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { FileText, ChevronDown } from "lucide-react";
 import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
 import { TimelinePlayerBar } from "@/components/timeline/TimelinePlayerBar";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
 import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibilityPanel";
+import { ObjectTranscriptPanel } from "@/components/ObjectTranscriptPanel";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player";
 import { useObjects } from "@/modules/objects/useObjects";
@@ -15,8 +19,10 @@ import { useTimeline } from "@/hooks/useTimeline";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 const TimelinePage = () => {
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const { error, objects } = useObjects();
@@ -234,18 +240,44 @@ const TimelinePage = () => {
           />
 
           <div className="border rounded-lg p-2">
+            <TimelinePlayerBar
+              scale={timeline.timeScale}
+              transform={timeline.transform}
+              width={timeline.width}
+              className="border-0 rounded-none mb-1"
+            />
             <MultiTrackTimeline timeline={timeline} />
           </div>
 
-          {/* Audio player bar with waveform scrubber */}
-          <TimelinePlayerBar
-            scale={timeline.timeScale}
-            transform={timeline.transform}
-            width={timeline.width}
-          />
-
           {/* Hidden audio player component that handles actual playback */}
           <AudioPlayer />
+
+          {/* Collapsible transcript panel synced with player */}
+          <Collapsible open={transcriptOpen} onOpenChange={setTranscriptOpen}>
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-between px-3 py-2 h-auto text-muted-foreground hover:text-foreground"
+              >
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <FileText className="w-4 h-4" />
+                  Transcript
+                </span>
+                <ChevronDown className={cn(
+                  "w-4 h-4 transition-transform duration-200",
+                  transcriptOpen && "rotate-180"
+                )} />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              {rangeStart && rangeEnd && (
+                <ObjectTranscriptPanel
+                  timeRange={{ start: rangeStart, end: rangeEnd }}
+                />
+              )}
+            </CollapsibleContent>
+          </Collapsible>
 
           <SelectedObjectsPanel
             selectedObjects={panelObjects}
