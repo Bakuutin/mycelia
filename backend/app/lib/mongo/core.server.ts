@@ -37,12 +37,38 @@ function cleanupExpiredCursors(): void {
   }
 }
 
-export const getRootDB = async (): Promise<Db> => {
+const MAX_RETRIES = 10;
+const INITIAL_DELAY_MS = 1000;
+const MAX_DELAY_MS = 10000;
+
+async function connectWithRetry(): Promise<void> {
   if (!client) {
     client = new MongoClient(env.MONGO_URL);
   }
-  await client.connect();
-  return client.db(env.DATABASE_NAME);
+
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await client.connect();
+      return;
+    } catch (err) {
+      lastError = err as Error;
+      const delay = Math.min(INITIAL_DELAY_MS * Math.pow(2, attempt - 1), MAX_DELAY_MS);
+      console.log(`[MongoDB] Connection attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`);
+      if (attempt < MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        // Reset client for fresh connection attempt
+        try { await client.close(); } catch { /* ignore */ }
+        client = new MongoClient(env.MONGO_URL);
+      }
+    }
+  }
+  throw lastError;
+}
+
+export const getRootDB = async (): Promise<Db> => {
+  await connectWithRetry();
+  return client!.db(env.DATABASE_NAME);
 };
 
 export function sift(query: Filter<unknown>): (item: unknown) => boolean {
