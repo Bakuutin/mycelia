@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink } from "lucide-react";
+import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle } from "lucide-react";
 import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
@@ -558,6 +558,118 @@ export default function JobDetailPage() {
                                 })}
                             </div>
                         )}
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Conversation Extractor Details Section */}
+            {job.type === "conversation_extractor" && job.state === "completed" && job.result && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Users className="h-5 w-5" />
+                            Conversation Extractor Details
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Processing Time</div>
+                                    <div className="text-sm font-medium">
+                                        {formatDuration(job.processedOn, job.finishedOn)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Conversations Created</div>
+                                    <div className="text-sm font-medium">
+                                        {job.result.conversationsCreated ?? 0}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Layers className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Chunks Processed</div>
+                                    <div className="text-sm font-medium">
+                                        {job.result.chunksProcessed ?? 0}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Hash className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Has More</div>
+                                    <div className="text-sm font-medium">
+                                        {job.result.hasMore ? "Yes" : "No"}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Errors */}
+                        {job.result.errors?.length > 0 && (
+                            <div>
+                                <div className="flex items-center gap-2 text-sm text-red-500 mb-2">
+                                    <AlertTriangle className="h-4 w-4" />
+                                    {job.result.errors.length} error{job.result.errors.length !== 1 ? "s" : ""}
+                                </div>
+                                <div className="bg-red-500/5 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
+                                    {job.result.errors.map((err: any, idx: number) => (
+                                        <div key={idx} className="text-xs text-red-400">
+                                            <span className="font-medium">{err.type}:</span> {err.message}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Transcription Sequence Creator Details Section */}
+            {job.type === "transcription_sequence_creator" && job.state === "completed" && job.result && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Layers className="h-5 w-5" />
+                            Sequence Creator Details
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Processing Time</div>
+                                    <div className="text-sm font-medium">
+                                        {formatDuration(job.processedOn, job.finishedOn)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Hash className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Chunks Processed</div>
+                                    <div className="text-sm font-medium">
+                                        {job.result.processed ?? 0}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Layers className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                    <div className="text-xs text-muted-foreground">Has More</div>
+                                    <div className="text-sm font-medium">
+                                        {job.result.hasMore ? "Yes" : "No"}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </CardContent>
                 </Card>
             )}

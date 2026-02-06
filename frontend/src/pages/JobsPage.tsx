@@ -1162,6 +1162,75 @@ export default function JobsPage() {
                             )}
                           </div>
                         </div>
+                      ) : job.type === "conversation_extractor" && job.state === "completed" ? (
+                        /* Conversation extractor - show result summary */
+                        <div className="space-y-1">
+                          {(job.result?.conversationsCreated ?? 0) === 0 && (job.result?.chunksProcessed ?? 0) === 0 ? (
+                            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
+                              Empty
+                            </Badge>
+                          ) : (
+                            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                              {job.result?.conversationsCreated != null && (
+                                <span>{job.result.conversationsCreated} conversations</span>
+                              )}
+                              {job.result?.chunksProcessed != null && (
+                                <span>{job.result.chunksProcessed} chunks</span>
+                              )}
+                              {job.result?.errors?.length > 0 && (
+                                <span className="text-red-400">{job.result.errors.length} errors</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : job.type === "conversation_extractor" && job.progress?.stage ? (
+                        /* Conversation extractor in progress */
+                        <div className="space-y-1">
+                          <Badge variant="secondary" className="bg-blue-500/10 text-blue-500 text-xs">
+                            {job.progress.stage === "processing_chunk" && "Processing chunk"}
+                            {job.progress.stage === "segmenting" && "Segmenting"}
+                            {job.progress.stage === "extracting_metadata" && "Extracting metadata"}
+                            {!["processing_chunk", "segmenting", "extracting_metadata"].includes(job.progress.stage) && job.progress.stage}
+                          </Badge>
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            {job.progress.chunksProcessed != null && (
+                              <span>{job.progress.chunksProcessed} chunks</span>
+                            )}
+                            {job.progress.totalSegments != null && (
+                              <span>{job.progress.segment ?? 0}/{job.progress.totalSegments} segments</span>
+                            )}
+                          </div>
+                        </div>
+                      ) : job.type === "transcription_sequence_creator" && job.state === "completed" ? (
+                        /* Transcription sequence creator - show result summary */
+                        <div className="space-y-1">
+                          {(job.result?.processed ?? 0) === 0 ? (
+                            <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">
+                              Empty
+                            </Badge>
+                          ) : (
+                            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                              {job.result?.processed != null && (
+                                <span>{job.result.processed} processed</span>
+                              )}
+                              {job.result?.hasMore && (
+                                <span className="text-amber-400">has more</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : job.type === "transcription_sequence_creator" && job.progress ? (
+                        /* Transcription sequence creator in progress */
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            {job.progress.processed != null && (
+                              <span>{job.progress.processed} processed</span>
+                            )}
+                            {job.progress.sequencesCreated != null && (
+                              <span>{job.progress.sequencesCreated} sequences</span>
+                            )}
+                          </div>
+                        </div>
                       ) : job.progress ? (
                         <div className="space-y-2">
                           {(() => {
