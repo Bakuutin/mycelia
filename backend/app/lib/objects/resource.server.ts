@@ -252,7 +252,7 @@ export class ObjectsResource
     other: number;
     total: number;
   }> {
-    const mongo = getMongoResource(auth);
+    const mongo = await getMongoResource(auth);
 
     const countsPipeline = [
       {
@@ -331,7 +331,7 @@ export class ObjectsResource
 
   // Calculate orphaned count (slow - uses $lookup)
   private async refreshOrphanedCount(auth: Auth): Promise<number> {
-    const mongo = getMongoResource(auth);
+    const mongo = await getMongoResource(auth);
 
     const orphanedPipeline = [
       {
@@ -389,7 +389,7 @@ export class ObjectsResource
     total: number;
     updatedAt: Date;
   }> {
-    const mongo = getMongoResource(auth);
+    const mongo = await getMongoResource(auth);
 
     // Calculate type counts first (fast)
     const typeCounts = await this.refreshTypeCounts(auth);
@@ -436,7 +436,7 @@ export class ObjectsResource
     updatedAt: Date;
     orphanedLoading?: boolean;
   }> {
-    const mongo = getMongoResource(auth);
+    const mongo = await getMongoResource(auth);
 
     // Get existing orphaned count from cache
     const cached = await mongo({
@@ -487,7 +487,7 @@ export class ObjectsResource
 
     // Calculate orphaned count in background (don't await)
     this.refreshOrphanedCount(auth).then(async (orphaned) => {
-      const bgMongo = getMongoResource(auth);
+      const bgMongo = await getMongoResource(auth);
       await bgMongo({
         action: "updateOne",
         collection: "object_stats",
@@ -513,7 +513,7 @@ export class ObjectsResource
     updatedAt: Date | null;
     stale?: boolean;
   } | null> {
-    const mongo = getMongoResource(auth);
+    const mongo = await getMongoResource(auth);
     const cached = await mongo({
       action: "findOne",
       collection: "object_stats",
@@ -537,7 +537,7 @@ export class ObjectsResource
 
   // Invalidate counts cache (called after create/update/delete)
   private async invalidateCountsCache(auth: Auth): Promise<void> {
-    const mongo = getMongoResource(auth);
+    const mongo = await getMongoResource(auth);
     // Just mark as stale by updating a flag, don't recalculate immediately
     await mongo({
       action: "updateOne",
@@ -559,7 +559,7 @@ export class ObjectsResource
     newValue: any,
   ): Promise<void> {
     try {
-      const mongo = getMongoResource(auth);
+      const mongo = await getMongoResource(auth);
       await mongo({
         action: "insertOne",
         collection: "object_history",
