@@ -67,6 +67,7 @@
     "npm:@typescript-eslint/parser@^6.7.4": "6.21.0_eslint@8.57.1_typescript@5.9.3",
     "npm:ai@^6.0.3": "6.0.3_zod@4.3.5",
     "npm:bson@^6.10.4": "6.10.4",
+    "npm:bullmq@5.42.0": "5.42.0",
     "npm:bullmq@^5.1.1": "5.65.1",
     "npm:bullmq@^5.47.1": "5.65.1",
     "npm:chokidar@^4.0.3": "4.0.3",
@@ -1714,6 +1715,18 @@
     "buildcheck@0.0.7": {
       "integrity": "sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA=="
     },
+    "bullmq@5.42.0": {
+      "integrity": "sha512-6vR0qoO/v0xbwbOAiKBYPBg7zE14WsVdjN1Miq7yOht1Ju5INlpObhtBbEKNV+oMual/SyO0gEuLE6pyEA5Kbg==",
+      "dependencies": [
+        "cron-parser",
+        "ioredis",
+        "msgpackr",
+        "node-abort-controller",
+        "semver@7.7.3",
+        "tslib",
+        "uuid@9.0.1"
+      ]
+    },
     "bullmq@5.65.1": {
       "integrity": "sha512-QgDAzX1G9L5IRy4Orva5CfQTXZT+5K+OfO/kbPrAqN+pmL9LJekCzxijXehlm/u2eXfWPfWvIdJJIqiuz3WJSg==",
       "dependencies": [
@@ -2705,6 +2718,7 @@
         "package-json-from-dist",
         "path-scurry"
       ],
+      "deprecated": true,
       "bin": true
     },
     "glob@7.2.3": {
@@ -4334,7 +4348,8 @@
         "minizlib",
         "mkdirp@1.0.4",
         "yallist"
-      ]
+      ],
+      "deprecated": true
     },
     "testcontainers@11.9.0": {
       "integrity": "sha512-SQ6OqQUig7HcGVF72i+ZVIMvxPSpEz8cgC/B63ekqMzgf98DnveoBbOmqux/Wa5wQAQCt4mEPNMa/Jz7vMg9fQ==",
@@ -4567,6 +4582,10 @@
     },
     "uuid@11.1.0": {
       "integrity": "sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==",
+      "bin": true
+    },
+    "uuid@9.0.1": {
+      "integrity": "sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==",
       "bin": true
     },
     "vary@1.1.2": {
