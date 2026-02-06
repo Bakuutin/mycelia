@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { apiClient } from "@/lib/api";
 
 export interface MarkedRange {
   id: string;
@@ -12,16 +12,13 @@ export interface MarkedRange {
 
 interface MarkedRangesState {
   ranges: MarkedRange[];
+  loaded: boolean;
+  loadFromServer: () => Promise<void>;
   addRange: (start: Date, end: Date, label?: string, color?: string) => string;
   removeRange: (id: string) => void;
   updateRange: (id: string, updates: Partial<Pick<MarkedRange, "label" | "color">>) => void;
   clearAll: () => void;
   getRangeAt: (date: Date) => MarkedRange | undefined;
-}
-
-// Generate a simple unique ID
-function generateId(): string {
-  return `mr_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
 // Default colors for marked ranges (cycle through these)
@@ -43,78 +40,118 @@ function getNextColor(): string {
   return color;
 }
 
+function parseRange(r: any): MarkedRange {
+  return {
+    id: r.id,
+    start: new Date(r.start),
+    end: new Date(r.end),
+    label: r.label,
+    color: r.color,
+    createdAt: new Date(r.createdAt),
+  };
+}
+
 export const useMarkedRangesStore = create<MarkedRangesState>()(
-  persist(
-    (set, get) => ({
-      ranges: [],
+  (set, get) => ({
+    ranges: [],
+    loaded: false,
 
-      addRange: (start, end, label, color) => {
-        const id = generateId();
-        const newRange: MarkedRange = {
-          id,
-          start,
-          end,
-          label,
-          color: color || getNextColor(),
-          createdAt: new Date(),
-        };
-        set((state) => ({
-          ranges: [...state.ranges, newRange],
-        }));
-        return id;
-      },
+    loadFromServer: async () => {
+      try {
+        const data = await apiClient.get("/data/marked-ranges") as { ranges: any[] };
+        if (data?.ranges) {
+          set({
+            ranges: data.ranges.map(parseRange),
+            loaded: true,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to load marked ranges:", err);
+      }
+    },
 
-      removeRange: (id) => {
-        set((state) => ({
-          ranges: state.ranges.filter((r) => r.id !== id),
-        }));
-      },
+    addRange: (start, end, label, color) => {
+      // Optimistic: generate a temp id and add immediately
+      const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const assignedColor = color || getNextColor();
+      const newRange: MarkedRange = {
+        id: tempId,
+        start,
+        end,
+        label,
+        color: assignedColor,
+        createdAt: new Date(),
+      };
+      set((state) => ({ ranges: [...state.ranges, newRange] }));
 
-      updateRange: (id, updates) => {
+      // Persist to backend, then replace temp id with real id
+      apiClient.post("/data/marked-ranges", {
+        start: start.toISOString(),
+        end: end.toISOString(),
+        label,
+        color: assignedColor,
+      }).then((resp: any) => {
         set((state) => ({
           ranges: state.ranges.map((r) =>
-            r.id === id ? { ...r, ...updates } : r
+            r.id === tempId ? { ...r, id: resp.id } : r
           ),
         }));
-      },
+      }).catch((err) => {
+        console.error("Failed to save marked range:", err);
+        // Revert on failure
+        set((state) => ({ ranges: state.ranges.filter((r) => r.id !== tempId) }));
+      });
 
-      clearAll: () => {
-        set({ ranges: [] });
-      },
+      return tempId;
+    },
 
-      getRangeAt: (date) => {
-        const time = date.getTime();
-        return get().ranges.find(
-          (r) => time >= r.start.getTime() && time <= r.end.getTime()
-        );
-      },
-    }),
-    {
-      name: "mycelia-marked-ranges",
-      // Custom serialization to handle Date objects
-      storage: {
-        getItem: (name) => {
-          const str = localStorage.getItem(name);
-          if (!str) return null;
-          const parsed = JSON.parse(str);
-          // Convert date strings back to Date objects
-          if (parsed.state?.ranges) {
-            parsed.state.ranges = parsed.state.ranges.map((r: any) => ({
-              ...r,
-              start: new Date(r.start),
-              end: new Date(r.end),
-              createdAt: new Date(r.createdAt),
-            }));
-          }
-          return parsed;
-        },
-        setItem: (name, value) => {
-          localStorage.setItem(name, JSON.stringify(value));
-        },
-        removeItem: (name) => {
-          localStorage.removeItem(name);
-        },
-      },
-    }
-  )
+    removeRange: (id) => {
+      const prev = get().ranges;
+      set({ ranges: prev.filter((r) => r.id !== id) });
+
+      if (!id.startsWith("temp_")) {
+        apiClient.delete(`/data/marked-ranges/${id}`).catch((err) => {
+          console.error("Failed to delete marked range:", err);
+          // Revert on failure
+          set({ ranges: prev });
+        });
+      }
+    },
+
+    updateRange: (id, updates) => {
+      const prev = get().ranges;
+      set({
+        ranges: prev.map((r) => (r.id === id ? { ...r, ...updates } : r)),
+      });
+
+      if (!id.startsWith("temp_")) {
+        apiClient.put(`/data/marked-ranges/${id}`, updates).catch((err) => {
+          console.error("Failed to update marked range:", err);
+          // Revert on failure
+          set({ ranges: prev });
+        });
+      }
+    },
+
+    clearAll: () => {
+      const prev = get().ranges;
+      set({ ranges: [] });
+
+      // Delete each from backend
+      for (const r of prev) {
+        if (!r.id.startsWith("temp_")) {
+          apiClient.delete(`/data/marked-ranges/${r.id}`).catch((err) => {
+            console.error("Failed to delete marked range:", err);
+          });
+        }
+      }
+    },
+
+    getRangeAt: (date) => {
+      const time = date.getTime();
+      return get().ranges.find(
+        (r) => time >= r.start.getTime() && time <= r.end.getTime()
+      );
+    },
+  })
 );

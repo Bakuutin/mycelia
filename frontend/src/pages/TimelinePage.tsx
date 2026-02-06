@@ -18,6 +18,7 @@ import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useTimeline } from "@/hooks/useTimeline";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useMarkedRangesStore } from "@/stores/markedRangesStore";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +58,14 @@ const TimelinePage = () => {
   useEffect(() => {
     initSelectionFromURL();
   }, [initSelectionFromURL]);
+
+  // Load marked ranges from server on mount
+  const { loadFromServer: loadMarkedRanges, loaded: markedRangesLoaded } = useMarkedRangesStore();
+  useEffect(() => {
+    if (!markedRangesLoaded) {
+      loadMarkedRanges();
+    }
+  }, [loadMarkedRanges, markedRangesLoaded]);
 
   // Follow playback: edge-trigger mode - recenter when playhead reaches edge
   useEffect(() => {

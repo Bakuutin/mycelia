@@ -24,6 +24,12 @@ import { authJwtLoginHandler } from "@/routes/auth.jwt.login.ts";
 import { wellKnownOauthAuthorizationServerHandler } from "@/routes/[.]well-known.oauth-authorization-server.ts";
 import { wellKnownOauthProtectedResourceHandler } from "@/routes/[.]well-known.oauth-protected-resource.ts";
 import { apiChatHandler } from "@/routes/api.chat.ts";
+import {
+  listMarkedRangesHandler,
+  createMarkedRangeHandler,
+  updateMarkedRangeHandler,
+  deleteMarkedRangeHandler,
+} from "@/routes/data.marked-ranges.ts";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
 
 export function registerRoutes(app: Express): void {
@@ -33,6 +39,10 @@ export function registerRoutes(app: Express): void {
   app.get("/data/audio", dataAudioHandler);
   app.get("/data/audio/items", dataAudioItemsHandler);
   app.get("/data/audio/sources", dataAudioSourcesHandler);
+  app.get("/data/marked-ranges", listMarkedRangesHandler);
+  app.post("/data/marked-ranges", createMarkedRangeHandler);
+  app.put("/data/marked-ranges/:id", updateMarkedRangeHandler);
+  app.delete("/data/marked-ranges/:id", deleteMarkedRangeHandler);
   app.post("/api/resource/:name", asyncHandler(apiResourceHandler));
   app.post("/api/chat", asyncHandler(apiChatHandler));
   app.get("/api/files/:id", apiFilesIdHandler);
