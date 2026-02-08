@@ -37,20 +37,43 @@ export function ObjectTranscriptPanel({ timeRange }: ObjectTranscriptPanelProps)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(true);
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
 
-  const { currentDate, resetDate, setIsPlaying } = useAudioPlayer();
+  // Use selective subscription to avoid re-renders at playback rate
+  const resetDate = useAudioPlayer((s) => s.resetDate);
+  const setIsPlaying = useAudioPlayer((s) => s.setIsPlaying);
   const { timeFormat } = useSettingsStore();
   const currentSegmentRef = useRef<HTMLDivElement>(null);
   const lastScrolledIndex = useRef<number>(-1);
+  const segmentsRef = useRef<RenderSegment[]>([]);
 
-  // Find the index of the currently playing segment
-  const currentSegmentIndex = segments.findIndex(seg =>
-    currentDate &&
-    currentDate >= seg.time &&
-    currentDate < seg.endTime
-  );
+  // Keep segments ref in sync
+  segmentsRef.current = segments;
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Subscribe to currentDate changes without causing re-renders
+  useEffect(() => {
+    if (!syncEnabled) return;
+
+    const unsubscribe = useAudioPlayer.subscribe((state) => {
+      const currentDate = state.currentDate;
+      if (!currentDate) {
+        setCurrentSegmentIndex(-1);
+        return;
+      }
+
+      // Find the current segment
+      const idx = segmentsRef.current.findIndex(
+        (seg) => currentDate >= seg.time && currentDate < seg.endTime
+      );
+
+      // Only update state if index actually changed
+      setCurrentSegmentIndex((prev) => (prev !== idx ? idx : prev));
+    });
+
+    return unsubscribe;
+  }, [syncEnabled]);
 
   // Auto-scroll to current segment within the ScrollArea only (not the page)
   useEffect(() => {
