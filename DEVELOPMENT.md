@@ -200,4 +200,3 @@ mycelia/
 5. Submit a PR
 
 Join the [Discord](https://discord.gg/hPfYbpp2am) for discussions.
-
