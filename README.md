@@ -110,6 +110,7 @@ See **[DEVELOPMENT.md](DEVELOPMENT.md)** for:
 - Native development setup (Deno + Vite)
 - Python tooling (audio import, STT, conversation extraction)
 - GPU inference stack setup
+- Database backup & point-in-time recovery
 - Project structure and contributing guidelines
 
 ## Contributing
