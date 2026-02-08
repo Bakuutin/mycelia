@@ -186,7 +186,7 @@ export default function SetupPage() {
                     type="url"
                     value={localEndpoint}
                     onChange={(e) => setLocalEndpoint(e.target.value)}
-                    placeholder="https://localhost:4433"
+                    placeholder="http://localhost:3210"
                     disabled={isLoading}
                     className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-purple-400 disabled:opacity-50"
                   />

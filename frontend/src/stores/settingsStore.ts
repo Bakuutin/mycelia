@@ -47,7 +47,7 @@ interface SettingsState {
 }
 
 function getDefaultApiEndpoint(): string {
-  return "https://localhost:4433";
+  return "http://localhost:3210";
 }
 
 const DEFAULT_API_ENDPOINT = getDefaultApiEndpoint();
