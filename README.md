@@ -8,38 +8,76 @@ your own words.
 
 📍 Local-first · 🔓 Open-source · 📦 Modular · 🛠 Hackable
 
+## Features
+
+### Audio Ingestion & Processing
+
+- Continuous import from Apple Voice Memos, Google Drive, and local folders.
+- Automated pipeline: VAD → Transcription → Conversation extraction → Summarization.
+- Smart chunking, waveform normalization, and diarization-friendly segments.
+- Whisper transcription via local GPU or any remote OpenAI-compatible server.
+- Audio recording, playback (0.5x–3x speed, volume up to 300%), and WAV export.
+- Pipeline monitoring UI with real-time session tracking and error handling.
+
+### Interactive Timeline
+
+- D3.js-powered multi-track timeline with zoom and pan.
+- Multi-resolution views (5 min, 1 hour, 1 day, 1 week).
+- Transcript-synced audio playback with jump controls.
+- Track visibility controls, object overlays, and event creation from selection.
+- Quick presets (last hour, today, yesterday, this week, and more).
+
+### AI Chat
+
+- Chat with your memory — tool-calling agent with access to all backend resources.
+- Streaming responses, file uploads, and speech input.
+- Chat history with rename and management.
+
+### Object Management
+
+- Create, edit, and browse People, Events, Conversations, Relationships, and Promises.
+- Per-object audio player with transcript sync and segment navigation.
+- LLM summarization with model selection and cost estimation.
+- Summary comparison (side-by-side, star/favorite).
+- Autosave with per-field throttling and version history.
+- Full-text search, category filtering, and relationship graph.
+
+### Background Processing
+
+- BullMQ job queue backed by Redis.
+- Worker management UI with pause/resume, statistics, and success rates.
+- Pipeline ordering and progress tracking.
+- Configurable worker defaults and prompt templates.
+
+### Infrastructure & Auth
+
+- One-command Docker setup (`docker compose up -d`) with backend, frontend, Python worker, MongoDB, and Redis.
+- OAuth 2.0 with PKCE, `.well-known` metadata, JWT login, and API key management.
+- MCP (Model Context Protocol) server endpoint for remote operations and scripting.
+- First-run setup wizard with automatic API key creation and inference provider configuration.
+- OpenTelemetry observability (optional).
+- Feature flags, access logging, and server configuration UI.
+
+### Integrations
+
+- Messenger platform import (Telegram, Signal).
+- LLM provider configuration with model aliases (small / medium / large).
+- OpenAI-compatible API endpoints (`/v1/audio/transcriptions`, `/llm/chat/completions`).
+- MongoDB full-text search alongside GridFS-backed storage.
+
 ## Roadmap
 
-**Ready now**
+**In progress**
 
-- ✅ Continuous audio ingestion from Apple Voice Memos, Google Drive, and local libraries.
-- ✅ Automated pipeline: Speech detection (VAD) and Transcription trigger automatically.
-- ✅ Smart chunking, diarization-friendly VAD, and waveform normalization for aligned segments.
-- ✅ Speech detection plus Whisper transcription via local or remote servers.
-- ✅ Timeline UI with transcript-synced playback, jump controls, and search overlays.
-- ✅ Modular resource-based backend for pluggable processors, storage, or prompts.
-- ✅ MCP + CLI automation for remote operations and scripting.
-- ✅ OAuth2 flows with `.well-known` metadata, JWT login, and token issuance.
-- ✅ LLM summarizations and conversation extraction across the stack.
-- ✅ MongoDB full-text search alongside GridFS-backed storage.
-- ✅ Structured logging and observability for ingestion, STT, and LLM jobs.
-- ✅ First-run setup wizard with automatic API key creation and inference provider configuration.
+- Friend-Lite companion app + advanced backend (`friend/`) wiring semantic memories and wearable capture back into Mycelia.
+- GPU diarization stack replacing the current batch-only flow (`diarizator/` Helm charts + WebUI).
+- Semantic search + vector memory integration connecting Qdrant-backed pipelines and the OpenMemory MCP bridges into the main timeline.
 
-**In Progress**
+**Planned**
 
-- 🚧 Chat with your memory via the Friend-Lite companion app + advanced backend (`friend/`) that is wiring semantic memories and wearable capture back into Mycelia.
-- 🚧 Streaming ingestion & GPU diarization stack replacing the current batch-only flow (`python/diarization_worker.py`, `diarizator/` Helm charts + WebUI).
-- 🚧 Multi-device & multi-modal capture (health, geolocation, photos, sensors) prototyped across `friend/extras/` and `friend/Docs/features.md`.
-- 🚧 Semantic search + vector memory integration that connects the Qdrant-backed pipelines in `friend/backends/advanced/` and the OpenMemory MCP bridges into the main timeline.
-
-**Planned / Up Next**
-
-- 🧭 Unified dockerized stack with auto-initialization scripts so `docker compose up` brings up backend, frontend, and Python services (Phase 0 in `docs/DX_ROADMAP.md` & `docs/TASK_BREAKDOWN.md`).
-- 🧭 Invite flow and sample data path outlined in `docs/ONBOARDING_FLOW.md` (Phase 1).
-- 🧭 Remote GPU support and connection testing UI (Phase 2 in `docs/DX_ROADMAP.md`/`docs/TASK_BREAKDOWN.md`).
-- 🧭 LLM provider + model management, aliasing, quotas, and a model selection wiki (Phase 3 plus `docs/PROCESSING_AND_ARTIFACTS.md` + `docs/DX_ROADMAP.md`).
-- 🧭 Privacy + usage dashboards, token metering, and formal privacy policy with export/acceptance flows (Phase 4 roadmap).
-- 🧭 Processing/artifact templates, batch operations, sharing, and backup/export automation (Phases 5–6; see `docs/PROCESSING_AND_ARTIFACTS.md`).
+- Multi-device & multi-modal capture (health, geolocation, photos, sensors).
+- Privacy + usage dashboards, token metering, and export flows.
+- Processing / artifact templates, batch operations, and backup automation.
 
 
 ## 🚀 Quick Start
