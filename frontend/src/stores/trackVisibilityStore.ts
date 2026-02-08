@@ -9,6 +9,7 @@ const DEFAULT_VISIBLE_TRACKS: TrackId[] = [
   "audio-chunks",
   "diarizations",
   "objects",
+  "audio-sources",
 ];
 
 const DEFAULT_HEIGHTS: Record<TrackId, number> = {
@@ -18,6 +19,7 @@ const DEFAULT_HEIGHTS: Record<TrackId, number> = {
   "audio-chunks": 40,
   "diarizations": 40,
   "objects": 120,
+  "audio-sources": 48,
 };
 
 const ALL_OBJECT_CATEGORIES: ObjectCategory[] = [

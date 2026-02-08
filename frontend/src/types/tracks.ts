@@ -7,7 +7,8 @@ export type TrackId =
   | "transcriptions"
   | "audio-chunks"
   | "diarizations"
-  | "objects";
+  | "objects"
+  | "audio-sources";
 
 // Object categories for timeline grouping
 export type ObjectCategory = "person" | "event" | "relationship" | "promise" | "other";

@@ -10,12 +10,48 @@ export interface AudioSource {
 }
 
 /**
+ * Auto-collapse sources with identical labels (e.g., same microphone).
+ * Merges them into a single source with combined stats.
+ */
+function collapseSourcesByLabel(sources: AudioSource[]): AudioSource[] {
+  if (sources.length <= 1) return sources;
+
+  // Group by label
+  const byLabel = new Map<string, AudioSource[]>();
+  for (const source of sources) {
+    const existing = byLabel.get(source.label) || [];
+    existing.push(source);
+    byLabel.set(source.label, existing);
+  }
+
+  // Merge sources with same label
+  const result: AudioSource[] = [];
+  for (const [label, group] of byLabel) {
+    if (group.length === 1) {
+      result.push(group[0]);
+    } else {
+      // Merge multiple sources with same label
+      result.push({
+        originalId: group[0].originalId, // Use first source's ID for selection
+        label: `${label} (${group.length} merged)`,
+        count: group.reduce((sum, s) => sum + s.count, 0),
+        firstChunk: new Date(Math.min(...group.map(s => s.firstChunk.getTime()))),
+        lastChunk: new Date(Math.max(...group.map(s => s.lastChunk.getTime()))),
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
  * Fetch distinct audio sources for a time range.
  * Re-fetches when start/end change (debounced).
  */
 export function useAudioSources(start: Date, end: Date) {
   const [sources, setSources] = useState<AudioSource[]>([]);
   const [loading, setLoading] = useState(false);
+  const [skippedWideRange, setSkippedWideRange] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -35,13 +71,13 @@ export function useAudioSources(start: Date, end: Date) {
 
         const data = resp as { sources: any[] };
         if (data?.sources) {
-          setSources(
-            data.sources.map((s: any) => ({
-              ...s,
-              firstChunk: new Date(s.firstChunk),
-              lastChunk: new Date(s.lastChunk),
-            }))
-          );
+          const parsed = data.sources.map((s: any) => ({
+            ...s,
+            firstChunk: new Date(s.firstChunk),
+            lastChunk: new Date(s.lastChunk),
+          }));
+          // Auto-collapse sources with identical labels (same microphone)
+          setSources(collapseSourcesByLabel(parsed));
         }
       } catch (err) {
         if (!controller.signal.aborted) {
@@ -57,8 +93,10 @@ export function useAudioSources(start: Date, end: Date) {
     // Skip fetch for very wide ranges (>90 days) - aggregation too slow
     if (rangeMs > 90 * 24 * 60 * 60 * 1000) {
       setSources([]);
+      setSkippedWideRange(true);
       return;
     }
+    setSkippedWideRange(false);
     const debounceMs = rangeMs > 7 * 24 * 60 * 60 * 1000 ? 800 : 400;
     const timer = setTimeout(fetchSources, debounceMs);
     return () => {
@@ -67,5 +105,5 @@ export function useAudioSources(start: Date, end: Date) {
     };
   }, [start.getTime(), end.getTime()]);
 
-  return { sources, loading };
+  return { sources, loading, skippedWideRange };
 }

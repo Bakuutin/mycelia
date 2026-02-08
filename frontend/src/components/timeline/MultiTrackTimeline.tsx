@@ -52,6 +52,7 @@ const TRACK_CONFIGS: Record<TrackId, { label: string; color: string }> = {
   "audio-chunks": AUDIO_CHUNKS_CONFIG,
   "diarizations": DIARIZATIONS_CONFIG,
   "objects": { label: "Objects", color: "#6b7280" },
+  "audio-sources": { label: "Audio Sources", color: "#0ea5e9" },
 };
 
 // Stable list of histogram track IDs
@@ -161,12 +162,14 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           />
         </div>
 
-        {/* Audio sources track (only shows when multiple sources exist) */}
-        <AudioSourcesTrack
-          scale={timeScale}
-          transform={transform}
-          width={width}
-        />
+        {/* Audio sources track (only shows when multiple sources exist and visible) */}
+        {visibleTracks.includes("audio-sources") && (
+          <AudioSourcesTrack
+            scale={timeScale}
+            transform={transform}
+            width={width}
+          />
+        )}
 
         {/* Data tracks */}
         {visibleHistogramTracks.map((trackId) => {

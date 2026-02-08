@@ -22,6 +22,51 @@ const COLORS = [
   "hsl(47, 96%, 53%)",  // yellow
 ];
 
+interface PackedSource {
+  source: AudioSource;
+  lane: number;
+  colorIndex: number;
+}
+
+/**
+ * Pack sources into minimal lanes using greedy algorithm.
+ * Sources that overlap in time share lanes only if they don't overlap.
+ */
+function packSourcesIntoLanes(sources: AudioSource[]): { packed: PackedSource[]; maxLanes: number } {
+  if (sources.length === 0) return { packed: [], maxLanes: 0 };
+
+  // Sort by firstChunk time
+  const sorted = [...sources].sort((a, b) =>
+    a.firstChunk.getTime() - b.firstChunk.getTime()
+  );
+
+  // Track end time of each lane
+  const laneEnds: number[] = [];
+  const packed: PackedSource[] = [];
+
+  for (let i = 0; i < sorted.length; i++) {
+    const source = sorted[i];
+    const startTime = source.firstChunk.getTime();
+
+    // Find first lane where this source doesn't overlap
+    let lane = 0;
+    while (lane < laneEnds.length && laneEnds[lane] > startTime) {
+      lane++;
+    }
+
+    // Update or create lane end time
+    if (lane === laneEnds.length) {
+      laneEnds.push(source.lastChunk.getTime());
+    } else {
+      laneEnds[lane] = source.lastChunk.getTime();
+    }
+
+    packed.push({ source, lane, colorIndex: i });
+  }
+
+  return { packed, maxLanes: laneEnds.length };
+}
+
 /**
  * AudioSourcesTrack - Shows distinct audio sources as horizontal lanes.
  * Click a source to filter playback to that source.
@@ -32,7 +77,7 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
   width,
 }: AudioSourcesTrackProps) {
   const { start, end } = useTimelineRange();
-  const { sources, loading } = useAudioSources(start, end);
+  const { sources, loading, skippedWideRange } = useAudioSources(start, end);
   const originalId = useAudioPlayer((s) => s.originalId);
   const setOriginalId = useAudioPlayer((s) => s.setOriginalId);
   const resetDate = useAudioPlayer((s) => s.resetDate);
@@ -61,11 +106,28 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
     [originalId, setOriginalId, resetDate, setIsPlaying]
   );
 
+  // Pack sources into minimal lanes (must be before conditional return for hook rules)
+  const { packed, maxLanes } = useMemo(
+    (): { packed: PackedSource[]; maxLanes: number } => packSourcesIntoLanes(sources),
+    [sources]
+  );
+
+  // Show message when range is too wide
+  if (skippedWideRange) {
+    return (
+      <div className="relative h-6 flex items-center" data-no-seek>
+        <div className="track-header px-2 py-0.5 text-xs text-muted-foreground">
+          Audio Sources — zoom in to view (range &gt;90 days)
+        </div>
+      </div>
+    );
+  }
+
   if (sources.length <= 1 && !loading) {
     return null; // Don't show if there's 0 or 1 source
   }
 
-  const height = sources.length * LANE_HEIGHT + 4;
+  const height = maxLanes * LANE_HEIGHT + 4;
 
   return (
     <div className="relative" style={{ height }} data-no-seek>
@@ -79,13 +141,13 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
 
       {/* Source lanes */}
       <svg width={width} height={height} className="w-full">
-        {sources.map((source, idx) => {
-          const y = idx * LANE_HEIGHT + 2;
+        {packed.map(({ source, lane, colorIndex }) => {
+          const y = lane * LANE_HEIGHT + 2;
           const x1 = rescaledScale(source.firstChunk);
           const x2 = rescaledScale(source.lastChunk);
           const barX = Math.max(0, Math.min(x1, width));
           const barW = Math.max(4, Math.min(x2, width) - barX);
-          const color = COLORS[idx % COLORS.length];
+          const color = COLORS[colorIndex % COLORS.length];
           const isSelected = originalId === source.originalId;
           const isOtherSelected = originalId !== null && !isSelected;
 
