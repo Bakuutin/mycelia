@@ -77,7 +77,12 @@ export function useAudioSources(start: Date, end: Date) {
             lastChunk: new Date(s.lastChunk),
           }));
           // Auto-collapse sources with identical labels (same microphone)
-          setSources(collapseSourcesByLabel(parsed));
+          const collapsed = collapseSourcesByLabel(parsed);
+          // Limit to max 30 sources for performance (sorted by count, keep most active)
+          const limited = collapsed.length > 30
+            ? collapsed.sort((a, b) => b.count - a.count).slice(0, 30)
+            : collapsed;
+          setSources(limited);
         }
       } catch (err) {
         if (!controller.signal.aborted) {
@@ -90,8 +95,8 @@ export function useAudioSources(start: Date, end: Date) {
 
     // Debounce: longer delay for wider ranges (aggregation is heavier)
     const rangeMs = end.getTime() - start.getTime();
-    // Skip fetch for very wide ranges (>90 days) - aggregation too slow
-    if (rangeMs > 90 * 24 * 60 * 60 * 1000) {
+    // Skip fetch for wide ranges (>30 days) - aggregation is slow
+    if (rangeMs > 30 * 24 * 60 * 60 * 1000) {
       setSources([]);
       setSkippedWideRange(true);
       return;

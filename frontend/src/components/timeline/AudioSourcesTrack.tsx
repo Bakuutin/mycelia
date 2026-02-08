@@ -117,7 +117,7 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
     return (
       <div className="relative h-6 flex items-center" data-no-seek>
         <div className="track-header px-2 py-0.5 text-xs text-muted-foreground">
-          Audio Sources — zoom in to view (range &gt;90 days)
+          Audio Sources — zoom in to view (range &gt;30 days)
         </div>
       </div>
     );
@@ -139,17 +139,24 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
         Audio Sources ({sources.length})
       </div>
 
-      {/* Source lanes */}
+      {/* Source lanes - with viewport culling for performance */}
       <svg width={width} height={height} className="w-full">
         {packed.map(({ source, lane, colorIndex }) => {
-          const y = lane * LANE_HEIGHT + 2;
           const x1 = rescaledScale(source.firstChunk);
           const x2 = rescaledScale(source.lastChunk);
-          const barX = Math.max(0, Math.min(x1, width));
+
+          // Viewport culling: skip sources completely outside visible area
+          if (x2 < 0 || x1 > width) return null;
+
+          const y = lane * LANE_HEIGHT + 2;
+          const barX = Math.max(0, x1);
           const barW = Math.max(4, Math.min(x2, width) - barX);
           const color = COLORS[colorIndex % COLORS.length];
           const isSelected = originalId === source.originalId;
           const isOtherSelected = originalId !== null && !isSelected;
+
+          // Only show label if bar is wide enough (performance optimization)
+          const showLabel = barW > 40;
 
           return (
             <g
@@ -186,28 +193,30 @@ export const AudioSourcesTrack = memo(function AudioSourcesTrack({
                 />
               )}
 
-              {/* Label */}
-              <foreignObject
-                x={barX + 4}
-                y={y}
-                width={Math.max(barW - 8, 60)}
-                height={LANE_HEIGHT - 2}
-              >
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 h-full text-xs truncate",
-                    isSelected ? "font-semibold text-foreground" : "text-muted-foreground",
-                    isOtherSelected && "opacity-50"
-                  )}
+              {/* Label - only render if bar is wide enough */}
+              {showLabel && (
+                <foreignObject
+                  x={barX + 4}
+                  y={y}
+                  width={barW - 8}
+                  height={LANE_HEIGHT - 2}
                 >
-                  <span
-                    className="w-2 h-2 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: color }}
-                  />
-                  <span className="truncate">{source.label}</span>
-                  <span className="text-[10px] opacity-60">({source.count})</span>
-                </div>
-              </foreignObject>
+                  <div
+                    className={cn(
+                      "flex items-center gap-1.5 h-full text-xs truncate",
+                      isSelected ? "font-semibold text-foreground" : "text-muted-foreground",
+                      isOtherSelected && "opacity-50"
+                    )}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: color }}
+                    />
+                    <span className="truncate">{source.label}</span>
+                    <span className="text-[10px] opacity-60">({source.count})</span>
+                  </div>
+                </foreignObject>
+              )}
             </g>
           );
         })}

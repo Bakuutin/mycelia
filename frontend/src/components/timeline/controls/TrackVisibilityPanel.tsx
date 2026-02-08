@@ -65,9 +65,19 @@ export function TrackVisibilityPanel() {
     }
   };
 
-  // Include objects track in the list
+  // Include objects and audio-sources tracks in the list
   const allTracks = [
     ...TRACK_REGISTRY,
+    {
+      config: {
+        id: "audio-sources" as const,
+        label: "Audio Sources",
+        description: "Distinct audio sources/microphones",
+        defaultVisible: true,
+        defaultHeight: 48,
+        color: "#0ea5e9",
+      },
+    },
     {
       config: {
         id: "objects" as const,
