@@ -121,9 +121,28 @@ services:
     restart: always
 
 
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6380:6379"
+      - "3000:3000"
+    environment:
+    #   - FALKORDB_PASSWORD=${FALKORDB_PASSWORD:-}
+      - BROWSER=${FALKORDB_BROWSER:-1}  # Enable FalkorDB Browser UI (set to 0 to disable)
+    volumes:
+      - falkordb_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 
 volumes:
   redis_data:
   mongo_data:
   mongo_search_data:
   worker_data:
+  falkordb_data:
+  mcp_logs:
