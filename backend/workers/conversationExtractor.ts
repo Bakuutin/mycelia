@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
  * 
  * This worker is responsible for extracting conversations from transcriptions and creating conversation objects.
  * It uses a LLM to segment the transcriptions into conversations and then extracts metadata from each conversation.
- * It then creates a conversation object for each conversation and enqueues a summarization job for each conversation.
+ * It then creates a conversation object for each conversation.
  */
 
 // ============================================================================
@@ -46,6 +46,13 @@ interface ConversationMetadata {
   agreed_upon_something: boolean;
   entities: string[];
   emoji: string | undefined;
+}
+
+interface ConversationError {
+  type: string;
+  message: string;
+  conversationId?: string;
+  entity?: string;
 }
 
 interface ConversationChunk {
@@ -188,6 +195,7 @@ async function callLLMStructured<T>(
   llm: (input: any) => Promise<any>,
   model: string,
   messages: Array<{ role: string; content: string }>,
+  responseFormat: { type: "json_object" } | { type: "json_schema"; json_schema: any },
   parseResponse: (content: string) => T,
   logContext?: string,
 ): Promise<T> {
@@ -195,7 +203,7 @@ async function callLLMStructured<T>(
     action: "completions",
     model,
     messages,
-    response_format: { type: "json_object" },
+    response_format: responseFormat,
   });
 
   const content = response.choices[0]?.message?.content;
@@ -230,6 +238,28 @@ async function callLLMStructured<T>(
     console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: retry response: ${retryContent.slice(0, 300)}`);
     return parseResponse(retryContent);
   }
+}
+
+function buildSegmentationMessages(input: ConversationExtractorJobData, prompt: string) {
+  const messages: Array<{ role: string; content: string }> = [
+    { role: "system", content: input.segmentation_system_prompt },
+    { role: "user", content: prompt },
+  ];
+  if (input.segmentation_guidance_prompt) {
+    messages.push({ role: "assistant", content: input.segmentation_guidance_prompt });
+  }
+  return messages;
+}
+
+function buildMetadataMessages(input: ConversationExtractorJobData, prompt: string) {
+  const messages: Array<{ role: string; content: string }> = [
+    { role: "system", content: input.extraction_system_prompt },
+    { role: "user", content: prompt },
+  ];
+  if (input.extraction_guidance_prompt) {
+    messages.push({ role: "assistant", content: input.extraction_guidance_prompt });
+  }
+  return messages;
 }
 
 function stripMarkdownCodeBlock(content: string): string {
@@ -457,6 +487,12 @@ function parseMetadataResponse(content: string): ConversationMetadata {
   };
 }
 
+const metadataResponseSchema = z.object({
+  agreed_upon_something: z.boolean().optional(),
+  entities: z.array(z.string()).optional(),
+  emoji: z.string().optional(),
+});
+
 // ============================================================================
 // Entity Operations
 // ============================================================================
@@ -492,6 +528,39 @@ async function findOrCreateEntity(
 
   entityCache.set(name, result.insertedId);
   return result.insertedId;
+}
+
+async function createEntityRelationships(
+  objects: (input: any) => Promise<any>,
+  conversationId: ObjectId,
+  entityNames: string[],
+  errors: ConversationError[],
+): Promise<void> {
+  for (const entityName of entityNames) {
+    try {
+      const entityId = await findOrCreateEntity(objects, entityName);
+      await objects({
+        action: "create",
+        object: {
+          isRelationship: true,
+          name: "mentioned in",
+          relationship: {
+            subject: conversationId,
+            object: entityId,
+            symmetrical: false,
+          },
+        },
+      });
+    } catch (error) {
+      console.error(`Failed to create entity relationship for "${entityName}":`, error);
+      errors.push({
+        type: "entity_relationship",
+        message: error instanceof Error ? error.message : String(error),
+        conversationId: conversationId.toString(),
+        entity: entityName,
+      });
+    }
+  }
 }
 
 // ============================================================================
@@ -549,6 +618,290 @@ async function deleteConversationsInRange(
   return conversations.length;
 }
 
+async function processChunk(params: {
+  chunk: ConversationChunk;
+  input: ConversationExtractorJobData;
+  mongo: (input: any) => Promise<any>;
+  objects: (input: any) => Promise<any>;
+  llm: (input: any) => Promise<any>;
+  job: any;
+  promptVersion: string;
+  processingTimeoutMs: number;
+  chunksProcessed: number;
+  errors: ConversationError[];
+}): Promise<{ claimed: boolean; conversationsCreated: number; segmentsFound: number }> {
+  const {
+    chunk,
+    input,
+    mongo,
+    objects,
+    llm,
+    job,
+    promptVersion,
+    processingTimeoutMs,
+    chunksProcessed,
+    errors,
+  } = params;
+
+  try {
+    // Claim chunk for processing (atomic)
+    const updateResult = await mongo({
+      action: "updateOne",
+      collection: "conversation_chunks",
+      query: {
+        _id: chunk._id,
+        $or: [
+          { state: "ready" },
+          {
+            state: "processing",
+            processingStartedAt: { $lt: new Date(Date.now() - processingTimeoutMs) },
+          },
+        ],
+      },
+      update: {
+        $set: {
+          state: "processing",
+          processingStartedAt: new Date(),
+          processedByJobId: job.id,
+        },
+      },
+    }) as { modifiedCount: number };
+
+    if (updateResult.modifiedCount === 0) {
+      // Another worker claimed it
+      return { claimed: false, conversationsCreated: 0, segmentsFound: 0 };
+    }
+
+    await job.updateProgress({
+      stage: "processing_chunk",
+      chunkId: chunk._id.toString(),
+      chunksProcessed,
+    });
+
+    // Check extraction idempotency
+    const extractionKey = generateExtractionKey(
+      chunk._id.toString(),
+      promptVersion,
+      chunk.params.model,
+      input.extractorVersion,
+    );
+
+    // Fetch transcriptions
+    const transcriptions = await mongo({
+      action: "find",
+      collection: "transcriptions",
+      query: { _id: { $in: chunk.transcriptionIds } },
+      options: { sort: { start: 1 } },
+    }) as Array<{
+      start: Date;
+      end: Date;
+      segments?: Array<{ text: string }>;
+    }>;
+
+    if (!transcriptions || transcriptions.length === 0) {
+      console.log(`[ConvExtractor] Chunk ${chunk._id}: NO transcriptions found for IDs: ${chunk.transcriptionIds.map(id => id.toString()).join(", ")}`);
+      await mongo({
+        action: "updateOne",
+        collection: "conversation_chunks",
+        query: { _id: chunk._id },
+        update: { $set: { state: "empty", error: "No transcriptions found" } },
+      });
+      return { claimed: true, conversationsCreated: 0, segmentsFound: 0 };
+    }
+
+    // Convert to utterances
+    const utterances: Utterance[] = transcriptions.map((t: any) => ({
+      start: new Date(t.start),
+      end: new Date(t.end),
+      text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
+    }));
+
+    console.log(`[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`);
+    const totalTextLen = utterances.reduce((sum, u) => sum + u.text.length, 0);
+    console.log(`[ConvExtractor] Chunk ${chunk._id}: total text length = ${totalTextLen} chars`);
+    if (utterances.length > 0) {
+      console.log(`[ConvExtractor] Chunk ${chunk._id}: time range ${utterances[0].start.toISOString()} to ${utterances[utterances.length - 1].end.toISOString()}`);
+    }
+
+    // Delete existing if force
+    if (chunk.params.force) {
+      await deleteConversationsInRange(objects, mongo, chunk.start, chunk.end);
+    }
+
+    // Format prompt
+    const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(utterances);
+    console.log(`[ConvExtractor] Chunk ${chunk._id}: prompt length = ${prompt.length} chars`);
+
+    await job.updateProgress({
+      stage: "segmenting",
+      chunkId: chunk._id.toString(),
+    });
+
+    // LLM Call #1: Segmentation
+    console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
+    const promptLines = prompt.split("\n");
+    const segmentationMessages = buildSegmentationMessages(input, prompt);
+    const segments = await callLLMStructured(
+      llm,
+      chunk.params.model,
+      segmentationMessages,
+      {
+        type: "json_schema",
+        json_schema: z.object({
+          segments: z.array(z.object({
+            title: z.string(),
+            start: z.string(),
+            end: z.string(),
+          })),
+        }).toJSONSchema(),
+      },
+      createSegmentParser(promptLines, chunkStart, chunkEnd),
+      `Chunk ${chunk._id} segmentation`,
+    );
+    console.log(`[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`);
+    for (const seg of segments) {
+      console.log(`[ConvExtractor]   - "${seg.title}" ${seg.start.toISOString()} to ${seg.end.toISOString()}`);
+    }
+
+    // Clip and filter segments
+    const clippedSegments = segments.map(s => clipSegmentTimes(s, chunkStart, chunkEnd));
+    const segmentsWithUtterances = filterSegmentsWithUtterances(clippedSegments, utterances);
+    console.log(`[ConvExtractor] Chunk ${chunk._id}: after filtering, ${segmentsWithUtterances.length} segments have utterances`);
+
+    if (segmentsWithUtterances.length === 0) {
+      console.log(`[ConvExtractor] Chunk ${chunk._id}: NO segments with utterances - marking as empty`);
+      await mongo({
+        action: "updateOne",
+        collection: "conversation_chunks",
+        query: { _id: chunk._id },
+        update: {
+          $set: {
+            state: "empty",
+            segmentsFound: 0,
+            conversationsCreated: 0,
+            extractionKey,
+          },
+        },
+      });
+      return { claimed: true, conversationsCreated: 0, segmentsFound: 0 };
+    }
+
+    // Process each segment
+    let chunkConversations = 0;
+
+    for (let i = 0; i < segmentsWithUtterances.length; i++) {
+      const { segment, utterances: segUtterances } = segmentsWithUtterances[i];
+
+      await job.updateProgress({
+        stage: "extracting_metadata",
+        chunkId: chunk._id.toString(),
+        segment: i + 1,
+        totalSegments: segmentsWithUtterances.length,
+      });
+
+      // Format segment prompt
+      const { prompt: segPrompt } = formatChunkAsPrompt(segUtterances);
+
+      // LLM Call #2: Metadata extraction (entities, emoji, agreed_upon_something)
+      const messages = buildMetadataMessages(input, segPrompt);
+
+      const metadata = await callLLMStructured(
+        llm,
+        chunk.params.model,
+        messages,
+        {
+          type: "json_schema",
+          json_schema: metadataResponseSchema.toJSONSchema(),
+        },
+        parseMetadataResponse,
+        `Chunk ${chunk._id} segment ${i + 1}/${segmentsWithUtterances.length} metadata`,
+      );
+      console.log(`[ConvExtractor] Chunk ${chunk._id} segment ${i + 1}: metadata extracted - entities=${metadata.entities.length}, emoji=${metadata.emoji ?? "none"}, agreed=${metadata.agreed_upon_something}`);
+
+      // Create conversation object (without summary - will be generated separately)
+      // Validate required fields before creating
+      if (segment.title == null || typeof segment.title !== "string" || segment.title.trim().length === 0) {
+        throw new Error(`Invalid segment title: ${JSON.stringify(segment.title)}`);
+      }
+
+      const conversationObject: Record<string, any> = {
+        isConversation: true,
+        name: segment.title.trim(),
+        agreed_upon_something: metadata.agreed_upon_something,
+        timeRanges: [{
+          start: segment.start.toISOString(),
+          end: segment.end.toISOString(),
+        }],
+        metadata: {
+          extractedWith: {
+            model: chunk.params.model,
+            extractorVersion: input.extractorVersion,
+            chunkId: chunk._id.toString(),
+            timestamp: new Date().toISOString(),
+          },
+        },
+      };
+
+      // Only set icon if emoji was extracted
+      if (metadata.emoji) {
+        conversationObject.icon = { text: metadata.emoji };
+      }
+
+      const convResult = await objects({
+        action: "create",
+        object: conversationObject,
+      }) as { insertedId: ObjectId };
+
+      const conversationId = convResult.insertedId;
+      console.log(`[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`);
+
+      await createEntityRelationships(objects, conversationId, metadata.entities, errors);
+
+      chunkConversations++;
+    }
+
+    // Mark chunk completed
+    await mongo({
+      action: "updateOne",
+      collection: "conversation_chunks",
+      query: { _id: chunk._id },
+      update: {
+        $set: {
+          state: "completed",
+          segmentsFound: segmentsWithUtterances.length,
+          conversationsCreated: chunkConversations,
+          extractionKey,
+        },
+        $unset: { processingStartedAt: "" },
+      },
+    });
+
+    return {
+      claimed: true,
+      conversationsCreated: chunkConversations,
+      segmentsFound: segmentsWithUtterances.length,
+    };
+  } catch (error) {
+    console.error(`Failed to process chunk ${chunk._id}:`, error);
+
+    await mongo({
+      action: "updateOne",
+      collection: "conversation_chunks",
+      query: { _id: chunk._id },
+      update: {
+        $set: {
+          state: "error",
+          error: error instanceof Error ? error.message : String(error),
+        },
+        $unset: { processingStartedAt: "" },
+      },
+    });
+
+    // Re-throw to fail the job - chunk state is saved, job can be retried
+    throw error;
+  }
+}
+
 // ============================================================================
 // Main Worker
 // ============================================================================
@@ -577,7 +930,6 @@ const capability: JobCapability = {
     { resource: "db/prompts", action: "read", effect: "allow" },
     { resource: "objects", action: "*", effect: "allow" },
     { resource: "llm/chat", action: "completions", effect: "allow" },
-    { resource: "jobs/summarization", action: "enqueue", effect: "allow" },
   ],
   maxConcurrency: 1,
   use: async (job) => {
@@ -588,7 +940,6 @@ const capability: JobCapability = {
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
     const objects = (input: any) => callResource("objects", input, { jwt, myceliaUrl });
     const llm = (input: any) => callResource("llm", input, { jwt, myceliaUrl });
-    const jobs = (input: any) => callResource("jobs", input, { jwt, myceliaUrl });
 
     // Processing timeout (10 minutes)
     const processingTimeoutMs = 10 * 60 * 1000;
@@ -646,7 +997,7 @@ const capability: JobCapability = {
 
     let conversationsCreated = 0;
     let chunksProcessed = 0;
-    const errors: Array<{ type: string; message: string; conversationId?: string; entity?: string }> = [];
+    const errors: ConversationError[] = [];
 
     // Compute prompt version for idempotency (based on prompts that affect output)
     const promptVersion = createHash("sha256")
@@ -655,310 +1006,25 @@ const capability: JobCapability = {
       .slice(0, 8);
 
     for (const chunk of chunksToProcess) {
-      try {
-        // Claim chunk for processing (atomic)
-        const updateResult = await mongo({
-          action: "updateOne",
-          collection: "conversation_chunks",
-          query: {
-            _id: chunk._id,
-            $or: [
-              { state: "ready" },
-              {
-                state: "processing",
-                processingStartedAt: { $lt: new Date(Date.now() - processingTimeoutMs) },
-              },
-            ],
-          },
-          update: {
-            $set: {
-              state: "processing",
-              processingStartedAt: new Date(),
-              processedByJobId: job.id,
-            },
-          },
-        }) as { modifiedCount: number };
+      const result = await processChunk({
+        chunk,
+        input,
+        mongo,
+        objects,
+        llm,
+        job,
+        promptVersion,
+        processingTimeoutMs,
+        chunksProcessed,
+        errors,
+      });
 
-        if (updateResult.modifiedCount === 0) {
-          // Another worker claimed it
-          continue;
-        }
-
-        await job.updateProgress({
-          stage: "processing_chunk",
-          chunkId: chunk._id.toString(),
-          chunksProcessed,
-        });
-
-        // Check extraction idempotency
-        const extractionKey = generateExtractionKey(
-          chunk._id.toString(),
-          promptVersion,
-          chunk.params.model,
-          input.extractorVersion,
-        );
-
-        // Fetch transcriptions
-        const transcriptions = await mongo({
-          action: "find",
-          collection: "transcriptions",
-          query: { _id: { $in: chunk.transcriptionIds } },
-          options: { sort: { start: 1 } },
-        }) as Array<{
-          start: Date;
-          end: Date;
-          segments?: Array<{ text: string }>;
-        }>;
-
-        if (!transcriptions || transcriptions.length === 0) {
-          console.log(`[ConvExtractor] Chunk ${chunk._id}: NO transcriptions found for IDs: ${chunk.transcriptionIds.map(id => id.toString()).join(', ')}`);
-          await mongo({
-            action: "updateOne",
-            collection: "conversation_chunks",
-            query: { _id: chunk._id },
-            update: { $set: { state: "empty", error: "No transcriptions found" } },
-          });
-          chunksProcessed++;
-          continue;
-        }
-
-        // Convert to utterances
-        const utterances: Utterance[] = transcriptions.map((t: any) => ({
-          start: new Date(t.start),
-          end: new Date(t.end),
-          text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
-        }));
-
-        console.log(`[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`);
-        const totalTextLen = utterances.reduce((sum, u) => sum + u.text.length, 0);
-        console.log(`[ConvExtractor] Chunk ${chunk._id}: total text length = ${totalTextLen} chars`);
-        if (utterances.length > 0) {
-          console.log(`[ConvExtractor] Chunk ${chunk._id}: time range ${utterances[0].start.toISOString()} to ${utterances[utterances.length - 1].end.toISOString()}`);
-        }
-
-        // Delete existing if force
-        if (chunk.params.force) {
-          await deleteConversationsInRange(objects, mongo, chunk.start, chunk.end);
-        }
-
-        // Format prompt
-        const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(utterances);
-        console.log(`[ConvExtractor] Chunk ${chunk._id}: prompt length = ${prompt.length} chars`);
-
-        await job.updateProgress({
-          stage: "segmenting",
-          chunkId: chunk._id.toString(),
-        });
-
-        // LLM Call #1: Segmentation
-        console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
-        const promptLines = prompt.split('\n');
-        const segmentationMessages: Array<{ role: string; content: string }> = [
-          { role: "system", content: input.segmentation_system_prompt },
-          { role: "user", content: prompt },
-        ];
-        if (input.segmentation_guidance_prompt) {
-          segmentationMessages.push({ role: "assistant", content: input.segmentation_guidance_prompt });
-        }
-        const segments = await callLLMStructured(
-          llm,
-          chunk.params.model,
-          segmentationMessages,
-          createSegmentParser(promptLines, chunkStart, chunkEnd),
-          `Chunk ${chunk._id} segmentation`,
-        );
-        console.log(`[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`);
-        for (const seg of segments) {
-          console.log(`[ConvExtractor]   - "${seg.title}" ${seg.start.toISOString()} to ${seg.end.toISOString()}`);
-        }
-
-        // Clip and filter segments
-        const clippedSegments = segments.map(s => clipSegmentTimes(s, chunkStart, chunkEnd));
-        const segmentsWithUtterances = filterSegmentsWithUtterances(clippedSegments, utterances);
-        console.log(`[ConvExtractor] Chunk ${chunk._id}: after filtering, ${segmentsWithUtterances.length} segments have utterances`);
-
-        if (segmentsWithUtterances.length === 0) {
-          console.log(`[ConvExtractor] Chunk ${chunk._id}: NO segments with utterances - marking as empty`);
-          await mongo({
-            action: "updateOne",
-            collection: "conversation_chunks",
-            query: { _id: chunk._id },
-            update: {
-              $set: {
-                state: "empty",
-                segmentsFound: 0,
-                conversationsCreated: 0,
-                extractionKey,
-              },
-            },
-          });
-          chunksProcessed++;
-          continue;
-        }
-
-        // Process each segment
-        let chunkConversations = 0;
-
-        for (let i = 0; i < segmentsWithUtterances.length; i++) {
-          const { segment, utterances: segUtterances } = segmentsWithUtterances[i];
-
-          await job.updateProgress({
-            stage: "extracting_metadata",
-            chunkId: chunk._id.toString(),
-            segment: i + 1,
-            totalSegments: segmentsWithUtterances.length,
-          });
-
-          // Format segment prompt
-          const { prompt: segPrompt } = formatChunkAsPrompt(segUtterances);
-
-          // LLM Call #2: Metadata extraction (entities, emoji, agreed_upon_something)
-          const messages: Array<{ role: string; content: string }> = [
-            { role: "system", content: input.extraction_system_prompt },
-            { role: "user", content: segPrompt },
-          ];
-          if (input.extraction_guidance_prompt) {
-            messages.push({ role: "assistant", content: input.extraction_guidance_prompt });
-          }
-
-          const metadata = await callLLMStructured(
-            llm,
-            chunk.params.model,
-            messages,
-            parseMetadataResponse,
-            `Chunk ${chunk._id} segment ${i + 1}/${segmentsWithUtterances.length} metadata`,
-          );
-          console.log(`[ConvExtractor] Chunk ${chunk._id} segment ${i + 1}: metadata extracted - entities=${metadata.entities.length}, emoji=${metadata.emoji ?? 'none'}, agreed=${metadata.agreed_upon_something}`);
-
-          // Create conversation object (without summary - will be generated separately)
-          // Validate required fields before creating
-          if (segment.title == null || typeof segment.title !== 'string' || segment.title.trim().length === 0) {
-            throw new Error(`Invalid segment title: ${JSON.stringify(segment.title)}`);
-          }
-
-          const conversationObject: Record<string, any> = {
-            isConversation: true,
-            name: segment.title.trim(),
-            agreed_upon_something: metadata.agreed_upon_something,
-            timeRanges: [{
-              start: segment.start.toISOString(),
-              end: segment.end.toISOString(),
-            }],
-            metadata: {
-              extractedWith: {
-                model: chunk.params.model,
-                extractorVersion: input.extractorVersion,
-                chunkId: chunk._id.toString(),
-                timestamp: new Date().toISOString(),
-              },
-            },
-          };
-
-          // Only set icon if emoji was extracted
-          if (metadata.emoji) {
-            conversationObject.icon = { text: metadata.emoji };
-          }
-
-          const convResult = await objects({
-            action: "create",
-            object: conversationObject,
-          }) as { insertedId: ObjectId };
-
-          const conversationId = convResult.insertedId;
-          console.log(`[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`);
-
-          // Create entity relationships
-          for (const entityName of metadata.entities) {
-            try {
-              const entityId = await findOrCreateEntity(objects, entityName);
-              await objects({
-                action: "create",
-                object: {
-                  isRelationship: true,
-                  name: "mentioned in",
-                  relationship: {
-                    subject: conversationId,
-                    object: entityId,
-                    symmetrical: false,
-                  },
-                },
-              });
-            } catch (error) {
-              console.error(`Failed to create entity relationship for "${entityName}":`, error);
-              errors.push({
-                type: "entity_relationship",
-                message: error instanceof Error ? error.message : String(error),
-                conversationId: conversationId.toString(),
-                entity: entityName,
-              });
-            }
-          }
-
-          // Queue a summarization job for the newly created conversation
-          try {
-            await jobs({
-              action: "enqueue",
-              data: {
-                type: "summarization",
-                start: segment.start.toISOString(),
-                end: segment.end.toISOString(),
-                objectId: conversationId.toString(),
-              },
-              trigger: {
-                type: "auto",
-                reason: `Triggered by conversation_extractor job ${job.id}`,
-              },
-            });
-          } catch (error) {
-            console.error(`Failed to queue summarization job for conversation ${conversationId}:`, error);
-            errors.push({
-              type: "summarization_job",
-              message: error instanceof Error ? error.message : String(error),
-              conversationId: conversationId.toString(),
-            });
-          }
-
-          chunkConversations++;
-          conversationsCreated++;
-        }
-
-        // Mark chunk completed
-        await mongo({
-          action: "updateOne",
-          collection: "conversation_chunks",
-          query: { _id: chunk._id },
-          update: {
-            $set: {
-              state: "completed",
-              segmentsFound: segmentsWithUtterances.length,
-              conversationsCreated: chunkConversations,
-              extractionKey,
-            },
-            $unset: { processingStartedAt: "" },
-          },
-        });
-
-        chunksProcessed++;
-
-      } catch (error) {
-        console.error(`Failed to process chunk ${chunk._id}:`, error);
-        
-        await mongo({
-          action: "updateOne",
-          collection: "conversation_chunks",
-          query: { _id: chunk._id },
-          update: {
-            $set: {
-              state: "error",
-              error: error instanceof Error ? error.message : String(error),
-            },
-            $unset: { processingStartedAt: "" },
-          },
-        });
-
-        // Re-throw to fail the job - chunk state is saved, job can be retried
-        throw error;
+      if (!result.claimed) {
+        continue;
       }
+
+      chunksProcessed++;
+      conversationsCreated += result.conversationsCreated;
     }
 
     return {
