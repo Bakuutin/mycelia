@@ -105,14 +105,34 @@ export default function JobDetailPage() {
         enabled: !!id && !cachedJob,
     });
 
+    const job = cachedJob || fetchedJob;
+    const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
+
+    const logDateRange = (() => {
+        if (!job) return null;
+        const start = job.timestamp ?? job.processedOn;
+        if (!start) return null;
+        const startDate = new Date(new Date(start).getTime() - 60_000);
+        const range: { $gte: Date; $lte?: Date } = { $gte: startDate };
+        if (job.finishedOn) {
+            const endDate = new Date(new Date(job.finishedOn).getTime() + 60_000);
+            range.$lte = endDate;
+        }
+        return range;
+    })();
+
     const { data: jobLogs = [], isLoading: isLogsLoading } = useQuery({
-        queryKey: ["job-logs", id],
+        queryKey: ["job-logs", id, logDateRange],
         queryFn: async () => {
             if (!id) return [];
+            const query: Record<string, unknown> = { jobId: id };
+            if (logDateRange) {
+                query.timestamp = logDateRange;
+            }
             const response = await api.callResource("mongo", {
                 action: "find",
                 collection: "job_logs",
-                query: { jobId: id },
+                query,
                 options: {
                     sort: { timestamp: 1 },
                     limit: 500,
@@ -120,17 +140,21 @@ export default function JobDetailPage() {
             });
             return response as JobLogEntry[];
         },
-        enabled: !!id,
+        enabled: !!id && !!job,
     });
 
     const { data: accessLogs = [], isLoading: isAccessLogsLoading } = useQuery({
-        queryKey: ["job-access-logs", id],
+        queryKey: ["job-access-logs", id, logDateRange],
         queryFn: async () => {
             if (!id) return [];
+            const query: Record<string, unknown> = { principal: `job:${id}` };
+            if (logDateRange) {
+                query.timestamp = logDateRange;
+            }
             const response = await api.callResource("mongo", {
                 action: "find",
                 collection: "access_logs",
-                query: { principal: `job:${id}` },
+                query,
                 options: {
                     sort: { timestamp: 1 },
                     limit: 500,
@@ -138,7 +162,7 @@ export default function JobDetailPage() {
             });
             return response as JobAccessLogEntry[];
         },
-        enabled: !!id,
+        enabled: !!id && !!job,
     });
 
     useWebSocketSubscription(
@@ -182,9 +206,6 @@ export default function JobDetailPage() {
         if (!confirm("Are you sure you want to cancel this job?")) return;
         cancelJobMutation.mutate();
     };
-
-    const job = cachedJob || fetchedJob;
-    const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const getStatusColor = (status: string) => {
         switch (status) {
