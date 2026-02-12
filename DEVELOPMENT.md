@@ -152,8 +152,11 @@ mycelia/
 │   └── Dockerfile.prod # Production nginx build
 ├── backend/            # Deno API server
 ├── python/             # Audio import, STT, conversation extraction
+├── diarizator/         # Speaker diarization service (FastAPI)
+├── friend/             # Friend-Lite companion app
 ├── gpu/                # GPU inference stack
-├── myceliasdk/         # Shared TypeScript myceliasdk
+├── myceliasdk/         # Shared TypeScript SDK
+├── misc/               # Infrastructure configs (nginx, mongo)
 └── docs/               # Additional documentation
 ```
 
@@ -166,4 +169,3 @@ mycelia/
 5. Submit a PR
 
 Join the [Discord](https://discord.gg/hPfYbpp2am) for discussions.
-
