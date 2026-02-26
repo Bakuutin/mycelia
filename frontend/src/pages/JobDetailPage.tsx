@@ -204,7 +204,6 @@ export default function JobDetailPage() {
         enabled: !!id && !!job,
     });
 
-    const job = cachedJob || fetchedJob;
     const isTranscriptionJob = job?.type === "transcription";
 
     // Fetch transcriptions created by this job
@@ -287,8 +286,6 @@ export default function JobDetailPage() {
         if (!confirm("Are you sure you want to cancel this job?")) return;
         cancelJobMutation.mutate();
     };
-
-    const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const getStatusColor = (status: string) => {
         switch (status) {
