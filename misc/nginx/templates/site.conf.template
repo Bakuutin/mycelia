@@ -1,10 +1,6 @@
-upstream frontend {
-    server frontend:8080;
-}
-
-upstream backend {
-    server backend:5173;
-}
+# Use resolver for runtime DNS resolution
+# This allows nginx to start even if upstream services aren't ready yet
+resolver 127.0.0.11 valid=30s;
 
 server {
     listen 80 default_server;
@@ -20,9 +16,16 @@ server {
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;
 
+    # Allow larger uploads (voice samples, audio files)
+    client_max_body_size 50M;
+
+    # Variables for upstream hosts (forces runtime DNS resolution)
+    set $frontend_upstream "http://frontend:8080";
+    set $backend_upstream "http://backend:5173";
+
     # Backend routes
     location ~ ^/(ws|api|data|oauth|llm|v1|mcp|health|\.well-known) {
-        proxy_pass http://backend;
+        proxy_pass $backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -36,7 +39,7 @@ server {
 
     # Everything else to frontend
     location / {
-        proxy_pass http://frontend;
+        proxy_pass $frontend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

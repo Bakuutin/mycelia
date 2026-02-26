@@ -68,12 +68,18 @@ const chatCompletionRequestSchema = z.object({
     .union([
       z.object({ type: z.literal("text") }),
       z.object({ type: z.literal("json_object") }),
+      z.object({ type: z.literal("json_schema"), json_schema: z.any() }),
     ])
     .optional(),
 });
 
+const listModelsRequestSchema = z.object({
+  action: z.literal("list"),
+});
+
 const llmRequestSchema = z.discriminatedUnion("action", [
   chatCompletionRequestSchema,
+  listModelsRequestSchema,
 ]);
 
 type LLMRequest = z.infer<typeof llmRequestSchema>;
@@ -152,12 +158,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {
     const startTime = performance.now();
     // Track the resolved model for consistent metrics (set after resolution)
-    let resolvedModel = input.model;
-    
+    let resolvedModel = input.action === "completions" ? input.model : "n/a";
+
     const span = tracer.startSpan("llm_resource_use", {
       attributes: {
         "llm.action": input.action,
-        "llm.model_requested": input.model,
+        "llm.model_requested": input.action === "completions" ? input.model : undefined,
       },
     });
 
@@ -249,6 +255,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           try {
             const jsonResponse = JSON.parse(responseText);
+
+            // Extract cost from litellm response header (x-litellm-response-cost)
+            const responseCostHeader = proxyResponse.headers.get("x-litellm-response-cost");
+            if (responseCostHeader) {
+              const cost = parseFloat(responseCostHeader);
+              if (!isNaN(cost)) {
+                jsonResponse.response_cost = cost;
+              }
+            }
+
             span.setStatus({ code: 1 }); // Success
             return jsonResponse;
           } catch (parseError) {
@@ -269,10 +285,64 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             );
           }
         }
+        case "list": {
+          const provider = await this.getInferenceProvider();
+          if (!provider) {
+            span.setStatus({
+              code: 2,
+              message: "Inference provider not configured",
+            });
+            throw new Error("Inference provider not configured. Please configure it in server settings.");
+          }
+
+          // Normalize base URL
+          let baseUrl = provider.baseUrl.replace(/\/$/, "");
+          if (!baseUrl.endsWith("/v1")) {
+            baseUrl = `${baseUrl}/v1`;
+          }
+
+          // Fetch available models from inference provider
+          const modelsResponse = await fetch(`${baseUrl}/models`, {
+            headers: { "Authorization": `Bearer ${provider.apiKey}` },
+          });
+
+          if (!modelsResponse.ok) {
+            const errorText = await modelsResponse.text();
+            span.setStatus({
+              code: 2,
+              message: `Failed to fetch models: ${modelsResponse.status}`,
+            });
+            throw new Error(`Failed to fetch models (${modelsResponse.status}): ${errorText.slice(0, 200)}`);
+          }
+
+          const modelsData = await modelsResponse.json();
+
+          // Get category config from env vars
+          const categories = {
+            small: {
+              default: Deno.env.get("MODEL_SMALL") || "small",
+              models: [] as string[],
+            },
+            medium: {
+              default: Deno.env.get("MODEL_MEDIUM") || "medium",
+              models: [] as string[],
+            },
+            large: {
+              default: Deno.env.get("MODEL_LARGE") || "large",
+              models: [] as string[],
+            },
+          };
+
+          span.setStatus({ code: 1 });
+          return {
+            models: modelsData.data || [],
+            categories,
+          };
+        }
         default:
           llmErrorsCounter.add(1, {
             error_type: "unknown_action",
-            action: input.action,
+            action: (input as any).action,
           });
           span.setStatus({ code: 2, message: "Unknown action" });
           throw new Error("Unknown action");
@@ -292,6 +362,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   }
 
   extractActions(input: LLMRequest) {
+    if (input.action === "list") {
+      return [{
+        path: ["llm", "models"],
+        actions: ["list"],
+      }];
+    }
     return [{
       path: ["llm", "chat"],
       actions: [input.action],

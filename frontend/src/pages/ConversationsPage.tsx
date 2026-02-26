@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessagesSquare, ChevronRight, Clock, Loader2 } from "lucide-react";
+import { MessagesSquare, ChevronRight, Clock, Loader2, Tag } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useWebSocketSubscription } from "@/hooks/useWebSocket";
@@ -18,6 +19,7 @@ interface ConversationObject {
   icon?: { text?: string };
   agreed_upon_something?: boolean;
   timeRanges?: TimeRange[];
+  aliases?: string[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -105,6 +107,20 @@ function ConversationCard({ conversation }: { conversation: ConversationObject }
                   <span className="text-muted-foreground/50">·</span>
                   <span>{duration}</span>
                 </>
+              )}
+            </div>
+          )}
+          
+          {conversation.aliases && conversation.aliases.length > 0 && (
+            <div className="flex items-center gap-1 mt-2 flex-wrap">
+              <Tag className="w-3 h-3 text-muted-foreground" />
+              {conversation.aliases.slice(0, 3).map((alias, idx) => (
+                <Badge key={idx} variant="secondary" className="text-xs py-0">
+                  {alias}
+                </Badge>
+              ))}
+              {conversation.aliases.length > 3 && (
+                <span className="text-xs text-muted-foreground">+{conversation.aliases.length - 3}</span>
               )}
             </div>
           )}

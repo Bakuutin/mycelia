@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 type Theme = "light" | "dark" | "system";
 
 type TimeFormat =
+  | "gregorian-local-natural"
   | "gregorian-local-iso"
   | "gregorian-local-verbose"
   | "gregorian-local-european"
@@ -28,6 +29,7 @@ interface SettingsState {
   autoGainControl: boolean;
   playbackRate: number;
   volume: number;
+  autoSave: boolean;
   setApiEndpoint: (endpoint: string) => void;
   setClientId: (id: string) => void;
   setClientSecret: (secret: string) => void;
@@ -40,15 +42,16 @@ interface SettingsState {
   setAutoGainControl: (enabled: boolean) => void;
   setPlaybackRate: (rate: number) => void;
   setVolume: (volume: number) => void;
+  setAutoSave: (enabled: boolean) => void;
   clearSettings: () => void;
 }
 
 function getDefaultApiEndpoint(): string {
-  return "https://localhost:4433";
+  return "http://localhost:3210";
 }
 
 const DEFAULT_API_ENDPOINT = getDefaultApiEndpoint();
-const DEFAULT_TIME_FORMAT: TimeFormat = "gregorian-local-iso";
+const DEFAULT_TIME_FORMAT: TimeFormat = "gregorian-local-natural";
 const DEFAULT_TRANSCRIPT_THRESHOLD_HOURS = 12;
 const DEFAULT_PLAYBACK_RATE = 1;
 const DEFAULT_VOLUME = 1;
@@ -68,6 +71,7 @@ export const useSettingsStore = create<SettingsState>()(
       autoGainControl: false,
       playbackRate: DEFAULT_PLAYBACK_RATE,
       volume: DEFAULT_VOLUME,
+      autoSave: true,
       setApiEndpoint: (endpoint) => set({ apiEndpoint: endpoint }),
       setClientId: (id) => set({ clientId: id }),
       setClientSecret: (secret) => set({ clientSecret: secret }),
@@ -82,6 +86,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoGainControl: (enabled) => set({ autoGainControl: enabled }),
       setPlaybackRate: (rate) => set({ playbackRate: rate }),
       setVolume: (volume) => set({ volume }),
+      setAutoSave: (enabled) => set({ autoSave: enabled }),
       clearSettings: () =>
         set({
           apiEndpoint: DEFAULT_API_ENDPOINT,
@@ -96,6 +101,7 @@ export const useSettingsStore = create<SettingsState>()(
           autoGainControl: false,
           playbackRate: DEFAULT_PLAYBACK_RATE,
           volume: DEFAULT_VOLUME,
+          autoSave: true,
         }),
     }),
     {

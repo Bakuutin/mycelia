@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
 import {
   ArrowRight,
   Calendar,
@@ -42,6 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { isTimeRangeShorterThanTranscriptThreshold } from "@/lib/transcriptUtils";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
+import { TimeRangeCompact, TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
 
 // Details field with edit/preview toggle
 function DetailsField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -103,10 +103,78 @@ function DetailsField({ value, onChange }: { value: string; onChange: (value: st
   );
 }
 
+// Time Ranges Section with compact display and edit dialog
+interface TimeRange {
+  start: Date;
+  end?: Date;
+  name?: string;
+}
+
+function TimeRangesSection({ 
+  timeRanges, 
+  onUpdate 
+}: { 
+  timeRanges?: TimeRange[];
+  onUpdate: (ranges: TimeRange[] | undefined) => void;
+}) {
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+
+  if (!timeRanges || timeRanges.length === 0) {
+    return null;
+  }
+
+  const handleSave = (index: number, range: TimeRange) => {
+    const newRanges = [...timeRanges];
+    newRanges[index] = range;
+    onUpdate(newRanges);
+  };
+
+  const handleDelete = (index: number) => {
+    const newRanges = timeRanges.filter((_, i) => i !== index);
+    onUpdate(newRanges.length > 0 ? newRanges : undefined);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-sm font-medium">Time Ranges</Label>
+      <div className="space-y-2">
+        {timeRanges.map((range, index) => (
+          <TimeRangeCompact
+            key={index}
+            timeRange={range}
+            index={index}
+            onEdit={setEditingIndex}
+            onDelete={handleDelete}
+          />
+        ))}
+      </div>
+      
+      {editingIndex !== null && timeRanges[editingIndex] && (
+        <TimeRangeEditDialog
+          open={editingIndex !== null}
+          onOpenChange={(open) => !open && setEditingIndex(null)}
+          timeRange={timeRanges[editingIndex]}
+          index={editingIndex}
+          onSave={handleSave}
+          onDelete={handleDelete}
+        />
+      )}
+    </div>
+  );
+}
+
 interface ObjectFormProps {
   object: ObjectFormData;
   onUpdate?: (updates: Partial<ObjectFormData>) => Promise<void>;
   onFieldUpdate?: (field: string, value: any) => void;
+  /** Hide the summary section when already displayed elsewhere on the page */
+  hideSummary?: boolean;
+  /** Hide icon and name when displayed as page title */
+  hideIconName?: boolean;
+  /** Hide details section when displayed elsewhere on the page */
+  hideDetails?: boolean;
+  /** Use compact layout with smaller text and spacing */
+  compact?: boolean;
 }
 
 const renderIcon = (icon: any) => {
@@ -257,7 +325,7 @@ function useDebouncedUpdate(
 }
 
 export function ObjectForm(
-  { object, onUpdate, onFieldUpdate }: ObjectFormProps,
+  { object, onUpdate, onFieldUpdate, hideSummary, hideIconName, hideDetails, compact = false }: ObjectFormProps,
 ) {
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
@@ -373,33 +441,37 @@ export function ObjectForm(
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <div className="flex-shrink-0">
-          <Label className="text-sm font-medium">Icon</Label>
-          <div className="mt-1">
-            <EmojiPickerButton
-              value={object.icon}
-              onChange={(icon) => updateField("icon", icon)}
+      {!hideIconName && (
+        <div className="flex items-start gap-4">
+          <div className="flex-shrink-0">
+            <Label className="text-sm font-medium">Icon</Label>
+            <div className="mt-1">
+              <EmojiPickerButton
+                value={object.icon}
+                onChange={(icon) => updateField("icon", icon)}
+              />
+            </div>
+          </div>
+
+          <div className="flex-1">
+            <Label htmlFor="name" className="text-sm font-medium">Name</Label>
+            <Input
+              id="name"
+              value={nameValue}
+              onChange={(e) => setNameValue(e.target.value)}
+              placeholder="Object name"
+              className="mt-1"
             />
           </div>
         </div>
+      )}
 
-        <div className="flex-1">
-          <Label htmlFor="name" className="text-sm font-medium">Name</Label>
-          <Input
-            id="name"
-            value={nameValue}
-            onChange={(e) => setNameValue(e.target.value)}
-            placeholder="Object name"
-            className="mt-1"
-          />
-        </div>
-      </div>
-
-      <DetailsField
-        value={detailsValue}
-        onChange={setDetailsValue}
-      />
+      {!hideDetails && (
+        <DetailsField
+          value={detailsValue}
+          onChange={setDetailsValue}
+        />
+      )}
 
       <SummarizeDialog
         open={isSummarizeOpen}
@@ -484,7 +556,7 @@ export function ObjectForm(
         </DialogContent>
       </Dialog>
 
-      {object.summaries && object.summaries.length > 0 && (
+      {!hideSummary && object.summaries && object.summaries.length > 0 && (
         <div className="space-y-2">
           <Label className="text-sm font-medium">{object.summaries.length > 1 ? 'Summaries' : 'Summary'}</Label>
           <div className="space-y-3">
@@ -533,52 +605,55 @@ export function ObjectForm(
       )}
 
       {/* Object Type Toggle Buttons */}
-      <div className="space-y-2">
-        <Label className="text-sm text-muted-foreground">Object Type</Label>
-        <div className="flex flex-wrap gap-2">
+      <div className={compact ? "space-y-1" : "space-y-2"}>
+        <Label className={`text-muted-foreground ${compact ? 'text-xs' : 'text-sm'}`}>Object Type</Label>
+        <div className={`flex flex-nowrap ${compact ? 'gap-1' : 'gap-2'}`}>
           <button
             type="button"
             onClick={() => updateField("isPerson", !object.isPerson)}
             className={`
-              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isPerson
-                ? "bg-blue-100 text-blue-800 border-blue-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-blue-500 text-white border-blue-600 shadow-sm"
+                : "bg-background border-border hover:bg-blue-50 hover:border-blue-300"
               }
             `}
           >
-            <User className="w-4 h-4" />
-            <span className="font-medium">Person</span>
+            <User className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Person</span>
           </button>
 
           <button
             type="button"
             onClick={() => updateField("isEvent", !object.isEvent)}
             className={`
-              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isEvent
-                ? "bg-green-100 text-green-800 border-green-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-green-500 text-white border-green-600 shadow-sm"
+                : "bg-background border-border hover:bg-green-50 hover:border-green-300"
               }
             `}
           >
-            <Calendar className="w-4 h-4" />
-            <span className="font-medium">Event</span>
+            <Calendar className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Event</span>
           </button>
 
           <button
             type="button"
             onClick={() => updateField("isConversation", !object.isConversation)}
             className={`
-              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isConversation
-                ? "bg-cyan-100 text-cyan-800 border-cyan-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-cyan-500 text-white border-cyan-600 shadow-sm"
+                : "bg-background border-border hover:bg-cyan-50 hover:border-cyan-300"
               }
             `}
           >
-            <MessageSquare className="w-4 h-4" />
-            <span className="font-medium">Conversation</span>
+            <MessageSquare className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Conversation</span>
           </button>
 
           <button
@@ -598,15 +673,16 @@ export function ObjectForm(
               }
             }}
             className={`
-              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isRelationship && !object.isPromise
-                ? "bg-purple-100 text-purple-800 border-purple-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-purple-500 text-white border-purple-600 shadow-sm"
+                : "bg-background border-border hover:bg-purple-50 hover:border-purple-300"
               }
             `}
           >
-            <Users className="w-4 h-4" />
-            <span className="font-medium">Relationship</span>
+            <Users className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Relationship</span>
           </button>
 
           <button
@@ -624,15 +700,16 @@ export function ObjectForm(
               }
             }}
             className={`
-              flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-sm
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
               ${object.isPromise
-                ? "bg-orange-100 text-orange-800 border-orange-200"
-                : "bg-background border-border hover:bg-muted"
+                ? "bg-orange-500 text-white border-orange-600 shadow-sm"
+                : "bg-background border-border hover:bg-orange-50 hover:border-orange-300"
               }
             `}
           >
-            <Handshake className="w-4 h-4" />
-            <span className="font-medium">Promise</span>
+            <Handshake className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Promise</span>
           </button>
         </div>
       </div>
@@ -911,103 +988,11 @@ export function ObjectForm(
         )}
       </div>
 
-      <div className="space-y-2">
-        {object.timeRanges && object.timeRanges.length > 0 && (
-          <Label className="text-sm font-medium">Time Ranges</Label>
-        )}
-        <div className="space-y-3">
-          {(object.timeRanges || []).map((range, index) => (
-            <div key={index} className="border rounded-md p-4 space-y-3">
-              <div className="flex justify-between items-start">
-                <Label className="text-xs text-muted-foreground">
-                  Range {index + 1}
-                </Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    const newRanges = (object.timeRanges || []).filter((_, i) =>
-                      i !== index
-                    );
-                    onUpdate({
-                      timeRanges: newRanges.length > 0 ? newRanges : undefined,
-                    });
-                  }}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <div>
-                <Label htmlFor={`range-name-${index}`} className="text-xs">
-                  Name (optional)
-                </Label>
-                <Input
-                  id={`range-name-${index}`}
-                  value={range.name || ""}
-                  onChange={(e) => {
-                    const newRanges = [...(object.timeRanges || [])];
-                    newRanges[index] = {
-                      ...range,
-                      name: e.target.value || undefined,
-                    };
-                    onUpdate({ timeRanges: newRanges });
-                  }}
-                  placeholder="Range name"
-                />
-              </div>
-              <div>
-                <Label htmlFor={`range-start-${index}`} className="text-xs">
-                  Start
-                </Label>
-                <DateTimePicker
-                  value={range.start}
-                  onChange={(date) => {
-                    if (date) {
-                      const newRanges = [...(object.timeRanges || [])];
-                      newRanges[index] = { ...range, start: date };
-                      onUpdate({ timeRanges: newRanges });
-                    }
-                  }}
-                  placeholder="Pick start time"
-                />
-              </div>
-              <div>
-                <Label htmlFor={`range-end-${index}`} className="text-xs">
-                  End (optional)
-                </Label>
-                <DateTimePicker
-                  nullable
-                  value={range.end}
-                  onChange={(date) => {
-                    const newRanges = [...(object.timeRanges || [])];
-                    newRanges[index] = { ...range, end: date || undefined };
-                    onUpdate({ timeRanges: newRanges });
-                  }}
-                  placeholder="Pick end time (optional)"
-                />
-              </div>
-
-              {/* Transcript button for ranges shorter than user-configured threshold */}
-              {range.end &&
-                isTimeRangeShorterThanTranscriptThreshold(
-                  range.start,
-                  range.end,
-                ) && (
-                <div className="pt-2 flex items-center gap-2">
-                  <Link
-                    to={`/transcript?start=${range.start.getTime()}&end=${range.end.getTime()}`}
-                  >
-                    <Button variant="outline" size="sm">
-                      Go to transcript
-                    </Button>
-                  </Link>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Time Ranges - compact display with edit dialog */}
+      <TimeRangesSection 
+        timeRanges={object.timeRanges}
+        onUpdate={(newRanges) => onUpdate({ timeRanges: newRanges })}
+      />
 
       <div className="space-y-2">
 

@@ -9,6 +9,26 @@ export type TrackId =
   | "diarizations"
   | "objects";
 
+// Object categories for timeline grouping
+export type ObjectCategory = "person" | "event" | "relationship" | "promise" | "other";
+
+export type ObjectsLayoutMode = "mixed" | "by-category";
+
+export interface ObjectCategoryConfig {
+  id: ObjectCategory;
+  label: string;
+  color: string;
+  icon: string;
+}
+
+export const OBJECT_CATEGORIES: ObjectCategoryConfig[] = [
+  { id: "event", label: "Events", color: "#8b5cf6", icon: "📅" },
+  { id: "person", label: "People", color: "#3b82f6", icon: "👤" },
+  { id: "relationship", label: "Relationships", color: "#ec4899", icon: "🔗" },
+  { id: "promise", label: "Promises", color: "#f97316", icon: "🤝" },
+  { id: "other", label: "Other", color: "#6b7280", icon: "📦" },
+];
+
 export interface TrackConfig {
   id: TrackId;
   label: string;
