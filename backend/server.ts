@@ -178,10 +178,20 @@ async function startServer(
     // Unified auto-detecting audio endpoint (recommended)
     if (url.pathname === "/ws/audio") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
+        ws.on("error", (error: Error) => {
+          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+            console.error("WebSocket /ws/audio error:", error);
+          }
+        });
+
         handlePcmWebSocket(ws, request).catch((error) => {
           console.error("WebSocket audio error:", error);
-          if (ws.readyState === 1) {
-            ws.close(1011, "Internal server error");
+          try {
+            if (ws.readyState === 1) {
+              ws.close(1011, "Internal server error");
+            }
+          } catch (closeError) {
+            // Ignore errors when closing
           }
         });
       });
@@ -210,10 +220,20 @@ async function startServer(
       });
     } else if (url.pathname === "/ws_omi") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
+        ws.on("error", (error: Error) => {
+          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+            console.error("WebSocket /ws_omi error:", error);
+          }
+        });
+
         handleOpusWebSocket(ws, request).catch((error) => {
           console.error("WebSocket Opus/OMI error:", error);
-          if (ws.readyState === 1) {
-            ws.close(1011, "Internal server error");
+          try {
+            if (ws.readyState === 1) {
+              ws.close(1011, "Internal server error");
+            }
+          } catch (closeError) {
+            // Ignore errors when closing
           }
         });
       });

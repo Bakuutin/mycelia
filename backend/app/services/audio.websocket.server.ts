@@ -552,15 +552,11 @@ class PcmWebSocketSession {
     if (!this.audioFormat) {
       return 0;
     }
-    // For Opus (width=0), use frame-based calculation
     let bytesPerSecond: number;
     if (this.audioFormat.width === 0) {
-      // Opus: 20ms frames, ~320 bytes/frame, 50 frames/sec
-      const OPUS_FRAME_SIZE_BYTES = 320;
-      const OPUS_FRAMES_PER_SECOND = 50;
-      bytesPerSecond = OPUS_FRAME_SIZE_BYTES * OPUS_FRAMES_PER_SECOND;
+      // Opus is decoded to 16-bit PCM in the buffer: rate * 2 bytes * channels
+      bytesPerSecond = this.audioFormat.rate * 2 * this.audioFormat.channels;
     } else {
-      // PCM or float: rate * width * channels
       bytesPerSecond = this.audioFormat.rate * this.audioFormat.width * this.audioFormat.channels;
     }
     return bytes / bytesPerSecond;
@@ -656,7 +652,7 @@ class PcmWebSocketSession {
           chunkStartTime,
           this.chunkIndex,
           this.sourceFileId,
-          formatConfig.format,
+          formatConfig,
         );
         log("INFO", `[AUDIO_WS] Audio chunk created`, {
           sessionId: this.sessionId,
