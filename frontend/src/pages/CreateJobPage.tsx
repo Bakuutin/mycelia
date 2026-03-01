@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Form from "@rjsf/shadcn";
@@ -14,6 +14,7 @@ import { toast } from "sonner";
 
 export default function CreateJobPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [selectedType, setSelectedType] = useState<string | null>(null);
 
   const { data: schemas, isLoading: isLoadingSchemas } = useQuery({
@@ -49,6 +50,14 @@ export default function CreateJobPage() {
       toast.error("Failed to enqueue job");
     },
   });
+
+  // Pre-select job type from URL query parameter
+  useEffect(() => {
+    const typeParam = searchParams.get("type");
+    if (typeParam && schemas && typeParam in schemas && !selectedType) {
+      setSelectedType(typeParam);
+    }
+  }, [searchParams, schemas, selectedType]);
 
   const handleTypeChange = (value: string) => {
     setSelectedType(value);
@@ -103,7 +112,12 @@ export default function CreateJobPage() {
           <CardContent>
             <div className="rjsf-container">
               <Form
-                schema={schemas[selectedType].input}
+                schema={(() => {
+                  // Strip $schema to avoid AJV8 draft 2020-12 compatibility issues
+                  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                  const { $schema, ...rest } = schemas[selectedType].input;
+                  return rest;
+                })()}
                 validator={validator}
                 onSubmit={(data: any) => onSubmit(data.formData)}
                 disabled={enqueueMutation.isPending}

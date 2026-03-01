@@ -8,19 +8,19 @@ import { createHash } from "node:crypto";
 
 /**
  * Conversation Extractor
- * 
- *  okay so what we have we have like a timeline of (overlapping) transcriptions 
+ *
+ *  okay so what we have we have like a timeline of (overlapping) transcriptions
  * and then then when one person said something, and the other person said something and I want you to use ASCII art to represent it on a timeline.
- * 
- * 
+ *
+ *
  *  10:00:00 - 10:00:09 - Person 1: "Hello"
  *  10:00:09 - 10:00:11 - Person 2: "Hello"
  *  10:00:20 - 10:00:30 - Person 1: "How are you?"
  *  10:00:30 - 10:00:40 - Person 2: "I'm good, thank you!"
  *  10:00:40 - 10:00:50 - Person 1: "What are you doing?"
  *  10:00:50 - 10:01:00 - Person 2: "I'm writing this docstring."
- * 
- * 
+ *
+ *
  * This worker is responsible for extracting conversations from transcriptions and creating conversation objects.
  * It uses a LLM to segment the transcriptions into conversations and then extracts metadata from each conversation.
  * It then creates a conversation object for each conversation.
@@ -80,20 +80,20 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().default(1),
   extractorVersion: z.string().default("v1"),
-  
+
   // Prompt overrides (migrated from config.prompts)
   segmentation_system_prompt: z.string()
     .default("You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.")
     .describe("System prompt for finding conversation topics in transcripts"),
-  
+
   segmentation_guidance_prompt: z.string()
     .default("")
     .describe("Additional guidance for conversation topic segmentation response format"),
-  
+
   extraction_system_prompt: z.string()
     .default("summarize this please")
     .describe("System prompt for extracting conversation metadata"),
-  
+
   extraction_guidance_prompt: z.string()
     .default("")
     .describe("Guidance for conversation metadata extraction response format"),
@@ -111,19 +111,19 @@ function formatChunkAsPrompt(utterances: Utterance[]): { prompt: string; start: 
     throw new Error("Cannot format empty utterances array");
   }
 
-  const sorted = [...utterances].sort((a, b) => 
+  const sorted = [...utterances].sort((a, b) =>
     new Date(a.start).getTime() - new Date(b.start).getTime()
   );
 
   const strings: string[] = [];
   let latest = new Date(sorted[0].start);
-  
+
   strings.push(`[time: ${new Date(sorted[0].start).toISOString()}]`);
 
   for (const u of sorted) {
     const uStart = new Date(u.start);
     const gap = uStart.getTime() - latest.getTime();
-    
+
     if (gap > 30 * 1000) {  // > 30 seconds
       strings.push(`[time: ${latest.toISOString()}]`);
       const minutes = Math.floor(gap / 1000 / 60);
@@ -162,7 +162,7 @@ function filterSegmentsWithUtterances(
   for (const segment of segments) {
     const segStart = new Date(segment.start).getTime();
     const segEnd = new Date(segment.end).getTime();
-    
+
     const overlapping = utterances.filter(u => {
       const uStart = new Date(u.start).getTime();
       const uEnd = new Date(u.end).getTime();
@@ -199,10 +199,20 @@ async function callLLMStructured<T>(
   parseResponse: (content: string) => T,
   logContext?: string,
 ): Promise<T> {
+  // OpenAI requires the word "json" in messages when using response_format: json_object
+  // Ensure the first message (system prompt) includes it
+  const adjustedMessages = [...messages];
+  if (adjustedMessages.length > 0 && !adjustedMessages[0].content.toLowerCase().includes('json')) {
+    adjustedMessages[0] = {
+      ...adjustedMessages[0],
+      content: adjustedMessages[0].content + ' Respond in JSON format.',
+    };
+  }
+
   const response = await llm({
     action: "completions",
     model,
-    messages,
+    messages: adjustedMessages,
     response_format: responseFormat,
   });
 
@@ -283,26 +293,26 @@ function stripMarkdownCodeBlock(content: string): string {
  */
 function extractJsonFromText(content: string): any {
   const cleaned = stripMarkdownCodeBlock(content);
-  
+
   // First, try to parse as-is (for clean JSON responses)
   try {
     return JSON.parse(cleaned);
   } catch (e) {
     // Continue to more robust extraction
   }
-  
+
   // Try to find JSON object {} or array []
   // Look for the first { or [ and find its matching closing bracket
   const jsonStart = Math.min(
     cleaned.indexOf('{') >= 0 ? cleaned.indexOf('{') : Infinity,
     cleaned.indexOf('[') >= 0 ? cleaned.indexOf('[') : Infinity
   );
-  
+
   if (jsonStart === Infinity) {
     const preview = cleaned.length > 200 ? cleaned.slice(0, 200) + '...' : cleaned;
     throw new Error(`No JSON object or array found in response. Got: ${preview}`);
   }
-  
+
   // Find the matching closing bracket
   const startChar = cleaned[jsonStart];
   const endChar = startChar === '{' ? '}' : ']';
@@ -310,25 +320,25 @@ function extractJsonFromText(content: string): any {
   let jsonEnd = -1;
   let inString = false;
   let escapeNext = false;
-  
+
   for (let i = jsonStart; i < cleaned.length; i++) {
     const char = cleaned[i];
-    
+
     if (escapeNext) {
       escapeNext = false;
       continue;
     }
-    
+
     if (char === '\\') {
       escapeNext = true;
       continue;
     }
-    
+
     if (char === '"' && !escapeNext) {
       inString = !inString;
       continue;
     }
-    
+
     if (!inString) {
       if (char === startChar) {
         depth++;
@@ -341,11 +351,11 @@ function extractJsonFromText(content: string): any {
       }
     }
   }
-  
+
   if (jsonEnd === -1) {
     throw new Error("Could not find complete JSON object/array in response");
   }
-  
+
   const jsonStr = cleaned.substring(jsonStart, jsonEnd);
   return JSON.parse(jsonStr);
 }
@@ -357,7 +367,7 @@ function extractJsonFromText(content: string): any {
 function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: number; time: Date }> {
   const markers: Array<{ lineIdx: number; time: Date }> = [];
   const timeRegex = /^\[time:\s*(.+)\]$/;
-  
+
   for (let i = 0; i < promptLines.length; i++) {
     const match = promptLines[i].match(timeRegex);
     if (match) {
@@ -367,7 +377,7 @@ function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: n
       }
     }
   }
-  
+
   return markers;
 }
 
@@ -423,7 +433,7 @@ function findAttrStartingWith(obj: Record<string, any>, prefix: string): any {
  */
 function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: Date) {
   const timeMarkers = extractTimeMarkersFromPrompt(promptLines);
-  
+
   return function parseSegmentationResponse(content: string): Segment[] {
     const parsed = extractJsonFromText(content);
     const segments = parsed.segments || [];
@@ -436,23 +446,23 @@ function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: 
           title = trimmed;
         }
       }
-      
+
       // Find any key starting with "start" and "end" (case-insensitive)
       const startVal = findAttrStartingWith(s, 'start');
       const endVal = findAttrStartingWith(s, 'end');
-      
+
       if (startVal != null && endVal != null) {
         // Both numbers → line indices
         if (typeof startVal === 'number' && typeof endVal === 'number') {
-          const start = findTimeAtOrBeforeLine(timeMarkers, startVal) 
-            ?? findTimeAtOrAfterLine(timeMarkers, startVal) 
+          const start = findTimeAtOrBeforeLine(timeMarkers, startVal)
+            ?? findTimeAtOrAfterLine(timeMarkers, startVal)
             ?? chunkStart;
-          const end = findTimeAtOrAfterLine(timeMarkers, endVal) 
-            ?? findTimeAtOrBeforeLine(timeMarkers, endVal) 
+          const end = findTimeAtOrAfterLine(timeMarkers, endVal)
+            ?? findTimeAtOrBeforeLine(timeMarkers, endVal)
             ?? chunkEnd;
           return { title, start, end };
         }
-        
+
         // Both strings → try as dates
         if (typeof startVal === 'string' && typeof endVal === 'string') {
           const start = new Date(startVal);
@@ -462,7 +472,7 @@ function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: 
           }
         }
       }
-      
+
       // Fallback: use chunk boundaries
       console.warn(`[ConvExtractor] Segment "${title}" has no valid time info (start=${JSON.stringify(startVal)}, end=${JSON.stringify(endVal)}), using chunk boundaries`);
       return { title, start: chunkStart, end: chunkEnd };
@@ -936,7 +946,7 @@ const capability: JobCapability = {
     const input = job.data as ConversationExtractorJobData;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
-    
+
     const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
     const objects = (input: any) => callResource("objects", input, { jwt, myceliaUrl });
     const llm = (input: any) => callResource("llm", input, { jwt, myceliaUrl });
@@ -946,7 +956,7 @@ const capability: JobCapability = {
 
     // Find chunks to process
     let chunks: ConversationChunk[];
-    
+
     if (input.chunkId) {
       const chunk = await mongo({
         action: "findOne",

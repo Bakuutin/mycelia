@@ -18,6 +18,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
   ollama:
     image: ollama/ollama:0.13.5
     deploy:
@@ -29,7 +30,38 @@ services:
               capabilities: [gpu]
     volumes:
       - ./docker/ollama:/root/.ollama
-    
+
+  diarization:
+    build:
+      context: ../diarizator
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: cu126
+    environment:
+      - HF_HOME=/models
+      - HF_TOKEN=${HF_TOKEN}
+      - COMPUTE_MODE=gpu
+      - SPEAKER_SERVICE_HOST=0.0.0.0
+      - SPEAKER_SERVICE_PORT=8085
+      - LOG_LEVEL=INFO
+    volumes:
+      - ../diarizator/src:/app/src        # Hot reload
+      - ./docker/diarization-models:/models
+    ports:
+      - "8085:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+
   proxy:
     build:
       context: ./proxy

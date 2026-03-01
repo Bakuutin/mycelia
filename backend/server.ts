@@ -28,6 +28,7 @@ import { WebSocketServer } from "npm:ws@^8.18.0";
 
 import { requestCounter } from "@/lib/telemetry.ts";
 import { handlePcmWebSocket } from "@/services/audio.websocket.server.ts";
+import { handleOpusWebSocket } from "@/services/audio.websocket.opus.server.ts";
 import { handleUpdatesWebSocket } from "@/services/updates.websocket.server.ts";
 import { setupResources } from "@/lib/resources/registry.ts";
 import { shutdownTelemetry } from "@/lib/telemetry.ts";
@@ -140,14 +141,6 @@ async function startServer(
     await ensureAllCollectionsExist(db);
   }
 
-  if (!noWorkers) {
-    await startWorkers();
-    await startChangeStreamWorker();
-    await startAccessLogWorker();
-    await triggerManager.start();
-    await maintenanceManager.start();
-  }
-
   const app = express();
   const httpServer = createHttpServer(app);
 
@@ -161,6 +154,7 @@ async function startServer(
       skip: (req: Request) =>
         req.url === "/health" ||
         req.url === "/readiness" ||
+        req.url?.startsWith("/api/audio/pipeline") ||
         req.url?.startsWith("/api/resource/"),
     }));
   }
@@ -181,7 +175,28 @@ async function startServer(
 
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url || "", `http://${request.headers.host}`);
-    if (url.pathname === "/ws_pcm") {
+    // Unified auto-detecting audio endpoint (recommended)
+    if (url.pathname === "/ws/audio") {
+      wss.handleUpgrade(request, socket, head, (ws: any) => {
+        ws.on("error", (error: Error) => {
+          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+            console.error("WebSocket /ws/audio error:", error);
+          }
+        });
+
+        handlePcmWebSocket(ws, request).catch((error) => {
+          console.error("WebSocket audio error:", error);
+          try {
+            if (ws.readyState === 1) {
+              ws.close(1011, "Internal server error");
+            }
+          } catch (closeError) {
+            // Ignore errors when closing
+          }
+        });
+      });
+    // Legacy endpoints (backward compatibility)
+    } else if (url.pathname === "/ws_pcm") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
         // Add error handler immediately to catch any errors including broken pipe
         ws.on("error", (error: Error) => {
@@ -200,6 +215,25 @@ async function startServer(
             }
           } catch (closeError) {
             // Ignore errors when closing (socket might already be dead)
+          }
+        });
+      });
+    } else if (url.pathname === "/ws_omi") {
+      wss.handleUpgrade(request, socket, head, (ws: any) => {
+        ws.on("error", (error: Error) => {
+          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+            console.error("WebSocket /ws_omi error:", error);
+          }
+        });
+
+        handleOpusWebSocket(ws, request).catch((error) => {
+          console.error("WebSocket Opus/OMI error:", error);
+          try {
+            if (ws.readyState === 1) {
+              ws.close(1011, "Internal server error");
+            }
+          } catch (closeError) {
+            // Ignore errors when closing
           }
         });
       });
@@ -246,10 +280,22 @@ async function startServer(
   // Error handling middleware (must be last)
   app.use(errorHandler);
 
-  httpServer.listen(port, host, () => {
-    console.log(`Server is running on ${host}:${port}`);
-    console.log(`Open http://${host}:${port}`);
+  await new Promise<void>((resolve) => {
+    httpServer.listen(port, host, () => {
+      console.log(`Server is running on ${host}:${port}`);
+      console.log(`Open http://${host}:${port}`);
+      resolve();
+    });
   });
+
+  // Start workers AFTER the HTTP server is listening (workers depend on HTTP API)
+  if (!noWorkers) {
+    await startWorkers();
+    await startChangeStreamWorker();
+    await startAccessLogWorker();
+    await triggerManager.start();
+    await maintenanceManager.start();
+  }
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
       process.once(signal, async () => {
@@ -335,21 +381,24 @@ async function configureCli() {
           .option("name", {
             alias: "n",
             type: "string",
-            describe: "The name of the token.",
-            default: `test_${Math.floor(Date.now() / 1000)}`,
+            describe: "The name of the token (e.g. browser-ui, cli, mobile).",
+            default: "default",
           }),
       async (args: ArgumentsCamelCase<{ owner: string; name: string }>) => {
         const owner = String(args.owner);
         const name = String(args.name);
-        console.log(`Owner: ${owner}`);
-        console.log(`Name: ${name}`);
-        console.log("Generating token...");
+        console.log("Generating API key...");
         await setupResources();
         const { apiKey, clientId } = await generateApiKeyWithId(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
+        console.log("");
+        console.log(`Created API key "${name}" (owner: ${owner})`);
+        console.log("");
         console.log(`MYCELIA_CLIENT_ID=${clientId}`);
         console.log(`MYCELIA_TOKEN=${apiKey}`);
+        console.log("");
+        console.log("Copy these values to your .env file or enter them in the setup page.");
       },
     )
     .command(

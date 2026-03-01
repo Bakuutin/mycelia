@@ -119,8 +119,8 @@ if [[ "$GENERATE_TOKENS" == true ]]; then
         TOKEN_OUTPUT=$(docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm backend deno run -A server.ts token-create 2>&1)
         
         # Parse output for MYCELIA_CLIENT_ID and MYCELIA_TOKEN
-        CLIENT_ID=$(echo "$TOKEN_OUTPUT" | grep -E "^MYCELIA_CLIENT_ID=" | cut -d= -f2)
-        TOKEN=$(echo "$TOKEN_OUTPUT" | grep -E "^MYCELIA_TOKEN=" | cut -d= -f2)
+        CLIENT_ID=$(echo "$TOKEN_OUTPUT" | grep -E "^MYCELIA_CLIENT_ID=" | head -1 | cut -d= -f2)
+        TOKEN=$(echo "$TOKEN_OUTPUT" | grep -E "^MYCELIA_TOKEN=" | head -1 | cut -d= -f2)
         
         if [[ -n "$CLIENT_ID" && -n "$TOKEN" ]]; then
             # Update .env with tokens
