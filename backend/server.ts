@@ -140,14 +140,6 @@ async function startServer(
     await ensureAllCollectionsExist(db);
   }
 
-  if (!noWorkers) {
-    await startWorkers();
-    await startChangeStreamWorker();
-    await startAccessLogWorker();
-    await triggerManager.start();
-    await maintenanceManager.start();
-  }
-
   const app = express();
   const httpServer = createHttpServer(app);
 
@@ -246,10 +238,22 @@ async function startServer(
   // Error handling middleware (must be last)
   app.use(errorHandler);
 
-  httpServer.listen(port, host, () => {
-    console.log(`Server is running on ${host}:${port}`);
-    console.log(`Open http://${host}:${port}`);
+  await new Promise<void>((resolve) => {
+    httpServer.listen(port, host, () => {
+      console.log(`Server is running on ${host}:${port}`);
+      console.log(`Open http://${host}:${port}`);
+      resolve();
+    });
   });
+
+  // Start workers AFTER the HTTP server is listening (workers depend on HTTP API)
+  if (!noWorkers) {
+    await startWorkers();
+    await startChangeStreamWorker();
+    await startAccessLogWorker();
+    await triggerManager.start();
+    await maintenanceManager.start();
+  }
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
       process.once(signal, async () => {
@@ -335,21 +339,24 @@ async function configureCli() {
           .option("name", {
             alias: "n",
             type: "string",
-            describe: "The name of the token.",
-            default: `test_${Math.floor(Date.now() / 1000)}`,
+            describe: "The name of the token (e.g. browser-ui, cli, mobile).",
+            default: "default",
           }),
       async (args: ArgumentsCamelCase<{ owner: string; name: string }>) => {
         const owner = String(args.owner);
         const name = String(args.name);
-        console.log(`Owner: ${owner}`);
-        console.log(`Name: ${name}`);
-        console.log("Generating token...");
+        console.log("Generating API key...");
         await setupResources();
         const { apiKey, clientId } = await generateApiKeyWithId(owner, name, [
           { resource: "**", action: "**", effect: "allow" } as Policy,
         ]);
+        console.log("");
+        console.log(`Created API key "${name}" (owner: ${owner})`);
+        console.log("");
         console.log(`MYCELIA_CLIENT_ID=${clientId}`);
         console.log(`MYCELIA_TOKEN=${apiKey}`);
+        console.log("");
+        console.log("Copy these values to your .env file or enter them in the setup page.");
       },
     )
     .command(

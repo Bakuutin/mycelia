@@ -4,11 +4,11 @@ import { z } from "zod";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { uploadToGridFS } from "@/lib/mongo/fs.server.ts";
 
-const uploadBucketName = "uploads";
+const DEFAULT_BUCKET = "uploads";
 
 const uploadSchema = z.object({
   metadata: z.record(z.string(), z.any()).optional(),
-  bucket: z.string().optional(),
+  bucket: z.enum(["uploads", "voice_samples"]).optional(),
 });
 
 export type UploadData = z.infer<typeof uploadSchema>;
@@ -66,12 +66,15 @@ export async function apiFilesUploadHandler(req: Request, res: Response) {
 
     const data = uploadSchema.parse({
       metadata,
+      bucket: body.bucket,
     });
+
+    const bucketName = data.bucket || DEFAULT_BUCKET;
 
     const fileId = await uploadToGridFS(
       auth,
       file as any,
-      uploadBucketName,
+      bucketName,
       data.metadata || {},
     );
 

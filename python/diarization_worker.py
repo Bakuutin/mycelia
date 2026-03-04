@@ -31,9 +31,68 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 DIARIZATION_SERVER_URL = os.environ.get('DIARIZATION_SERVER_URL', 'http://localhost:8085').rstrip('/')
 MAX_SEQUENCE_CHUNKS = max(1, int(os.environ.get('DIARIZATION_MAX_SEQUENCE_CHUNKS', '6')))
+SPEAKER_SIMILARITY_THRESHOLD = float(os.environ.get('SPEAKER_SIMILARITY_THRESHOLD', '0.35'))
 
+# Cache for speaker profiles (refreshed periodically)
+_speaker_profiles_cache: list = []
+_speaker_profiles_cache_time: float = 0
+_PROFILE_CACHE_TTL_SECONDS = 300  # 5 minutes
+
+import json
 import numpy as np
 from chunking import read_codec, array_to_wav, sample_rate
+
+
+def _is_speaker_identification_enabled() -> bool:
+    """Check if speaker identification is enabled via server config."""
+    try:
+        result = call_resource('config', {"action": "get"})
+        if result and 'features' in result:
+            return result['features'].get('enable_speaker_identification', False)
+    except Exception as e:
+        logger.warning(f"Could not check speaker identification feature flag: {e}")
+    return False
+
+
+def _get_speaker_profiles() -> list:
+    """
+    Get speaker profiles from cache or reload from MongoDB.
+    Returns list of profiles with id, name, and embedding.
+    """
+    global _speaker_profiles_cache, _speaker_profiles_cache_time
+    
+    now = time.time()
+    if _speaker_profiles_cache and (now - _speaker_profiles_cache_time) < _PROFILE_CACHE_TTL_SECONDS:
+        return _speaker_profiles_cache
+    
+    try:
+        result = call_resource('mongo', {
+            "action": "find",
+            "collection": "speaker_profiles",
+            "query": {},
+            "options": {"sort": {"created_at": 1}},
+        })
+        profiles = result.get("data", [])
+        _speaker_profiles_cache = profiles
+        _speaker_profiles_cache_time = now
+        if profiles:
+            logger.info(f"Loaded {len(profiles)} speaker profiles for identification")
+        return profiles
+    except Exception as e:
+        logger.warning(f"Could not load speaker profiles: {e}")
+        return []
+
+
+def _build_clusters_param(profiles: list) -> str:
+    """Build JSON clusters parameter for diarization API."""
+    clusters = []
+    for profile in profiles:
+        clusters.append({
+            "id": str(profile["_id"]),
+            "name": profile.get("name", "Unknown"),
+            "embedding": profile["embedding"],
+        })
+    return json.dumps(clusters)
 
 
 class DiarizationSequence(BaseModel):
@@ -296,10 +355,25 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         payload_bytes = wav_file.getbuffer().nbytes
         payload_duration = total_samples / sample_rate if total_samples else 0.0
 
+        # Check if speaker identification is enabled and get profiles
+        speaker_profiles = []
+        clusters_param = None
+        if _is_speaker_identification_enabled():
+            speaker_profiles = _get_speaker_profiles()
+            if speaker_profiles:
+                clusters_param = _build_clusters_param(speaker_profiles)
+                log_info(f'  → Speaker identification enabled with {len(speaker_profiles)} profiles')
+
         # Call diarization API
+        request_data = {}
+        if clusters_param:
+            request_data['clusters'] = clusters_param
+            request_data['similarity_threshold'] = str(SPEAKER_SIMILARITY_THRESHOLD)
+        
         response = requests.post(
             f'{DIARIZATION_SERVER_URL}/diarize',
             files={'file': ('audio.wav', wav_file, 'audio/wav')},
+            data=request_data if request_data else None,
             timeout=300 + len(sequence.chunks) * 3
         )
         response.raise_for_status()
@@ -334,8 +408,12 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         inference_id = ObjectId()
         sequence_start_time = sequence.start
 
+        # Build profile ID to profile lookup for matched speaker info
+        profile_lookup = {str(p["_id"]): p for p in speaker_profiles} if speaker_profiles else {}
+
         # Save each segment as a separate document
         saved_segments = 0
+        matched_segments = 0
         for segment in segments:
             # Convert relative times to absolute datetimes
             segment_start_relative = segment['start']  # seconds relative to audio start
@@ -345,20 +423,36 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
             segment_start_absolute = sequence_start_time + timedelta(seconds=segment_start_relative)
             segment_end_absolute = sequence_start_time + timedelta(seconds=segment_end_relative)
 
+            # Build diarization document
+            diar_doc = {
+                "inference_id": inference_id,
+                "original_id": sequence.original_id,
+                "start": segment_start_absolute,
+                "end": segment_end_absolute,
+                "speaker": segment['speaker'],
+                "embedding": segment['embedding'],  # 256 floats
+                "duration": segment.get('duration', segment_end_relative - segment_start_relative),
+                "created_at": datetime.now(tz=UTC)
+            }
+
+            # Add matched_speaker if cluster was matched
+            cluster_id = segment.get('cluster_id')
+            if cluster_id and cluster_id in profile_lookup:
+                profile = profile_lookup[cluster_id]
+                diar_doc["matched_speaker"] = {
+                    "profile_id": profile["_id"],
+                    "name": profile.get("name", "Unknown"),
+                    "similarity": segment.get('similarity', 0),
+                    "matched_at": datetime.now(tz=UTC),
+                    "method": "live"
+                }
+                matched_segments += 1
+
             # Save segment to diarizations collection
             call_resource('mongo', {
                 "action": "insertOne",
                 "collection": "diarizations",
-                "doc": {
-                    "inference_id": inference_id,
-                    "original_id": sequence.original_id,
-                    "start": segment_start_absolute,
-                    "end": segment_end_absolute,
-                    "speaker": segment['speaker'],
-                    "embedding": segment['embedding'],  # 256 floats
-                    "duration": segment.get('duration', segment_end_relative - segment_start_relative),
-                    "created_at": datetime.now(tz=UTC)
-                }
+                "doc": diar_doc
             })
             saved_segments += 1
 
@@ -372,17 +466,19 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         remaining_in_sequence = max(chunks_count - chunks_marked, 0)
         remaining_for_original = count_pending_chunks_for_original(sequence.original_id)
         remaining_original_display = remaining_for_original if remaining_for_original is not None else 'unknown'
+        matched_info = f', matched={matched_segments}' if matched_segments else ''
         log_info(
             f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
             f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}, orig_left={remaining_original_display}) @ {chunk_rate_display}  '
-            f'diarized  {saved_segments} segments  payload={payload_bytes / (1024 * 1024):.2f} MiB/{payload_duration:.1f}s'
+            f'diarized  {saved_segments} segments{matched_info}  payload={payload_bytes / (1024 * 1024):.2f} MiB/{payload_duration:.1f}s'
         )
         return {
             "status": "diarized",
             "chunks": chunks_count,
             "chunks_diarized": chunks_marked,
             "duration": duration,
-            "segments": saved_segments
+            "segments": saved_segments,
+            "matched_segments": matched_segments
         }
 
     except requests.exceptions.ReadTimeout:

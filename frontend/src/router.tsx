@@ -8,11 +8,11 @@ import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
 import InferenceSettingsPage from "./pages/settings/InferenceSettingsPage";
 import PromptsPage from "./pages/settings/PromptsPage";
-import APIKeysPage from "./pages/settings/APIKeysPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
 import WorkersPage from "./pages/settings/WorkersPage";
 import WorkerDetailPage from "./pages/settings/WorkerDetailPage";
+import VoiceProfilesPage from "./pages/settings/VoiceProfilesPage";
 import ConfigSettingsPage from "./pages/settings/ConfigSettingsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
@@ -162,10 +162,6 @@ export const router = createBrowserRouter([
             element: <PromptsPage />,
           },
           {
-            path: "api-keys",
-            element: <APIKeysPage />,
-          },
-          {
             path: "config",
             element: <ConfigSettingsPage />,
           },
@@ -184,6 +180,10 @@ export const router = createBrowserRouter([
           {
             path: "workers/:workerType",
             element: <WorkerDetailPage />,
+          },
+          {
+            path: "voice-profiles",
+            element: <VoiceProfilesPage />,
           },
         ],
       },
