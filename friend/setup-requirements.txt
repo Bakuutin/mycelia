@@ -1,3 +1,0 @@
-# Dependencies for Friend-Lite root setup orchestrator
-rich>=13.0.0
-python-dotenv
