@@ -706,7 +706,7 @@ export default function JobDetailPage() {
                                     <MetricCell key={m.label} icon={m.icon} label={m.label} value={m.value} />
                                 ))}
                             </div>
-                            {config.errors?.length > 0 && (
+                            {config.errors && config.errors?.length > 0 && (
                                 <div>
                                     <div className="flex items-center gap-2 text-sm text-red-500 mb-2">
                                         <AlertTriangle className="h-4 w-4" />
