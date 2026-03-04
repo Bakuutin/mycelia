@@ -145,6 +145,7 @@ export default function JobDetailPage() {
     });
 
     const job = cachedJob || fetchedJob;
+    const isTranscriptionJob = job?.type === "transcription";
     const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const logDateRange = (() => {
