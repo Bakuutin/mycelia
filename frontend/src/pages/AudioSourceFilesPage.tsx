@@ -637,7 +637,7 @@ export default function AudioSourceFilesPage() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept="audio/*,video/mp4,.wav,.mp3,.m4a,.flac,.opus,.ogg,.aac,.wma,.mp4"
+              accept="audio/*,.wav,.mp3,.m4a,.flac,.opus,.ogg,.aac,.wma,.mp4"
               className="hidden"
               onChange={(e) => e.target.files && handleFiles(e.target.files)}
             />
