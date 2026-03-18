@@ -17,7 +17,8 @@ const transcriptionRequestSchema = z.object({
 type TranscriptionRequest = z.infer<typeof transcriptionRequestSchema>;
 type TranscriptionResponse = any | Response;
 
-export class TranscriptionResource implements Resource<TranscriptionRequest, TranscriptionResponse> {
+export class TranscriptionResource
+  implements Resource<TranscriptionRequest, TranscriptionResponse> {
   code = "transcription";
   description = "Audio transcription";
   schemas: {
@@ -28,19 +29,51 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     response: z.any() as z.ZodType<TranscriptionResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
-    const config = await getServerConfig();
-    const inference = config.inference;
-    if (!inference?.baseUrl || !inference?.apiKey) {
-      return null;
+  async getInferenceProvider(): Promise<
+    { baseUrl: string; apiKey: string } | null
+  > {
+    const dedicatedBaseUrl = Deno.env.get("TRANSCRIPTION_BASE_URL");
+    const dedicatedApiKey = Deno.env.get("TRANSCRIPTION_API_KEY");
+    if (dedicatedBaseUrl && dedicatedApiKey) {
+      return {
+        baseUrl: dedicatedBaseUrl,
+        apiKey: dedicatedApiKey,
+      };
     }
-    return {
-      baseUrl: inference.baseUrl,
-      apiKey: inference.apiKey,
-    };
+
+    const envBaseUrl = Deno.env.get("OPENAI_BASE_URL");
+    const envApiKey = Deno.env.get("OPENAI_API_KEY");
+    if (envBaseUrl && envApiKey) {
+      return {
+        baseUrl: envBaseUrl,
+        apiKey: envApiKey,
+      };
+    }
+
+    const config = await getServerConfig();
+    const transcription = config.transcription;
+    if (transcription?.baseUrl && transcription?.apiKey) {
+      return {
+        baseUrl: transcription.baseUrl,
+        apiKey: transcription.apiKey,
+      };
+    }
+
+    const inference = config.inference;
+    if (inference?.baseUrl && inference?.apiKey) {
+      return {
+        baseUrl: inference.baseUrl,
+        apiKey: inference.apiKey,
+      };
+    }
+
+    return null;
   }
 
-  async use(input: TranscriptionRequest, auth: Auth): Promise<TranscriptionResponse> {
+  async use(
+    input: TranscriptionRequest,
+    auth: Auth,
+  ): Promise<TranscriptionResponse> {
     const startTime = performance.now();
     const span = tracer.startSpan("transcription_resource_use", {
       attributes: {
@@ -55,37 +88,55 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           if (!provider) {
             span.setStatus({
               code: 2,
-              message: "Inference provider not configured",
+              message: "Transcription provider not configured",
             });
             throw new Error(
-              "Inference provider not configured. Please configure it in server settings."
+              "Transcription provider not configured. Configure TRANSCRIPTION_BASE_URL / TRANSCRIPTION_API_KEY, or set a transcription or inference provider in server settings.",
             );
           }
 
+          let baseUrl = provider.baseUrl.replace(/\/$/, "");
+          if (baseUrl.endsWith("/v1")) {
+            baseUrl = baseUrl.slice(0, -3);
+          }
+
           span.setAttributes({
+            "transcription.base_url": baseUrl,
             "transcription.has_api_key": !!provider.apiKey,
           });
 
           let fileBuffer: Uint8Array;
           if (input.file instanceof Uint8Array) {
             fileBuffer = input.file;
-          } else if (input.file instanceof Buffer ) {
+          } else if (input.file instanceof Buffer) {
             fileBuffer = new Uint8Array(input.file);
           } else if (input.file?.buffer instanceof Uint8Array) {
             fileBuffer = new Uint8Array(input.file.buffer);
-          } else if (input.file && typeof input.file === "object" && "$binary" in input.file) {
-            const binary = (input.file as { $binary: { base64: string; subType?: string } }).$binary;
+          } else if (
+            input.file && typeof input.file === "object" &&
+            "$binary" in input.file
+          ) {
+            const binary =
+              (input.file as { $binary: { base64: string; subType?: string } })
+                .$binary;
             const decoded = Buffer.from(binary.base64, "base64");
             fileBuffer = new Uint8Array(decoded);
           } else {
-            throw new Error(`Invalid file format. Expected Uint8Array, Buffer, or EJSON binary. Got ${typeof input.file}, ${Object.keys(input.file)}`);
+            throw new Error(
+              `Invalid file format. Expected Uint8Array, Buffer, or EJSON binary. Got ${typeof input
+                .file}, ${Object.keys(input.file)}`,
+            );
           }
 
           const formData = new FormData();
           const newBuffer = new Uint8Array(fileBuffer);
-          const blob = new Blob([newBuffer], { type: input.fileType || "audio/mpeg" });
+          const blob = new Blob([newBuffer], {
+            type: input.fileType || "audio/mpeg",
+          });
           const fileName = input.fileName || "audio.mp3";
-          const file = new File([blob], fileName, { type: input.fileType || "audio/mpeg" });
+          const file = new File([blob], fileName, {
+            type: input.fileType || "audio/mpeg",
+          });
           formData.append("file", file);
           if (input.language) {
             formData.append("language", input.language);
@@ -96,7 +147,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           formData.append("model", "whisper");
 
           const proxyResponse = await fetch(
-            provider.baseUrl.replace(/\/$/, "") + "/v1/audio/transcriptions",
+            `${baseUrl}/v1/audio/transcriptions`,
             {
               method: "POST",
               headers: {
@@ -166,4 +217,3 @@ export async function getTranscriptionResource(
 ): Promise<(input: TranscriptionRequest) => Promise<TranscriptionResponse>> {
   return auth.getResource("transcription");
 }
-
