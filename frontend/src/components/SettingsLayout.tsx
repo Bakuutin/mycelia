@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog, ScrollText } from "lucide-react";
+import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog, ScrollText, UserRound } from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
@@ -43,6 +43,12 @@ const SettingsLayout = () => {
       path: "/settings/workers",
       icon: Cog,
       description: "Configure background job workers",
+    },
+    {
+      name: "Voice Profiles",
+      path: "/settings/voice-profiles",
+      icon: UserRound,
+      description: "Enroll and manage speaker voices",
     },
   ];
 

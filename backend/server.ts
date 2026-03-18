@@ -140,14 +140,6 @@ async function startServer(
     await ensureAllCollectionsExist(db);
   }
 
-  if (!noWorkers) {
-    await startWorkers();
-    await startChangeStreamWorker();
-    await startAccessLogWorker();
-    await triggerManager.start();
-    await maintenanceManager.start();
-  }
-
   const app = express();
   const httpServer = createHttpServer(app);
 
@@ -246,10 +238,22 @@ async function startServer(
   // Error handling middleware (must be last)
   app.use(errorHandler);
 
-  httpServer.listen(port, host, () => {
-    console.log(`Server is running on ${host}:${port}`);
-    console.log(`Open http://${host}:${port}`);
+  await new Promise<void>((resolve) => {
+    httpServer.listen(port, host, () => {
+      console.log(`Server is running on ${host}:${port}`);
+      console.log(`Open http://${host}:${port}`);
+      resolve();
+    });
   });
+
+  // Start workers AFTER the HTTP server is listening (workers depend on HTTP API)
+  if (!noWorkers) {
+    await startWorkers();
+    await startChangeStreamWorker();
+    await startAccessLogWorker();
+    await triggerManager.start();
+    await maintenanceManager.start();
+  }
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
       process.once(signal, async () => {
