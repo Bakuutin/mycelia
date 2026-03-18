@@ -9,7 +9,22 @@ Lightweight OpenAI-compatible transcription server for local development on macO
 - `POST /asr` compatibility endpoint for the existing Whisper proxy flow
 - Optional bearer auth via `WHISPER_API_KEY`
 
-## Run Locally
+## Run With Docker
+
+```bash
+docker build -t mycelia-whisper-local -f python/whisper_server/Dockerfile .
+
+docker container run --rm \
+  -p 9000:9000 \
+  -e WHISPER_MODEL=small \
+  -e WHISPER_API_KEY=mycelia-local \
+  -v mycelia-whisper-models:/models \
+  mycelia-whisper-local
+```
+
+The server listens on `http://localhost:9000` by default.
+
+## Run Natively
 
 ```bash
 cd python/whisper_server
@@ -19,8 +34,6 @@ WHISPER_MODEL=small \
 WHISPER_API_KEY=mycelia-local \
 uv run mycelia-whisper-server
 ```
-
-The server listens on `http://localhost:9000` by default.
 
 ## Configuration
 

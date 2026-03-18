@@ -157,15 +157,17 @@ You can reconfigure these settings anytime in Settings.
 
 ### Run Whisper Locally on Mac
 
-If you want local transcription on macOS without the GPU stack, start the bundled Whisper server:
+If you want local transcription on macOS without the GPU stack, build and run the bundled Whisper server container:
 
 ```bash
-cd python/whisper_server
-uv sync
+docker build -t mycelia-whisper-local -f python/whisper_server/Dockerfile .
 
-WHISPER_MODEL=small \
-WHISPER_API_KEY=mycelia-local \
-uv run mycelia-whisper-server
+docker container run --rm \
+  -p 9000:9000 \
+  -e WHISPER_MODEL=small \
+  -e WHISPER_API_KEY=mycelia-local \
+  -v mycelia-whisper-models:/models \
+  mycelia-whisper-local
 ```
 
 The server exposes:
@@ -182,7 +184,7 @@ TRANSCRIPTION_BASE_URL=http://host.docker.internal:9000
 TRANSCRIPTION_API_KEY=mycelia-local
 ```
 
-If you run the backend natively instead of in Docker, use `http://localhost:9000` as the base URL. The first transcription request downloads the configured `faster-whisper` model.
+If you run the backend natively instead of in Docker, use `http://localhost:9000` as the base URL. The first transcription request downloads the configured `faster-whisper` model into the mounted Docker volume.
 
 #### Managing API Keys
 
