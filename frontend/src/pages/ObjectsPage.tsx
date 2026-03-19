@@ -652,7 +652,7 @@ const ObjectsPage = () => {
               {
                 $match: {
                   isTag: true,
-                  $expr: { $eq: ["$relationship.subject", "$$tagId"] },
+                  $expr: { $eq: ["$relationship.object", "$$tagId"] },
                 },
               },
             ],
@@ -768,14 +768,14 @@ const ObjectsPage = () => {
             {
               $match: {
                 isTag: true,
-                $expr: { $eq: ["$relationship.object", "$$objectId"] },
+                $expr: { $eq: ["$relationship.subject", "$$objectId"] },
               },
             },
             { $limit: 5 },
             {
               $lookup: {
                 from: "objects",
-                localField: "relationship.subject",
+                localField: "relationship.object",
                 foreignField: "_id",
                 as: "tagObject",
               },
