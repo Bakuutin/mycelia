@@ -4,6 +4,7 @@ import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { callResource } from "@myceliasdk/resources.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { createHash } from "node:crypto";
+import { STRUCTURED_ANALYZE_CONVERSATION_DETAILS_PROMPT } from "@/lib/prompts/conversationExtractor.ts";
 
 
 /**
@@ -91,7 +92,7 @@ export const schema = z.object({
     .describe("Additional guidance for conversation topic segmentation response format"),
   
   extraction_system_prompt: z.string()
-    .default("summarize this please")
+    .default(STRUCTURED_ANALYZE_CONVERSATION_DETAILS_PROMPT)
     .describe("System prompt for extracting conversation metadata"),
   
   extraction_guidance_prompt: z.string()

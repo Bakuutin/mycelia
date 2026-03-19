@@ -42,6 +42,7 @@ import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/cha
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
 import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
 import { up, down, to, status } from "@/lib/mongo/migrator.ts";
+import { requeueConversationChunksInRange } from "@/lib/jobs/conversationChunkRequeue.ts";
 
 
 let logFile: Deno.FsFile | null = null;
@@ -422,6 +423,54 @@ async function configureCli() {
           }
           console.log("Token is valid");
           console.log(JSON.stringify(doc, null, 2));
+        }
+      },
+    )
+    .command(
+      "conversation-extractor-requeue",
+      "Requeue finalized conversation chunks in a date range for extractor backfill.",
+      (y: Argv) =>
+        y
+          .option("start", {
+            type: "string",
+            describe: "Start of the range in ISO8601 format. Optional when --days is provided.",
+          })
+          .option("end", {
+            type: "string",
+            describe: "End of the range in ISO8601 format. Defaults to now.",
+          })
+          .option("days", {
+            type: "number",
+            describe: "Number of trailing days to requeue when --start is omitted.",
+            default: 7,
+          }),
+      async (
+        args: ArgumentsCamelCase<{ start?: string; end?: string; days?: number }>,
+      ) => {
+        try {
+          const end = args.end ? new Date(String(args.end)) : new Date();
+          const start = args.start
+            ? new Date(String(args.start))
+            : new Date(end.getTime() - (Number(args.days) || 7) * 24 * 60 * 60 * 1000);
+
+          if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            throw new Error("Invalid --start or --end date. Use ISO8601 values.");
+          }
+
+          if (start >= end) {
+            throw new Error("--start must be earlier than --end.");
+          }
+
+          const db = await getRootDB();
+          const result = await requeueConversationChunksInRange(db, start, end);
+
+          console.log("Requeued conversation chunks for extractor backfill.");
+          console.log(`Range: ${start.toISOString()} → ${end.toISOString()}`);
+          console.log(`Matched: ${result.matchedCount}`);
+          console.log(`Modified: ${result.modifiedCount}`);
+        } catch (err) {
+          console.error("Failed to requeue conversation chunks:", err);
+          exit(1);
         }
       },
     )

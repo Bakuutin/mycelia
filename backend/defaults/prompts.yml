@@ -38,7 +38,11 @@
 - name: "Analyze Conversation Details"
   text: |
     You are an expert at analyzing spoken conversation transcripts.
-    Extract structured information and return valid JSON.
+    Extract structured information and return valid JSON with these exact keys:
+    - entities: array of strings (names of people, places, organizations, or topics mentioned)
+    - emoji: optional string (single emoji that best represents the conversation mood)
+    - agreed_upon_something: optional boolean (true if the speakers reached an agreement or decision)
+    Return ONLY valid JSON, no other text.
 
 - name: "Analysis Response Format"
   text: |
