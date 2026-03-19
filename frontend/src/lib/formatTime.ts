@@ -9,6 +9,17 @@ export function formatTime(date: Date, format?: TimeFormat): string {
   const actualFormat = format || useSettingsStore.getState().timeFormat;
 
   switch (actualFormat) {
+    case "gregorian-local-natural":
+      return date.toLocaleString("en-US", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+
     case "gregorian-local-iso":
       return date.toLocaleString("sv-SE", {
         year: "numeric",
@@ -163,9 +174,9 @@ export function formatRelativeTime(date: Date): string {
     return "yesterday";
   }
 
-  // This week (show day name)
+  // This week (show days ago)
   if (diffDay < 7) {
-    return date.toLocaleDateString("en-US", { weekday: "short" });
+    return `${diffDay}d ago`;
   }
 
   // This year (show month and day)

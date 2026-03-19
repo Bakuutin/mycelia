@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
-import { Auth } from "@/lib/auth/core.server.ts";
+import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
+import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { generateApiKeyWithId } from "@/lib/auth/tokens.ts";
 import type { Policy } from "@/lib/auth/resources.ts";
 import { getObjectsResource } from "../lib/objects/resource.server.ts";
@@ -60,7 +61,28 @@ export async function setupHandler(req: Request, res: Response) {
       return;
     }
 
-    // Create a new API key with root permissions
+    // Check if any API keys already exist
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+
+    const existingKeys = await mongo({
+      action: "find",
+      collection: "api_keys",
+      query: {},
+      options: { limit: 1 },
+    });
+
+    if (existingKeys && existingKeys.length > 0) {
+      // API keys already exist, refuse to create new ones via web UI
+      res.status(400).json({ 
+        created: false,
+        error: "keys_exist",
+        message: "API keys already exist. Generate new keys via CLI.",
+      });
+      return;
+    }
+
+    // No API keys exist, create the first one with root permissions
     const policies: Policy[] = [
       { resource: "**", action: "**", effect: "allow" },
     ];

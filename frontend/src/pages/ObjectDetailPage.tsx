@@ -1,48 +1,317 @@
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { Button } from "@/components/ui/button";
-import { History, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { 
+  History, 
+  Trash2, 
+  Pencil, 
+  Check, 
+  X, 
+  Tag, 
+  Handshake,
+  Users,
+  MessageSquare,
+  User,
+  Calendar,
+  Package,
+  Save,
+  Clock,
+  Star,
+} from "lucide-react";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { SmartBackButton } from "@/components/SmartBackButton";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useDeleteObject,
   useObject,
   useUpdateObject,
+  objectKeys,
 } from "@/hooks/useObjectQueries";
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
 import { MetadataDisplay } from "@/components/MetadataDisplay";
-import { ObjectId } from "bson";
+import { ObjectPlayerTranscript } from "@/components/ObjectPlayerTranscript";
+import { TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
+import { SummarySection } from "@/components/SummarySection";
+import { Markdown } from "@/components/Markdown";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { formatTime } from "@/lib/formatTime";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { EmojiPickerButton } from "@/components/ui/emoji-picker";
+
+// Helper to get object type info
+function getObjectType(object: { isPromise?: boolean; isRelationship?: boolean; isConversation?: boolean; isPerson?: boolean; isEvent?: boolean }): {
+  type: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+} {
+  if (object.isPromise) return { type: "Promise", icon: Handshake, color: "bg-orange-100 text-orange-800 border border-orange-200" };
+  if (object.isRelationship) return { type: "Relationship", icon: Users, color: "bg-purple-100 text-purple-800 border border-purple-200" };
+  if (object.isConversation) return { type: "Conversation", icon: MessageSquare, color: "bg-cyan-100 text-cyan-800 border border-cyan-200" };
+  if (object.isPerson) return { type: "Person", icon: User, color: "bg-blue-100 text-blue-800 border border-blue-200" };
+  if (object.isEvent) return { type: "Event", icon: Calendar, color: "bg-green-100 text-green-800 border border-green-200" };
+  return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border border-gray-200" };
+}
+
+// Inline editable title component
+function EditableTitle({
+  icon,
+  name,
+  onIconChange,
+  onNameChange,
+}: {
+  icon: any;
+  name: string;
+  onIconChange: (icon: any) => void;
+  onNameChange: (name: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setEditName(name);
+  }, [name]);
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleSave = () => {
+    if (editName.trim() !== name) {
+      onNameChange(editName.trim());
+    }
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditName(name);
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleSave();
+    } else if (e.key === "Escape") {
+      handleCancel();
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3 group flex-1 min-w-0">
+      <EmojiPickerButton
+        value={icon}
+        onChange={onIconChange}
+        className="text-4xl flex-shrink-0"
+      />
+      {isEditing ? (
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <Input
+            ref={inputRef}
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={handleSave}
+            className="text-2xl font-bold h-auto py-1 flex-1"
+          />
+          <Button variant="ghost" size="sm" onClick={handleSave} className="flex-shrink-0">
+            <Check className="w-4 h-4" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleCancel} className="flex-shrink-0">
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+      ) : (
+        <h1 
+          className="text-2xl font-bold cursor-pointer hover:text-primary transition-colors flex items-center gap-2 flex-1 min-w-0"
+          onClick={() => setIsEditing(true)}
+        >
+          <span className="truncate">{name || "Untitled Object"}</span>
+          <Pencil className="w-4 h-4 opacity-0 group-hover:opacity-50 transition-opacity flex-shrink-0" />
+        </h1>
+      )}
+    </div>
+  );
+}
 
 const ObjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // Use React Query hooks
   const { data: object, isLoading: loading, error } = useObject(id);
   const updateObjectMutation = useUpdateObject();
   const deleteObjectMutation = useDeleteObject();
+  
+  // State for time range editing from metadata display
+  const [editingTimeRangeIndex, setEditingTimeRangeIndex] = useState<number | null>(null);
+  
+  // State for summary details dialog
+  const [selectedSummary, setSelectedSummary] = useState<any | null>(null);
+  
+  // State for editing details
+  const [isEditingDetails, setIsEditingDetails] = useState(false);
+  const [editingDetailsValue, setEditingDetailsValue] = useState("");
+  
+  // Autosave settings and status
+  const { autoSave, setAutoSave, dateFormat } = useSettingsStore();
+  const [pendingChanges, setPendingChanges] = useState<Record<string, any>>({});
+  const pendingChangesRef = useRef<Record<string, any>>({}); // Ref to always get latest pending changes
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [, forceUpdate] = useState(0); // For relative time updates
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleFieldUpdate = (field: string, value: any) => {
+  // Keep ref in sync with state
+  useEffect(() => {
+    pendingChangesRef.current = pendingChanges;
+  }, [pendingChanges]);
+  
+  // Update relative time every minute
+  useEffect(() => {
+    const interval = setInterval(() => forceUpdate(n => n + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Core save function - saves all pending changes sequentially with proper version tracking
+  const saveAllPendingChanges = useCallback(async () => {
+    // Get current object from cache to ensure we have the latest version
+    const currentObject = queryClient.getQueryData<typeof object>(objectKeys.detail(id!));
+    if (!currentObject || !id) return;
+
+    // Use ref to get latest pending changes (avoids stale closure issue)
+    const changesToSave = { ...pendingChangesRef.current };
+    if (Object.keys(changesToSave).length === 0) return;
+
+    setIsSaving(true);
+    let currentVersion = currentObject.version;
+    let successCount = 0;
+
+    // Save changes sequentially with updated version after each save
+    for (const [field, value] of Object.entries(changesToSave)) {
+      try {
+        const result = await updateObjectMutation.mutateAsync({
+          id: currentObject._id.toString(),
+          version: currentVersion,
+          field,
+          value,
+        });
+        // Update version from response for next iteration
+        if (result && typeof result.version === 'number') {
+          currentVersion = result.version;
+        }
+        successCount++;
+        // Clear this field from pending
+        setPendingChanges(prev => {
+          const { [field]: _, ...rest } = prev;
+          return rest;
+        });
+      } catch (error) {
+        console.error(`Failed to save field ${field}:`, error);
+        // Stop on error to avoid cascading failures
+        break;
+      }
+    }
+
+    setIsSaving(false);
+    if (successCount > 0) {
+      setLastSaved(new Date());
+      // Invalidate to ensure UI shows latest version
+      queryClient.invalidateQueries({ queryKey: objectKeys.detail(id) });
+    }
+  }, [id, updateObjectMutation, queryClient]);
+
+  // Schedule autosave - debounces all changes together
+  const scheduleAutoSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveAllPendingChanges();
+    }, 500);
+  }, [saveAllPendingChanges]);
+
+  // Handle field update - updates UI immediately, schedules save if autosave enabled
+  const handleFieldUpdate = useCallback((field: string, value: any) => {
     if (!object || !id) return;
 
-    updateObjectMutation.mutate({
-      id: object._id.toString(),
-      version: object.version,
-      field,
-      value,
+    // Update pendingChanges immediately for instant visual feedback
+    setPendingChanges(prev => ({ ...prev, [field]: value }));
+
+    if (autoSave) {
+      scheduleAutoSave();
+    }
+  }, [object, id, autoSave, scheduleAutoSave]);
+
+  // Handle starring a summary - only one can be starred at a time
+  const handleStarSummary = useCallback((index: number) => {
+    if (!object || !object.summaries) return;
+    
+    // Get current summaries, applying any pending changes
+    const currentSummaries = pendingChanges.summaries || object.summaries;
+    
+    // Create new array with updated starred state
+    const newSummaries = currentSummaries.map((summary: any, i: number) => {
+      if (i === index) {
+        // Toggle the starred state for the selected summary
+        return { ...summary, starred: !summary.starred };
+      }
+      // Unstar all other summaries
+      return { ...summary, starred: false };
     });
-  };
+    
+    handleFieldUpdate("summaries", newSummaries);
+  }, [object, pendingChanges.summaries, handleFieldUpdate]);
+
+  // Manual save - saves immediately
+  const handleManualSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveAllPendingChanges();
+  }, [saveAllPendingChanges]);
+
+  const hasPendingChanges = Object.keys(pendingChanges).length > 0;
 
   // Convert Object to ObjectFormData for the form
+  // Merge pendingChanges for instant visual feedback (before throttled save completes)
   const formObject: ObjectFormData = object
     ? {
       ...object,
-      relationship: object.relationship
-        ? {
-          object: object.relationship.object,
-          subject: object.relationship.subject,
-          symmetrical: object.relationship.symmetrical,
-        }
-        : undefined,
+      ...pendingChanges, // Apply pending changes immediately for instant UI feedback
+      // Use pending relationship changes if present, otherwise use server's relationship
+      relationship: pendingChanges.relationship !== undefined
+        ? pendingChanges.relationship
+        : object.relationship
+          ? {
+            object: object.relationship.object,
+            subject: object.relationship.subject,
+            symmetrical: object.relationship.symmetrical,
+          }
+          : undefined,
     }
     : {} as ObjectFormData;
 
@@ -88,18 +357,73 @@ const ObjectDetailPage = () => {
     );
   }
 
+  const hasTimeRanges = object.timeRanges && object.timeRanges.length > 0;
+  
+  // Get object type info for badge
+  const typeInfo = getObjectType(object);
+  const TypeIcon = typeInfo.icon;
+
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <SmartBackButton defaultPath="/objects" />
-        <div className="flex items-center gap-2">
-          {updateObjectMutation.isPending && (
-            <span className="text-xs text-muted-foreground">Saving...</span>
+    <div className="max-w-7xl mx-auto space-y-4">
+      {/* Sticky Header with navigation and actions */}
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b pb-3 -mx-4 px-4 pt-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <SmartBackButton defaultPath="/objects" />
+            {/* Star toggle button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleFieldUpdate("starred", !object.starred)}
+              className={object.starred ? "text-yellow-500 hover:text-yellow-600" : "text-muted-foreground hover:text-yellow-500"}
+              title={object.starred ? "Remove from starred" : "Add to starred"}
+            >
+              <Star className={`w-5 h-5 ${object.starred ? "fill-current" : ""}`} />
+            </Button>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Status indicator */}
+            <div className="flex items-center gap-1.5 text-sm">
+              {updateObjectMutation.isPending ? (
+                <span className="text-primary font-medium">Saving...</span>
+              ) : hasPendingChanges ? (
+                <span className="text-amber-600 font-medium">● Unsaved</span>
+              ) : (
+                <span className="flex items-center gap-1 text-green-600 font-medium">
+                  <Check className="w-4 h-4" />
+                  Saved
+                </span>
+              )}
+            </div>
+            
+            {/* Autosave toggle */}
+            <div className="flex items-center gap-1.5 text-sm">
+              <Switch
+                checked={autoSave}
+                onCheckedChange={setAutoSave}
+                className="h-4 w-7"
+              />
+              <span className="text-muted-foreground">Auto</span>
+            </div>
+            
+            {/* Save button (shown when autosave is off) */}
+            {!autoSave && (
+              <Button 
+                variant={hasPendingChanges ? "default" : "outline"}
+                size="sm" 
+                onClick={handleManualSave}
+                disabled={!hasPendingChanges || updateObjectMutation.isPending}
+              >
+              <Save className="w-4 h-4 mr-1" />
+              Save
+            </Button>
           )}
+          
           <Button variant="outline" size="sm" asChild>
             <Link to={`/objects/${id}/history`}>
-              <History className="w-4 h-4 mr-2" />
+              <History className="w-4 h-4 mr-1" />
               History
+              <span className="ml-1 text-muted-foreground">v{object.version}</span>
             </Link>
           </Button>
           <Button
@@ -108,14 +432,82 @@ const ObjectDetailPage = () => {
             onClick={handleDelete}
             disabled={deleteObjectMutation.isPending}
           >
-            <Trash2 className="w-4 h-4 mr-2" />
-            {deleteObjectMutation.isPending ? "Deleting..." : "Delete"}
+            <Trash2 className="w-4 h-4" />
           </Button>
+        </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="border rounded-lg p-6">
+      {/* Title row: Icon + Name on left, metadata on right - all on one line */}
+      <div className="flex items-center justify-between gap-4">
+        <EditableTitle
+          icon={object.icon}
+          name={object.name || ""}
+          onIconChange={(icon) => handleFieldUpdate("icon", icon)}
+          onNameChange={(name) => handleFieldUpdate("name", name)}
+        />
+        
+        {/* Object Type, Date, Duration, Tags - aligned on one line */}
+        <div className="flex items-center gap-3 flex-shrink-0 text-xs">
+          {/* Object Type Badge */}
+          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-medium ${typeInfo.color}`}>
+            <TypeIcon className="w-3 h-3" />
+            <span>{typeInfo.type}</span>
+          </div>
+          
+          {/* Date and Duration together */}
+          {hasTimeRanges && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <span>{formatTime(new Date(object.timeRanges[0].start), "gregorian-local-natural")}</span>
+              {object.timeRanges[0].end && (
+                <span className="font-semibold text-foreground">
+                  {Math.round((new Date(object.timeRanges[0].end).getTime() - new Date(object.timeRanges[0].start).getTime()) / 60000)}m
+                </span>
+              )}
+            </div>
+          )}
+          
+          {/* Aliases as tags */}
+          {object.aliases && object.aliases.length > 0 && (
+            <div className="flex items-center gap-1">
+              <Tag className="w-3 h-3 text-muted-foreground" />
+              {object.aliases.slice(0, 2).map((alias, idx) => (
+                <Badge key={idx} variant="secondary" className="text-xs py-0">
+                  {alias}
+                </Badge>
+              ))}
+              {object.aliases.length > 2 && (
+                <span className="text-muted-foreground">+{object.aliases.length - 2}</span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Row 1: Summary (left) + Player/Transcript (right) - flexible height */}
+      {hasTimeRanges && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Summary - with model selector, generate button, and history navigation */}
+          <SummarySection
+            object={pendingChanges.summaries ? { ...object, summaries: pendingChanges.summaries } : object}
+            onSummaryClick={setSelectedSummary}
+            onStarSummary={handleStarSummary}
+          />
+
+          {/* Player + Transcript - flexible height, expands for long content */}
+          <ObjectPlayerTranscript timeRange={object.timeRanges[0]} minHeight={400} maxHeight={800} />
+        </div>
+      )}
+
+      {/* Row 2: Relationships (left) | Object Type (right) - equal height */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" style={{ gridAutoRows: '1fr' }}>
+        {/* Relationships */}
+        <div className="border rounded-lg p-3 min-h-[200px] max-h-[280px] overflow-y-auto flex flex-col">
+          <RelationshipsPanel object={object} />
+        </div>
+
+        {/* Object Type - with labels, clickable */}
+        <div className="border rounded-lg p-3 min-h-[200px] max-h-[280px] overflow-y-auto">
           <ObjectForm
             object={formObject}
             onUpdate={async (updates) => {
@@ -124,16 +516,217 @@ const ObjectDetailPage = () => {
                 handleFieldUpdate(field, value);
               }
             }}
+            hideSummary
+            hideIconName
+            hideDetails
+            compact
           />
         </div>
+      </div>
 
-        <div className="space-y-6">
-          <div className="border rounded-lg p-6">
-            <RelationshipsPanel object={object} />
+      {/* Row 3: Time Info + Metadata + Details (3 columns) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {/* Time Information - compact inline */}
+        <div className="border rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold text-muted-foreground">Time Information</h3>
+            {hasTimeRanges && (
+              <Button variant="ghost" size="sm" className="h-5 px-1.5 text-xs" onClick={() => setEditingTimeRangeIndex(0)}>
+                <Pencil className="w-3 h-3" />
+              </Button>
+            )}
           </div>
-          <MetadataDisplay object={object} />
+          <div className="text-xs space-y-1">
+            {hasTimeRanges && object.timeRanges?.[0] && (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Started:</span>
+                  <span>{formatTime(object.timeRanges[0].start, dateFormat)}</span>
+                </div>
+                {object.timeRanges[0].end && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Ended:</span>
+                    <span>{formatTime(object.timeRanges[0].end, dateFormat)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Duration:</span>
+                  <span className="font-medium">{Math.round((new Date(object.timeRanges[0].end || Date.now()).getTime() - new Date(object.timeRanges[0].start).getTime()) / 60000)}m</span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Metadata - compact */}
+        <div className="border rounded-lg p-3 space-y-2">
+          <h3 className="text-xs font-semibold text-muted-foreground">Metadata</h3>
+          <div className="text-xs space-y-1">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Created:</span>
+              <span>{formatTime(object.createdAt, dateFormat)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Updated:</span>
+              <span>{formatTime(object.updatedAt, dateFormat)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Version:</span>
+              <span>{object.version}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Details - compact */}
+        <div className="border rounded-lg p-3 bg-muted/30 flex flex-col max-h-[150px]">
+          <div className="flex items-center justify-between mb-2 flex-shrink-0">
+            <h3 className="text-xs font-semibold text-muted-foreground">Details</h3>
+            <div className="flex items-center gap-1">
+              <Button
+                variant={isEditingDetails ? "default" : "ghost"}
+                size="sm"
+                className="h-5 px-1.5 text-xs"
+                onClick={() => {
+                  if (!isEditingDetails) {
+                    setEditingDetailsValue(object.details || "");
+                  }
+                  setIsEditingDetails(!isEditingDetails);
+                }}
+              >
+                {isEditingDetails ? "Preview" : "Edit"}
+              </Button>
+              {isEditingDetails && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 px-1.5 text-xs"
+                  onClick={() => {
+                    handleFieldUpdate("details", editingDetailsValue);
+                    setIsEditingDetails(false);
+                  }}
+                >
+                  <Check className="w-3 h-3" />
+                </Button>
+              )}
+            </div>
+          </div>
+          {isEditingDetails ? (
+            <Textarea
+              value={editingDetailsValue}
+              onChange={(e) => setEditingDetailsValue(e.target.value)}
+              placeholder="Add details..."
+              className="flex-1 min-h-[60px] resize-none font-mono text-xs"
+            />
+          ) : (
+            <ScrollArea className="flex-1 [&>[data-radix-scroll-area-viewport]]:!overflow-y-scroll">
+              <div className="prose prose-xs max-w-none pr-2 text-xs">
+                {object.details ? (
+                  <Markdown>{object.details}</Markdown>
+                ) : (
+                  <p className="text-muted-foreground text-xs">No details. Click Edit to add.</p>
+                )}
+              </div>
+            </ScrollArea>
+          )}
         </div>
       </div>
+
+      {/* Time Range Edit Dialog triggered from MetadataDisplay */}
+      {editingTimeRangeIndex !== null && object.timeRanges && object.timeRanges[editingTimeRangeIndex] && (
+        <TimeRangeEditDialog
+          open={editingTimeRangeIndex !== null}
+          onOpenChange={(open) => !open && setEditingTimeRangeIndex(null)}
+          timeRange={object.timeRanges[editingTimeRangeIndex]}
+          index={editingTimeRangeIndex}
+          onSave={(index, range) => {
+            const newRanges = [...(object.timeRanges || [])];
+            newRanges[index] = range;
+            handleFieldUpdate("timeRanges", newRanges);
+          }}
+          onDelete={(index) => {
+            const newRanges = (object.timeRanges || []).filter((_, i) => i !== index);
+            handleFieldUpdate("timeRanges", newRanges.length > 0 ? newRanges : undefined);
+          }}
+        />
+      )}
+
+      {/* Summary Details Dialog */}
+      <Dialog open={selectedSummary !== null} onOpenChange={(open) => !open && setSelectedSummary(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Summary Details</DialogTitle>
+          </DialogHeader>
+          {selectedSummary && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-sm font-medium">Model</Label>
+                  <div className="mt-1 text-sm">
+                    {selectedSummary.model} {selectedSummary.modelName && `(${selectedSummary.modelName})`}
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Generated</Label>
+                  <div className="mt-1 text-sm">
+                    {new Date(selectedSummary.date).toLocaleString([], {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {selectedSummary.usage && (
+                <div>
+                  <Label className="text-sm font-medium">Token Usage</Label>
+                  <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Prompt</div>
+                      <div className="font-medium">{selectedSummary.usage.promptTokens?.toLocaleString()}</div>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Completion</div>
+                      <div className="font-medium">{selectedSummary.usage.completionTokens?.toLocaleString()}</div>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Total</div>
+                      <div className="font-medium">{selectedSummary.usage.totalTokens?.toLocaleString()}</div>
+                    </div>
+                  </div>
+                  {selectedSummary.usage.cost != null && (
+                    <div className="mt-3 p-2 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Estimated Cost</div>
+                      <div className="font-medium">${selectedSummary.usage.cost.toFixed(6)}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selectedSummary.prompt && (
+                <div>
+                  <Label className="text-sm font-medium">System Prompt</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-[200px] overflow-y-auto font-mono">
+                    {selectedSummary.prompt}
+                  </div>
+                </div>
+              )}
+
+              {selectedSummary.jobId && (
+                <div>
+                  <Label className="text-sm font-medium">Job ID</Label>
+                  <div className="mt-1 text-sm font-mono text-muted-foreground">
+                    {selectedSummary.jobId}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

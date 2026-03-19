@@ -32,6 +32,7 @@ export const zServerConfig = z.object({
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({
     enable_experimental_processing: z.boolean().describe("Enable experimental processing of conversations. This feature is currently in development and may not work as expected."),
+    enable_speaker_identification: z.boolean().default(false).describe("Enable speaker identification to recognize enrolled voices in diarization results. When enabled, diarization will match segments against enrolled speaker profiles."),
   }),
   workers: z.record(z.string(), zWorkerConfig).optional().default({}).describe("Per-worker configuration. Key is worker code/type."),
   createdAt: zDateOrString(),
@@ -53,6 +54,7 @@ export const zPrompt = z.object({
   name: z.string(),
   text: z.string(),
   description: z.string().optional(),
+  model: z.string().optional(),
 });
 
 export type Prompt = z.infer<typeof zPrompt>;

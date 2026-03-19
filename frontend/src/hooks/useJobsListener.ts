@@ -46,18 +46,28 @@ function getResultDescription(result: any): string | null {
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
-export function useJobsListener() {
+interface UseJobsListenerOptions {
+  types?: string[];
+}
+
+export function useJobsListener(options: UseJobsListenerOptions = {}) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { addNotification, showPopups } = useNotificationStore();
 
+  // Create a stable query key that includes the types filter
+  const queryKey = options.types?.length
+    ? ["jobs", "filtered", options.types.sort().join(",")]
+    : ["jobs", "all"];
+
   const { data: jobs = [], isLoading } = useQuery({
-    queryKey: ["jobs", "all"],
+    queryKey,
     queryFn: async () => {
       const response = await api.callResource("jobs", {
         action: "list",
         limit: 1000,
         statuses: ["active", "waiting", "delayed", "completed", "failed"],
+        ...(options.types?.length && { types: options.types }),
       });
       return response as JobInfo[];
     },
@@ -86,7 +96,12 @@ export function useJobsListener() {
 
       if (!jobData?.jobId) return;
 
-      queryClient.setQueryData<JobInfo[]>(["jobs", "all"], (oldJobs = []) => {
+      // Skip updates for jobs that don't match our type filter
+      if (options.types?.length && !options.types.includes(jobData.jobType)) {
+        return;
+      }
+
+      queryClient.setQueryData<JobInfo[]>(queryKey, (oldJobs = []) => {
         const newState = jobData.state || event.event.replace("job.", "");
         const existingIndex = oldJobs.findIndex((job) => job.id === jobData.jobId);
 

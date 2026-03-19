@@ -9,11 +9,21 @@ This guide is for developers who want to contribute to Mycelia or run it in deve
 The fastest way to get a development environment with hot reload:
 
 ```bash
-# Clone and setup
+# Enable dev mode for both frontend and backend
 echo "FRONTEND_MODE=dev" >> .env
+echo "BACKEND_TASK=dev" >> .env
 docker compose build frontend
 docker compose up -d
 ```
+
+#### Development Mode Variables
+
+| Variable | Default | Dev Value | Effect |
+|----------|---------|-----------|--------|
+| `FRONTEND_MODE` | `prod` | `dev` | Enables Vite hot reload instead of nginx static build |
+| `BACKEND_TASK` | `start` | `dev` | Enables file watcher for auto-restart on code changes |
+
+Both variables are optional and default to production mode if not set.
 
 Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` dependencies, you might still need to run `docker compose build` again
 
@@ -33,6 +43,8 @@ Example:
 ```bash
 NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
 ```
+
+
 
 For more details on networking and SSL setup, see **[NETWORKING.md](docs/NETWORKING.md)**.
 
@@ -59,6 +71,8 @@ deno task build
 # Preview production build
 deno task preview
 ```
+
+for mycelia url during development use: `http://localhost:3210` (non-https nginx port)
 
 ### Tech Stack
 - **Deno** runtime with npm compatibility
@@ -91,70 +105,51 @@ deno task dev
 deno run -A server.ts token-create
 ```
 
-## Python Tooling
-
-The Python services handle audio import, STT, and conversation extraction.
-
-### Audio Import Daemon
-
-```bash
-cd python
-uv run daemon.py
-```
-
-The daemon auto-detects:
-- Apple Voice Memos (if `CloudRecordings.db` exists)
-- Google Drive Easy Voice Recorder
-- Local audio folder (`~/Library/mycelia/audio`)
-
-**Environment variables** (optional, set in `.env`):
-- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
-- `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
-- `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
-- `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
-
-**Logging:** `~/Library/mycelia/logs/daemon.log`
-
-### Speech-to-Text (STT)
-
-```bash
-cd python
-
-# Transcribe queued audio
-uv run stt.py [--server https://your-stt-server.com/]
-
-# Check backlog without processing
-uv run stt.py --count
-```
-
-See [backend/README.md](backend/README.md#speech-to-text-stt) for Whisper server setup.
-
-### Conversation Extraction
-
-```bash
-cd python
-uv run python -m convos.cli \
-  --limit 5 \
-  --model small
-```
-
-**Flags:**
-- `--limit <n>` - Max conversation chunks to process
-- `--not-later-than <unix_ts>` - Only process transcripts before this time
-- `--model <small|medium|large>` - LLM size (default: small)
-
-**Logging:** `~/Library/mycelia/logs/convos.log`
 
 ## Inference Stack (GPU)
 
-For local GPU inference:
+For local GPU inference (Whisper, Ollama, Diarization):
 
 ```bash
 cd gpu
+
+# Create .env with required tokens
+echo "HF_TOKEN=your_huggingface_token" >> .env
+echo "PROXY_API_KEY=your_api_key" >> .env
+
+# Start all services
 docker compose up -d --build
 ```
 
-See [docs/LLM_DEVELOPER_GUIDE.md](docs/LLM_DEVELOPER_GUIDE.md) for hardware recommendations and model setup.
+See [gpu/README.md](gpu/README.md) for detailed setup and VRAM requirements.
+
+## Speaker Identification
+
+For voice enrollment and speaker recognition:
+
+1. Deploy diarization service on GPU (see above)
+2. Run migrations: `docker compose exec backend deno run -A server.ts migrate-up`
+3. Enable feature flag in Settings → Feature Flags
+4. Enroll voices in Settings → Voice Profiles
+
+See [docs/SPEAKER_IDENTIFICATION.md](docs/SPEAKER_IDENTIFICATION.md) for the full guide.
+
+## Database Migrations
+
+Migrations are in `backend/migrations/`. Apply them with:
+
+```bash
+# Check status
+docker compose exec backend deno run -A server.ts migrate-status
+
+# Apply all pending
+docker compose exec backend deno run -A server.ts migrate-up
+
+# Rollback last migration
+docker compose exec backend deno run -A server.ts migrate-down
+```
+
+See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for details.
 
 ## Troubleshooting
 
@@ -191,8 +186,11 @@ mycelia/
 │   └── Dockerfile.prod # Production nginx build
 ├── backend/            # Deno API server
 ├── python/             # Audio import, STT, conversation extraction
+├── diarizator/         # Speaker diarization service (FastAPI)
+├── friend/             # Friend-Lite companion app
 ├── gpu/                # GPU inference stack
-├── myceliasdk/         # Shared TypeScript myceliasdk
+├── myceliasdk/         # Shared TypeScript SDK
+├── misc/               # Infrastructure configs (nginx, mongo)
 └── docs/               # Additional documentation
 ```
 
@@ -205,4 +203,3 @@ mycelia/
 5. Submit a PR
 
 Join the [Discord](https://discord.gg/hPfYbpp2am) for discussions.
-

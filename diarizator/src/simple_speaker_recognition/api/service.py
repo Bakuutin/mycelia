@@ -1,4 +1,4 @@
-"""Minimal FastAPI service for pyannote diarization with embeddings."""
+"""FastAPI service for pyannote diarization with embeddings and speaker identification."""
 
 import json
 import logging
@@ -16,6 +16,26 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from simple_speaker_recognition.core.audio_backend import AudioBackend
 from simple_speaker_recognition.core.seeded_clustering import SeededAgglomerativeClustering
+
+# Load .env from root directory if running locally
+# This allows using HF_TOKEN from the main project .env
+def _load_dotenv():
+    """Try to load .env from project root for local development."""
+    try:
+        from dotenv import load_dotenv
+        # Try project root first (../../.env from this file)
+        root_env = Path(__file__).parent.parent.parent.parent.parent / ".env"
+        if root_env.exists():
+            load_dotenv(root_env)
+            return
+        # Try diarizator root
+        diarizator_env = Path(__file__).parent.parent.parent.parent / ".env"
+        if diarizator_env.exists():
+            load_dotenv(diarizator_env)
+    except ImportError:
+        pass  # python-dotenv not installed, skip
+
+_load_dotenv()
 
 # Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -75,6 +95,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PyAnnote Diarization Service", version="1.0.0", lifespan=lifespan)
 
+# Note: Speaker profiles are managed via MongoDB in the main Mycelia backend.
+# The legacy SQLite/FAISS routers are not mounted. Only /diarize and /embed are exposed.
+
 
 @app.get("/health")
 async def health():
@@ -85,6 +108,94 @@ async def health():
         "device": str(device),
         "service": "pyannote-diarization"
     }
+
+
+@app.post("/embed")
+async def embed(
+    file: UploadFile = File(..., description="Audio file to extract embedding from"),
+    start: Optional[float] = Query(default=None, description="Start time in seconds (optional)"),
+    end: Optional[float] = Query(default=None, description="End time in seconds (optional)"),
+):
+    """
+    Extract speaker embedding from an audio file.
+    
+    This endpoint is used for voice enrollment - it extracts a 256-dimensional
+    speaker embedding vector from the provided audio.
+    
+    Args:
+        file: Audio file (WAV, MP3, etc.)
+        start: Optional start time for extracting a segment
+        end: Optional end time for extracting a segment
+    
+    Returns:
+        embedding: List of 256 floats (L2-normalized)
+        dimension: Embedding dimension (256)
+        duration: Duration of audio processed in seconds
+    """
+    log.debug(f"Received embedding request: filename={file.filename}")
+    
+    if audio_backend is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    # Read audio file
+    audio_data = await file.read()
+    
+    if len(audio_data) == 0:
+        raise HTTPException(status_code=400, detail="Audio file is empty")
+    
+    # Create temporary file for processing
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+        tmp_file.write(audio_data)
+        tmp_file.flush()
+        os.fsync(tmp_file.fileno())
+        tmp_path = Path(tmp_file.name)
+    
+    try:
+        # Load audio (optionally with time range)
+        log.debug(f"Loading audio from {tmp_path}, start={start}, end={end}")
+        wav = audio_backend.load_wave(tmp_path, start=start, end=end)
+        
+        # Calculate duration
+        duration = wav.shape[-1] / 16000.0  # 16kHz sample rate
+        log.debug(f"Audio loaded: shape={wav.shape}, duration={duration:.2f}s")
+        
+        # Check minimum duration
+        if duration < 0.5:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Audio too short ({duration:.2f}s). Minimum 0.5 seconds required."
+            )
+        
+        # Extract embedding
+        log.debug("Extracting embedding...")
+        emb = await audio_backend.async_embed(wav)
+        emb_flat = emb.flatten()
+        
+        # Validate embedding
+        if np.any(np.isnan(emb_flat)):
+            raise HTTPException(status_code=500, detail="Embedding extraction produced NaN values")
+        
+        # Ensure normalization
+        emb_norm = np.linalg.norm(emb_flat)
+        if abs(emb_norm - 1.0) > 0.01:
+            emb_flat = emb_flat / emb_norm
+        
+        log.info(f"Embedding extracted: dim={len(emb_flat)}, duration={duration:.2f}s")
+        
+        return {
+            "embedding": emb_flat.tolist(),
+            "dimension": len(emb_flat),
+            "duration": round(duration, 3)
+        }
+        
+    except ValueError as e:
+        log.error(f"Error extracting embedding: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Embedding extraction failed: {str(e)}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @app.post("/diarize")

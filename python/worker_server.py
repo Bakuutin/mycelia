@@ -1,18 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
-import threading
-import contextvars
-from fastapi import FastAPI, HTTPException, Header, Depends
+from contextvars import copy_context
+from dataclasses import dataclass
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from pydantic import BaseModel
-from typing import Any, Dict, Optional
-import dotenv
+from typing import Any, Callable, Dict, Optional, Type
 
 from lib.resources import call_resource
 from lib.api import job_token_var
-from jobs.vad import VadJobData
-from jobs.test_python_integration import TestPythonIntegrationJobData
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,31 +21,59 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Mycelia Worker Server")
 
 
+@dataclass
+class JobDefinition:
+    data_model: Type[BaseModel]
+    processor: Callable
+
+
+# Job registry - add new jobs here
+JOB_REGISTRY: Dict[str, JobDefinition] = {}
+
+
+def register_job(name: str, data_model: Type[BaseModel], processor: Callable):
+    """Register a job type with its data model and processor"""
+    JOB_REGISTRY[name] = JobDefinition(data_model, processor)
+
+
+def _load_jobs():
+    """Load and register all job types"""
+    from jobs.vad import VadJobData, process_vad_job
+    from jobs.test_python_integration import TestPythonIntegrationJobData, process_test_python_integration_job
+    from jobs.enrollment import EnrollmentJobData, process_enrollment_job
+    from jobs.speaker_matching import SpeakerMatchingJobData, process_speaker_matching_job
+    from jobs.diarization import DiarizationJobData, process_diarization_job
+
+    register_job("vad", VadJobData, process_vad_job)
+    register_job("testPythonIntegration", TestPythonIntegrationJobData, process_test_python_integration_job)
+    register_job("enrollment", EnrollmentJobData, process_enrollment_job)
+    register_job("speakerMatching", SpeakerMatchingJobData, process_speaker_matching_job)
+    register_job("diarization", DiarizationJobData, process_diarization_job)
+
+
+_load_jobs()
+
+
 def get_token(authorization: Optional[str] = Header(None)) -> Optional[str]:
     if authorization and authorization.startswith("Bearer "):
         return authorization.split(" ")[1]
     return None
 
 
-class VadJobRequest(BaseModel):
-    jobId: str
-    data: VadJobData
-
-
-class TestPythonIntegrationJobRequest(BaseModel):
-    jobId: str
-    data: TestPythonIntegrationJobData
-
-
-
-
-def update_progress(job_id: str, job_type: str, progress: Dict[str, Any]):
-    """Send progress update back to TypeScript server (non-blocking)"""
+def update_progress(job_id: str, progress: Dict[str, Any]):
+    """Send progress update back to TypeScript server"""
     call_resource("jobs", {
         "action": "progressUpdate",
         "jobId": job_id,
         "progress": progress,
     })
+
+
+async def run_in_thread_with_context(func: Callable, *args) -> Any:
+    """Run a sync function in a thread pool while preserving context variables"""
+    ctx = copy_context()
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: ctx.run(func, *args))
 
 
 @app.get("/health")
@@ -59,84 +85,58 @@ async def health():
 async def root():
     return {
         "service": "Mycelia Worker Server",
-        "endpoints": [
-            "POST /jobs/vad",
-            "POST /jobs/transcription",
-            "POST /jobs/diarization",
-            "POST /jobs/ingestion",
-            "POST /jobs/testPythonIntegration",
-        ],
+        "endpoints": [f"POST /jobs/{name}" for name in JOB_REGISTRY],
     }
 
 
-@app.post("/jobs/testPythonIntegration")
-async def process_test_python_integration(
-    request: TestPythonIntegrationJobRequest,
-    token: Optional[str] = Depends(get_token)
+@app.post("/jobs/{job_type}")
+async def process_job(
+    job_type: str,
+    request: Request,
+    token: Optional[str] = Depends(get_token),
 ):
-    """Process test Python integration job and return result"""
-    from jobs.test_python_integration import process_test_python_integration_job
-    
-    logger.info(f"Processing test Python integration job {request.jobId}")
+    """Unified job endpoint - validates and processes any registered job type"""
+    if job_type not in JOB_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Unknown job type: {job_type}")
 
-    token_token = None
-    if token:
-        token_token = job_token_var.set(token)
+    job_def = JOB_REGISTRY[job_type]
+    body = await request.json()
+
+    job_id = body.get("jobId")
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Missing jobId")
 
     try:
-        def progress_callback(progress: Dict[str, Any]):
-            update_progress(request.jobId, "testPythonIntegration", progress)
-
-        result = process_test_python_integration_job(
-            request.jobId,
-            request.data,
-            progress_callback,
-        )
-
-        logger.info(f"Test Python integration job {request.jobId} completed: {result}")
-        return result
-
+        data = job_def.data_model.model_validate(body.get("data", {}))
     except Exception as e:
-        logger.exception(f"Test Python integration job {request.jobId} failed")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if token_token:
-            job_token_var.reset(token_token)
+        raise HTTPException(status_code=400, detail=f"Invalid job data: {e}")
 
+    logger.info(f"Processing {job_type} job {job_id}")
 
-@app.post("/jobs/vad")
-async def process_vad(
-    request: VadJobRequest,
-    token: Optional[str] = Depends(get_token)
-):
-    """Process VAD job and return result"""
-    from jobs.vad import process_vad_job
+    # Set token in current context before copying to thread
+    token_ref = job_token_var.set(token) if token else None
 
-    logger.info(f"Processing VAD job {request.jobId}")
-
-    token_token = None
-    if token:
-        token_token = job_token_var.set(token)
+    def run_processor():
+        try:
+            result = job_def.processor(
+                job_id,
+                data,
+                lambda progress: update_progress(job_id, progress),
+            )
+            logger.info(f"{job_type} job {job_id} completed: {result}")
+            return result
+        except Exception as e:
+            logger.exception(f"{job_type} job {job_id} failed")
+            raise e
 
     try:
-        def progress_callback(progress: Dict[str, Any]):
-            update_progress(request.jobId, "vad", progress)
-
-        result = process_vad_job(
-            request.jobId,
-            request.data,
-            progress_callback,
-        )
-
-        logger.info(f"VAD job {request.jobId} completed: {result}")
+        result = await run_in_thread_with_context(run_processor)
         return result
-
     except Exception as e:
-        logger.exception(f"VAD job {request.jobId} failed")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if token_token:
-            job_token_var.reset(token_token)
+        if token_ref:
+            job_token_var.reset(token_ref)
 
 
 if __name__ == "__main__":

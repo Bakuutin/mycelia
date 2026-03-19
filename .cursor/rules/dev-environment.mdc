@@ -8,6 +8,7 @@ alwaysApply: true
 - **Frontend and backend run in Docker** with hot reload (frontend and backend dirs are volume-mounted).
 - **Assume they are already running.** You can check the app in the browser or hit APIs without starting anything.
 - **Only if services are not running:** run `docker compose up -d`. Do not start frontend/backend manually outside Docker for normal dev.
+- **Frontend URL:** Access the frontend/backend at `https://localhost:4433/` (via nginx reverse proxy, self-signed certificate)
 
 ## Path Conventions
 

@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog } from "lucide-react";
+import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog, ScrollText, UserRound } from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
@@ -15,7 +15,7 @@ const SettingsLayout = () => {
       name: "API",
       path: "/settings/api",
       icon: Key,
-      description: "API configuration and authentication",
+      description: "API endpoint, credentials & keys",
     },
   ];
 
@@ -27,12 +27,11 @@ const SettingsLayout = () => {
       description: "Configure OpenAI-compatible inference provider",
     },
     {
-      name: "API Keys",
-      path: "/settings/api-keys",
-      icon: Key,
-      description: "Manage API keys and policies",
+      name: "Prompts",
+      path: "/settings/prompts",
+      icon: ScrollText,
+      description: "Manage prompt templates",
     },
-
     {
       name: "Configuration",
       path: "/settings/config",
@@ -44,6 +43,12 @@ const SettingsLayout = () => {
       path: "/settings/workers",
       icon: Cog,
       description: "Configure background job workers",
+    },
+    {
+      name: "Voice Profiles",
+      path: "/settings/voice-profiles",
+      icon: UserRound,
+      description: "Enroll and manage speaker voices",
     },
   ];
 

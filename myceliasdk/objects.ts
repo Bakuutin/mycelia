@@ -30,6 +30,9 @@ const zObjectBase = z.object({
   isConversation: z.boolean().optional(),
   isTag: z.boolean().optional(),
 
+  // User flags
+  starred: z.boolean().optional(),
+
   agreed_upon_something: z.boolean().optional(),
 
   relationship: z.object({
@@ -55,12 +58,15 @@ const zObjectBase = z.object({
     modelName: z.string(),
     date: z.date(),
     prompt: z.string().optional(),
+    promptName: z.string().optional(),
     usage: z.object({
       promptTokens: z.number(),
       completionTokens: z.number(),
       totalTokens: z.number(),
+      cost: z.number().optional(),
     }).optional(),
     jobId: z.string().optional(),
+    starred: z.boolean().optional(),
   })).optional(),
 
   metadata: z.object({

@@ -26,3 +26,4 @@ misc/.htpasswd
 /misc/nginx/ssl/*.pem
 /misc/secrets/
 cloudflare.ini
+qdrant_storage/*

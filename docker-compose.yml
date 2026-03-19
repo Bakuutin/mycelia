@@ -8,7 +8,7 @@ services:
       - --bind 0.0.0.0
     volumes:
       - ${REDIS_HOST_PATH:-redis_data}:/data
-    restart: always
+    restart: unless-stopped
     environment:
       - REDIS_PASSWORD
   mongo:
@@ -18,9 +18,8 @@ services:
     volumes:
       - ${MONGO_HOST_PATH:-mongo_data}:/data/db
       - ./misc/mongo/mongod.conf:/etc/mongod.conf:ro
-      - ./misc/mongo/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
       - ./misc/mongo/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
-    restart: always
+    restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME
       - MONGO_INITDB_ROOT_PASSWORD
@@ -31,7 +30,7 @@ services:
         limits:
           cpus: '2.0'
           memory: 4G
-    
+
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
   #   entrypoint: ["/mongot-entrypoint.sh"]
@@ -44,6 +43,18 @@ services:
   #     - MONGO_INITDB_ROOT_PASSWORD
   #   depends_on:
   #     - mongo
+
+  pbm-agent:
+    image: percona/percona-backup-mongodb:2.12.0
+    profiles: ["backup"]
+    environment:
+      PBM_MONGODB_URI: "mongodb://${PBM_USER:-pbmuser}:${PBM_PASSWORD}@mongo:27017/?authSource=admin&directConnection=true"
+    volumes:
+      - ${PBM_BACKUP_HOST_PATH:-pbm_backup_data}:/data/backups
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
   frontend:
     image: bakuutin/mycelia-frontend:dev
     build:
@@ -51,7 +62,7 @@ services:
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
     expose:
       - "8080"
-    restart: always
+    restart: unless-stopped
     volumes:
       - ./frontend:/app
       - ./myceliasdk:/app/myceliasdk
@@ -63,7 +74,10 @@ services:
       dockerfile: ./backend/Dockerfile
     expose:
       - "5173"
-    restart: always
+    restart: unless-stopped
+    depends_on:
+      - mongo
+      - redis
     command: deno task ${BACKEND_TASK:-start}
     env_file:
       - .env
@@ -91,10 +105,12 @@ services:
       dockerfile: ./python/Dockerfile
     environment:
       MYCELIA_URL: http://backend:5173
+      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://host.docker.internal:8085}
+      SPEAKER_SIMILARITY_THRESHOLD: ${SPEAKER_SIMILARITY_THRESHOLD:-0.35}
     volumes:
       - ./python:/app
       - ${WORKER_HOST_PATH:-worker_data}:/root/.cache
-    restart: always
+    restart: unless-stopped
     deploy:
       resources:
         limits:
@@ -115,7 +131,10 @@ services:
       - ./misc/nginx/templates:/etc/nginx/templates:ro
       - ./misc/nginx/ssl:/etc/nginx/ssl
       - ./misc/nginx/nginx-entrypoint.sh:/nginx-entrypoint.sh:ro
-    restart: always
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
 
 
 
@@ -124,3 +143,4 @@ volumes:
   mongo_data:
   mongo_search_data:
   worker_data:
+  pbm_backup_data:
