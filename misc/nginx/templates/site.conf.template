@@ -1,8 +1,9 @@
-# Use resolver for runtime DNS resolution
-# This allows nginx to start even if upstream services aren't ready yet
-resolver 127.0.0.11 valid=30s;
-
 server {
+    # Use container DNS resolvers for runtime hostname resolution.
+    #  - 127.0.0.11: Docker embedded DNS
+    #  - 10.89.4.1: Podman DNS
+    # nginx will fall back between them as needed.
+    resolver 127.0.0.11 10.89.4.1 ipv6=off valid=30s;
     listen 80 default_server;
     listen 443 ssl http2 default_server;
     listen 4433 ssl http2 default_server;
