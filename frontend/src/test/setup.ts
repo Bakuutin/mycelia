@@ -8,7 +8,9 @@ afterEach(() => {
 
 (globalThis as any).confirm = vi.fn(() => true);
 
-Object.defineProperty(window, "matchMedia", {
+const rootWindow = globalThis.window ?? globalThis;
+
+Object.defineProperty(rootWindow, "matchMedia", {
   writable: true,
   value: vi.fn().mockImplementation((query) => ({
     matches: false,
@@ -28,4 +30,6 @@ Object.defineProperty(window, "matchMedia", {
   disconnect: vi.fn(),
 }));
 
-Element.prototype.scrollIntoView = vi.fn();
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView = vi.fn();
+}
