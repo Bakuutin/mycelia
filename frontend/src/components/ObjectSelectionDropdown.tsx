@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import {
   useCreateObject,
   useObject,
-  useObjectSearch,
   useObjectSelection,
 } from "@/hooks/useObjectQueries";
 import type { Object } from "@/types/objects";
@@ -29,6 +28,20 @@ const renderIcon = (icon: any) => {
   return "";
 };
 
+const getObjectIdString = (objectId: Object["_id"]) =>
+  objectId instanceof ObjectId ? objectId.toHexString() : String(objectId);
+
+const getObjectDisplayName = (object: Pick<Object, "name">) =>
+  object.name?.trim() || "Unnamed";
+
+const getObjectDisplayLabel = (object: Pick<Object, "name" | "icon">) => {
+  const icon = renderIcon(object.icon);
+  const name = getObjectDisplayName(object);
+  return icon ? `${icon} ${name}` : name;
+};
+
+const normalizeSearchValue = (value: string) => value.trim().toLowerCase();
+
 export function ObjectSelectionDropdown({
   value,
   onChange,
@@ -42,24 +55,12 @@ export function ObjectSelectionDropdown({
   // Fetch all objects for dropdown (1000 limit)
   const { data: allObjects = [] } = useObjectSelection();
 
-  // Use search when user types, otherwise use all objects
-  const { data: searchResults = [] } = useObjectSearch(
-    searchValue.trim(),
-    1000,
-  );
-
-  // Use search results if searching, otherwise use all objects
-  const baseResults = searchValue.trim() ? searchResults : allObjects;
+  const baseResults = allObjects;
 
   // Fetch the selected object if it's not in the results
   const hasValueInResults = useMemo(() => {
     if (!value) return true;
-    return baseResults.some((obj: Object) => {
-      const objectIdString = obj._id instanceof ObjectId
-        ? obj._id.toHexString()
-        : String(obj._id);
-      return objectIdString === value;
-    });
+    return baseResults.some((obj: Object) => getObjectIdString(obj._id) === value);
   }, [baseResults, value]);
 
   const { data: selectedObject } = useObject(
@@ -68,53 +69,46 @@ export function ObjectSelectionDropdown({
 
   const options: SelectOption[] = useMemo(() => {
     const objectOptions = baseResults.map((obj: Object) => {
-      // Ensure consistent string representation of ObjectId
-      const objectIdString = obj._id instanceof ObjectId
-        ? obj._id.toHexString()
-        : String(obj._id);
-
-      const icon = renderIcon(obj.icon);
-      const name = obj.name || "Unnamed";
-
       return {
-        label: icon ? `${icon} ${name}` : name,
-        value: objectIdString,
+        label: getObjectDisplayLabel(obj),
+        value: getObjectIdString(obj._id),
       };
     });
 
     // Add the selected object if it's not in the results
     if (selectedObject && value) {
-      const objectIdString = selectedObject._id instanceof ObjectId
-        ? selectedObject._id.toHexString()
-        : String(selectedObject._id);
+      const objectIdString = getObjectIdString(selectedObject._id);
 
       // Only add if it's not already in the options
-      if (!objectOptions.some((opt) => opt.value === objectIdString)) {
-        const icon = renderIcon(selectedObject.icon);
-        const name = selectedObject.name || "Unnamed";
+      if (!objectOptions.some((opt: SelectOption) => opt.value === objectIdString)) {
         objectOptions.unshift({
-          label: icon ? `${icon} ${name}` : name,
+          label: getObjectDisplayLabel(selectedObject),
           value: objectIdString,
         });
       }
     }
 
     // Add create option if there's a search value and no exact match
-    if (searchValue.trim()) {
-      const hasExactMatch = objectOptions.some((option: SelectOption) =>
-        option.label.toLowerCase() === searchValue.toLowerCase()
+    const trimmedSearchValue = searchValue.trim();
+    const normalizedSearchValue = normalizeSearchValue(trimmedSearchValue);
+    if (normalizedSearchValue) {
+      const availableObjects = selectedObject && value && !hasValueInResults
+        ? [...baseResults, selectedObject]
+        : baseResults;
+      const hasExactMatch = availableObjects.some((obj: Object) =>
+        normalizeSearchValue(getObjectDisplayName(obj)) === normalizedSearchValue
       );
 
       if (!hasExactMatch) {
         objectOptions.push({
-          label: `➕ Create "${searchValue}"`,
-          value: `__create__${searchValue}`,
+          label: `➕ Create "${trimmedSearchValue}"`,
+          value: `__create__${trimmedSearchValue}`,
         });
       }
     }
 
     return objectOptions;
-  }, [baseResults, selectedObject, value, searchValue]);
+  }, [baseResults, selectedObject, value, searchValue, hasValueInResults]);
 
   const handleCreateObject = async (objectName: string) => {
     if (!objectName.trim()) return;
