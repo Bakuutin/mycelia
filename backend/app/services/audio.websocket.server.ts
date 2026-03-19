@@ -5,13 +5,15 @@ import type { IncomingMessage } from "node:http";
 import {
   createAudioChunk,
   createSourceFile,
-  decodeOpusToPcm,
   type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
 import { ObjectId } from "bson";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
-import { OpusDecoder } from "npm:opus-decoder@^0.7.11";
+import {
+  OpusDecoder,
+  type OpusDecoderSampleRate,
+} from "npm:opus-decoder@^0.7.11";
 
 // Debug logging - enable with DEBUG_AUDIO_WS=true
 const DEBUG = Deno.env.get("DEBUG_AUDIO_WS") === "true";
@@ -25,6 +27,22 @@ const log = (level: string, msg: string, data?: Record<string, unknown>) => {
 };
 
 const CHUNK_DURATION_SECONDS = 10;
+
+function coerceOpusSampleRate(rate: number): OpusDecoderSampleRate {
+  switch (rate) {
+    case 8000:
+    case 12000:
+    case 16000:
+    case 24000:
+    case 48000:
+      return rate;
+    default:
+      log("WARN", "Unsupported Opus sample rate, defaulting to 16000Hz", {
+        rate,
+      });
+      return 16000;
+  }
+}
 
 // ============================================================================
 // Audio Format Detection
@@ -199,7 +217,7 @@ class PcmWebSocketSession {
   private opusDecodedToPcm = false; // Track if we're converting Opus→PCM (Chronicle mode)
   private opusFrameCount = 0; // Track number of Opus frames received
   private lastFlushTime: Date | null = null; // Track last flush for time-based flushing
-  private opusDecoder: OpusDecoder | null = null; // opus-decoder WASM instance (in-process, like Chronicle)
+  private opusDecoder: OpusDecoder<OpusDecoderSampleRate> | null = null; // opus-decoder WASM instance (in-process, like Chronicle)
   private opusDecodeLock = new AsyncLock(); // Serialize Opus frame decoding (Chronicle pattern)
 
   constructor(
@@ -253,13 +271,14 @@ class PcmWebSocketSession {
           channels: audioFormat.channels
         });
 
-        this.opusDecoder = new OpusDecoder({
-          sampleRate: audioFormat.rate, // OMI typically sends 16kHz
+        const decoder = new OpusDecoder<OpusDecoderSampleRate>({
+          sampleRate: coerceOpusSampleRate(audioFormat.rate), // OMI typically sends 16kHz
           channels: audioFormat.channels,
           forceStereo: false,
         });
+        this.opusDecoder = decoder;
 
-        await this.opusDecoder.ready;
+        await decoder.ready;
 
         log("INFO", `[AUDIO_WS] Opus decoder ready (in-process, zero HTTP overhead)`, {
           sessionId: this.sessionId
@@ -642,7 +661,8 @@ class PcmWebSocketSession {
 
       // For Opus: we decoded to PCM, so buffer contains PCM now
       // For PCM/float32: buffer contains what header declared
-      const format = this.detectedFormat === "opus" ? "pcm" : (this.detectedFormat || "pcm");
+      const format: AudioFormatConfig["format"] =
+        this.detectedFormat === "float32" ? "float32" : "pcm";
 
       const formatConfig: AudioFormatConfig = {
         format,
@@ -656,7 +676,7 @@ class PcmWebSocketSession {
           chunkStartTime,
           this.chunkIndex,
           this.sourceFileId,
-          formatConfig.format,
+          formatConfig,
         );
         log("INFO", `[AUDIO_WS] Audio chunk created`, {
           sessionId: this.sessionId,

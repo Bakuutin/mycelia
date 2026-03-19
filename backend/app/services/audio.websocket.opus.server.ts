@@ -10,6 +10,10 @@ import {
 import { ObjectId } from "mongodb";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
+import {
+  OpusDecoder,
+  type OpusDecoderSampleRate,
+} from "npm:opus-decoder@^0.7.11";
 
 // Debug logging - enable with DEBUG_AUDIO_WS=true
 const DEBUG = Deno.env.get("DEBUG_AUDIO_WS") === "true";
@@ -21,6 +25,24 @@ const log = (level: string, msg: string, data?: Record<string, unknown>) => {
   const dataStr = data ? ` ${JSON.stringify(data)}` : "";
   console.log(`[AUDIO-WS-OPUS] ${timestamp} ${level}: ${msg}${dataStr}`);
 };
+
+const OPUS_CHANNELS = 1;
+
+function coerceOpusSampleRate(rate: number): OpusDecoderSampleRate {
+  switch (rate) {
+    case 8000:
+    case 12000:
+    case 16000:
+    case 24000:
+    case 48000:
+      return rate;
+    default:
+      log("WARN", "Unsupported Opus sample rate, defaulting to 16000Hz", {
+        rate,
+      });
+      return 16000;
+  }
+}
 
 // Opus frame duration in milliseconds (standard is 20ms)
 const OPUS_FRAME_DURATION_MS = 20;
@@ -70,9 +92,11 @@ class OpusWebSocketSession {
   buffer: Denque<Uint8Array> = new Denque();
   chunkIndex = 0;
   private flushLock = new AsyncLock();
+  private opusDecodeLock = new AsyncLock();
   private framesReceived = 0;
   private bytesReceived = 0;
   private sessionId: string;
+  private opusDecoder: OpusDecoder<OpusDecoderSampleRate> | null = null;
 
   constructor(
     private auth: Auth,
@@ -89,13 +113,14 @@ class OpusWebSocketSession {
     }
 
     const opusFormat = header.data as unknown as OpusFormat;
+    const sampleRate = coerceOpusSampleRate(opusFormat.rate);
     const startTime = opusFormat.timestamp
       ? new Date(opusFormat.timestamp * 1000)
       : new Date();
 
     log("INFO", `Opus stream starting`, {
       sessionId: this.sessionId,
-      rate: opusFormat.rate,
+      rate: sampleRate,
       timestamp: opusFormat.timestamp,
       startTime: startTime.toISOString()
     });
@@ -107,8 +132,30 @@ class OpusWebSocketSession {
     this.bytesReceived = 0;
     this.buffer.clear();
 
+    if (this.opusDecoder) {
+      this.opusDecoder.free();
+      this.opusDecoder = null;
+    }
+
+    try {
+      const decoder = new OpusDecoder<OpusDecoderSampleRate>({
+        sampleRate,
+        channels: OPUS_CHANNELS,
+        forceStereo: false,
+      });
+      this.opusDecoder = decoder;
+      await decoder.ready;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      log("ERROR", "Failed to initialize Opus decoder", {
+        sessionId: this.sessionId,
+        error: errorMsg,
+      });
+      throw error;
+    }
+
     const metadata = {
-      rate: opusFormat.rate,
+      rate: sampleRate,
       format: "opus",
       codec: "opus",
       source: "websocket_opus",
@@ -167,6 +214,11 @@ class OpusWebSocketSession {
         bufferRemaining: this.buffer.length
       });
     }
+
+    if (this.opusDecoder) {
+      this.opusDecoder.free();
+      this.opusDecoder = null;
+    }
   }
 
   async addOpusFrame(opusFrame: Uint8Array): Promise<void> {
@@ -188,8 +240,48 @@ class OpusWebSocketSession {
       });
     }
 
-    // Buffer the entire frame
-    this.buffer.push(opusFrame);
+    const decoder = this.opusDecoder;
+    if (!decoder) {
+      log("ERROR", "Received Opus frame before decoder initialization", {
+        sessionId: this.sessionId,
+        frameBytes: opusFrame.byteLength,
+      });
+      return;
+    }
+
+    await this.opusDecodeLock.acquire(async () => {
+      const result = decoder.decodeFrame(opusFrame);
+
+      if (result.errors.length > 0) {
+        for (const error of result.errors) {
+          log("WARN", "Opus decoder reported an error", {
+            sessionId: this.sessionId,
+            error: error.message,
+          });
+        }
+      }
+
+      if (result.samplesDecoded === 0 || result.channelData.length === 0) {
+        return;
+      }
+
+      const pcm = result.channelData[0];
+      const int16Pcm = new Int16Array(pcm.length);
+
+      for (let i = 0; i < pcm.length; i++) {
+        const sample = Math.max(-1, Math.min(1, pcm[i]));
+        int16Pcm[i] = Math.round(sample * 32767);
+      }
+
+      this.buffer.push(
+        new Uint8Array(
+          int16Pcm.buffer,
+          int16Pcm.byteOffset,
+          int16Pcm.byteLength,
+        ),
+      );
+    });
+
     await this.checkAndFlushIfNeeded();
   }
 
@@ -246,33 +338,32 @@ class OpusWebSocketSession {
         break;
       }
 
-      // Concatenate Opus frames into a single chunk
+      // Concatenate decoded PCM frames into a single chunk.
       let totalBytes = 0;
-      const frames: Uint8Array[] = [];
+      const pcmFrames: Uint8Array[] = [];
       for (let i = 0; i < framesToFlush; i++) {
         const frame = this.buffer.shift();
         if (!frame) {
           break;
         }
-        frames.push(frame);
+        pcmFrames.push(frame);
         totalBytes += frame.byteLength;
       }
 
-      // Combine all frames into single buffer
+      // Combine all PCM frames into single buffer
       const chunkData = new Uint8Array(totalBytes);
       let offset = 0;
-      for (const frame of frames) {
+      for (const frame of pcmFrames) {
         chunkData.set(frame, offset);
         offset += frame.byteLength;
       }
 
       const chunkStartTime = this.calculateChunkStartTime();
 
-      // Opus is already encoded - use "opus" format to skip re-encoding
       const formatConfig: AudioFormatConfig = {
-        format: "opus",
+        format: "pcm",
         sampleRate: this.opusFormat.rate,
-        channels: 1, // Opus streams are typically mono for voice
+        channels: OPUS_CHANNELS,
       };
 
       try {
@@ -287,7 +378,7 @@ class OpusWebSocketSession {
           sessionId: this.sessionId,
           chunkIndex: this.chunkIndex,
           chunkBytes: chunkData.length,
-          frameCount: frames.length,
+          frameCount: pcmFrames.length,
           chunkStart: chunkStartTime.toISOString(),
           isFinal: flushAll,
           sourceFileId: this.sourceFileId?.toString(),
