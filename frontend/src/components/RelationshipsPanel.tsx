@@ -8,7 +8,6 @@ import {
   Plus,
   RefreshCcw,
   Trash2,
-  X,
 } from "lucide-react";
 import type { Object } from "@/types/objects";
 import { Button } from "@/components/ui/button";
@@ -31,6 +30,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface RelationshipsPanelProps {
   object: Object;
@@ -45,6 +51,15 @@ const renderIcon = (icon: any) => {
   if (icon.base64) return "📷"; // Placeholder for base64 images
   return "";
 };
+
+const createInitialRelationship = (object: Object) => ({
+  name: "",
+  icon: { text: "" } as { text: string } | { base64: string },
+  details: "",
+  subjectId: object._id.toString(),
+  objectId: "",
+  symmetrical: false,
+});
 
 export function RelationshipsPanel({ object, compact = false }: RelationshipsPanelProps) {
   const { data: relationships = [] } = getRelationships(object._id);
@@ -62,15 +77,14 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
     subjectId: string;
     objectId: string;
     symmetrical: boolean;
-  }>({
-    name: "",
-    icon: { text: "" },
-    details: "",
-    subjectId: object._id.toString(),
-    objectId: "",
-    symmetrical: false,
-  });
+  }>(createInitialRelationship(object));
   const [createError, setCreateError] = useState<string | null>(null);
+
+  const closeCreateForm = () => {
+    setShowCreateForm(false);
+    setCreateError(null);
+    setNewRelationship(createInitialRelationship(object));
+  };
 
   const handleCreateRelationship = async () => {
     if (!newRelationship.name.trim()) {
@@ -99,15 +113,7 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
 
     try {
       await createObjectMutation.mutateAsync(relationshipDoc);
-      setShowCreateForm(false);
-      setNewRelationship({
-        name: "",
-        icon: { text: "" },
-        details: "",
-        subjectId: object._id.toString(),
-        objectId: "",
-        symmetrical: false,
-      });
+      closeCreateForm();
     } catch (err) {
       setCreateError(
         err instanceof Error ? err.message : "Failed to create relationship",
@@ -159,6 +165,198 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
         )}
       </div>
 
+      <Dialog open={showCreateForm} onOpenChange={(open) => {
+        if (open) {
+          setShowCreateForm(true);
+          return;
+        }
+        closeCreateForm();
+      }}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New Relationship</DialogTitle>
+            <DialogDescription>
+              Create a relationship object linking this object to another one.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <div>
+                <Label className="text-xs">Icon</Label>
+                <div className="mt-1">
+                  <EmojiPickerButton
+                    value={newRelationship.icon}
+                    onChange={(icon) => {
+                      if (icon) {
+                        setNewRelationship((prev) => ({ ...prev, icon }));
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="flex-1">
+                <Label htmlFor="rel-name" className="text-xs">
+                  Relationship Name
+                </Label>
+                <Input
+                  id="rel-name"
+                  value={newRelationship.name}
+                  onChange={(e) => {
+                    setNewRelationship((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                    }));
+                    if (createError) setCreateError(null);
+                  }}
+                  placeholder="e.g., knows, works with, manages"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <Label className="text-xs">Source Object</Label>
+                  {!newRelationship.symmetrical && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex items-center gap-1"
+                          onClick={() => {
+                            setNewRelationship((prev) => ({
+                              ...prev,
+                              subjectId: prev.objectId || object._id.toString(),
+                              objectId: prev.subjectId,
+                            }));
+                          }}
+                        >
+                          <RefreshCcw className="w-3 h-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Reverse direction</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+                <ObjectSelectionDropdown
+                  value={newRelationship.subjectId}
+                  onChange={(value) => {
+                    if (value) {
+                      setNewRelationship((prev) => ({
+                        ...prev,
+                        subjectId: value,
+                      }));
+                    }
+                  }}
+                  placeholder="Select source object..."
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-px bg-border" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setNewRelationship((prev) => ({
+                          ...prev,
+                          symmetrical: !prev.symmetrical,
+                        }));
+                      }}
+                      className="h-7 px-2 gap-1"
+                    >
+                      {newRelationship.symmetrical
+                        ? <MoveHorizontal className="w-3 h-3" />
+                        : <ArrowRight className="w-3 h-3" />}
+                      <span className="text-xs">
+                        {newRelationship.symmetrical ? "Bidirectional" : "Directional"}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>
+                      {newRelationship.symmetrical
+                        ? "Click to make directional (one-way)"
+                        : "Click to make bidirectional (both ways)"}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+
+              <div>
+                <Label className="text-xs mb-1 block">Target Object</Label>
+                <ObjectSelectionDropdown
+                  value={newRelationship.objectId}
+                  onChange={(value) => {
+                    if (value) {
+                      setNewRelationship((prev) => ({
+                        ...prev,
+                        objectId: value,
+                      }));
+                      if (createError) setCreateError(null);
+                    }
+                  }}
+                  placeholder="Select target object..."
+                />
+                {!newRelationship.objectId && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Select the object this relationship points to
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="rel-details" className="text-xs">
+                Details (optional)
+              </Label>
+              <textarea
+                id="rel-details"
+                value={newRelationship.details}
+                onChange={(e) =>
+                  setNewRelationship((prev) => ({
+                    ...prev,
+                    details: e.target.value,
+                  }))}
+                placeholder="Additional details about this relationship"
+                className="mt-1 flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </div>
+
+            {createError && (
+              <div className="p-2 bg-red-50 border border-red-200 rounded text-sm text-red-600">
+                {createError}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <Button
+                size="sm"
+                onClick={handleCreateRelationship}
+                disabled={createObjectMutation.isPending}
+              >
+                {createObjectMutation.isPending ? "Creating..." : "Create"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={closeCreateForm}
+                disabled={createObjectMutation.isPending}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Reference Counts Display - only show when not compact */}
       {!compact && referenceCounts && (
         <div className="grid grid-cols-3 gap-2 p-2 bg-muted/30 rounded-lg border">
@@ -189,200 +387,6 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
         </div>
       )}
 
-      {showCreateForm && (
-        <div className="border rounded-lg p-4 space-y-4 bg-muted/50">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">New Relationship</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowCreateForm(false);
-                setCreateError(null);
-              }}
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-
-          <div className="flex items-start gap-3">
-            <div>
-              <Label className="text-xs">Icon</Label>
-              <div className="mt-1">
-                <EmojiPickerButton
-                  value={newRelationship.icon}
-                  onChange={(icon) => {
-                    if (icon) {
-                      setNewRelationship((prev) => ({ ...prev, icon }));
-                    }
-                  }}
-                />
-              </div>
-            </div>
-            <div className="flex-1">
-              <Label htmlFor="rel-name" className="text-xs">
-                Relationship Name
-              </Label>
-              <Input
-                id="rel-name"
-                value={newRelationship.name}
-                onChange={(e) => {
-                  setNewRelationship((prev) => ({
-                    ...prev,
-                    name: e.target.value,
-                  }));
-                  if (createError) setCreateError(null);
-                }}
-                placeholder="e.g., knows, works with, manages"
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          {/* Source and Target Objects - stacked layout for narrow containers */}
-          <div className="space-y-3">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Label className="text-xs">Source Object</Label>
-                {!newRelationship.symmetrical && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex items-center gap-1"
-                        onClick={() => {
-                          setNewRelationship((prev) => ({
-                            ...prev,
-                            subjectId: prev.objectId || object._id.toString(),
-                            objectId: prev.subjectId,
-                          }));
-                        }}
-                      >
-                        <RefreshCcw className="w-3 h-3" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Reverse direction</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-              <ObjectSelectionDropdown
-                value={newRelationship.subjectId}
-                onChange={(value) => {
-                  if (value) {
-                    setNewRelationship((prev) => ({
-                      ...prev,
-                      subjectId: value,
-                    }));
-                  }
-                }}
-                placeholder="Select source object..."
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="flex-1 h-px bg-border" />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setNewRelationship((prev) => ({
-                        ...prev,
-                        symmetrical: !prev.symmetrical,
-                      }));
-                    }}
-                    className="h-7 px-2 gap-1"
-                  >
-                    {newRelationship.symmetrical
-                      ? <MoveHorizontal className="w-3 h-3" />
-                      : <ArrowRight className="w-3 h-3" />}
-                    <span className="text-xs">
-                      {newRelationship.symmetrical ? "Bidirectional" : "Directional"}
-                    </span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>
-                    {newRelationship.symmetrical
-                      ? "Click to make directional (one-way)"
-                      : "Click to make bidirectional (both ways)"}
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-              <div className="flex-1 h-px bg-border" />
-            </div>
-
-            <div>
-              <Label className="text-xs mb-1 block">Target Object</Label>
-              <ObjectSelectionDropdown
-                value={newRelationship.objectId}
-                onChange={(value) => {
-                  if (value) {
-                    setNewRelationship((prev) => ({
-                      ...prev,
-                      objectId: value,
-                    }));
-                    if (createError) setCreateError(null);
-                  }
-                }}
-                placeholder="Select target object..."
-              />
-              {!newRelationship.objectId && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Select the object this relationship points to
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <Label htmlFor="rel-details" className="text-xs">
-              Details (optional)
-            </Label>
-            <textarea
-              id="rel-details"
-              value={newRelationship.details}
-              onChange={(e) =>
-                setNewRelationship((prev) => ({
-                  ...prev,
-                  details: e.target.value,
-                }))}
-              placeholder="Additional details about this relationship"
-              className="mt-1 flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </div>
-
-          {createError && (
-            <div className="p-2 bg-red-50 border border-red-200 rounded text-sm text-red-600">
-              {createError}
-            </div>
-          )}
-
-          <div className="flex gap-2 pt-2">
-            <Button
-              size="sm"
-              onClick={handleCreateRelationship}
-              disabled={createObjectMutation.isPending}
-            >
-              {createObjectMutation.isPending ? "Creating..." : "Create"}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowCreateForm(false);
-                setCreateError(null);
-              }}
-              disabled={createObjectMutation.isPending}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
       {relationships.length > 0 && (
         <div className={`flex flex-col ${compact ? 'gap-1' : 'gap-2'}`}>
           {relationships.map(({ other, relationship }) => {
