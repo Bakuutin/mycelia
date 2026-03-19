@@ -27,3 +27,4 @@ misc/.htpasswd
 /misc/secrets/
 cloudflare.ini
 qdrant_storage/*
+.playwright-cli

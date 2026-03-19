@@ -480,17 +480,8 @@ export default function SetupPage() {
                   disabled={!pastedCredentials.trim() || isLoading}
                   className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-5 rounded-xl disabled:opacity-50"
                 >
-                  {status === "verifying" ? (
-                    <>
-                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-5 h-5 mr-2" />
-                      Connect
-                    </>
-                  )}
+                  <CheckCircle2 className="w-5 h-5 mr-2" />
+                  Connect
                 </Button>
                 <Button
                   type="button"

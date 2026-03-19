@@ -115,6 +115,7 @@ export class ConfigResource implements Resource<ConfigRequest, ConfigResponse> {
       inference: null,
       features: {
         enable_experimental_processing: false,
+        enable_speaker_identification: false,
       },
       workers: {},
       createdAt: now,

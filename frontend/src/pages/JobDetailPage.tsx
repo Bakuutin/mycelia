@@ -145,6 +145,7 @@ export default function JobDetailPage() {
     });
 
     const job = cachedJob || fetchedJob;
+    const isTranscriptionJob = job?.type === "transcription";
     const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const logDateRange = (() => {
@@ -203,9 +204,6 @@ export default function JobDetailPage() {
         },
         enabled: !!id && !!job,
     });
-
-    const job = cachedJob || fetchedJob;
-    const isTranscriptionJob = job?.type === "transcription";
 
     // Fetch transcriptions created by this job
     const { data: transcriptions = [], isLoading: isTranscriptionsLoading } = useQuery({
@@ -287,9 +285,6 @@ export default function JobDetailPage() {
         if (!confirm("Are you sure you want to cancel this job?")) return;
         cancelJobMutation.mutate();
     };
-
-    const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
-
     const getStatusColor = (status: string) => {
         switch (status) {
             case "completed":
@@ -711,7 +706,7 @@ export default function JobDetailPage() {
                                     <MetricCell key={m.label} icon={m.icon} label={m.label} value={m.value} />
                                 ))}
                             </div>
-                            {config.errors?.length > 0 && (
+                            {config.errors && config.errors?.length > 0 && (
                                 <div>
                                     <div className="flex items-center gap-2 text-sm text-red-500 mb-2">
                                         <AlertTriangle className="h-4 w-4" />
