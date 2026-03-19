@@ -1,46 +1,32 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
-import { useFilteredObjects, useObjectsStore, getObjectCategory } from "./useObjects.ts";
+import {
+  getObjectCategory,
+  useFilteredObjects,
+  useObjectsStore,
+} from "./useObjects.ts";
 import { Button } from "@/components/ui/button.tsx";
 import type { Object } from "@/types/objects.ts";
-import {
-  ArrowLeftRight,
-  ArrowRight,
-  PlusIcon,
-  RefreshCw,
-} from "lucide-react";
+import { ArrowLeftRight, ArrowRight, PlusIcon, RefreshCw } from "lucide-react";
 import { useTimelineRange } from "../../stores/timelineRange.ts";
 import { useNow } from "@/hooks/useNow.ts";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore.ts";
 import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore.ts";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore.ts";
-import { type ObjectCategory, OBJECT_CATEGORIES } from "@/types/tracks.ts";
+import { OBJECT_CATEGORIES, type ObjectCategory } from "@/types/tracks.ts";
+import {
+  buildRelationshipConnectors,
+  type CategorySection,
+  type ExtractedObjectRange,
+  getRangeYOffset,
+  type PlacedObjectRange,
+} from "./relationshipConnectors.ts";
 
 const laneHeight = 40; // Half the previous height for more compact display
 const topMargin = 4;
 const categoryHeaderHeight = 24; // Height for category headers
-
-type ExtractedObjectRange = {
-  object: Object & {
-    subjectObject?: Object;
-    objectObject?: Object;
-  };
-  rangeIndex: number;
-  start: Date;
-  end?: Date;
-  category: ObjectCategory;
-};
-
-type PlacedObjectRange = {
-  startX: number;
-  endX: number;
-  lane: number;
-  startOffScreen: boolean;
-  endOffScreen: boolean;
-  hasNoEnd: boolean;
-  isSmall: boolean;
-} & ExtractedObjectRange;
+const categoryLabelInset = 72;
 
 const SMALL_OBJECT_THRESHOLD = 50;
 
@@ -120,16 +106,6 @@ function flattenObjectsToRanges(objects: Object[]): ExtractedObjectRange[] {
 
   return ranges;
 }
-
-// Category section info for rendering headers
-type CategorySection = {
-  category: ObjectCategory;
-  config: typeof OBJECT_CATEGORIES[0];
-  startLane: number;
-  laneCount: number;
-  yOffset: number;
-};
-
 function useLaneLayout(
   ranges: ExtractedObjectRange[],
   xFor: (d: Date) => number,
@@ -147,16 +123,18 @@ function useLaneLayout(
     const nowIsVisible = now >= visibleStart && now <= visibleEnd;
 
     // Filter and classify ranges
-    const classifiedRanges: Array<ExtractedObjectRange & {
-      originalStartX: number;
-      originalEndX: number;
-      startX: number;
-      endX: number;
-      rangeWidth: number;
-      startOffScreen: boolean;
-      endOffScreen: boolean;
-      isSmall: boolean;
-    }> = [];
+    const classifiedRanges: Array<
+      ExtractedObjectRange & {
+        originalStartX: number;
+        originalEndX: number;
+        startX: number;
+        endX: number;
+        rangeWidth: number;
+        startOffScreen: boolean;
+        endOffScreen: boolean;
+        isSmall: boolean;
+      }
+    > = [];
 
     for (const range of ranges) {
       // Filter by visible categories
@@ -211,14 +189,20 @@ function useLaneLayout(
       for (const categoryConfig of OBJECT_CATEGORIES) {
         if (!visibleCategories.includes(categoryConfig.id)) continue;
 
-        const categoryRanges = classifiedRanges.filter(r => r.category === categoryConfig.id);
+        const categoryRanges = classifiedRanges.filter((r) =>
+          r.category === categoryConfig.id
+        );
         if (categoryRanges.length === 0) continue;
 
-        const bigRanges = categoryRanges.filter(r => !r.isSmall);
-        const smallRanges = categoryRanges.filter(r => r.isSmall);
+        const bigRanges = categoryRanges.filter((r) => !r.isSmall);
+        const smallRanges = categoryRanges.filter((r) => r.isSmall);
 
-        const sortedBig = [...bigRanges].sort((a, b) => a.start.getTime() - b.start.getTime());
-        const sortedSmall = [...smallRanges].sort((a, b) => a.start.getTime() - b.start.getTime());
+        const sortedBig = [...bigRanges].sort((a, b) =>
+          a.start.getTime() - b.start.getTime()
+        );
+        const sortedSmall = [...smallRanges].sort((a, b) =>
+          a.start.getTime() - b.start.getTime()
+        );
 
         const laneEnds: number[] = [];
         const startLane = totalLanes;
@@ -270,7 +254,8 @@ function useLaneLayout(
           });
         }
 
-        const categoryLaneCount = bigLaneCount + (smallRanges.length > 0 ? 1 : 0);
+        const categoryLaneCount = bigLaneCount +
+          (smallRanges.length > 0 ? 1 : 0);
 
         categorySections.push({
           category: categoryConfig.id,
@@ -285,11 +270,15 @@ function useLaneLayout(
       }
     } else {
       // Mixed mode - original algorithm
-      const bigRanges = classifiedRanges.filter(r => !r.isSmall);
-      const smallRanges = classifiedRanges.filter(r => r.isSmall);
+      const bigRanges = classifiedRanges.filter((r) => !r.isSmall);
+      const smallRanges = classifiedRanges.filter((r) => r.isSmall);
 
-      const sortedBig = [...bigRanges].sort((a, b) => a.start.getTime() - b.start.getTime());
-      const sortedSmall = [...smallRanges].sort((a, b) => a.start.getTime() - b.start.getTime());
+      const sortedBig = [...bigRanges].sort((a, b) =>
+        a.start.getTime() - b.start.getTime()
+      );
+      const sortedSmall = [...smallRanges].sort((a, b) =>
+        a.start.getTime() - b.start.getTime()
+      );
 
       const bigLaneEnds: number[] = [];
 
@@ -348,7 +337,16 @@ function useLaneLayout(
       spanningObjects,
       ongoingObjects,
     };
-  }, [ranges, xFor, width, now, visibleStart, visibleEnd, layoutMode, visibleCategories]);
+  }, [
+    ranges,
+    xFor,
+    width,
+    now,
+    visibleStart,
+    visibleEnd,
+    layoutMode,
+    visibleCategories,
+  ]);
 }
 
 // Category header component
@@ -368,18 +366,20 @@ const CategoryHeader = React.memo(function CategoryHeader({
         width={width}
         height={categoryHeaderHeight}
         fill={section.config.color}
-        opacity={0.15}
+        opacity={0.22}
       />
       {/* Header text */}
       <foreignObject
-        x={0}
+        x={categoryLabelInset}
         y={section.yOffset}
-        width={width}
+        width={Math.max(0, width - categoryLabelInset)}
         height={categoryHeaderHeight}
       >
-        <div className="flex items-center gap-2 px-2 h-full text-xs font-medium text-muted-foreground">
-          <span>{section.config.icon}</span>
-          <span>{section.config.label}</span>
+        <div className="flex items-center h-full px-2">
+          <div className="inline-flex items-center gap-2 rounded-md border border-border/60 bg-background/90 px-2 py-0.5 text-xs font-semibold text-foreground shadow-sm">
+            <span>{section.config.icon}</span>
+            <span>{section.config.label}</span>
+          </div>
         </div>
       </foreignObject>
       {/* Divider line */}
@@ -389,7 +389,7 @@ const CategoryHeader = React.memo(function CategoryHeader({
         x2={width}
         y2={section.yOffset + categoryHeaderHeight}
         stroke={section.config.color}
-        strokeOpacity={0.3}
+        strokeOpacity={0.55}
         strokeWidth={1}
       />
     </g>
@@ -399,45 +399,32 @@ const CategoryHeader = React.memo(function CategoryHeader({
 // Wrapper to adjust RangeBox Y position for category layout
 const CategoryAwareRangeBox = React.memo(function CategoryAwareRangeBox({
   range,
-  width,
   categorySections,
   layoutMode,
 }: {
   range: PlacedObjectRange;
-  width: number;
   categorySections: CategorySection[];
   layoutMode: "mixed" | "by-category";
 }) {
-  // In by-category mode, find the section for this range and adjust Y offset
-  let yOffset = 0;
-  if (layoutMode === "by-category" && categorySections.length > 0) {
-    const section = categorySections.find(s => s.category === range.category);
-    if (section) {
-      // Adjust Y position: add header height and section's yOffset
-      yOffset = section.yOffset + categoryHeaderHeight - topMargin - section.startLane * laneHeight;
-    }
-  }
-
-  // Create adjusted range with new lane position accounting for offset
-  const adjustedRange = {
-    ...range,
-    // We pass yOffset to the RangeBox via a modified lane calculation approach
-  };
-
-  return <RangeBoxWithOffset range={range} width={width} yOffset={yOffset} />;
+  const yOffset = getRangeYOffset(
+    range,
+    categorySections,
+    layoutMode,
+    { laneHeight, topMargin, categoryHeaderHeight },
+  );
+  return <RangeBoxWithOffset range={range} yOffset={yOffset} />;
 });
 
 // RangeBox variant that accepts yOffset for category layout
 const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
   range,
-  width,
   yOffset = 0,
 }: {
   range: PlacedObjectRange;
-  width: number;
   yOffset?: number;
 }) {
-  const { startX: rawStartX, endX, lane, object, startOffScreen, endOffScreen, isSmall } = range;
+  const { startX: rawStartX, startOffScreen, endOffScreen, object, isSmall } =
+    range;
   const startX = rawStartX < 0 ? 0 : rawStartX;
   const { toggleSelection, isSelected, addToSelection, clearSelection } =
     useObjectSelectionStore();
@@ -466,15 +453,13 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
   const isRelationship = object.isRelationship;
   const hasRelationshipData = object.relationship && object.subjectObject &&
     object.objectObject;
-
-  let rangeWidth = endX - startX;
-
+  let rangeWidth = range.endX - startX;
   if (Number.isNaN(rangeWidth) || rangeWidth <= 0) return null;
   if (rangeWidth < 2) rangeWidth = 2;
 
   const height = laneHeight - 2;
   const x = startX;
-  const y = yOffset + topMargin + lane * laneHeight;
+  const y = yOffset + topMargin + range.lane * laneHeight;
   const cornerRadius = 4;
   const chevronOffset = 8;
   const showEndChevron = range.hasNoEnd || endOffScreen;
@@ -482,8 +467,24 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
   const clipPathId = `clip-${range.object._id.toString()}-${range.rangeIndex}`;
   const filterId = `blur-${range.object._id.toString()}-${range.rangeIndex}`;
 
-  const leftBoundaryPath = getLeftBoundaryPath(x, y, rangeWidth, height, startOffScreen, cornerRadius, chevronOffset);
-  const rightBoundaryPath = getRightBoundaryPath(x, y, rangeWidth, height, showEndChevron, cornerRadius, chevronOffset);
+  const leftBoundaryPath = getLeftBoundaryPath(
+    x,
+    y,
+    rangeWidth,
+    height,
+    startOffScreen,
+    cornerRadius,
+    chevronOffset,
+  );
+  const rightBoundaryPath = getRightBoundaryPath(
+    x,
+    y,
+    rangeWidth,
+    height,
+    showEndChevron,
+    cornerRadius,
+    chevronOffset,
+  );
 
   return (
     <g
@@ -593,7 +594,8 @@ export const ObjectsLayer: () => Layer = () => {
       const setOngoingObjects = useSpanningObjectsStore(
         (state) => state.setOngoingObjects,
       );
-      const { objectsLayoutMode, visibleObjectCategories } = useTrackVisibilityStore();
+      const { objectsLayoutMode, visibleObjectCategories } =
+        useTrackVisibilityStore();
 
       const ranges = useMemo(() => flattenObjectsToRanges(objects), [objects]);
       const { start, end } = useTimelineRange();
@@ -609,7 +611,7 @@ export const ObjectsLayer: () => Layer = () => {
         start,
         end,
         objectsLayoutMode,
-        visibleObjectCategories
+        visibleObjectCategories,
       );
 
       useEffect(() => {
@@ -620,29 +622,74 @@ export const ObjectsLayer: () => Layer = () => {
         setOngoingObjects(layout.ongoingObjects);
       }, [layout.ongoingObjects, setOngoingObjects]);
 
+      const relationshipConnectors = useMemo(
+        () =>
+          buildRelationshipConnectors(
+            layout.placed,
+            layout.categorySections,
+            objectsLayoutMode,
+            { laneHeight, topMargin, categoryHeaderHeight },
+          ),
+        [layout.categorySections, layout.placed, objectsLayoutMode],
+      );
+
       // Calculate height including category headers
       const height = objectsLayoutMode === "by-category"
-        ? layout.categorySections.reduce((max, s) =>
-            Math.max(max, s.yOffset + categoryHeaderHeight + s.laneCount * laneHeight), 0) + 10
+        ? layout.categorySections.reduce(
+          (max, s) =>
+            Math.max(
+              max,
+              s.yOffset + categoryHeaderHeight + s.laneCount * laneHeight,
+            ),
+          0,
+        ) + 10
         : topMargin + layout.lanes * laneHeight + 10;
 
       return (
-        <svg className="w-full h-full zoomable" width={width} height={Math.max(height, 50)}>
+        <svg
+          className="w-full h-full zoomable"
+          width={width}
+          height={Math.max(height, 50)}
+        >
           {/* Category headers in by-category mode */}
-          {objectsLayoutMode === "by-category" && layout.categorySections.map((section) => (
-            <CategoryHeader
-              key={section.category}
-              section={section}
-              width={width}
-            />
-          ))}
+          {objectsLayoutMode === "by-category" &&
+            layout.categorySections.map((section) => (
+              <CategoryHeader
+                key={section.category}
+                section={section}
+                width={width}
+              />
+            ))}
+
+          {/* Relationship connectors */}
+          <g aria-hidden="true" pointerEvents="none">
+            {relationshipConnectors.map((connector) => (
+              <g key={connector.key}>
+                <path
+                  d={connector.path}
+                  fill="none"
+                  stroke={connector.color}
+                  strokeOpacity={0.4}
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <circle
+                  cx={connector.endX}
+                  cy={connector.endY}
+                  r={1.75}
+                  fill={connector.color}
+                  fillOpacity={0.55}
+                />
+              </g>
+            ))}
+          </g>
 
           {/* Object ranges */}
           {layout.placed.map((range: PlacedObjectRange) => (
             <CategoryAwareRangeBox
               key={`${range.object._id.toString()}-${range.rangeIndex}`}
               range={range}
-              width={width}
               categorySections={layout.categorySections}
               layoutMode={objectsLayoutMode}
             />
@@ -695,7 +742,12 @@ export const RefreshObjectsTool: Tool = {
     };
 
     return (
-      <Button onClick={handleRefresh} disabled={isRefreshing} variant="outline" size="icon">
+      <Button
+        onClick={handleRefresh}
+        disabled={isRefreshing}
+        variant="outline"
+        size="icon"
+      >
         <RefreshCw
           className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`}
         />

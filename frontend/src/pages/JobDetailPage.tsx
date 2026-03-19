@@ -126,7 +126,7 @@ export default function JobDetailPage() {
     const { id } = useParams<{ id: string }>();
     const { getJobById, isLoading: isListenerLoading } = useJobsListener();
     const queryClient = useQueryClient();
-    
+
     const cachedJob = id ? getJobById(id) : null;
 
     const { data: fetchedJob, isLoading: isFetching, refetch } = useQuery({
@@ -228,7 +228,7 @@ export default function JobDetailPage() {
     const transcriptionChunkIds = transcriptions
         .map(t => t.chunk_id)
         .filter((id): id is string => !!id);
-    
+
     const { data: conversationChunks = [] } = useQuery({
         queryKey: ["transcription-chunks", transcriptionChunkIds],
         queryFn: async () => {
@@ -354,8 +354,8 @@ export default function JobDetailPage() {
                     </div>
                 </div>
                 {["active", "waiting", "delayed"].includes(job.state) && (
-                    <Button 
-                        variant="destructive" 
+                    <Button
+                        variant="destructive"
                         size="sm"
                         onClick={handleCancel}
                         disabled={cancelJobMutation.isPending}
@@ -505,7 +505,7 @@ export default function JobDetailPage() {
                             <Skeleton className="h-32 w-full" />
                         ) : transcriptions.length === 0 ? (
                             <div className="text-sm text-muted-foreground">
-                                {job.state === "completed" 
+                                {job.state === "completed"
                                     ? "No transcriptions were created by this job (possibly empty audio or filtered out)"
                                     : "Transcription not yet available"}
                             </div>
@@ -516,7 +516,7 @@ export default function JobDetailPage() {
                                         c => c._id === transcription.chunk_id
                                     );
                                     const meta = transcription.metadata;
-                                    
+
                                     return (
                                         <div key={transcription._id} className="space-y-4 border-b border-border/50 pb-6 last:border-b-0 last:pb-0">
                                             {/* Metadata Grid */}
@@ -543,7 +543,7 @@ export default function JobDetailPage() {
 
                                             {/* Audio Player */}
                                             {transcription.start && (
-                                                <ObjectAudioPlayer 
+                                                <ObjectAudioPlayer
                                                     timeRange={{
                                                         start: transcription.start,
                                                         end: transcription.end || new Date(new Date(transcription.start).getTime() + (transcription.duration || 60) * 1000).toISOString()
@@ -832,4 +832,3 @@ export default function JobDetailPage() {
         </div>
     );
 }
-
