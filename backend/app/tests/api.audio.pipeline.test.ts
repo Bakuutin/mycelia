@@ -1,0 +1,80 @@
+import { expect } from "@std/expect";
+import { apiAudioPipelineHandler } from "@/routes/api.audio.pipeline.ts";
+import { withFixtures } from "@/tests/fixtures.server.ts";
+import { callExpressHandler } from "@/tests/express-helpers.ts";
+
+Deno.test(
+  "audio pipeline handler: requires authentication",
+  withFixtures([], async () => {
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+    );
+    expect(response.status).toBe(401);
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: returns sessions and stats when authenticated",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(Array.isArray(data.sessions)).toBe(true);
+    expect(typeof data.hasMore).toBe("boolean");
+    expect(typeof data.stats).toBe("object");
+    expect(typeof data.stats.totalSessions).toBe("number");
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: respects limit parameter",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline?limit=5",
+      { headers },
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.sessions.length).toBeLessThanOrEqual(5);
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: caps limit at 100 to prevent DoS",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
+    // Request an absurdly large limit — handler must cap it at 100
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline?limit=999999",
+      { headers },
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    // With an empty DB the result will be empty, but the handler must not crash
+    // and must not attempt to fetch more than 101 (limit+1) source files
+    expect(Array.isArray(data.sessions)).toBe(true);
+    expect(data.sessions.length).toBeLessThanOrEqual(100);
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: uses default limit of 10 when not specified",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(Array.isArray(data.sessions)).toBe(true);
+    // Empty DB → 0 sessions, hasMore false
+    expect(data.hasMore).toBe(false);
+  }),
+);

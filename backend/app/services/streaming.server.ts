@@ -294,11 +294,6 @@ export async function createAudioChunk(
     : formatOrConfig;
   const { format, sampleRate = 16000, channels = 1 } = config;
 
-  await Deno.writeFile(
-    `debug.${format}`,
-    audioData,
-  );
-
   if (format == "pcm") {
     audioData = await pcmToOpus(audioData, sampleRate, channels);
   } else if (format == "float32") {
