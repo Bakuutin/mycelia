@@ -97,8 +97,11 @@ export function withRateLimit(
       await handler(req, res);
     } catch (error) {
       console.error("Rate limit error:", error);
-      // If rate limiting fails, allow the request through but log the error
-      await handler(req, res);
+      // Fail closed: if rate limiting is unavailable, reject rather than allow through
+      res.status(503).json({
+        error: "service_unavailable",
+        error_description: "Rate limiting service unavailable. Please try again later.",
+      });
     }
   };
 }

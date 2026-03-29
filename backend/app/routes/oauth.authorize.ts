@@ -190,8 +190,6 @@ export const oauthAuthorizeHandler = withRateLimit(
     console.log({
       event: "oauth.authorize.consent_required",
       client_id,
-      redirect_uri,
-      scope,
       timestamp: new Date().toISOString(),
     });
 

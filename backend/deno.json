@@ -1,7 +1,7 @@
 {
   "tasks": {
-    "dev": "deno run --watch -A server.ts serve",
-    "start": "deno run -A server.ts serve"
+    "dev": "deno run --watch --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg --allow-sys server.ts serve",
+    "start": "deno run --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg --allow-sys server.ts serve"
   },
   "lint": {
     "rules": {
