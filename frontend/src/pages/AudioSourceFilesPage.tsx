@@ -25,6 +25,7 @@ import {
   X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface SourceFile {
   _id: any;
@@ -395,10 +396,19 @@ export default function AudioSourceFilesPage() {
 
   // Upload handling
   const handleFiles = useCallback((files: FileList | File[]) => {
-    const audioFiles = Array.from(files).filter(f =>
+    const allFiles = Array.from(files);
+    const audioFiles = allFiles.filter(f =>
       f.type.startsWith("audio/") ||
-      /\.(wav|mp3|m4a|flac|opus|ogg|aac|wma)$/i.test(f.name)
+      f.type === "video/mp4" ||
+      /\.(wav|mp3|m4a|flac|opus|ogg|aac|wma|mp4)$/i.test(f.name)
     );
+    const rejected = allFiles.filter(f => !audioFiles.includes(f));
+    if (rejected.length > 0) {
+      const names = rejected.map(f => f.name).join(", ");
+      toast.error(`Unsupported format: ${names}`, {
+        description: "Supported: WAV, MP3, M4A, MP4, FLAC, OPUS, OGG, AAC, WMA",
+      });
+    }
     if (audioFiles.length === 0) return;
     setUploadingFiles(prev => [
       ...prev,
@@ -613,7 +623,7 @@ export default function AudioSourceFilesPage() {
                 {isDragging ? "Drop audio files here" : "Drag & drop audio files to upload"}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                WAV, MP3, M4A, FLAC, OPUS, OGG supported
+                WAV, MP3, M4A, MP4, FLAC, OPUS, OGG supported
               </p>
             </div>
             <Button
@@ -627,7 +637,7 @@ export default function AudioSourceFilesPage() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept="audio/*,.wav,.mp3,.m4a,.flac,.opus,.ogg,.aac,.wma"
+              accept="audio/*,.wav,.mp3,.m4a,.flac,.opus,.ogg,.aac,.wma,.mp4"
               className="hidden"
               onChange={(e) => e.target.files && handleFiles(e.target.files)}
             />

@@ -23,7 +23,12 @@ import { authJwtLoginHandler } from "@/routes/auth.jwt.login.ts";
 import { wellKnownOauthAuthorizationServerHandler } from "@/routes/[.]well-known.oauth-authorization-server.ts";
 import { wellKnownOauthProtectedResourceHandler } from "@/routes/[.]well-known.oauth-protected-resource.ts";
 import { apiChatHandler } from "@/routes/api.chat.ts";
+import { apiAudioPipelineHandler } from "@/routes/api.audio.pipeline.ts";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
+import { withRateLimit } from "@/utils/rateLimit.ts";
+
+const uploadKeyGenerator = (req: any) =>
+  `upload:${req.headers.authorization?.slice(-8) || "anon"}`;
 
 export function registerRoutes(app: Express): void {
   app.get("/", rootHandler);
@@ -33,10 +38,17 @@ export function registerRoutes(app: Express): void {
   app.get("/data/audio/items", dataAudioItemsHandler);
   app.post("/api/resource/:name", asyncHandler(apiResourceHandler));
   app.post("/api/chat", asyncHandler(apiChatHandler));
+  app.get("/api/audio/pipeline", asyncHandler(apiAudioPipelineHandler));
   app.get("/api/files/:id", apiFilesIdHandler);
-  app.post("/api/files/upload", apiFilesUploadHandler);
+  app.post("/api/files/upload", withRateLimit(
+    { keyGenerator: uploadKeyGenerator, limit: 20, windowSeconds: 60 },
+    apiFilesUploadHandler,
+  ));
   app.get("/api/audio/stream", apiAudioStreamHandler);
-  app.post("/api/audio/upload", apiAudioUploadHandler);
+  app.post("/api/audio/upload", withRateLimit(
+    { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
+    apiAudioUploadHandler,
+  ));
   app.get("/api/audio/wav", apiAudioWavHandler);
   app.get("/mcp", mcpGetHandler);
   app.post("/mcp", mcpPostHandler);

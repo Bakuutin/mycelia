@@ -62,8 +62,6 @@ export function errorHandler(
   }
 
   // Default error handling
-  const errorMessage = error instanceof Error ? error.message : String(error);
-
   console.error("Unhandled error:", error);
   console.error("Error type:", error?.constructor?.name);
   console.error(
@@ -71,8 +69,11 @@ export function errorHandler(
     error instanceof Error ? error.stack : "No stack trace available",
   );
 
+  const isProduction = Deno.env.get("NODE_ENV") === "production";
   res.status(500).json({
     success: false,
-    error: errorMessage,
+    error: isProduction
+      ? "Internal server error"
+      : (error instanceof Error ? error.message : String(error)),
   });
 }

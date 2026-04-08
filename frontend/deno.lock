@@ -101,6 +101,7 @@
     "npm:use-stick-to-bottom@^1.1.1": "1.1.1_react@18.3.1",
     "npm:vite@*": "6.4.1_jiti@2.6.1_yaml@2.8.2_picomatch@4.0.3",
     "npm:vite@^6.3.5": "6.4.1_jiti@2.6.1_yaml@2.8.2_picomatch@4.0.3",
+    "npm:vitest@*": "3.2.4_jsdom@27.2.0_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2",
     "npm:vitest@^3.2.4": "3.2.4_jsdom@27.2.0_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2",
     "npm:yaml@^2.8.1": "2.8.2",
     "npm:zod@^4.1.12": "4.1.13",

@@ -17,6 +17,7 @@ import { hideBin } from "yargs/helpers";
 import { generateApiKeyWithId, verifyApiKey } from "@/lib/auth/tokens.ts";
 import process, { exit } from "node:process";
 import { verifyToken } from "@/lib/auth/core.server.ts";
+import { env } from "#/env.ts";
 import { type Policy } from "@/lib/auth/resources.ts";
 import express from "express";
 import morgan from "morgan";
@@ -28,6 +29,7 @@ import { WebSocketServer } from "npm:ws@^8.18.0";
 
 import { requestCounter } from "@/lib/telemetry.ts";
 import { handlePcmWebSocket } from "@/services/audio.websocket.server.ts";
+import { handleOpusWebSocket } from "@/services/audio.websocket.opus.server.ts";
 import { handleUpdatesWebSocket } from "@/services/updates.websocket.server.ts";
 import { setupResources } from "@/lib/resources/registry.ts";
 import { shutdownTelemetry } from "@/lib/telemetry.ts";
@@ -144,7 +146,14 @@ async function startServer(
   const httpServer = createHttpServer(app);
 
   app.disable("x-powered-by");
+  const corsOrigins = [
+    env.MYCELIA_FRONTEND_HOST,
+    "https://localhost:4433",
+    "http://localhost:5173",
+    "http://localhost:5180",
+  ].filter(Boolean) as string[];
   app.use(cors({
+    origin: corsOrigins,
     exposedHeaders: ["X-Mycelia-Chat-Id"],
   }));
   // HTTP request logging - disable with LOG_HTTP=false
@@ -153,6 +162,7 @@ async function startServer(
       skip: (req: Request) =>
         req.url === "/health" ||
         req.url === "/readiness" ||
+        req.url?.startsWith("/api/audio/pipeline") ||
         req.url?.startsWith("/api/resource/"),
     }));
   }
@@ -171,9 +181,38 @@ async function startServer(
 
   const wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on("upgrade", (request, socket, head) => {
+  async function isUpgradeAuthenticated(request: any): Promise<boolean> {
+    const authHeader = request.headers["authorization"];
+    if (authHeader) {
+      const token = authHeader.split(" ")[1];
+      if (token && await verifyToken(token)) return true;
+    }
+    // URL token param — kept for IoT/hardware devices that cannot set headers
+    const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+    const tokenParam = url.searchParams.get("token");
+    if (tokenParam && await verifyToken(tokenParam)) return true;
+    return false;
+  }
+
+  httpServer.on("upgrade", async (request, socket, head) => {
+    if (!await isUpgradeAuthenticated(request)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const url = new URL(request.url || "", `http://${request.headers.host}`);
-    if (url.pathname === "/ws_pcm") {
+    // Unified auto-detecting audio endpoint (recommended)
+    if (url.pathname === "/ws/audio") {
+      wss.handleUpgrade(request, socket, head, (ws: any) => {
+        handlePcmWebSocket(ws, request).catch((error) => {
+          console.error("WebSocket audio error:", error);
+          if (ws.readyState === 1) {
+            ws.close(1011, "Internal server error");
+          }
+        });
+      });
+    // Legacy endpoints (backward compatibility)
+    } else if (url.pathname === "/ws_pcm") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
         // Add error handler immediately to catch any errors including broken pipe
         ws.on("error", (error: Error) => {
@@ -192,6 +231,15 @@ async function startServer(
             }
           } catch (closeError) {
             // Ignore errors when closing (socket might already be dead)
+          }
+        });
+      });
+    } else if (url.pathname === "/ws_omi") {
+      wss.handleUpgrade(request, socket, head, (ws: any) => {
+        handleOpusWebSocket(ws, request).catch((error) => {
+          console.error("WebSocket Opus/OMI error:", error);
+          if (ws.readyState === 1) {
+            ws.close(1011, "Internal server error");
           }
         });
       });

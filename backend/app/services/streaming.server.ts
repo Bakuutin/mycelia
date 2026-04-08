@@ -256,21 +256,30 @@ async function ffmpeg(
   }
 }
 
-async function pcmToOpus(audioData: Uint8Array): Promise<Uint8Array> {
-  return await ffmpeg(
-    audioData,
-    { outputOptions: ["-c:a", "libopus", "-b:a", "64k"] },
-  );
-}
-
-async function float32ToOpus(audioData: Uint8Array): Promise<Uint8Array> {
+async function pcmToOpus(audioData: Uint8Array, sampleRate: number = 16000, channels: number = 1): Promise<Uint8Array> {
   return await ffmpeg(
     audioData,
     {
-      inputOptions: ["-f", "f32le", "-ar", "16000", "-ac", "1"],
+      inputOptions: ["-f", "s16le", "-ar", String(sampleRate), "-ac", String(channels)],
       outputOptions: ["-c:a", "libopus", "-b:a", "64k"],
     },
   );
+}
+
+async function float32ToOpus(audioData: Uint8Array, sampleRate: number = 16000, channels: number = 1): Promise<Uint8Array> {
+  return await ffmpeg(
+    audioData,
+    {
+      inputOptions: ["-f", "f32le", "-ar", String(sampleRate), "-ac", String(channels)],
+      outputOptions: ["-c:a", "libopus", "-b:a", "64k"],
+    },
+  );
+}
+
+export interface AudioFormatConfig {
+  format: "opus" | "pcm" | "float32";
+  sampleRate?: number;
+  channels?: number;
 }
 
 export async function createAudioChunk(
@@ -278,17 +287,17 @@ export async function createAudioChunk(
   startTime: Date,
   index: number,
   originalId: ObjectId,
-  format: "opus" | "pcm" | "float32" = "opus",
-): Promise<MongoObjectId> {
-  await Deno.writeFile(
-    `debug.${format}`,
-    audioData,
-  );
+  formatOrConfig: "opus" | "pcm" | "float32" | AudioFormatConfig = "opus",
+): Promise<ObjectId> {
+  const config: AudioFormatConfig = typeof formatOrConfig === "string"
+    ? { format: formatOrConfig }
+    : formatOrConfig;
+  const { format, sampleRate = 16000, channels = 1 } = config;
 
   if (format == "pcm") {
-    audioData = await pcmToOpus(audioData);
+    audioData = await pcmToOpus(audioData, sampleRate, channels);
   } else if (format == "float32") {
-    audioData = await float32ToOpus(audioData);
+    audioData = await float32ToOpus(audioData, sampleRate, channels);
   }
 
   const auth = await getServerAuth();

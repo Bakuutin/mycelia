@@ -5,10 +5,15 @@ import type { IncomingMessage } from "node:http";
 import {
   createAudioChunk,
   createSourceFile,
+  type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
 import { ObjectId } from "bson";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
+import {
+  OpusDecoder,
+  type OpusDecoderSampleRate,
+} from "npm:opus-decoder@^0.7.11";
 
 // Debug logging - enable with DEBUG_AUDIO_WS=true
 const DEBUG = Deno.env.get("DEBUG_AUDIO_WS") === "true";
@@ -23,6 +28,107 @@ const log = (level: string, msg: string, data?: Record<string, unknown>) => {
 
 const CHUNK_DURATION_SECONDS = 10;
 
+function coerceOpusSampleRate(rate: number): OpusDecoderSampleRate {
+  switch (rate) {
+    case 8000:
+    case 12000:
+    case 16000:
+    case 24000:
+    case 48000:
+      return rate;
+    default:
+      log("WARN", "Unsupported Opus sample rate, defaulting to 16000Hz", {
+        rate,
+      });
+      return 16000;
+  }
+}
+
+// ============================================================================
+// Audio Format Detection
+// ============================================================================
+
+export type DetectedFormat = "opus" | "pcm" | "float32" | "unknown";
+
+/**
+ * Check if data is Opus audio in Ogg container.
+ * Opus uses Ogg container with "OggS" magic bytes at the start.
+ */
+export function isOpusOgg(data: Uint8Array): boolean {
+  return data.length >= 4 &&
+         data[0] === 0x4F && // 'O'
+         data[1] === 0x67 && // 'g'
+         data[2] === 0x67 && // 'g'
+         data[3] === 0x53;   // 'S'
+}
+
+/**
+ * Check if data is 16-bit PCM audio.
+ * PCM must be aligned to 2-byte boundaries (16-bit samples).
+ */
+export function isPcm(data: Uint8Array): boolean {
+  if (data.length === 0 || data.length % 2 !== 0) {
+    return false;
+  }
+
+  // PCM is just raw audio samples, no magic bytes to check
+  // Length must be multiple of 2 bytes (16-bit samples)
+  return true;
+}
+
+/**
+ * Check if data is 32-bit float audio.
+ * Float32 must be aligned to 4-byte boundaries and values in typical audio range.
+ */
+export function isFloat32(data: Uint8Array): boolean {
+  if (data.length < 4 || data.length % 4 !== 0) {
+    return false;
+  }
+
+  // Check if values are in typical audio range [-2.0, 2.0]
+  // Sample first 10 float32 values (40 bytes)
+  try {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const samplesToCheck = Math.min(10, Math.floor(data.length / 4));
+
+    for (let i = 0; i < samplesToCheck * 4; i += 4) {
+      const val = view.getFloat32(i, true); // little-endian
+
+      // Float32 audio should be roughly in range [-2.0, 2.0]
+      // (typically [-1.0, 1.0] but allow some headroom)
+      if (!isFinite(val) || Math.abs(val) > 3.0) {
+        return false;
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect audio format by inspecting binary data.
+ * Returns: "opus", "pcm", "float32", or "unknown"
+ *
+ * Checks formats in order of specificity:
+ * 1. Opus (has magic bytes - most specific)
+ * 2. Float32 (has alignment + value range constraints)
+ * 3. PCM (only has alignment constraint - least specific)
+ */
+export function detectAudioFormat(data: Uint8Array): DetectedFormat {
+  if (data.length === 0) {
+    return "unknown";
+  }
+
+  // Check in order of specificity
+  if (isOpusOgg(data)) return "opus";
+  if (isFloat32(data)) return "float32";
+  if (isPcm(data)) return "pcm";
+
+  return "unknown";
+}
+
 interface AudioFormat {
   rate: number;
   width: number;
@@ -32,16 +138,35 @@ interface AudioFormat {
 }
 
 // Determine the audio format type from sample width in bytes
-function getFormatFromWidth(width: number): "pcm" | "float32" {
+/**
+ * Detect format from Wyoming header audio format.
+ * Wyoming headers can declare format via width field:
+ * - width=0 → Opus (compressed, variable-length frames)
+ * - width=2 → 16-bit PCM (2 bytes per sample)
+ * - width=4 → 32-bit float (4 bytes per sample)
+ */
+function getFormatFromHeader(audioFormat: AudioFormat): DetectedFormat {
+  const width = audioFormat.width;
+
+  // width=0 means Opus compressed audio (not PCM)
+  if (width === 0) {
+    return "opus";
+  }
   // width=2 means 16-bit PCM (2 bytes per sample)
-  // width=4 means 32-bit float (4 bytes per sample)
-  if (width === 2) {
+  else if (width === 2) {
     return "pcm";
-  } else if (width === 4) {
+  }
+  // width=4 means 32-bit float (4 bytes per sample)
+  else if (width === 4) {
     return "float32";
-  } else {
-    log("WARN", `Unknown audio width, defaulting to float32`, { width });
-    return "float32";
+  }
+  else {
+    log("WARN", `Unknown audio width in header, defaulting to pcm`, {
+      width,
+      rate: audioFormat.rate,
+      channels: audioFormat.channels
+    });
+    return "pcm";
   }
 }
 
@@ -80,7 +205,8 @@ class PcmWebSocketSession {
   sourceFileId: ObjectId | null = null;
   audioFormat: AudioFormat | null = null;
   startedAt: Date | null = null;
-  buffer: Denque<number> = new Denque();
+  buffer: Denque<Uint8Array> = new Denque();
+  bufferByteLength = 0;
   bytesFlushed = 0;
   chunkIndex = 0;
   bytesPerChunk = 0;
@@ -88,12 +214,18 @@ class PcmWebSocketSession {
   private messagesReceived = 0;
   private bytesReceived = 0;
   private sessionId: string;
+  private detectedFormat: DetectedFormat | null = null;
+  private opusDecodedToPcm = false; // Track if we're converting Opus→PCM (Chronicle mode)
+  private opusFrameCount = 0; // Track number of Opus frames received
+  private lastFlushTime: Date | null = null; // Track last flush for time-based flushing
+  private opusDecoder: OpusDecoder<OpusDecoderSampleRate> | null = null; // opus-decoder WASM instance (in-process, like Chronicle)
+  private opusDecodeLock = new AsyncLock(); // Serialize Opus frame decoding (Chronicle pattern)
 
   constructor(
     private auth: Auth,
     private ws: WebSocket | any,
   ) {
-    this.sessionId = Math.random().toString(36).substring(2, 10);
+    this.sessionId = crypto.randomUUID().replace(/-/g, "").substring(0, 8);
     log("INFO", `Session created`, { sessionId: this.sessionId, principal: auth.principal });
   }
 
@@ -108,7 +240,7 @@ class PcmWebSocketSession {
       ? new Date(audioFormat.timestamp * 1000)
       : new Date();
 
-    log("INFO", `Audio stream starting`, {
+    log("INFO", `[AUDIO_WS] [START] Audio stream starting`, {
       sessionId: this.sessionId,
       rate: audioFormat.rate,
       width: audioFormat.width,
@@ -124,25 +256,85 @@ class PcmWebSocketSession {
     this.chunkIndex = 0;
     this.messagesReceived = 0;
     this.bytesReceived = 0;
+    this.opusFrameCount = 0;
+    this.lastFlushTime = startTime;
     this.buffer.clear();
+    this.bufferByteLength = 0;
 
-    const bytesPerSecond = audioFormat.rate * audioFormat.width *
-      audioFormat.channels;
-    this.bytesPerChunk = bytesPerSecond * CHUNK_DURATION_SECONDS;
+    // Detect format from header
+    this.detectedFormat = getFormatFromHeader(audioFormat);
 
-    log("INFO", `Audio format calculated`, {
-      sessionId: this.sessionId,
-      bytesPerSecond,
-      bytesPerChunk: this.bytesPerChunk,
-      chunkDurationSeconds: CHUNK_DURATION_SECONDS
-    });
+    // For Opus: Create in-process WASM decoder (like Chronicle architecture)
+    if (this.detectedFormat === "opus") {
+      try {
+        log("INFO", `[AUDIO_WS] Creating in-process Opus decoder (WASM)`, {
+          sessionId: this.sessionId,
+          sampleRate: audioFormat.rate,
+          channels: audioFormat.channels
+        });
 
-    // Determine format from width: 2 bytes = 16-bit PCM, 4 bytes = 32-bit float
-    const detectedFormat = getFormatFromWidth(audioFormat.width);
-    log("INFO", `Detected audio format`, {
+        const decoder = new OpusDecoder<OpusDecoderSampleRate>({
+          sampleRate: coerceOpusSampleRate(audioFormat.rate), // OMI typically sends 16kHz
+          channels: audioFormat.channels,
+          forceStereo: false,
+        });
+        this.opusDecoder = decoder;
+
+        await decoder.ready;
+
+        log("INFO", `[AUDIO_WS] Opus decoder ready (in-process, zero HTTP overhead)`, {
+          sessionId: this.sessionId
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        log("ERROR", `[AUDIO_WS] Failed to create Opus decoder`, {
+          sessionId: this.sessionId,
+          error: errorMsg
+        });
+        throw error;
+      }
+    }
+
+    // Calculate bytes per second and chunk size
+    let bytesPerSecond: number;
+    if (audioFormat.width === 0) {
+      // For Opus: Decode to PCM, so calculate PCM buffer size
+      // PCM: 16kHz * 2 bytes * 1 channel * duration
+      bytesPerSecond = audioFormat.rate * 2 * audioFormat.channels; // 2 bytes for 16-bit PCM
+      this.bytesPerChunk = bytesPerSecond * CHUNK_DURATION_SECONDS; // 320KB for 10 sec
+      this.opusFrameCount = 0;
+      this.lastFlushTime = startTime;
+
+      log("INFO", `[AUDIO_WS] Audio format calculated (Opus→PCM - byte-based)`, {
+        sessionId: this.sessionId,
+        bytesPerChunk: this.bytesPerChunk,
+        chunkDurationSeconds: CHUNK_DURATION_SECONDS,
+        note: "Opus decoded frame-by-frame to PCM, buffered as PCM"
+      });
+    } else {
+      // PCM or float: rate * width * channels
+      bytesPerSecond = audioFormat.rate * audioFormat.width * audioFormat.channels;
+      this.bytesPerChunk = bytesPerSecond * CHUNK_DURATION_SECONDS;
+
+      log("INFO", `[AUDIO_WS] Audio format calculated (PCM/float32 - byte-based)`, {
+        sessionId: this.sessionId,
+        bytesPerSecond,
+        bytesPerChunk: this.bytesPerChunk,
+        chunkDurationSeconds: CHUNK_DURATION_SECONDS
+      });
+    }
+
+    // Detect format from Wyoming header (PCM vs float32 based on width)
+    // Note: Opus cannot be detected from header alone - will be detected from actual data
+    const declaredFormat = getFormatFromHeader(audioFormat);
+    this.detectedFormat = declaredFormat; // Initial format based on header
+
+    log("INFO", `[AUDIO_WS] Audio format from header`, {
       sessionId: this.sessionId,
       width: audioFormat.width,
-      detectedFormat
+      rate: audioFormat.rate,
+      channels: audioFormat.channels,
+      declaredFormat
     });
 
     const metadata = {
@@ -150,8 +342,10 @@ class PcmWebSocketSession {
       width: audioFormat.width,
       channels: audioFormat.channels,
       mode: audioFormat.mode,
-      format: detectedFormat,
+      format: declaredFormat,
       source: "websocket",
+      protocol: "wyoming", // For frontend display
+      data: "opus", // For frontend display - always stored as Ogg Opus
     };
 
     const filename = `audio_${
@@ -166,7 +360,7 @@ class PcmWebSocketSession {
         metadata,
         this.auth.principal,
       );
-      log("INFO", `SourceFile created`, {
+      log("INFO", `[AUDIO_WS] SourceFile created`, {
         sessionId: this.sessionId,
         sourceFileId: this.sourceFileId.toString(),
         startTime: startTime.toISOString(),
@@ -174,7 +368,7 @@ class PcmWebSocketSession {
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      log("ERROR", `Failed to create SourceFile`, {
+      log("ERROR", `[AUDIO_WS] Failed to create SourceFile`, {
         sessionId: this.sessionId,
         error: errorMsg
       });
@@ -193,7 +387,7 @@ class PcmWebSocketSession {
       ? (Date.now() - this.startedAt.getTime()) / 1000
       : 0;
 
-    log("INFO", `Audio stop received`, {
+    log("INFO", `[AUDIO_WS] [STOP] Audio stop received`, {
       sessionId: this.sessionId,
       sourceFileId: this.sourceFileId?.toString(),
       messagesReceived: this.messagesReceived,
@@ -209,8 +403,28 @@ class PcmWebSocketSession {
         sourceFileId: this.sourceFileId.toString(),
         totalChunks: this.chunkIndex,
         totalBytesFlushed: this.bytesFlushed,
-        bufferRemaining: this.buffer.length
+        bufferRemaining: this.bufferByteLength
       });
+    }
+
+    this.freeDecoder();
+  }
+
+  freeDecoder(): void {
+    if (this.opusDecoder) {
+      try {
+        this.opusDecoder.free();
+        log("INFO", `[AUDIO_WS] Freed in-process Opus decoder`, {
+          sessionId: this.sessionId,
+          framesDecoded: this.opusFrameCount
+        });
+      } catch (error) {
+        log("WARN", `[AUDIO_WS] Exception freeing Opus decoder`, {
+          sessionId: this.sessionId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      this.opusDecoder = null;
     }
   }
 
@@ -222,31 +436,137 @@ class PcmWebSocketSession {
     this.messagesReceived++;
     this.bytesReceived += audioData.byteLength;
 
-    // Log periodically (every 100 messages) to avoid flooding
-    if (this.messagesReceived % 100 === 0) {
-      log("DEBUG", `Audio data progress`, {
-        sessionId: this.sessionId,
-        messagesReceived: this.messagesReceived,
-        bytesReceived: this.bytesReceived,
-        bufferSize: this.buffer.length,
-        chunksCreated: this.chunkIndex
+    // For Opus: Decode frame-by-frame to PCM (like Chronicle), then buffer PCM
+    // CRITICAL: Serialize decoding to prevent concurrent decoder access (Chronicle pattern)
+    if (this.detectedFormat === "opus") {
+      this.opusFrameCount++;
+
+      if (this.messagesReceived === 1) {
+        log("INFO", `[AUDIO_WS] Opus detected - decoding frames to PCM (serialized)`, {
+          sessionId: this.sessionId,
+          opusFrameSize: audioData.byteLength
+        });
+      }
+
+      // Serialize Opus decoding (like Chronicle's sequential while loop)
+      // IN-PROCESS WASM decoding - zero HTTP overhead!
+      await this.opusDecodeLock.acquire(async () => {
+        const decodeStartTime = performance.now();
+        try {
+          if (!this.opusDecoder) {
+            log("ERROR", `[OPUS_DECODE] Decoder not initialized`, {
+              sessionId: this.sessionId,
+              frameNumber: this.opusFrameCount
+            });
+            return;
+          }
+
+          // Decode frame using in-process WASM decoder (maintains state)
+          const wasmDecodeStart = performance.now();
+          const result = this.opusDecoder.decodeFrame(audioData);
+          const wasmDecodeMs = performance.now() - wasmDecodeStart;
+
+          if (result.samplesDecoded > 0 && result.channelData.length > 0) {
+            // Convert Float32Array PCM to Int16 PCM bytes
+            const float32Pcm = result.channelData[0]; // Mono channel
+            const int16Pcm = new Int16Array(float32Pcm.length);
+
+            for (let i = 0; i < float32Pcm.length; i++) {
+              // Clamp to [-1, 1] and convert to 16-bit int range [-32768, 32767]
+              const sample = Math.max(-1, Math.min(1, float32Pcm[i]));
+              int16Pcm[i] = Math.round(sample * 32767);
+            }
+
+            // Convert Int16Array to bytes and buffer them
+            const pcmBytes = new Uint8Array(int16Pcm.buffer.slice(int16Pcm.byteOffset, int16Pcm.byteOffset + int16Pcm.byteLength));
+            this.buffer.push(pcmBytes);
+            this.bufferByteLength += pcmBytes.length;
+
+            // Log any errors from decoder
+            if (result.errors && result.errors.length > 0) {
+              for (const error of result.errors) {
+                log("WARN", `[OPUS_DECODE] Decoder error at frame ${this.opusFrameCount}`, {
+                  sessionId: this.sessionId,
+                  error: error.message
+                });
+              }
+            }
+          }
+
+          // Log every 50 frames with statistics
+          if (this.opusFrameCount % 50 === 0) {
+            log("INFO", `[OPUS_DECODE] Progress checkpoint`, {
+              sessionId: this.sessionId,
+              framesProcessed: this.opusFrameCount,
+              bufferedPcmBytes: this.bufferByteLength,
+              targetChunkSize: this.bytesPerChunk,
+              fillPercentage: ((this.bufferByteLength / this.bytesPerChunk) * 100).toFixed(1)
+            });
+          }
+
+          // Flush when buffer reaches target size (bytesPerChunk is set to PCM byte count)
+          if (this.bufferByteLength >= this.bytesPerChunk) {
+            log("INFO", `[OPUS_DECODE] Buffer full - flushing chunk`, {
+              sessionId: this.sessionId,
+              frameNumber: this.opusFrameCount,
+              bufferedBytes: this.bufferByteLength,
+              targetBytes: this.bytesPerChunk
+            });
+            await this.flush(false);
+          }
+
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          log("ERROR", `[OPUS_DECODE] Exception in WASM decoder`, {
+            sessionId: this.sessionId,
+            frameNumber: this.opusFrameCount,
+            error: errorMsg
+          });
+          // Continue processing other frames
+        }
       });
+
+      return;
     }
 
-    if (
-      this.audioFormat && audioData.byteLength % this.audioFormat.width !== 0
-    ) {
-      log("WARN", `Audio data alignment issue`, {
+    // Ensure audio data is properly aligned to sample width BEFORE format detection
+    // Note: Skip alignment for Opus (width=0) since Opus frames are variable-length
+    // (but we've already decoded Opus to PCM above, so this only applies to non-Opus)
+    let alignedData = audioData;
+    if (this.audioFormat && this.audioFormat.width > 0 && audioData.byteLength % this.audioFormat.width !== 0) {
+      const misalignment = audioData.byteLength % this.audioFormat.width;
+      const alignedLength = audioData.byteLength - misalignment;
+
+      log("WARN", `[AUDIO_WS] Audio data alignment issue - truncating ${misalignment} bytes`, {
         sessionId: this.sessionId,
-        dataLength: audioData.byteLength,
+        originalLength: audioData.byteLength,
+        alignedLength,
         sampleWidth: this.audioFormat.width,
         bitsPerSample: this.audioFormat.width * 8
       });
+
+      // Truncate to aligned boundary (drop incomplete sample at end)
+      alignedData = audioData.slice(0, alignedLength);
     }
 
-    for (let i = 0; i < audioData.length; i++) {
-      this.buffer.push(audioData[i]);
+    // Trust the format from the header (don't override with detection)
+    // The phone declares width=2 (16-bit PCM), so use that for chunk calculations
+
+    // Log periodically (every 100 messages) to avoid flooding
+    if (this.messagesReceived % 100 === 0) {
+      log("DEBUG", `[AUDIO_WS] Audio data progress`, {
+        sessionId: this.sessionId,
+        messagesReceived: this.messagesReceived,
+        bytesReceived: this.bytesReceived,
+        bufferSize: this.bufferByteLength,
+        chunksCreated: this.chunkIndex,
+        detectedFormat: this.detectedFormat,
+        opusDecodedToPcm: this.opusDecodedToPcm
+      });
     }
+
+    this.buffer.push(alignedData);
+    this.bufferByteLength += alignedData.length;
     await this.checkAndFlushIfNeeded();
   }
 
@@ -254,8 +574,17 @@ class PcmWebSocketSession {
     if (!this.audioFormat) {
       return 0;
     }
-    const bytesPerSecond = this.audioFormat.rate * this.audioFormat.width *
-      this.audioFormat.channels;
+    // For Opus (width=0), use frame-based calculation
+    let bytesPerSecond: number;
+    if (this.audioFormat.width === 0) {
+      // Opus: 20ms frames, ~320 bytes/frame, 50 frames/sec
+      const OPUS_FRAME_SIZE_BYTES = 320;
+      const OPUS_FRAMES_PER_SECOND = 50;
+      bytesPerSecond = OPUS_FRAME_SIZE_BYTES * OPUS_FRAMES_PER_SECOND;
+    } else {
+      // PCM or float: rate * width * channels
+      bytesPerSecond = this.audioFormat.rate * this.audioFormat.width * this.audioFormat.channels;
+    }
     return bytes / bytesPerSecond;
   }
 
@@ -268,7 +597,7 @@ class PcmWebSocketSession {
   }
 
   private getBufferSize(): number {
-    return this.buffer.length;
+    return this.bufferByteLength;
   }
 
   private async checkAndFlushIfNeeded(): Promise<void> {
@@ -301,39 +630,54 @@ class PcmWebSocketSession {
   private async flush(flushAll: boolean = false): Promise<void> {
     if (
       !this.sourceFileId || !this.startedAt || !this.audioFormat ||
-      !this.buffer.length
+      !this.bufferByteLength
     ) {
       return;
     }
 
-    while (this.buffer.length > 0) {
-      const hasWholeChunk = this.buffer.length >= this.bytesPerChunk;
+    while (this.bufferByteLength > 0) {
+      // Use byte count for all formats (Opus is already decoded to PCM)
+      const hasWholeChunk = this.bufferByteLength >= this.bytesPerChunk;
 
       if (!flushAll && !hasWholeChunk) {
         break;
       }
 
-      const bytesToFlush = flushAll ? this.buffer.length : this.bytesPerChunk;
+      // Flush exactly bytesPerChunk bytes (or remaining if flushAll)
+      const bytesToFlush = flushAll ? this.bufferByteLength : this.bytesPerChunk;
 
       if (bytesToFlush === 0) {
         break;
       }
 
       const audioData = new Uint8Array(bytesToFlush);
+      let written = 0;
 
-      for (let i = 0; i < bytesToFlush; i++) {
-        const byte = this.buffer.shift();
-        if (byte === undefined) {
-          break;
+      while (written < bytesToFlush && this.buffer.length > 0) {
+        const chunk = this.buffer.peekFront()!;
+        const needed = bytesToFlush - written;
+        if (chunk.length <= needed) {
+          audioData.set(chunk, written);
+          written += chunk.length;
+          this.buffer.shift();
+          this.bufferByteLength -= chunk.length;
+        } else {
+          audioData.set(chunk.subarray(0, needed), written);
+          this.buffer.shift();
+          this.buffer.unshift(chunk.subarray(needed));
+          this.bufferByteLength -= needed;
+          written += needed;
         }
-        audioData[i] = byte;
       }
 
       const chunkStartTime = this.calculateChunkStartTime();
 
-      // Determine format from audio header width
-      const format = this.audioFormat ? getFormatFromWidth(this.audioFormat.width) : "float32";
-      const formatConfig = {
+      // For Opus: we decoded to PCM, so buffer contains PCM now
+      // For PCM/float32: buffer contains what header declared
+      const format: AudioFormatConfig["format"] =
+        this.detectedFormat === "float32" ? "float32" : "pcm";
+
+      const formatConfig: AudioFormatConfig = {
         format,
         sampleRate: this.audioFormat?.rate || 16000,
         channels: this.audioFormat?.channels || 1,
@@ -345,9 +689,9 @@ class PcmWebSocketSession {
           chunkStartTime,
           this.chunkIndex,
           this.sourceFileId,
-          formatConfig.format,
+          formatConfig,
         );
-        log("INFO", `Audio chunk created`, {
+        log("INFO", `[AUDIO_WS] Audio chunk created`, {
           sessionId: this.sessionId,
           chunkIndex: this.chunkIndex,
           chunkBytes: audioData.length,
@@ -362,7 +706,7 @@ class PcmWebSocketSession {
         this.chunkIndex++;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        log("ERROR", `Failed to create audio chunk`, {
+        log("ERROR", `[AUDIO_WS] Failed to create audio chunk`, {
           sessionId: this.sessionId,
           chunkIndex: this.chunkIndex,
           isFinal: flushAll,
@@ -500,7 +844,7 @@ export async function handlePcmWebSocket(
   ws: WebSocket | any,
   upgrade: IncomingMessage,
 ): Promise<void> {
-  log("INFO", `WebSocket connection attempt`, {
+  log("INFO", `[AUDIO_WS] WebSocket connection attempt`, {
     url: upgrade.url,
     remoteAddress: upgrade.socket?.remoteAddress
   });
@@ -509,16 +853,16 @@ export async function handlePcmWebSocket(
   const auth = await authenticate(request);
 
   if (!auth) {
-    log("WARN", `WebSocket auth failed`, { url: upgrade.url });
+    log("WARN", `[AUDIO_WS] WebSocket auth failed`, { url: upgrade.url });
     try {
       ws.close(1008, "Unauthorized: Token is missing or invalid");
-    } catch (closeError) {
-      // Ignore errors when closing
+    } catch {
+      // socket may already be closing
     }
     throw new Error("Unauthorized");
   }
 
-  log("INFO", `WebSocket authenticated`, { principal: auth.principal });
+  log("INFO", `[AUDIO_WS] WebSocket authenticated`, { principal: auth.principal });
 
   await defaultResourceManager.ensureAllowed(
     auth,
@@ -621,7 +965,7 @@ export async function handlePcmWebSocket(
           await handleTextMessage(data);
         }
       } catch (error) {
-        console.error("Error handling message:", error);
+        console.error("[AUDIO_WS] Error handling message:", error);
       }
     };
 
@@ -636,14 +980,15 @@ export async function handlePcmWebSocket(
 
     const handleClose = (code: number, reason: Buffer) => {
       const reasonStr = reason ? reason.toString() : "";
-      log("INFO", `WebSocket closed`, { code, reason: reasonStr });
+      log("INFO", `[AUDIO_WS] WebSocket closed`, { code, reason: reasonStr });
       cleanup();
       resolve();
     };
 
     const cleanup = () => {
+      session.freeDecoder();
       session.flushAll().catch((error) => {
-        log("ERROR", `Error flushing buffer on cleanup`, {
+        log("ERROR", `[AUDIO_WS] Error flushing buffer on cleanup`, {
           error: error instanceof Error ? error.message : String(error)
         });
       });

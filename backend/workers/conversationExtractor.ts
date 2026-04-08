@@ -199,11 +199,21 @@ async function callLLMStructured<T>(
   parseResponse: (content: string) => T,
   logContext?: string,
 ): Promise<T> {
+  // OpenAI requires the word "json" in messages when using response_format: json_object
+  // Ensure the first message (system prompt) includes it
+  const adjustedMessages = [...messages];
+  if (adjustedMessages.length > 0 && !adjustedMessages[0].content.toLowerCase().includes('json')) {
+    adjustedMessages[0] = {
+      ...adjustedMessages[0],
+      content: adjustedMessages[0].content + ' Respond in JSON format.',
+    };
+  }
+
   const response = await llm({
     action: "completions",
     model,
-    messages,
-    response_format: responseFormat,
+    messages: adjustedMessages,
+    response_format: { type: "json_object" },
   });
 
   const content = response.choices[0]?.message?.content;

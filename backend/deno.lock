@@ -93,6 +93,7 @@
     "npm:ms@*": "2.1.3",
     "npm:ms@^2.1.3": "2.1.3",
     "npm:multer@^1.4.5-lts.1": "1.4.5-lts.2",
+    "npm:opus-decoder@~0.7.11": "0.7.11",
     "npm:multer@^1.4.5-lts.2": "1.4.5-lts.2",
     "npm:pyodide@*": "0.29.0",
     "npm:redis@^4.7.0": "4.7.1_@redis+client@1.6.1",
@@ -450,6 +451,9 @@
       "integrity": "sha512-aIitBcjQeyOhMTImhLZmtxfdOcuNRpwlPNmlFKPcHQYPhEssw75Cl1TSXJXpMkzaua9FUetx/4OQKq7eJul5Cg==",
       "os": ["win32"],
       "cpu": ["x64"]
+    },
+    "@eshaz/web-worker@1.2.2": {
+      "integrity": "sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw=="
     },
     "@eslint-community/eslint-utils@4.9.0_eslint@8.57.1": {
       "integrity": "sha512-ayVFHdtZ+hsq1t2Dy24wCmGXGe4q9Gu3smhLYALJrr473ZH27MsnSL+LKUlimp4BWJqMDMLmPpx/Q9R3OAlL4g==",
@@ -1346,6 +1350,13 @@
     },
     "@vercel/oidc@3.0.5": {
       "integrity": "sha512-fnYhv671l+eTTp48gB4zEsTW/YtRgRPnkI2nT7x6qw5rkI1Lq2hTmQIpHPgyThI0znLK+vX2n9XxKdXZ7BUbbw=="
+    },
+    "@wasm-audio-decoders/common@9.0.7": {
+      "integrity": "sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==",
+      "dependencies": [
+        "@eshaz/web-worker",
+        "simple-yenc"
+      ]
     },
     "abort-controller@3.0.0": {
       "integrity": "sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==",
@@ -3572,6 +3583,12 @@
         "word-wrap"
       ]
     },
+    "opus-decoder@0.7.11": {
+      "integrity": "sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==",
+      "dependencies": [
+        "@wasm-audio-decoders/common"
+      ]
+    },
     "own-keys@1.0.1": {
       "integrity": "sha512-qFOyK5PjiWZd+QQIh+1jhdb9LpxTF0qs7Pm8o5QHYZ0M3vKqSqzsZaEB6oWlxZ+q2sJBMI/Ktgd2N5ZwQoRHfg==",
       "dependencies": [
@@ -4125,6 +4142,9 @@
         "once",
         "simple-concat"
       ]
+    },
+    "simple-yenc@1.0.4": {
+      "integrity": "sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw=="
     },
     "slash@3.0.0": {
       "integrity": "sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q=="
@@ -4761,6 +4781,15 @@
     "zod@4.3.5": {
       "integrity": "sha512-k7Nwx6vuWx1IJ9Bjuf4Zt1PEllcwe7cls3VNzm4CQ1/hgtFUK2bRNG3rvnpPUhFjmqJKAKtjV576KnUkHocg/g=="
     }
+  },
+  "redirects": {
+    "https://unpkg.com/@evan/wasm/target/opus/deno.js": "https://unpkg.com/@evan/wasm@0.0.95/target/opus/deno.js"
+  },
+  "remote": {
+    "https://deno.land/x/opus@0.1.1/mod.ts": "147af5927fbc824e069a96494751d5aab7d58b4fa10d3281bf67afd79dee63e0",
+    "https://deno.land/x/opus@0.1.1/opus.ts": "66258c4487b956ba1ecc98d60d9cd62aef93fdd8a5c98d6fe9105f9e39daecc6",
+    "https://deno.land/x/opus@0.1.1/pack/opuswasm.js": "3f7117456651a6e426fe5e22ecf02325278cac1bd0f6f42e62f0b97ed0a87601",
+    "https://unpkg.com/@evan/wasm@0.0.95/target/opus/deno.js": "af5c2299afd23581384a319b71a36bed491aad3e98c2a13dd2f445e7b8aace5f"
   },
   "workspace": {
     "dependencies": [

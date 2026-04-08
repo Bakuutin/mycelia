@@ -100,7 +100,7 @@ The setup script automatically:
 - Generates a secure `SECRET_KEY`
 - Starts all services with Docker Compose
 
-Open [https://localhost:4433](https://localhost:4433) in your browser.
+Open [http://localhost:3210](http://localhost:3210) in your browser.
 
 #### CLI/Python Daemon Users
 
