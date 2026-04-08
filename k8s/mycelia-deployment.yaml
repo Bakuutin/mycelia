@@ -1,0 +1,357 @@
+# Example Kubernetes manifests for deploying Mycelia to KIND
+# Adjust image names, ports, and resources according to your setup
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mycelia
+  labels:
+    name: mycelia
+
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mycelia-config
+  namespace: mycelia
+data:
+  # Add your configuration here
+  LOG_LEVEL: "info"
+
+---
+# Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mycelia-backend
+  namespace: mycelia
+  labels:
+    app: mycelia-backend
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mycelia-backend
+  template:
+    metadata:
+      labels:
+        app: mycelia-backend
+    spec:
+      containers:
+      - name: backend
+        # Use your built image
+        image: mycelia-backend:latest
+        imagePullPolicy: Never  # Use local image in KIND
+        ports:
+        - name: http
+          containerPort: 5173
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: mycelia-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5173
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 5173
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mycelia-backend
+  namespace: mycelia
+  labels:
+    app: mycelia-backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5173
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: mycelia-backend
+
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mycelia-frontend
+  namespace: mycelia
+  labels:
+    app: mycelia-frontend
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mycelia-frontend
+  template:
+    metadata:
+      labels:
+        app: mycelia-frontend
+    spec:
+      containers:
+      - name: frontend
+        # Use your built image
+        image: mycelia-frontend:latest
+        imagePullPolicy: Never  # Use local image in KIND
+        ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+        env:
+        - name: BACKEND_URL
+          value: "http://mycelia-backend:5173"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mycelia-frontend
+  namespace: mycelia
+  labels:
+    app: mycelia-frontend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: mycelia-frontend
+
+---
+# MongoDB StatefulSet (optional, for local testing)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+  namespace: mycelia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: mycelia
+spec:
+  serviceName: mongodb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:6.0
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: admin
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: password
+        volumeMounts:
+        - name: mongodb-storage
+          mountPath: /data/db
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: mongodb-storage
+        persistentVolumeClaim:
+          claimName: mongodb-pvc
+
+---
+# MongoDB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: mycelia
+spec:
+  clusterIP: None  # Headless service for StatefulSet
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+    targetPort: 27017
+
+---
+# MongoDB Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-secret
+  namespace: mycelia
+type: Opaque
+stringData:
+  password: "changeme123"  # Change this!
+
+---
+# Ingress (requires ingress controller to be installed)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mycelia-ingress
+  namespace: mycelia
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+  - host: mycelia.local
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: mycelia-backend
+            port:
+              number: 5173
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mycelia-frontend
+            port:
+              number: 80
+
+---
+# HorizontalPodAutoscaler for Backend
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mycelia-backend-hpa
+  namespace: mycelia
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mycelia-backend
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# HorizontalPodAutoscaler for Frontend
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mycelia-frontend-hpa
+  namespace: mycelia
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mycelia-frontend
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# NetworkPolicy to restrict traffic (optional)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mycelia-network-policy
+  namespace: mycelia
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: mycelia
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: mycelia
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
