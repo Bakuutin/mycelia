@@ -19,6 +19,7 @@ services:
       - ${MONGO_HOST_PATH:-mongo_data}:/data/db
       - ./misc/mongo/mongod.conf:/etc/mongod.conf:ro
       - ./misc/mongo/mongo-entrypoint.sh:/mongo-entrypoint.sh:ro
+      - ${PBM_BACKUP_HOST_PATH:-pbm_backup_data}:/backups
     restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME
@@ -48,12 +49,13 @@ services:
     image: percona/percona-backup-mongodb:2.12.0
     profiles: ["backup"]
     environment:
-      PBM_MONGODB_URI: "mongodb://${PBM_USER:-pbmuser}:${PBM_PASSWORD}@mongo:27017/?authSource=admin&directConnection=true"
+      PBM_MONGODB_URI: ${MONGO_URL}
     volumes:
-      - ${PBM_BACKUP_HOST_PATH:-pbm_backup_data}:/data/backups
+      - ${PBM_BACKUP_HOST_PATH:-pbm_backup_data}:/backups
     depends_on:
       - mongo
     restart: unless-stopped
+
 
   frontend:
     image: bakuutin/mycelia-frontend:dev
