@@ -88,7 +88,7 @@ class Skip(Exception):
 class Metadata(TypedDict):
     path: str
 
-_IS_AUDIO_RE = re.compile(r"\.(m4a|mp3|wav|opus)$", re.IGNORECASE)
+_IS_AUDIO_RE = re.compile(r"\.(m4a|mp3|wav|opus|ogg|oga)$", re.IGNORECASE)
 
 
 
@@ -161,7 +161,10 @@ class Importer:
             if new_files:
                 self.logger.info("discovered %s new files in '%s'", len(new_files), self.root)
                 for item in new_files:
-                    self.ingest(item)
+                    try:
+                        self.ingest(item)
+                    except Skip as e:
+                        self.logger.warning("skipping %s: %s", item.get('path', item), e)
             else:
                 self.logger.info("no new files found in '%s'", self.root)
 
@@ -282,27 +285,37 @@ class SshFilesystemImporter(FilesystemImporter):
 
     def should_process(self, path: str, attributes: paramiko.SFTPAttributes) -> bool:
         if not is_audio_file(path):
+            self.logger.debug("skipping non-audio: %s", path)
             return False
 
         if self.last_modified_threshold:
             last_modified = datetime.fromtimestamp(attributes.st_mtime, tz=UTC)
             delta = datetime.now(UTC) - last_modified
             if delta < self.last_modified_threshold:
-                print(f"Skipping {path} because it was modified too recently ({delta.total_seconds()} seconds ago)")
+                self.logger.debug("skipping recently modified (%ds ago): %s", delta.total_seconds(), path)
                 return False
 
-        return not is_discovered(path)
+        if is_discovered(path):
+            self.logger.debug("skipping already discovered: %s", path)
+            return False
+
+        return True
 
     def discover(self):
+        total = 0
+        matched = 0
         for path, attributes in self.iterate_remote_files():
+            total += 1
             if not self.should_process(path, attributes):
                 continue
+            matched += 1
             yield {
                 "created": datetime.fromtimestamp(attributes.st_mtime, tz=UTC),
                 "modified": datetime.fromtimestamp(attributes.st_mtime, tz=UTC),
                 "path": path,
                 "size": attributes.st_size,
             }
+        self.logger.debug("ssh scan %s: %d/%d files to process", self.host, matched, total)
 
     def upload(self, source: dict):
         remote_path = source["path"]
@@ -311,7 +324,7 @@ class SshFilesystemImporter(FilesystemImporter):
             os.makedirs(local_dir, exist_ok=True)
             local_path = os.path.join(local_dir, os.path.basename(remote_path))
             with self.clients() as (ssh, sftp):
-                print(f"Downloading {humanize.naturalsize(source['size'])} from {self.host}")
+                self.logger.info("downloading %s from %s", humanize.naturalsize(source['size']), self.host)
                 total_size = int(source.get("size") or 0)
                 description = os.path.basename(remote_path)
                 with tqdm(total=total_size if total_size > 0 else None, unit='B', unit_scale=True, desc=f"{self.host}:{description}") as progress_bar:
@@ -326,18 +339,28 @@ class SshFilesystemImporter(FilesystemImporter):
             if self.delete_after_upload:
                 with self.clients() as (ssh, sftp):
                     sftp.remove(remote_path)
-
-                    print(f"Cleaned up {humanize.naturalsize(source['size'])} from {self.host}")
+                    self.logger.info("cleaned up %s from %s", humanize.naturalsize(source['size']), self.host)
         finally:
             if os.path.exists(local_path):
                 os.remove(local_path)
             shutil.rmtree(local_dir, ignore_errors=True)
 
 
+DEFAULT_START_FORMATS: list[tuple[str, str]] = [
+    (r"/(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})", "%Y-%m-%d %H-%M-%S"),
+    (r"/(\d{13,})\.", "epoch_ms"),
+    (r"/(\d{10})\.", "epoch_s"),
+]
+
+
 class ExtractStartTimeFromPathMixin:
     timezone_code: str = 'UTC'
-    start_group: str
-    strptime_format: str
+    # Single format (backward compat)
+    start_group: str = None
+    strptime_format: str = None
+    # Multiple formats: list of (regex, strptime_format) pairs.
+    # Use "epoch_ms" / "epoch_s" to parse as epoch timestamps (always UTC).
+    start_formats: list[tuple[str, str]] = None
 
     @cached_property
     def timezone(self) -> pytz.timezone:
@@ -345,13 +368,28 @@ class ExtractStartTimeFromPathMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.start_group_re = re.compile(self.start_group)
-        assert self.start_group_re.groups == 1, "Start group must be a single group"
+        if self.start_group and self.strptime_format:
+            formats = [(self.start_group, self.strptime_format)]
+        else:
+            formats = self.start_formats or DEFAULT_START_FORMATS
+        self._compiled_formats = []
+        for pattern, fmt in formats:
+            regex = re.compile(pattern)
+            assert regex.groups == 1, f"Pattern must have exactly one group: {pattern}"
+            self._compiled_formats.append((regex, fmt))
 
     def get_start(self, metadata: Metadata) -> datetime:
-        match = self.start_group_re.search(metadata["path"])
-        if not match:
-            raise Skip(f"Could not find start time in filename {metadata['path']}")
-        return self.timezone.localize(
-            datetime.strptime(match.group(1), self.strptime_format), is_dst=None
-        ).astimezone(pytz.UTC)
+        path = metadata["path"]
+        for regex, fmt in self._compiled_formats:
+            match = regex.search(path)
+            if not match:
+                continue
+            value = match.group(1)
+            if fmt == "epoch_ms":
+                return datetime.fromtimestamp(int(value) / 1000, tz=UTC)
+            if fmt == "epoch_s":
+                return datetime.fromtimestamp(int(value), tz=UTC)
+            return self.timezone.localize(
+                datetime.strptime(value, fmt), is_dst=None
+            ).astimezone(pytz.UTC)
+        raise Skip(f"Could not find start time in filename {path}")

@@ -1,3 +1,4 @@
+import logging
 import requests
 from typing import Any, Optional
 from datetime import datetime, timezone
@@ -5,6 +6,8 @@ from bson import ObjectId
 from contextvars import ContextVar
 
 from .config import get_url, client_id, client_secret, ALLOW_INSECURE_TRANSPORT
+
+logger = logging.getLogger(__name__)
 
 # ContextVars to store per-request job state
 job_token_var: ContextVar[Optional[str]] = ContextVar("job_token", default=None)
@@ -30,6 +33,25 @@ def exchange_api_key_for_jwt() -> str:
     return data["access_token"]
 
 
+def refresh_token() -> None:
+    """Re-exchange credentials for a fresh JWT and reset the session."""
+    logger.info("Refreshing expired JWT token")
+    token = exchange_api_key_for_jwt()
+    job_token_var.set(token)
+    # Clear cached session so get_session() rebuilds it with the new token
+    old_session = job_session_var.get()
+    if old_session:
+        old_session.close()
+    job_session_var.set(None)
+
+
+def ensure_authorized() -> None:
+    """Ensure the current session has a valid token. Acquires one if missing."""
+    token = job_token_var.get()
+    if not token:
+        refresh_token()
+
+
 def get_session() -> requests.Session:
     """Get or create a requests Session for the current job context."""
     session = job_session_var.get()
@@ -41,13 +63,6 @@ def get_session() -> requests.Session:
             session.headers.update({"Authorization": f"Bearer {token}"})
         job_session_var.set(session)
     return session
-
-
-def ensure_authorized() -> None:
-    """Ensure the current session has a token. Raises if no token is available."""
-    token = job_token_var.get()
-    if not token:
-        raise RuntimeError("No job token available in current context. Fallback authentication is disabled.")
 
 
 def encode_typed(obj: Any) -> Any:
