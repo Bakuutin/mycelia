@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { formatRelativeTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { Response } from "@/components/ai-elements/response";
+import { normalizeMessageParts } from "@/lib/chatUiMessages";
 import {
   Tool,
   ToolHeader,
@@ -18,25 +19,11 @@ interface MyceliaMessageProps {
   children?: React.ReactNode;
 }
 
-interface ToolCallPart {
-  type: 'tool-call';
-  toolCallId: string;
-  toolName: string;
-  input: Record<string, unknown>;
-}
-
-interface ToolResultPart {
-  type: 'tool-result';
-  toolCallId: string;
-  toolName: string;
-  output?: { type: string; value: unknown };
-  error?: string;
-}
-
 interface ParsedMessageContent {
   role: 'user' | 'assistant';
   content: string;
   toolCalls: Array<{
+    uiType: string;
     toolCallId: string;
     toolName: string;
     input: Record<string, unknown>;
@@ -48,36 +35,49 @@ interface ParsedMessageContent {
 
 function parseMessageContent(raw: any): ParsedMessageContent {
   const role = raw?.role === 'user' ? 'user' : 'assistant';
-  
-  const content = raw?.content;
-  let textContent = '';
+  const parts = normalizeMessageParts(raw?.parts, raw?.content);
+  const textContent = parts
+    .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
+    .map((part: any) => part.text)
+    .join('\n\n');
   const toolCalls: ParsedMessageContent['toolCalls'] = [];
-  
-  if (typeof content === 'string') {
-    textContent = content;
-  } else if (Array.isArray(content)) {
-    const textParts = content
-      .filter((part: any) => part?.type === 'text' && part?.text)
-      .map((part: any) => part.text)
-      .join('\n\n');
-    
-    textContent = textParts;
-    
-    // Extract tool calls and results
-    const toolCallParts = content.filter((part: any) => part?.type === 'tool-call') as ToolCallPart[];
-    const toolResultParts = content.filter((part: any) => part?.type === 'tool-result') as ToolResultPart[];
-    
-    for (const call of toolCallParts) {
-      const result = toolResultParts.find(r => r.toolCallId === call.toolCallId);
-      toolCalls.push({
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        input: call.input || {},
-        output: result?.output?.value,
-        error: result?.error,
-        state: result?.error ? 'output-error' : result ? 'output-available' : 'input-available',
-      });
+
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+
+    const type = (part as any).type;
+    const state = (part as any).state;
+    if (
+      typeof type !== "string" ||
+      (!type.startsWith("tool-") && type !== "dynamic-tool") ||
+      typeof state !== "string"
+    ) {
+      continue;
     }
+
+    const toolName = type === "dynamic-tool"
+      ? String((part as any).toolName ?? "dynamic-tool")
+      : type.slice(5);
+    const approvalReason = (part as any).approval?.reason;
+    const displayState = state === "output-available"
+      ? "output-available"
+      : state === "output-error" || state === "output-denied"
+        ? "output-error"
+        : "input-available";
+
+    toolCalls.push({
+      uiType: type,
+      toolCallId: String((part as any).toolCallId),
+      toolName,
+      input: ((part as any).input ?? {}) as Record<string, unknown>,
+      output: state === "output-available" ? (part as any).output : undefined,
+      error: state === "output-error"
+        ? String((part as any).errorText ?? "Tool execution failed.")
+        : state === "output-denied"
+          ? String(approvalReason ?? "Tool execution denied.")
+          : undefined,
+      state: displayState,
+    });
   }
   
   return { role, content: textContent, toolCalls };
@@ -88,7 +88,7 @@ function ToolCallDisplay({ toolCall }: { toolCall: ParsedMessageContent['toolCal
     <Tool className="group">
       <ToolHeader
         title={toolCall.toolName}
-        type="tool-call"
+        type={toolCall.uiType as any}
         state={toolCall.state}
       />
       <ToolContent>
@@ -232,13 +232,10 @@ function MyceliaMessageBubble({ message }: MyceliaMessageProps) {
 const MyceliaMessageComponent: Platform["MessageComponent"] = ({ message }) => {
   const raw = message.raw;
   
-  const hasContent = raw?.content && (
-    typeof raw.content === 'string' 
-      ? raw.content.length > 0 
-      : (Array.isArray(raw.content) && raw.content.length > 0)
-  );
+  const parts = normalizeMessageParts(raw?.parts, raw?.content);
+  const hasContent = parts.length > 0 || !!raw?.role;
   
-  if (hasContent || raw?.role) {
+  if (hasContent) {
     return <MyceliaMessageBubble message={message} />;
   }
 

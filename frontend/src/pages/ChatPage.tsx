@@ -32,6 +32,11 @@ import type { Message as MessengerMessage } from "@myceliasdk/messengers";
 import type { Chat } from "@myceliasdk/messengers.ts";
 import { cn } from "@/lib/utils";
 import { useFormattedTime } from "@/lib/formatTime";
+import {
+  extractTextFromUIParts,
+  normalizeMessageParts,
+  toUIMessageFromStoredRecord,
+} from "@/lib/chatUiMessages";
 
 async function fetchMessages(chatId: string) {
   const messages = await callResource("mongo", {
@@ -45,32 +50,7 @@ async function fetchMessages(chatId: string) {
     },
   });
 
-  return messages.map((msg: any) => ({
-    id: msg._id.toString(),
-    role: msg.raw?.role || msg.role,
-    content: msg.raw?.content || msg.content,
-    createdAt: new Date(msg.createdAt),
-    toolInvocations: msg.toolCalls?.map((call: any) => {
-      const result = msg.toolResults?.find(
-        (r: any) => r.toolCallId === call.toolCallId
-      );
-      if (result) {
-        return {
-          state: "result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          args: call.args,
-          result: result.result,
-        };
-      }
-      return {
-        state: "call",
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        args: call.args,
-      };
-    }),
-  }));
+  return messages.map((msg: any) => toUIMessageFromStoredRecord(msg));
 }
 
 function isValidObjectId(id: string): boolean {
@@ -78,23 +58,12 @@ function isValidObjectId(id: string): boolean {
 }
 
 function toMessengerMessage(message: any): MessengerMessage {
-  const content = message.content;
-  const parts = message.parts;
-  
-  let normalizedContent: string | Array<{ type: string; text: string }>;
-  
-  if (typeof content === 'string') {
-    normalizedContent = content;
-  } else if (Array.isArray(content)) {
-    normalizedContent = content;
-  } else if (Array.isArray(parts)) {
-    normalizedContent = parts
-      .filter((p: any) => typeof p === 'string' || (p?.type === 'text' && p?.text))
-      .map((p: any) => typeof p === 'string' ? { type: 'text', text: p } : p);
-  } else {
-    normalizedContent = '';
-  }
-  
+  const normalizedParts = normalizeMessageParts(message.parts, message.content);
+  const normalizedContent = typeof message.content === "string"
+    ? message.content
+    : Array.isArray(message.content)
+      ? message.content
+      : extractTextFromUIParts(normalizedParts);
   const messageId = isValidObjectId(message.id) ? new ObjectId(message.id) : new ObjectId();
   
   return {
@@ -108,6 +77,7 @@ function toMessengerMessage(message: any): MessengerMessage {
     updatedAt: message.createdAt || new Date(),
     raw: {
       role: message.role,
+      parts: normalizedParts,
       content: normalizedContent,
     },
   };
