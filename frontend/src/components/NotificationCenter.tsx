@@ -127,11 +127,13 @@ export function NotificationCenter() {
   const {
     notifications,
     showPopups,
+    hideEmptyJobs,
     markAsRead,
     markAllAsRead,
     removeNotification,
     clearAll,
     setShowPopups,
+    setHideEmptyJobs,
   } = useNotificationStore();
   const unreadCount = useNotificationStore(selectUnreadCount);
 
@@ -269,15 +271,27 @@ export function NotificationCenter() {
         </div>
 
         <Separator />
-        <div className="p-3 flex items-center justify-between">
-          <Label htmlFor="show-popups" className="text-sm text-muted-foreground cursor-pointer">
-            Show popup toasts
-          </Label>
-          <Switch
-            id="show-popups"
-            checked={showPopups}
-            onCheckedChange={setShowPopups}
-          />
+        <div className="p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="hide-empty" className="text-sm text-muted-foreground cursor-pointer">
+              Hide empty job notifications
+            </Label>
+            <Switch
+              id="hide-empty"
+              checked={hideEmptyJobs}
+              onCheckedChange={setHideEmptyJobs}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-popups" className="text-sm text-muted-foreground cursor-pointer">
+              Show popup toasts
+            </Label>
+            <Switch
+              id="show-popups"
+              checked={showPopups}
+              onCheckedChange={setShowPopups}
+            />
+          </div>
         </div>
       </PopoverContent>
     </Popover>

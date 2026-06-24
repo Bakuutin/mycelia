@@ -895,8 +895,7 @@ export default function JobsPage() {
 
     // Apply hide empty filter
     if (hideEmpty) {
-      result = result.filter(job => {
-        // Only filter completed jobs - keep active/waiting/failed visible
+      result = result.filter((job) => {
         if (job.state !== "completed") return true;
         return !isEmptyJobResult(job);
       });
@@ -1130,34 +1129,6 @@ export default function JobsPage() {
     }
   };
 
-  const handleClearCompleted = async () => {
-    const confirmText = "DELETE";
-    const userInput = prompt(
-      `⚠️ DEV ONLY - DESTRUCTIVE ACTION ⚠️\n\n` +
-      `This will permanently delete ALL completed, failed, and cancelled jobs from the database.\n\n` +
-      `This action cannot be undone and the data cannot be recovered.\n\n` +
-      `Type "${confirmText}" to confirm:`
-    );
-
-    if (userInput !== confirmText) {
-      if (userInput !== null) {
-        alert("Deletion cancelled - confirmation text did not match.");
-      }
-      return;
-    }
-
-    try {
-      const result = await api.callResource("jobs", {
-        action: "clear_completed",
-      });
-      console.log(`Deleted ${result.deletedCount} jobs`);
-      refetch();
-    } catch (error) {
-      console.error("Failed to clear completed jobs:", error);
-      alert("Failed to clear completed jobs");
-    }
-  };
-
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -1208,17 +1179,6 @@ export default function JobsPage() {
             <Trash2 className="h-4 w-4 mr-2" />
             Cancel All
           </Button>
-          {import.meta.env.DEV && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleClearCompleted}
-              title="Dev only: Permanently delete completed jobs from database"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Clear Completed (Dev)
-            </Button>
-          )}
           <Button
             variant="outline"
             size="sm"

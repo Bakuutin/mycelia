@@ -43,6 +43,8 @@ import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/cha
 import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
 import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
 import { up, down, to, status } from "@/lib/mongo/migrator.ts";
+import { JobsResource } from "@/lib/resources/worker.ts";
+import { getServerAuth } from "@/lib/auth/core.server.ts";
 
 
 let logFile: Deno.FsFile | null = null;
@@ -553,6 +555,74 @@ async function configureCli() {
           }
         } catch (err) {
           console.error("Failed to get migration status:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "jobs-clear",
+      "Clear all completed, failed, and cancelled jobs from database",
+      () => {},
+      async () => {
+        try {
+          await setupResources();
+          const auth = await getServerAuth();
+          const jobsResource = new JobsResource();
+          const result = await jobsResource.call({ action: "clear_completed" }, auth);
+          console.log(`Deleted ${result.deletedCount} jobs`);
+        } catch (err) {
+          console.error("Failed to clear jobs:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "jobs-cancel-all",
+      "Cancel all active and waiting jobs",
+      () => {},
+      async () => {
+        try {
+          await setupResources();
+          const auth = await getServerAuth();
+          const jobsResource = new JobsResource();
+          await jobsResource.call({ action: "cancel_all" }, auth);
+          console.log("All jobs cancelled");
+        } catch (err) {
+          console.error("Failed to cancel jobs:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "jobs-pause",
+      "Pause all workers",
+      () => {},
+      async () => {
+        try {
+          await setupResources();
+          const auth = await getServerAuth();
+          const jobsResource = new JobsResource();
+          await jobsResource.call({ action: "pause_all" }, auth);
+          console.log("All workers paused");
+        } catch (err) {
+          console.error("Failed to pause workers:", err);
+          exit(1);
+        }
+      },
+    )
+    .command(
+      "jobs-resume",
+      "Resume all workers",
+      () => {},
+      async () => {
+        try {
+          await setupResources();
+          const auth = await getServerAuth();
+          const jobsResource = new JobsResource();
+          await jobsResource.call({ action: "resume_all" }, auth);
+          console.log("All workers resumed");
+        } catch (err) {
+          console.error("Failed to resume workers:", err);
           exit(1);
         }
       },

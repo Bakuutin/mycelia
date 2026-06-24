@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import type { JobInfo } from "@/types/jobs";
 import { useNotificationStore } from "@/stores/notificationStore";
+import { isEmptyJobResult } from "@/lib/jobUtils";
 
 /** Format job type for display */
 function formatJobType(type: string): string {
@@ -53,7 +54,7 @@ interface UseJobsListenerOptions {
 export function useJobsListener(options: UseJobsListenerOptions = {}) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { addNotification, showPopups } = useNotificationStore();
+  const { addNotification, showPopups, hideEmptyJobs } = useNotificationStore();
 
   // Create a stable query key that includes the types filter
   const queryKey = options.types?.length
@@ -153,6 +154,17 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       });
 
       if (event.event === "job.completed" && event.data) {
+        // Skip empty job notifications if hideEmptyJobs is enabled
+        const isEmpty = isEmptyJobResult(
+          jobData.jobType,
+          "completed",
+          jobData.progress,
+          jobData.result
+        );
+        if (hideEmptyJobs && isEmpty) {
+          return;
+        }
+
         if (jobData.jobType === "summarization" && jobData.result?.objectId) {
           const result = jobData.result as { objectId: string; title?: string; end?: string };
           const title = result.title || "Conversation";
