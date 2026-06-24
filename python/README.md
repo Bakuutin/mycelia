@@ -223,6 +223,29 @@ Options:
 ### Transcription (`stt.py`)
 Speech-to-text transcription services.
 
+### Local Whisper Server (`whisper_server/`)
+
+Run a local OpenAI-compatible transcription server on macOS with Docker:
+
+```bash
+docker build -t mycelia-whisper-local -f python/whisper_server/Dockerfile .
+
+docker container run --rm \
+  -p 9000:9000 \
+  -e WHISPER_MODEL=small \
+  -e WHISPER_API_KEY=mycelia-local \
+  -v mycelia-whisper-models:/models \
+  mycelia-whisper-local
+```
+
+Then point Mycelia transcription traffic at it:
+
+- Backend in Docker: `TRANSCRIPTION_BASE_URL=http://host.docker.internal:9000`
+- Backend running natively: `TRANSCRIPTION_BASE_URL=http://localhost:9000`
+- Shared secret: `TRANSCRIPTION_API_KEY=mycelia-local`
+
+See [whisper_server/README.md](./whisper_server/README.md) for the available environment variables and the native non-Docker fallback.
+
 ## Configuration
 
 Configuration is managed through `settings.py`.

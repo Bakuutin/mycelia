@@ -15,7 +15,7 @@ your own words.
 - Continuous import from Apple Voice Memos, Google Drive, and local folders.
 - Automated pipeline: VAD → Transcription → Conversation extraction → Summarization.
 - Smart chunking, waveform normalization, and diarization-friendly segments.
-- Whisper transcription via local GPU or any remote OpenAI-compatible server.
+- Whisper transcription via local GPU, a Mac-local server, or any remote OpenAI-compatible server.
 - Audio recording, playback (0.5x–3x speed, volume up to 300%), and WAV export.
 - Pipeline monitoring UI with real-time session tracking and error handling.
 
@@ -154,6 +154,37 @@ When you first open the frontend, you'll be guided through a setup wizard:
    - Any OpenAI-compatible API endpoint
 
 You can reconfigure these settings anytime in Settings.
+
+### Run Whisper Locally on Mac
+
+If you want local transcription on macOS without the GPU stack, build and run the bundled Whisper server container:
+
+```bash
+docker build -t mycelia-whisper-local -f python/whisper_server/Dockerfile .
+
+docker container run --rm \
+  -p 9000:9000 \
+  -e WHISPER_MODEL=small \
+  -e WHISPER_API_KEY=mycelia-local \
+  -v mycelia-whisper-models:/models \
+  mycelia-whisper-local
+```
+
+The server exposes:
+
+- `GET /health`
+- `GET /v1/models`
+- `POST /v1/audio/transcriptions`
+
+To make Mycelia use it for transcription only, add these to `.env` before starting the backend:
+
+```bash
+# Backend running in Docker on macOS
+TRANSCRIPTION_BASE_URL=http://host.docker.internal:9000
+TRANSCRIPTION_API_KEY=mycelia-local
+```
+
+If you run the backend natively instead of in Docker, use `http://localhost:9000` as the base URL. The first transcription request downloads the configured `faster-whisper` model into the mounted Docker volume.
 
 #### Managing API Keys
 
