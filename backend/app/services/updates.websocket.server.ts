@@ -87,12 +87,20 @@ class UpdatesWebSocketSession {
       switch (message.type) {
         case "subscribe":
           if (message.channel) {
+            if (!/^[a-zA-Z0-9._:*-]+$/.test(message.channel)) {
+              this.sendMessage({ type: "error", message: "Invalid channel name" });
+              break;
+            }
             await this.subscribe(message.channel);
           }
           break;
 
         case "unsubscribe":
           if (message.channel) {
+            if (!/^[a-zA-Z0-9._:*-]+$/.test(message.channel)) {
+              this.sendMessage({ type: "error", message: "Invalid channel name" });
+              break;
+            }
             await this.unsubscribe(message.channel);
           }
           break;

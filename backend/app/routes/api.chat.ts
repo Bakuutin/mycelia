@@ -60,10 +60,7 @@ export async function apiChatHandler(req: Request, res: Response) {
   const mongo = await getMongoResource(auth);
 
   let { messages, chatId } = req.body;
-  
-  // Debug: Log incoming messages to understand the structure
-  console.log("[apiChatHandler] Incoming messages:", JSON.stringify(messages, null, 2));
-  
+
   // Normalize messages for AI SDK v6 compatibility
   // Claude requires that each tool_result has a matching tool_use in the previous message
   if (Array.isArray(messages)) {

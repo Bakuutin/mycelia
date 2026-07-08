@@ -102,7 +102,7 @@ class OpusWebSocketSession {
     private auth: Auth,
     private ws: WebSocket | any,
   ) {
-    this.sessionId = Math.random().toString(36).substring(2, 10);
+    this.sessionId = crypto.randomUUID().replace(/-/g, "").substring(0, 8);
     log("INFO", `Opus session created`, { sessionId: this.sessionId, principal: auth.principal });
   }
 
@@ -215,8 +215,16 @@ class OpusWebSocketSession {
       });
     }
 
+    this.freeDecoder();
+  }
+
+  freeDecoder(): void {
     if (this.opusDecoder) {
-      this.opusDecoder.free();
+      try {
+        this.opusDecoder.free();
+      } catch {
+        // ignore errors freeing WASM instance
+      }
       this.opusDecoder = null;
     }
   }
@@ -529,7 +537,11 @@ export async function handleOpusWebSocket(
 
   if (!auth) {
     log("WARN", `Opus WebSocket auth failed`, { url: upgrade.url });
-    ws.close(1008, "Unauthorized: Token is missing or invalid");
+    try {
+      ws.close(1008, "Unauthorized: Token is missing or invalid");
+    } catch {
+      // socket may already be closing
+    }
     throw new Error("Unauthorized");
   }
 
@@ -660,6 +672,7 @@ export async function handleOpusWebSocket(
     };
 
     const cleanup = () => {
+      session.freeDecoder();
       session.flushAll().catch((error) => {
         log("ERROR", `Error flushing Opus buffer on cleanup`, {
           error: error instanceof Error ? error.message : String(error)

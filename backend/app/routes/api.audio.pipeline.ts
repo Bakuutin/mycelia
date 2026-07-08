@@ -77,7 +77,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
   try {
     const auth = await authenticateOr401(req, res);
 
-    const limit = parseInt(req.query.limit as string) || 10;
+    const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
     const mongo = getMongoResource(auth);
 
     // Fetch source files
