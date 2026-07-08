@@ -223,6 +223,36 @@ Options:
 ### Transcription (`stt.py`)
 Speech-to-text transcription services.
 
+#### Running against a remote STT proxy
+
+`stt.py` still needs backend access for MongoDB/resource APIs, so `MYCELIA_URL`, `MYCELIA_CLIENT_ID`, and `MYCELIA_TOKEN` must be configured in the repo `.env`.
+
+To send transcription requests to a remote OpenAI-compatible STT endpoint instead of the backend-configured provider, add this to the repo `.env`:
+
+```bash
+STT_SERVER_URL=https://stt.mycelia.tech
+PROXY_API_KEY=your_proxy_api_key
+```
+
+Then run:
+
+```bash
+cd python
+export UV_CACHE_DIR=/tmp/uv-cache
+uv run stt.py --limit 10
+```
+
+Useful checks:
+
+```bash
+uv run stt.py --count
+uv run stt.py --limit 1
+```
+
+- `--server` can still override `STT_SERVER_URL`
+- `--api-key` can still override `PROXY_API_KEY`
+- `--count` returns pending speech chunks eligible for STT; it only verifies backend auth/Mongo access, not the remote STT call
+
 ## Configuration
 
 Configuration is managed through `settings.py`.
