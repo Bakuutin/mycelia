@@ -362,6 +362,7 @@ function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonPr
 
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`
         flex items-center gap-2 px-3 py-2 rounded-lg border transition-all
@@ -1469,7 +1470,7 @@ const ObjectsPage = () => {
               <div id="starred-section" className="border rounded-lg border-yellow-200 bg-yellow-50/30 dark:border-yellow-900/50 dark:bg-yellow-900/10">
                 <div className="flex items-center p-4 gap-2">
                   <CollapsibleTrigger asChild>
-                    <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
+                    <button type="button" className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
                       {starredCollapsed ? (
                         <ChevronRight className="w-5 h-5 text-muted-foreground" />
                       ) : (
@@ -1493,7 +1494,7 @@ const ObjectsPage = () => {
                           key={object._id.toString()}
                           object={object}
                           searchQuery={q}
-                          showType={true}
+                          showType
                           onToggleStar={toggleStar}
                         />
                       ))}
@@ -1545,7 +1546,7 @@ const ObjectsPage = () => {
                 <div className="border rounded-lg">
                   <div className="flex items-center p-4 gap-2">
                     <CollapsibleTrigger asChild>
-                      <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
+                      <button type="button" className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
                         {isCollapsed ? (
                           <ChevronRight className="w-5 h-5 text-muted-foreground" />
                         ) : (
@@ -1618,7 +1619,7 @@ const ObjectsPage = () => {
                                 key={object._id.toString()}
                                 object={object}
                                 searchQuery={q}
-                                showType={true}
+                                showType
                                 onToggleStar={toggleStar}
                               />
                             ))}

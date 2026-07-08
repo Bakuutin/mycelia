@@ -1630,6 +1630,7 @@ export default function JobsPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
+                            type="button"
                             onClick={() => {
                               navigator.clipboard.writeText(job.id);
                               setCopiedId(job.id);

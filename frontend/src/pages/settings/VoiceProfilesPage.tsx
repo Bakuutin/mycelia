@@ -366,7 +366,7 @@ const VoiceProfilesPage = () => {
       setRecordingDuration(0);
       setSelectedSampleId(null);
 
-      timerRef.current = window.setInterval(() => {
+      timerRef.current = globalThis.setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
     } catch {

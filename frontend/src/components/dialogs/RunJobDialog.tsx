@@ -267,7 +267,7 @@ export function RunJobDialog({
                   schema={currentSchema}
                   validator={validator}
                   onSubmit={(data: any) => handleSubmit(data.formData)}
-                  noHtml5Validate={true}
+                  noHtml5Validate
                   showErrorList={false}
                   liveValidate={false}
                 >

@@ -686,7 +686,7 @@ export default function AudioSourceFilesPage() {
                     )}
                     {uf.progress === 'uploading' && <RefreshCw className="w-3 h-3 animate-spin text-primary shrink-0" />}
                     {uf.progress === 'pending' && (
-                      <button onClick={() => removeUploadFile(i)} className="text-muted-foreground hover:text-foreground">
+                      <button type="button" onClick={() => removeUploadFile(i)} className="text-muted-foreground hover:text-foreground">
                         <X className="w-3 h-3" />
                       </button>
                     )}

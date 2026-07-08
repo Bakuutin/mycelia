@@ -211,6 +211,7 @@ function ChatListItemComponent({
                   {chatName}
                 </span>
                 <button
+                  type="button"
                   onClick={handleStartEdit}
                   className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-opacity"
                   title="Rename"
