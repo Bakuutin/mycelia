@@ -349,9 +349,9 @@ export default function AudioPipelinePage() {
                           </div>
                           <div className="text-sm text-muted-foreground">
                             {session.metadata?.codec || session.metadata?.format || 'unknown'} {session.metadata?.rate}Hz
-                            {" "}&middot;{" "}
+                             &middot;{" "}
                             {formatDistanceToNow(session.start, { addSuffix: true })}
-                            {" "}&middot;{" "}
+                             &middot;{" "}
                             <span className="font-mono text-xs">{session._id.substring(0, 8)}</span>
                           </div>
                         </div>

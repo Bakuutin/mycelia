@@ -86,6 +86,7 @@ function NotificationItem({
               <>
                 <span className="text-muted-foreground">•</span>
                 <button
+                  type="button"
                   onClick={() => onAction(notification.action!.path)}
                   className="text-xs text-primary hover:underline"
                 >
@@ -197,6 +198,7 @@ export function NotificationCenter() {
         {/* Filter tabs */}
         <div className="flex border-b">
           <button
+            type="button"
             onClick={() => setFilter("all")}
             className={cn(
               "flex-1 px-3 py-2 text-xs font-medium transition-colors",
@@ -208,6 +210,7 @@ export function NotificationCenter() {
             All ({notifications.length})
           </button>
           <button
+            type="button"
             onClick={() => setFilter("error")}
             className={cn(
               "flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1",
@@ -220,6 +223,7 @@ export function NotificationCenter() {
             Errors ({errorCount})
           </button>
           <button
+            type="button"
             onClick={() => setFilter("success")}
             className={cn(
               "flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1",

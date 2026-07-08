@@ -121,7 +121,7 @@ export default function CreateJobPage() {
                 validator={validator}
                 onSubmit={(data: any) => onSubmit(data.formData)}
                 disabled={enqueueMutation.isPending}
-                noHtml5Validate={true}
+                noHtml5Validate
                 showErrorList={false}
                 liveValidate={false}
               >
