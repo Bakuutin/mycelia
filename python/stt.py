@@ -96,6 +96,9 @@ def transcribe_with_remote_server(
         files={
             "file": (file_name, audio_bytes, file_type),
         },
+        data={
+            "model": "whisper",
+        },
         timeout=300,
     )
 
