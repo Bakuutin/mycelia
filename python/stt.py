@@ -11,7 +11,9 @@ from tqdm import tqdm
 import tempfile
 from pathlib import Path
 import ffmpeg
+import requests
 from lib.resources import call_resource
+from lib.api import job_token_var, exchange_api_key_for_jwt
 
 from lib.transcription import known_errors, remove_if_lonely
 
@@ -47,8 +49,73 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+TRANSCRIPTION_SERVER_URL: str | None = None
+TRANSCRIPTION_API_KEY: str | None = None
+
 
 NO_SPEECH_DETECTED = object()
+
+
+def initialize_backend_auth():
+    jwt_token = exchange_api_key_for_jwt()
+    job_token_var.set(jwt_token)
+
+
+def configure_transcription_endpoint(server: str | None, api_key: str | None):
+    global TRANSCRIPTION_SERVER_URL, TRANSCRIPTION_API_KEY
+
+    if not server:
+        TRANSCRIPTION_SERVER_URL = None
+        TRANSCRIPTION_API_KEY = None
+        return
+
+    resolved_api_key = api_key or os.getenv("PROXY_API_KEY") or os.getenv("INFERENCE_API_KEY")
+    if not resolved_api_key:
+        raise RuntimeError(
+            "Missing STT API key. Pass --api-key or set PROXY_API_KEY."
+        )
+
+    TRANSCRIPTION_SERVER_URL = server.rstrip("/")
+    TRANSCRIPTION_API_KEY = resolved_api_key
+    tqdm.write(f"Using remote transcription server: {TRANSCRIPTION_SERVER_URL}")
+
+
+def transcribe_with_remote_server(
+    audio_bytes: bytes,
+    file_name: str = "combined.wav",
+    file_type: str = "audio/wav",
+):
+    if not TRANSCRIPTION_SERVER_URL or not TRANSCRIPTION_API_KEY:
+        raise RuntimeError("Remote transcription server is not configured")
+
+    response = requests.post(
+        f"{TRANSCRIPTION_SERVER_URL}/v1/audio/transcriptions",
+        headers={
+            "Authorization": f"Bearer {TRANSCRIPTION_API_KEY}",
+        },
+        files={
+            "file": (file_name, audio_bytes, file_type),
+        },
+        data={
+            "model": "whisper",
+        },
+        timeout=300,
+    )
+
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        body = response.text[:500]
+        raise RuntimeError(
+            f"Remote transcription failed with HTTP {response.status_code}: {body}"
+        ) from exc
+
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Remote transcription returned invalid JSON: {response.text[:500]}"
+        ) from exc
 
 
 def ensure_audio_chunk_indexes():
@@ -472,13 +539,20 @@ def combine_chunks_with_ffmpeg(chunks: list[dict]) -> bytes:
 
 def transcribe_sequence(sequence: SpeechSequence):
     combined_audio = combine_chunks_with_ffmpeg(sequence.chunks)
-    
-    transcript = call_resource('transcription', {
-        'action': 'transcribe',
-        'file': combined_audio,
-        'fileName': 'combined.wav',
-        'fileType': 'audio/wav',
-    })
+
+    if TRANSCRIPTION_SERVER_URL:
+        transcript = transcribe_with_remote_server(
+            combined_audio,
+            file_name='combined.wav',
+            file_type='audio/wav',
+        )
+    else:
+        transcript = call_resource('transcription', {
+            'action': 'transcribe',
+            'file': combined_audio,
+            'fileName': 'combined.wav',
+            'fileType': 'audio/wav',
+        })
 
     # Extract segments (could be empty, which is valid)
     segments = transcript.get('segments', [])
@@ -547,21 +621,35 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument(
+        '--server',
+        default=os.getenv('STT_SERVER_URL'),
+        help='OpenAI-compatible STT server URL. Defaults to STT_SERVER_URL if set.',
+    )
+    parser.add_argument(
+        '--api-key',
+        default=None,
+        help='API key for the STT server. Defaults to PROXY_API_KEY if set.',
+    )
+    parser.add_argument(
         '--count',
         action='store_true',
-        help='Count pending audio chunks (transcribed_at=null, processing_by=null) and exit.',
+        help='Count pending speech chunks eligible for STT and exit.',
     )
     args = parser.parse_args()
+
+    try:
+        initialize_backend_auth()
+        configure_transcription_endpoint(args.server, args.api_key)
+    except Exception as e:
+        print(f"Error initializing STT worker: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if args.count:
         try:
             count = call_resource('mongo', {
                 "action": "count",
                 "collection": "audio_chunks",
-                "query": {
-                    "transcribed_at": {"$eq": None},
-                    "processing_by": {"$eq": None}
-                }
+                "query": build_base_filters(),
             })
             print(count)
             sys.exit(0)
