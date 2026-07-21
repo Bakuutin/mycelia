@@ -9,6 +9,11 @@ import { ObjectId } from "bson";
 import { Play, Pause, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import * as d3 from "d3";
+import {
+  type MatchedSpeakerValue,
+  SpeakerAssignmentControl,
+} from "@/modules/speakers";
+import { normalizeObjectId } from "@/lib/diarization";
 
 interface DiarizationDoc {
   _id: unknown;
@@ -21,6 +26,7 @@ interface DiarizationDoc {
   embedding?: number[];
   duration?: number;
   created_at?: Date;
+  matched_speaker?: MatchedSpeakerValue;
 }
 
 interface EmbeddingHeatmapProps {
@@ -182,9 +188,8 @@ const DiarizationDetailPage = () => {
     setAudioLoading(true);
     try {
       const originalId = diarization.original_id || diarization.original;
-      const originalIdStr = originalId instanceof ObjectId
-        ? originalId.toString()
-        : String(originalId);
+      const originalIdStr = normalizeObjectId(originalId);
+      if (!originalIdStr) throw new Error("Diarization has no valid original audio ID");
 
       const startParam = (diarization.start.getTime() / 1000).toString();
       const endParam = (diarization.end.getTime() / 1000).toString();
@@ -299,9 +304,20 @@ const DiarizationDetailPage = () => {
 
       <div className="border rounded-lg p-6 space-y-4">
         <div className="flex items-center gap-3">
-          
-          <div>
+          <div className="w-full space-y-3">
             <div className="font-semibold">Speaker Identity</div>
+            <SpeakerAssignmentControl
+              segmentId={diarization._id}
+              originalId={diarization.original_id ?? diarization.original}
+              speaker={diarization.speaker}
+              embedding={diarization.embedding}
+              duration={diarization.duration ?? durationSeconds}
+              matchedSpeaker={diarization.matched_speaker}
+              onChanged={(matchedSpeaker) =>
+                setDiarization((current) =>
+                  current ? { ...current, matched_speaker: matchedSpeaker } : current
+                )}
+            />
           </div>
         </div>
 
@@ -420,4 +436,3 @@ const DiarizationDetailPage = () => {
 };
 
 export default DiarizationDetailPage;
-

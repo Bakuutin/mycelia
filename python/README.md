@@ -200,6 +200,7 @@ Environment variables:
 
 - `DIARIZATION_SERVER_URL` (default `http://localhost:8085`): endpoint that exposes `POST /diarize`.
 - `DIARIZATION_MAX_SEQUENCE_CHUNKS`: fallback for the `--max-chunks` flag; use it when running the worker under a supervisor so uploads stay below the server’s payload limit.
+- `DIARIZATION_CONTINUITY_THRESHOLD` (default `0.75`): cosine-similarity threshold used to preserve speaker labels between overlapping requests.
 
 Progress logs stream to the console (via `tqdm`) and to `python/logs/diarization_worker.log`.
 
