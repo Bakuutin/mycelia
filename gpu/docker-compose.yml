@@ -2,7 +2,7 @@ services:
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu
     environment:
-      - ASR_MODEL=large-v3-turbo
+      - ASR_MODEL=${ASR_MODEL:-large-v3-turbo}
       - ASR_DEVICE=cuda
       - ASR_ENGINE=faster_whisper
       - NVIDIA_VISIBLE_DEVICES=all
@@ -75,3 +75,4 @@ services:
       - API_KEY=${PROXY_API_KEY}
       - WHISPER_SERVICE_URL=http://whisper:9000
       - OLLAMA_SERVICE_URL=http://ollama:11434
+      - ASR_MODEL=${ASR_MODEL:-large-v3-turbo}

@@ -109,11 +109,27 @@ def transcribe_with_remote_server(
         ) from exc
 
     try:
-        return response.json()
+        transcript = response.json()
     except ValueError as exc:
         raise RuntimeError(
             f"Remote transcription returned invalid JSON: {response.text[:500]}"
         ) from exc
+
+    model_used = (
+        response.headers.get("X-Whisper-Model")
+        or os.getenv("STT_MODEL")
+        or transcript.get("model")
+        or "unknown"
+    )
+    metadata = transcript.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    transcript["metadata"] = {
+        **metadata,
+        "model": model_used,
+        "provider": "remote_openai_compatible",
+    }
+    return transcript
 
 
 def ensure_audio_chunk_indexes():

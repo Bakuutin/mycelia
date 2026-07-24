@@ -31,6 +31,7 @@ services:
     environment:
       API_KEY: ${PROXY_API_KEY:?Set PROXY_API_KEY in Portainer}
       WHISPER_SERVICE_URL: http://whisper:9000
+      ASR_MODEL: ${ASR_MODEL:-large-v3-turbo}
     restart: unless-stopped
 
 volumes:

@@ -40,6 +40,15 @@ http://100.119.163.116:8001
 
 If the proxy image was already built on the endpoint, Portainer reuses `mycelia-stt-proxy:latest`. A Git-based deployment can also build it from `gpu/proxy/Dockerfile`.
 
+### Change the Whisper model
+
+1. Open the `mycelia-stt` stack in Portainer and select **Editor**.
+2. Under **Environment variables**, set `ASR_MODEL` to the desired model, for example `large-v3-turbo`.
+3. Select **Update the stack** and confirm the redeploy. Portainer recreates the `whisper` and `proxy` containers with the same model setting.
+4. Watch `mycelia-stt-whisper-1` logs. The first transcription after a model change may take longer while the model is downloaded or loaded.
+
+`large-v3-turbo` is already the default in `docker-compose.portainer.yml`, so removing the `ASR_MODEL` override also selects it. The model cache volume is retained during a normal stack update.
+
 ## Verify the service
 
 From the Docker host or a machine that can reach its Tailscale IP:
@@ -92,6 +101,8 @@ uv run stt.py --limit 1
 ```
 
 `--count` verifies Mycelia authentication and reports pending speech chunks without transcribing them. `--limit 1` processes one sequence through the remote proxy.
+
+The proxy returns its configured model in `X-Whisper-Model`. Transcriptions created by `python/stt.py` store this provenance in MongoDB at `transcriptions.metadata.model`, with the provider recorded at `transcriptions.metadata.provider`. Set `STT_MODEL` in Mycelia only as a fallback when using another OpenAI-compatible server that does not return the header.
 
 ## Same-host Docker networking
 

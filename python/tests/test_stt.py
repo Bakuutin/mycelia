@@ -1,0 +1,59 @@
+import os
+from pathlib import Path
+from sys import path
+from unittest import TestCase, main
+from unittest.mock import MagicMock, patch
+
+path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import stt  # noqa: E402
+
+
+class RemoteTranscriptionTest(TestCase):
+    def setUp(self):
+        self.previous_server = stt.TRANSCRIPTION_SERVER_URL
+        self.previous_key = stt.TRANSCRIPTION_API_KEY
+        stt.TRANSCRIPTION_SERVER_URL = "http://stt.example"
+        stt.TRANSCRIPTION_API_KEY = "test-key"
+
+    def tearDown(self):
+        stt.TRANSCRIPTION_SERVER_URL = self.previous_server
+        stt.TRANSCRIPTION_API_KEY = self.previous_key
+
+    def test_records_model_from_proxy_header(self):
+        response = MagicMock()
+        response.headers = {"X-Whisper-Model": "large-v3-turbo"}
+        response.json.return_value = {
+            "segments": [],
+            "metadata": {"language": "en"},
+        }
+
+        with patch("stt.requests.post", return_value=response) as request:
+            transcript = stt.transcribe_with_remote_server(b"audio")
+
+        self.assertEqual(
+            transcript["metadata"],
+            {
+                "language": "en",
+                "model": "large-v3-turbo",
+                "provider": "remote_openai_compatible",
+            },
+        )
+        self.assertEqual(request.call_args.kwargs["data"], {"model": "whisper"})
+
+    def test_uses_configured_model_when_header_is_missing(self):
+        response = MagicMock()
+        response.headers = {}
+        response.json.return_value = {"segments": []}
+
+        with (
+            patch.dict(os.environ, {"STT_MODEL": "medium"}),
+            patch("stt.requests.post", return_value=response),
+        ):
+            transcript = stt.transcribe_with_remote_server(b"audio")
+
+        self.assertEqual(transcript["metadata"]["model"], "medium")
+
+
+if __name__ == "__main__":
+    main()
