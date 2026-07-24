@@ -7,10 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAudioPlayer } from "@/modules/audio/player";
 import { embeddingToColor } from "@/lib/pcaColor";
 import { ObjectId } from "bson";
+import {
+  diarizationOverlapsTranscript,
+  normalizeObjectId,
+} from "@/lib/diarization";
+import { SpeakerBadge } from "@/modules/speakers";
 
 interface TranscriptSegment {
   start: number; // seconds from transcript start
@@ -39,8 +48,15 @@ interface DiarizationDoc {
   _id: unknown;
   start: Date;
   end: Date;
-  original: ObjectId;
+  original?: ObjectId;
+  original_id?: ObjectId;
+  speaker?: string;
   embedding?: number[];
+  matched_speaker?: {
+    profile_id: unknown;
+    name: string;
+    similarity: number;
+  };
 }
 
 function parseDateParam(value: string | null): Date | null {
@@ -545,13 +561,22 @@ const TranscriptPage = () => {
                     : null;
 
                   const diarizationsInSegment = !lastSearchedQ
-                    ? diarizations.filter(
-                        (d) =>
-                          d.original === seg.original_id &&
-                          d.start.getTime() < seg.endTime.getTime() &&
-                        d.end.getTime() > seg.time.getTime(),
-                      )
+                    ? diarizations.filter((d) =>
+                      diarizationOverlapsTranscript(d, seg)
+                    )
                     : [];
+                  const identifiedSpeakers = Array.from(
+                    new Map(
+                      diarizationsInSegment
+                        .filter((d) => d.matched_speaker)
+                        .map((d) => [
+                          normalizeObjectId(
+                            d.matched_speaker!.profile_id,
+                          ) ?? d.matched_speaker!.name,
+                          d,
+                        ]),
+                    ).values(),
+                  );
 
                   return (
                     <div key={idx} className="relative p-4">
@@ -559,7 +584,9 @@ const TranscriptPage = () => {
                       <div className="flex gap-3">
                         <div className="flex flex-col gap-1 items-center pt-1">
                           {diarizationsInSegment.map((diarization, diarIdx) => {
-                            const color = embeddingToColor(diarization.embedding) || "#eab308";
+                            const color =
+                              embeddingToColor(diarization.embedding) ||
+                              "#eab308";
                             return (
                               <Tooltip key={`${diarization._id}-${diarIdx}`}>
                                 <TooltipTrigger asChild>
@@ -570,20 +597,48 @@ const TranscriptPage = () => {
                                 </TooltipTrigger>
                                 <TooltipContent>
                                   <div className="space-y-2">
-                                    <div className="font-semibold">Diarization</div>
+                                    <div className="font-semibold">
+                                      Diarization
+                                    </div>
+                                    <div>
+                                      Speaker:{" "}
+                                      {diarization.matched_speaker?.name ??
+                                        diarization.speaker ?? "Unknown"}
+                                    </div>
+                                    {diarization.matched_speaker && (
+                                      <div>
+                                        Match: {Math.round(
+                                          diarization.matched_speaker
+                                            .similarity * 100,
+                                        )}%
+                                      </div>
+                                    )}
                                     <div className="text-xs">
-                                      <div>Start: {formatTime(diarization.start, timeFormat)}</div>
-                                      <div>End: {formatTime(diarization.end, timeFormat)}</div>
+                                      <div>
+                                        Start: {formatTime(
+                                          diarization.start,
+                                          timeFormat,
+                                        )}
+                                      </div>
+                                      <div>
+                                        End: {formatTime(
+                                          diarization.end,
+                                          timeFormat,
+                                        )}
+                                      </div>
                                     </div>
                                     <Button
                                       size="sm"
                                       variant="outline"
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        const diarizationId = diarization._id instanceof ObjectId
-                                          ? diarization._id.toString()
-                                          : String(diarization._id);
-                                        navigate(`/diarizations/${diarizationId}`);
+                                        const diarizationId =
+                                          diarization._id instanceof ObjectId
+                                            ? diarization._id.toString()
+                                            : String(diarization._id);
+                                        navigate(
+                                          `/diarizations/${diarizationId}`,
+                                        );
                                       }}
                                       className="w-full mt-2"
                                     >
@@ -612,30 +667,45 @@ const TranscriptPage = () => {
                               </svg>
                             </button>
                             <div className="text-xs text-muted-foreground flex items-center gap-1">
-                                <span>{formatTime(seg.time, timeFormat)}</span>
-                                <span>{formatTimeRangeDuration(seg.time, seg.endTime)}</span>
-                                {lastSearchedQ && (
-                                  <button
-                                    type="button"
-                                    className="ml-2 text-blue-600 hover:text-blue-800 hover:underline"
-                                    onClick={() => {
-                                      const center = seg.time.getTime();
-                                      const offset = 5 * 60 * 1000;
-                                      setQ("");
-                                      setLastSearchedQ("");
-                                      setSearchSegments([]);
-                                      setSegments([]);
-                                      navigate(
-                                        `?start=${center - offset}&end=${
-                                          center + offset
-                                        }`,
-                                      );
-                                    }}
-                                  >
-                                    Context
-                                  </button>
-                                )}
+                              <span>{formatTime(seg.time, timeFormat)}</span>
+                              <span>
+                                {formatTimeRangeDuration(seg.time, seg.endTime)}
+                              </span>
+                              {lastSearchedQ && (
+                                <button
+                                  type="button"
+                                  className="ml-2 text-blue-600 hover:text-blue-800 hover:underline"
+                                  onClick={() => {
+                                    const center = seg.time.getTime();
+                                    const offset = 5 * 60 * 1000;
+                                    setQ("");
+                                    setLastSearchedQ("");
+                                    setSearchSegments([]);
+                                    setSegments([]);
+                                    navigate(
+                                      `?start=${center - offset}&end=${
+                                        center + offset
+                                      }`,
+                                    );
+                                  }}
+                                >
+                                  Context
+                                </button>
+                              )}
                             </div>
+                            {identifiedSpeakers.map((diarization) => (
+                              <SpeakerBadge
+                                key={normalizeObjectId(
+                                  diarization.matched_speaker!.profile_id,
+                                ) ?? diarization.matched_speaker!.name}
+                                name={diarization.matched_speaker!.name}
+                                similarity={diarization.matched_speaker!
+                                  .similarity}
+                                color={embeddingToColor(
+                                  diarization.embedding,
+                                ) || "#6b7280"}
+                              />
+                            ))}
                           </div>
                           <div className="whitespace-pre-wrap leading-relaxed">
                             {lastSearchedQ

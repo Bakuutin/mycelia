@@ -40,6 +40,7 @@ services:
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
+      - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
       - COMPUTE_MODE=gpu
       - SPEAKER_SERVICE_HOST=0.0.0.0
       - SPEAKER_SERVICE_PORT=8085

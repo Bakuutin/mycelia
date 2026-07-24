@@ -1,12 +1,12 @@
 # PyAnnote Diarization Service
 
-A minimal inference provider for speaker diarization with embeddings using pyannote. Supports seeded clustering with known speaker clusters.
+A minimal inference provider for speaker diarization with embeddings using Pyannote Community-1. Supports matching Pyannote speaker clusters against known profiles.
 
 ## Features
 
 - **Speaker Diarization**: Uses pyannote to segment audio by speaker
 - **Embeddings**: Extracts WeSpeaker ResNet34 embeddings for each segment
-- **Seeded Clustering**: Optionally match segments against known speaker clusters using seeded clustering
+- **Speaker Identification**: Optionally match Pyannote speaker centroids against known profiles without replacing diarization labels
 - **FastAPI Service**: Simple REST API for easy integration
 
 ## Quick Start
@@ -24,16 +24,16 @@ Create a `.env` file:
 ```bash
 HF_TOKEN=your_huggingface_token_here
 COMPUTE_MODE=cpu  # or "gpu" for GPU acceleration
-PYTORCH_CUDA_VERSION=cpu  # or "cu121", "cu126", "cu128" for GPU
+PYTORCH_CUDA_VERSION=cpu  # or "cu126", "cu128" for GPU
 SPEAKER_SERVICE_HOST=0.0.0.0
 SPEAKER_SERVICE_PORT=8085
+DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
 ```
 
 Get your HF token from https://huggingface.co/settings/tokens
 
 Accept the terms and conditions for:
-- https://huggingface.co/pyannote/speaker-diarization-3.1
-- https://huggingface.co/pyannote/segmentation-3.0
+- https://huggingface.co/pyannote/speaker-diarization-community-1
 - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
 
 ### 2. Start the Service
@@ -62,8 +62,8 @@ Perform speaker diarization on an audio file.
 - `file`: Audio file (multipart/form-data)
 - `min_speakers` (optional): Minimum number of speakers to detect
 - `max_speakers` (optional): Maximum number of speakers to detect
-- `collar` (optional, default: 2.0): Gap duration in seconds to merge between speaker segments
-- `min_duration_off` (optional, default: 1.5): Minimum silence duration before treating as segment boundary
+- `collar` (optional, disabled by default): Post-processing gap duration used to merge same-speaker segments
+- `min_duration_off` (optional, disabled by default): Legacy segmentation override; Community-1 defaults are recommended
 - `clusters` (optional): JSON array of known speaker clusters with embeddings
 - `similarity_threshold` (optional, default: 0.15): Cosine similarity threshold for cluster matching
 

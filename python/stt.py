@@ -335,7 +335,7 @@ def process_sequence(sequence: SpeechSequence, worker_id: str):
             return {"status": "skipped", "chunks": 0, "duration": 0}
 
         result = transcribe_sequence(sequence)
-        mark_as_transcribed(sequence)
+        mark_as_transcribed(sequence, worker_id)
 
         end_time = time.time()
         duration = end_time - start_time
@@ -599,19 +599,33 @@ def transcribe_sequence(sequence: SpeechSequence):
 
 
 
-def mark_as_transcribed(seq: SpeechSequence):
+def mark_as_transcribed(seq: SpeechSequence, worker_id: str | None = None):
     chunks_to_mark = seq.chunks[:-1] if seq.is_partial else seq.chunks
     if chunks_to_mark:
+        query = {
+            '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]},
+        }
+        update_fields = {
+            'transcribed_at': datetime.now(tz=UTC),
+        }
+        if worker_id:
+            query['processing_by'] = worker_id
+            update_fields.update({
+                'processing_by': None,
+                'claimed_at': None,
+            })
+
         call_resource('mongo', {
             "action": "updateMany",
             "collection": "audio_chunks",
-            "query": {
-                '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]},
-            },
+            "query": query,
             "update": {
-                '$set': {'transcribed_at': datetime.now(tz=UTC)},
+                '$set': update_fields,
             }
         })
+
+    if worker_id and seq.is_partial:
+        release_chunks([seq.last['_id']], worker_id)
 
 
 if __name__ == '__main__':

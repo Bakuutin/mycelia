@@ -3,6 +3,7 @@ import time
 import os
 import argparse
 import math
+import re
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,7 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 DIARIZATION_SERVER_URL = os.environ.get('DIARIZATION_SERVER_URL', 'http://localhost:8085').rstrip('/')
 MAX_SEQUENCE_CHUNKS = max(1, int(os.environ.get('DIARIZATION_MAX_SEQUENCE_CHUNKS', '6')))
 SPEAKER_SIMILARITY_THRESHOLD = float(os.environ.get('SPEAKER_SIMILARITY_THRESHOLD', '0.35'))
+DIARIZATION_CONTINUITY_THRESHOLD = float(os.environ.get('DIARIZATION_CONTINUITY_THRESHOLD', '0.75'))
 
 # Cache for speaker profiles (refreshed periodically)
 _speaker_profiles_cache: list = []
@@ -93,6 +95,138 @@ def _build_clusters_param(profiles: list) -> str:
             "embedding": profile["embedding"],
         })
     return json.dumps(clusters)
+
+
+def _build_diarization_request_fields(clusters_param: Optional[str]) -> tuple[dict, dict]:
+    """Keep multipart fields separate from FastAPI query parameters."""
+    if not clusters_param:
+        return {}, {}
+    return (
+        {'clusters': clusters_param},
+        {'similarity_threshold': str(SPEAKER_SIMILARITY_THRESHOLD)},
+    )
+
+
+def _normalized_centroid(embeddings: list[list[float]]) -> Optional[np.ndarray]:
+    if not embeddings:
+        return None
+    centroid = np.mean(np.asarray(embeddings, dtype=np.float32), axis=0)
+    norm = np.linalg.norm(centroid)
+    if norm == 0 or not np.isfinite(norm):
+        return None
+    return centroid / norm
+
+
+def _reconcile_speaker_labels(
+    segments: list[dict],
+    previous_segments: list[dict],
+    threshold: float = DIARIZATION_CONTINUITY_THRESHOLD,
+    reserved_labels: Optional[set[str]] = None,
+) -> dict[str, str]:
+    """Map request-local Pyannote labels to stable labels from the overlap."""
+    current_groups: dict[str, list[list[float]]] = {}
+    previous_groups: dict[str, list[list[float]]] = {}
+
+    for segment in segments:
+        if segment.get('embedding'):
+            current_groups.setdefault(segment['speaker'], []).append(segment['embedding'])
+    for segment in previous_segments:
+        if segment.get('embedding'):
+            previous_groups.setdefault(segment['speaker'], []).append(segment['embedding'])
+
+    if not previous_groups and not reserved_labels:
+        return {speaker: speaker for speaker in current_groups}
+
+    current_centroids = {
+        speaker: centroid
+        for speaker, embeddings in current_groups.items()
+        if (centroid := _normalized_centroid(embeddings)) is not None
+    }
+    previous_centroids = {
+        speaker: centroid
+        for speaker, embeddings in previous_groups.items()
+        if (centroid := _normalized_centroid(embeddings)) is not None
+    }
+
+    candidates = []
+    for current_speaker, current_centroid in current_centroids.items():
+        for previous_speaker, previous_centroid in previous_centroids.items():
+            if current_centroid.shape != previous_centroid.shape:
+                continue
+            similarity = float(np.dot(current_centroid, previous_centroid))
+            if similarity >= threshold:
+                candidates.append((similarity, current_speaker, previous_speaker))
+
+    mapping: dict[str, str] = {}
+    used_previous = set()
+    for _, current_speaker, previous_speaker in sorted(candidates, reverse=True):
+        if current_speaker not in mapping and previous_speaker not in used_previous:
+            mapping[current_speaker] = previous_speaker
+            used_previous.add(previous_speaker)
+
+    existing_labels = set(previous_groups) | (reserved_labels or set())
+    numeric_labels = []
+    for label in existing_labels:
+        match = re.fullmatch(r'SPEAKER_(\d+)', label)
+        if match:
+            numeric_labels.append(int(match.group(1)))
+    next_speaker_number = max(numeric_labels, default=-1) + 1
+
+    for current_speaker in current_groups:
+        if current_speaker not in mapping:
+            while f'SPEAKER_{next_speaker_number:02d}' in existing_labels:
+                next_speaker_number += 1
+            mapping[current_speaker] = f'SPEAKER_{next_speaker_number:02d}'
+            existing_labels.add(mapping[current_speaker])
+            next_speaker_number += 1
+
+    return mapping
+
+
+def _get_overlap_segments(sequence: 'DiarizationSequence') -> list[dict]:
+    """Load the preceding run's segments for the intentionally repeated chunk."""
+    if not sequence.is_continuation or len(sequence.chunks) < 2:
+        return []
+
+    overlap_end = sequence.chunks[1]['start']
+    result = call_resource('mongo', {
+        "action": "find",
+        "collection": "diarizations",
+        "query": {
+            "original_id": sequence.original_id,
+            "end": {"$gt": sequence.start},
+            "start": {"$lt": overlap_end},
+        },
+        "options": {
+            "projection": {"speaker": 1, "embedding": 1, "start": 1, "end": 1},
+            "sort": {"start": 1},
+        },
+    })
+    return result.get('data', []) if result else []
+
+
+def _get_existing_speaker_labels(original_id: ObjectId) -> set[str]:
+    result = call_resource('mongo', {
+        "action": "aggregate",
+        "collection": "diarizations",
+        "pipeline": [
+            {"$match": {"original_id": original_id}},
+            {"$group": {"_id": "$speaker"}},
+        ],
+    })
+    return {item['_id'] for item in (result or []) if item.get('_id')}
+
+
+def _clip_continuation_segment(
+    start: datetime,
+    end: datetime,
+    overlap_end: Optional[datetime],
+) -> Optional[tuple[datetime, datetime]]:
+    if overlap_end is None:
+        return start, end
+    if end <= overlap_end:
+        return None
+    return max(start, overlap_end), end
 
 
 class DiarizationSequence(BaseModel):
@@ -365,15 +499,13 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
                 log_info(f'  → Speaker identification enabled with {len(speaker_profiles)} profiles')
 
         # Call diarization API
-        request_data = {}
-        if clusters_param:
-            request_data['clusters'] = clusters_param
-            request_data['similarity_threshold'] = str(SPEAKER_SIMILARITY_THRESHOLD)
+        request_data, request_params = _build_diarization_request_fields(clusters_param)
         
         response = requests.post(
             f'{DIARIZATION_SERVER_URL}/diarize',
             files={'file': ('audio.wav', wav_file, 'audio/wav')},
             data=request_data if request_data else None,
+            params=request_params if request_params else None,
             timeout=300 + len(sequence.chunks) * 3
         )
         response.raise_for_status()
@@ -381,9 +513,19 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         data = response.json()
         segments = data.get('segments', [])
 
+        previous_segments = _get_overlap_segments(sequence)
+        reserved_labels = _get_existing_speaker_labels(sequence.original_id)
+        speaker_label_mapping = _reconcile_speaker_labels(
+            segments,
+            previous_segments,
+            reserved_labels=reserved_labels,
+        )
+        for segment in segments:
+            segment['speaker'] = speaker_label_mapping.get(segment['speaker'], segment['speaker'])
+
         if not segments:
             # No segments found, mark as processed
-            chunks_marked = mark_as_diarized(sequence)
+            chunks_marked = mark_as_diarized(sequence, worker_id)
             end_time = time.time()
             duration = end_time - start_time
             chunk_rate = (chunks_marked / duration) if chunks_marked and duration > 0 else None
@@ -414,6 +556,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         # Save each segment as a separate document
         saved_segments = 0
         matched_segments = 0
+        overlap_end = sequence.chunks[1]['start'] if sequence.is_continuation and len(sequence.chunks) > 1 else None
         for segment in segments:
             # Convert relative times to absolute datetimes
             segment_start_relative = segment['start']  # seconds relative to audio start
@@ -423,6 +566,17 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
             segment_start_absolute = sequence_start_time + timedelta(seconds=segment_start_relative)
             segment_end_absolute = sequence_start_time + timedelta(seconds=segment_end_relative)
 
+            # The first chunk of a continuation was already stored by the
+            # preceding request. It is repeated only to reconcile speaker IDs.
+            clipped_bounds = _clip_continuation_segment(
+                segment_start_absolute,
+                segment_end_absolute,
+                overlap_end,
+            )
+            if clipped_bounds is None:
+                continue
+            segment_start_absolute, segment_end_absolute = clipped_bounds
+
             # Build diarization document
             diar_doc = {
                 "inference_id": inference_id,
@@ -431,7 +585,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
                 "end": segment_end_absolute,
                 "speaker": segment['speaker'],
                 "embedding": segment['embedding'],  # 256 floats
-                "duration": segment.get('duration', segment_end_relative - segment_start_relative),
+                "duration": (segment_end_absolute - segment_start_absolute).total_seconds(),
                 "created_at": datetime.now(tz=UTC)
             }
 
@@ -457,7 +611,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
             saved_segments += 1
 
         # Mark chunks as diarized
-        chunks_marked = mark_as_diarized(sequence)
+        chunks_marked = mark_as_diarized(sequence, worker_id)
 
         end_time = time.time()
         duration = end_time - start_time
@@ -532,26 +686,43 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         }
 
 
-def mark_as_diarized(seq: DiarizationSequence) -> int:
+def mark_as_diarized(seq: DiarizationSequence, worker_id: Optional[str] = None) -> int:
     """
     Mark chunks as diarized by setting diarized_at timestamp.
     For partial sequences, mark all but the last chunk.
     """
     chunks_to_mark = seq.chunks[:-1] if seq.is_partial else seq.chunks
     if not chunks_to_mark:
+        if worker_id:
+            release_sequence(seq, worker_id)
         return 0
 
-    call_resource('mongo', {
+    query = {
+        '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]},
+    }
+    update_fields = {
+        'diarized_at': datetime.now(tz=UTC),
+    }
+    if worker_id:
+        query['processing_by'] = worker_id
+        update_fields.update({
+            'processing_by': None,
+            'claimed_at': None,
+        })
+
+    result = call_resource('mongo', {
         "action": "updateMany",
         "collection": "audio_chunks",
-        "query": {
-            '_id': {'$in': [chunk['_id'] for chunk in chunks_to_mark]},
-        },
+        "query": query,
         "update": {
-            '$set': {'diarized_at': datetime.now(tz=UTC)},
+            '$set': update_fields,
         }
     })
-    return len(chunks_to_mark)
+
+    if worker_id and seq.is_partial:
+        release_chunks([seq.last['_id']], worker_id)
+
+    return int(result.get('modifiedCount', len(chunks_to_mark)))
 
 
 def process_diarization_sequences(limit=None, max_workers=1, worker_id=None, max_sequence_length=None):

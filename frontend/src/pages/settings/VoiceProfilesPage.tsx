@@ -281,14 +281,29 @@ const VoiceProfilesPage = () => {
   const deleteMutation = useMutation({
     mutationFn: async (profileId: string) => {
       await callResource("mongo", {
+        action: "updateMany",
+        collection: "diarizations",
+        query: { "matched_speaker.profile_id": { $oid: profileId } },
+        update: { $unset: { matched_speaker: "" } },
+      });
+      await callResource("mongo", {
+        action: "updateMany",
+        collection: `${VOICE_SAMPLES_BUCKET}.files`,
+        query: { "metadata.profile_id": profileId },
+        update: { $unset: { "metadata.profile_id": "" } },
+      });
+      await callResource("mongo", {
         action: "deleteOne",
         collection: "speaker_profiles",
         query: { _id: { $oid: profileId } },
       });
     },
     onSuccess: () => {
-      toast.success("Profile deleted");
+      toast.success("Profile deleted", {
+        description: "Existing segment assignments were cleared and voice samples were detached.",
+      });
       queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
     },
     onError: (error: Error) => {
       toast.error("Delete failed", { description: error.message });
@@ -366,7 +381,7 @@ const VoiceProfilesPage = () => {
       setRecordingDuration(0);
       setSelectedSampleId(null);
 
-      timerRef.current = window.setInterval(() => {
+      timerRef.current = globalThis.setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
     } catch {
@@ -742,7 +757,7 @@ const VoiceProfilesPage = () => {
                           <DialogHeader>
                             <DialogTitle>Delete Profile</DialogTitle>
                             <DialogDescription>
-                              Are you sure you want to delete "{profile.name}"? This will not remove speaker labels from existing transcripts.
+                              Delete "{profile.name}"? Existing segment assignments will be cleared and its saved voice samples will become unattached.
                             </DialogDescription>
                           </DialogHeader>
                           <DialogFooter>
