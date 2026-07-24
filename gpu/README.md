@@ -45,6 +45,8 @@ This directory contains Docker Compose configuration for GPU-accelerated AI serv
 
 ## Setup
 
+For a focused Whisper + authenticated proxy deployment in Portainer, see [PORTAINER.md](PORTAINER.md) and use `docker-compose.portainer.yml`.
+
 Tested with:
 ```
 NVIDIA GeForce RTX 4090
