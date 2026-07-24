@@ -125,21 +125,99 @@ After pulling updates, new environment variables may be added to `.env.example`:
 
 ### Import Existing Audio Files
 
+The Python daemon discovers new recordings, imports their metadata, splits each
+audio file into chunks, and ingests up to 20 source files per cycle. It runs
+continuously, starting another cycle approximately every 10 seconds, until you
+stop it with `Ctrl+C`.
+
 ```bash
 cd python
 uv run daemon.py
 ```
 
 The daemon can import:
+
 - Apple Voice Memos
 - Google Drive Folders
 - Local Audio Folders
 
+On macOS, give your terminal application **Full Disk Access** in System Settings
+if you want to import Apple Voice Memos.
+
 **Environment variables** (optional, set in `.env`):
+
 - `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
 - `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
 - `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
 - `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
+
+#### Daemon Options
+
+| Option | Purpose |
+| --- | --- |
+| `--once` | Run one cycle and exit instead of watching continuously. |
+| `--reset-errors` | Clear cached source-file ingestion errors before importing again. |
+| `--vad-only` | Skip discovery/import and process only chunks without VAD metadata. |
+| `--vad-limit N` | Process at most `N` chunks per VAD cycle; default is `1000`. |
+| `--vad-batch-size N` | Fetch `N` chunks per VAD database batch; default is `100`. |
+
+`--reset-errors` cannot be combined with `--vad-only`. Both VAD numeric options
+must be greater than zero.
+
+Examples:
+
+```bash
+# Import one batch and exit
+uv run daemon.py --once
+
+# Retry source files with cached ingestion errors
+uv run daemon.py --reset-errors
+```
+
+#### Run Import and VAD in Parallel
+
+Use two terminals. Keep file discovery/import on the host so it can access your
+local recordings, and run VAD in the Python worker container where the Silero
+model and cache are already available.
+
+Terminal 1:
+
+```bash
+cd /path/to/mycelia/python
+uv run daemon.py
+```
+
+Terminal 2:
+
+```bash
+cd /path/to/mycelia
+docker compose exec python-worker python daemon.py --vad-only
+```
+
+For a bounded VAD run:
+
+```bash
+docker compose exec python-worker python daemon.py \
+  --vad-only \
+  --once \
+  --vad-limit 1000 \
+  --vad-batch-size 100
+```
+
+This is process-level parallelism: importing and VAD can run simultaneously.
+Do not start multiple VAD-only processes against the same database; the current
+Silero worker uses shared state within each process and VAD chunks are not
+claimed for multi-worker execution.
+
+After VAD marks speech chunks, inspect and run the separately configured STT
+worker:
+
+```bash
+docker compose exec -T python-worker python stt.py --count
+docker compose exec python-worker python stt.py
+```
+
+The host daemon log is written to `~/Library/mycelia/logs/daemon.log`.
 
 
 ### Configuration
