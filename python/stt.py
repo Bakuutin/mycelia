@@ -69,7 +69,7 @@ def configure_transcription_endpoint(server: str | None, api_key: str | None):
         TRANSCRIPTION_API_KEY = None
         return
 
-    resolved_api_key = api_key or os.getenv("PROXY_API_KEY") or os.getenv("INFERENCE_API_KEY")
+    resolved_api_key = api_key or os.getenv("PROXY_API_KEY")
     if not resolved_api_key:
         raise RuntimeError(
             "Missing STT API key. Pass --api-key or set PROXY_API_KEY."
@@ -96,6 +96,7 @@ def transcribe_with_remote_server(
         files={
             "file": (file_name, audio_bytes, file_type),
         },
+        data={"model": "whisper"},
         timeout=300,
     )
 

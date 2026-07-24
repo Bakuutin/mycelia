@@ -1,0 +1,37 @@
+services:
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu
+    environment:
+      ASR_MODEL: ${ASR_MODEL:-large-v3-turbo}
+      ASR_ENGINE: faster_whisper
+      ASR_DEVICE: cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      MODEL_IDLE_TIMEOUT: "300"
+    volumes:
+      - whisper_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  proxy:
+    image: mycelia-stt-proxy:latest
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    depends_on:
+      - whisper
+    ports:
+      - "${PROXY_PORT:-8001}:8000"
+    environment:
+      API_KEY: ${PROXY_API_KEY:?Set PROXY_API_KEY in Portainer}
+      WHISPER_SERVICE_URL: http://whisper:9000
+    restart: unless-stopped
+
+volumes:
+  whisper_cache:

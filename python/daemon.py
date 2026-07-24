@@ -17,10 +17,6 @@ from lib.api import job_token_var, exchange_api_key_for_jwt
 
 import settings
 
-# Exchange API key for JWT and set it for daemon API calls
-jwt_token = exchange_api_key_for_jwt()
-job_token_var.set(jwt_token)
-
 #%%
 
 logger = logging.getLogger('daemon')
@@ -43,6 +39,12 @@ file_handler.setFormatter(formatter)
 logging.basicConfig(level=logging.DEBUG, handlers=[console, file_handler])
 
 logger.info(f"Logging to {log_file}")
+
+
+def initialize_auth():
+    """Exchange the configured API credentials for a daemon JWT."""
+    jwt_token = exchange_api_key_for_jwt()
+    job_token_var.set(jwt_token)
 
 
 def import_new_files():
@@ -371,23 +373,115 @@ def main(reset_errors=False):
     logger.info("=" * 60)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Mycelia daemon for importing and processing audio files')
-    parser.add_argument('--reset-errors', action='store_true',
-                        help='Reset previous failed uploads on start by clearing error flags')
-    args = parser.parse_args()
+def run_vad_cycle(limit=1000, batch_size=100):
+    """Run VAD directly, bypassing the backend job queue.
 
+    The VAD module is imported lazily so the normal import daemon does not load
+    Torch or the Silero model. Run this mode as a separate process alongside the
+    normal daemon to analyze chunks while new audio is still being ingested.
+    """
+    from jobs.vad import VadJobData, process_vad_job
+
+    job_id = f"daemon-vad-{os.getpid()}-{int(time.time())}"
+
+    def report_progress(progress):
+        logger.info(
+            "VAD progress: processed=%s/%s, speech=%s",
+            progress.get("processed", 0),
+            progress.get("total", limit),
+            progress.get("hasSpeech", 0),
+        )
+
+    return process_vad_job(
+        job_id,
+        VadJobData(limit=limit, batchSize=batch_size),
+        report_progress,
+    )
+
+
+def run_cycles(cycle, *, once=False):
+    """Run a daemon cycle once or continuously with the existing retry delay."""
     while True:
         start = time.time()
         try:
-            main(reset_errors=args.reset_errors)
+            cycle()
+        except KeyboardInterrupt:
+            raise
         except Exception as e:
             logger.exception(f"Error in main: {e}")
+            if once:
+                raise
             time.sleep(10)
             continue
-        end = time.time()
-        if end - start < 10:
+
+        if once:
+            return
+
+        elapsed = time.time() - start
+        if elapsed < 10:
             logger.info("Sleeping for a few seconds")
             time.sleep(10)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description='Mycelia daemon for importing and processing audio files')
+    parser.add_argument('--reset-errors', action='store_true',
+                        help='Reset previous failed uploads on start by clearing error flags')
+    parser.add_argument(
+        '--vad-only',
+        action='store_true',
+        help='Only run VAD on chunks without VAD metadata; safe to run beside the normal import daemon',
+    )
+    parser.add_argument(
+        '--vad-limit',
+        type=int,
+        default=1000,
+        help='Maximum chunks processed per VAD cycle (default: 1000)',
+    )
+    parser.add_argument(
+        '--vad-batch-size',
+        type=int,
+        default=100,
+        help='Chunks fetched per VAD database batch (default: 100)',
+    )
+    parser.add_argument(
+        '--once',
+        action='store_true',
+        help='Run one import or VAD cycle and exit instead of watching continuously',
+    )
+    return parser
+
+
+def cli(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.vad_limit <= 0:
+        parser.error('--vad-limit must be greater than zero')
+    if args.vad_batch_size <= 0:
+        parser.error('--vad-batch-size must be greater than zero')
+    if args.vad_only and args.reset_errors:
+        parser.error('--reset-errors cannot be combined with --vad-only')
+
+    initialize_auth()
+
+    if args.vad_only:
+        logger.info(
+            "Starting VAD-only daemon: limit=%s, batch_size=%s",
+            args.vad_limit,
+            args.vad_batch_size,
+        )
+        cycle = lambda: run_vad_cycle(
+            limit=args.vad_limit,
+            batch_size=args.vad_batch_size,
+        )
+    else:
+        cycle = lambda: main(reset_errors=args.reset_errors)
+
+    run_cycles(cycle, once=args.once)
+
+
+if __name__ == '__main__':
+    cli()
 
 #%%

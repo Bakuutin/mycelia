@@ -4,7 +4,7 @@ services:
     environment:
       - ASR_MODEL=large-v3-turbo
       - ASR_DEVICE=cuda
-      - ASR_LANGUAGE=faster_whisper
+      - ASR_ENGINE=faster_whisper
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - MODEL_IDLE_TIMEOUT=300
