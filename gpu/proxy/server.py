@@ -149,7 +149,10 @@ def _filtered_headers(request: Request) -> dict:
     # Keep original headers except hop-by-hop ones.
     # Important: do NOT set Content-Length manually; httpx will handle it for streamed bodies.
     return {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
-
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
@@ -199,16 +202,7 @@ async def proxy_all(path: str, request: Request, _: bool = Depends(verify_api_ke
     except httpx.RequestError as e:
         await client.aclose()
         raise HTTPException(status_code=502, detail=f"Bad gateway: {e}")
-
-
-
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {"status": "ok"}
-
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting proxy server on 0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
