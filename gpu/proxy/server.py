@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 API_KEY = os.getenv("API_KEY")
 WHISPER_SERVICE_URL = os.getenv("WHISPER_SERVICE_URL", "http://whisper:9000")
 OLLAMA_SERVICE_URL = os.getenv("OLLAMA_SERVICE_URL", "http://ollama:11434")
+ASR_MODEL = os.getenv("ASR_MODEL", "unknown")
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -126,7 +127,13 @@ async def transcribe_audio(
                 generate(),
                 status_code=response.status_code,
                 media_type=content_type,
-                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "transfer-encoding", "host", "connection"]}
+                headers={
+                    **{
+                        k: v for k, v in response.headers.items()
+                        if k.lower() not in ["content-length", "transfer-encoding", "host", "connection"]
+                    },
+                    "X-Whisper-Model": ASR_MODEL,
+                },
             )
             
     except httpx.HTTPStatusError as e:
