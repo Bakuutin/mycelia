@@ -49,6 +49,18 @@ If the proxy image was already built on the endpoint, Portainer reuses `mycelia-
 
 `large-v3-turbo` is already the default in `docker-compose.portainer.yml`, so removing the `ASR_MODEL` override also selects it. The model cache volume is retained during a normal stack update.
 
+### Unload the model after five idle minutes
+
+Set this Portainer stack environment variable:
+
+```env
+MODEL_IDLE_TIMEOUT=300
+```
+
+This unloads the Whisper model from GPU memory after 300 seconds without an ASR request. It does not stop the `whisper` container or remove the cached model files. The API stays available, and the next transcription request automatically reloads the configured model from the persistent `whisper_cache` volume. That first request can therefore take longer than requests made while the model is already loaded.
+
+The five-minute value is the stack default. Set `MODEL_IDLE_TIMEOUT=0` only when the model should remain loaded indefinitely. Continuous backlog processing is activity, so the idle timer begins after the final request completes.
+
 ## Verify the service
 
 From the Docker host or a machine that can reach its Tailscale IP:

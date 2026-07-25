@@ -7,7 +7,7 @@ services:
       ASR_DEVICE: cuda
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      MODEL_IDLE_TIMEOUT: "300"
+      MODEL_IDLE_TIMEOUT: ${MODEL_IDLE_TIMEOUT:-300}
     volumes:
       - whisper_cache:/root/.cache
     deploy:
