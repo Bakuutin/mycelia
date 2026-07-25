@@ -73,6 +73,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(sec
 async def transcribe_audio(
     request: Request,
     file: UploadFile = File(...),
+    model: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
     prompt: Optional[str] = Form(None),
     _: bool = Depends(verify_api_key)
@@ -81,6 +82,16 @@ async def transcribe_audio(
     OpenAI-compatible transcription endpoint that forwards to whisper service
     """
     logger.info(f"Received transcription request for file: {file.filename}")
+
+    if model and model != "whisper" and model != ASR_MODEL:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Requested model '{model}' is not loaded; "
+                f"this server is configured for '{ASR_MODEL}'. "
+                "Change ASR_MODEL and redeploy the STT stack."
+            ),
+        )
     
     try:
         # Read the audio file

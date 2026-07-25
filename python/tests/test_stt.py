@@ -13,12 +13,17 @@ class RemoteTranscriptionTest(TestCase):
     def setUp(self):
         self.previous_server = stt.TRANSCRIPTION_SERVER_URL
         self.previous_key = stt.TRANSCRIPTION_API_KEY
+        self.previous_model = stt.TRANSCRIPTION_MODEL
         stt.TRANSCRIPTION_SERVER_URL = "http://stt.example"
         stt.TRANSCRIPTION_API_KEY = "test-key"
+        stt.TRANSCRIPTION_MODEL = "whisper"
+        stt.REPORTED_TRANSCRIPTION_MODELS.clear()
 
     def tearDown(self):
         stt.TRANSCRIPTION_SERVER_URL = self.previous_server
         stt.TRANSCRIPTION_API_KEY = self.previous_key
+        stt.TRANSCRIPTION_MODEL = self.previous_model
+        stt.REPORTED_TRANSCRIPTION_MODELS.clear()
 
     def test_records_model_from_proxy_header(self):
         response = MagicMock()
@@ -53,6 +58,30 @@ class RemoteTranscriptionTest(TestCase):
             transcript = stt.transcribe_with_remote_server(b"audio")
 
         self.assertEqual(transcript["metadata"]["model"], "medium")
+
+    def test_sends_and_verifies_requested_model(self):
+        stt.TRANSCRIPTION_MODEL = "large-v3"
+        response = MagicMock()
+        response.headers = {"X-Whisper-Model": "large-v3"}
+        response.json.return_value = {"segments": []}
+
+        with patch("stt.requests.post", return_value=response) as request:
+            transcript = stt.transcribe_with_remote_server(b"audio")
+
+        self.assertEqual(request.call_args.kwargs["data"], {"model": "large-v3"})
+        self.assertEqual(transcript["metadata"]["model"], "large-v3")
+
+    def test_rejects_model_mismatch(self):
+        stt.TRANSCRIPTION_MODEL = "large-v3"
+        response = MagicMock()
+        response.headers = {"X-Whisper-Model": "large-v3-turbo"}
+        response.json.return_value = {"segments": []}
+
+        with (
+            patch("stt.requests.post", return_value=response),
+            self.assertRaisesRegex(RuntimeError, "model mismatch"),
+        ):
+            stt.transcribe_with_remote_server(b"audio")
 
 
 if __name__ == "__main__":

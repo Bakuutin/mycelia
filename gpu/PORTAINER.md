@@ -104,6 +104,14 @@ uv run stt.py --limit 1
 
 The proxy returns its configured model in `X-Whisper-Model`. Transcriptions created by `python/stt.py` store this provenance in MongoDB at `transcriptions.metadata.model`, with the provider recorded at `transcriptions.metadata.provider`. Set `STT_MODEL` in Mycelia only as a fallback when using another OpenAI-compatible server that does not return the header.
 
+Require a specific model when starting the worker:
+
+```bash
+docker compose exec python-worker python stt.py --model large-v3
+```
+
+The worker prints both the requested model and the model reported by the server. The Portainer service loads one model per deployment, so `--model` verifies that the requested model is loaded; it does not hot-swap models. A mismatch stops transcription with an error instead of saving misleading provenance. Change `ASR_MODEL` in Portainer and redeploy before requesting a different model.
+
 ## Same-host Docker networking
 
 When Mycelia and STT run on the same Docker host, either keep using the host's Tailscale address or attach both stacks to a shared external Docker network. Do not use a container name from an unrelated Compose network: Docker DNS only resolves names on shared networks.

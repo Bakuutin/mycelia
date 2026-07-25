@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 TRANSCRIPTION_SERVER_URL: str | None = None
 TRANSCRIPTION_API_KEY: str | None = None
+TRANSCRIPTION_MODEL = "whisper"
+REPORTED_TRANSCRIPTION_MODELS: set[str] = set()
 
 
 NO_SPEECH_DETECTED = object()
@@ -61,8 +63,12 @@ def initialize_backend_auth():
     job_token_var.set(jwt_token)
 
 
-def configure_transcription_endpoint(server: str | None, api_key: str | None):
-    global TRANSCRIPTION_SERVER_URL, TRANSCRIPTION_API_KEY
+def configure_transcription_endpoint(
+    server: str | None,
+    api_key: str | None,
+    model: str = "whisper",
+):
+    global TRANSCRIPTION_SERVER_URL, TRANSCRIPTION_API_KEY, TRANSCRIPTION_MODEL
 
     if not server:
         TRANSCRIPTION_SERVER_URL = None
@@ -77,7 +83,9 @@ def configure_transcription_endpoint(server: str | None, api_key: str | None):
 
     TRANSCRIPTION_SERVER_URL = server.rstrip("/")
     TRANSCRIPTION_API_KEY = resolved_api_key
+    TRANSCRIPTION_MODEL = model
     tqdm.write(f"Using remote transcription server: {TRANSCRIPTION_SERVER_URL}")
+    tqdm.write(f"Requested transcription model: {TRANSCRIPTION_MODEL}")
 
 
 def transcribe_with_remote_server(
@@ -96,7 +104,7 @@ def transcribe_with_remote_server(
         files={
             "file": (file_name, audio_bytes, file_type),
         },
-        data={"model": "whisper"},
+        data={"model": TRANSCRIPTION_MODEL},
         timeout=300,
     )
 
@@ -121,6 +129,20 @@ def transcribe_with_remote_server(
         or transcript.get("model")
         or "unknown"
     )
+    if (
+        TRANSCRIPTION_MODEL != "whisper"
+        and model_used != "unknown"
+        and model_used != TRANSCRIPTION_MODEL
+    ):
+        raise RuntimeError(
+            "Remote STT model mismatch: "
+            f"requested {TRANSCRIPTION_MODEL}, server used {model_used}"
+        )
+
+    if model_used not in REPORTED_TRANSCRIPTION_MODELS:
+        tqdm.write(f"Transcription model used: {model_used}")
+        REPORTED_TRANSCRIPTION_MODELS.add(model_used)
+
     metadata = transcript.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -659,6 +681,14 @@ if __name__ == '__main__':
         help='API key for the STT server. Defaults to PROXY_API_KEY if set.',
     )
     parser.add_argument(
+        '--model',
+        default=os.getenv('STT_MODEL') or 'whisper',
+        help=(
+            'Required remote STT model, for example large-v3. '
+            'Defaults to STT_MODEL or the generic whisper alias.'
+        ),
+    )
+    parser.add_argument(
         '--count',
         action='store_true',
         help='Count pending speech chunks eligible for STT and exit.',
@@ -667,7 +697,7 @@ if __name__ == '__main__':
 
     try:
         initialize_backend_auth()
-        configure_transcription_endpoint(args.server, args.api_key)
+        configure_transcription_endpoint(args.server, args.api_key, args.model)
     except Exception as e:
         print(f"Error initializing STT worker: {e}", file=sys.stderr)
         sys.exit(1)
