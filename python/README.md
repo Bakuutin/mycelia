@@ -224,6 +224,8 @@ Options:
 ### Transcription (`stt.py`)
 Speech-to-text transcription services.
 
+For local Argmax/Whisper setup, see [Local STT with Argmax and Whisper](../docs/LOCAL_STT.md).
+
 #### Running against a remote STT proxy
 
 `stt.py` still needs backend access for MongoDB/resource APIs, so `MYCELIA_URL`, `MYCELIA_CLIENT_ID`, and `MYCELIA_TOKEN` must be configured in the repo `.env`.
