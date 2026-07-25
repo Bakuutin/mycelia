@@ -8,6 +8,13 @@ import { getQueue } from "./queue.ts";
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
+const LIVE_QUEUE_STATES = new Set([
+  "active",
+  "delayed",
+  "prioritized",
+  "waiting",
+  "waiting-children",
+]);
 
 export class MaintenanceManager {
   private interval: number | null = null;
@@ -131,7 +138,28 @@ export class MaintenanceManager {
       const queue = getQueue(jobType);
       const queueJob = await queue.getJob(jobId);
       if (queueJob) {
-        continue;
+        const queueState = await queueJob.getState();
+        if (LIVE_QUEUE_STATES.has(queueState)) {
+          continue;
+        }
+
+        // Mongo can say "waiting" after the BullMQ job has already reached a
+        // terminal state (for example when the backend missed a Redis event).
+        // Remove that terminal queue record so the same stable job ID can be
+        // added again below.
+        try {
+          await queueJob.remove();
+          console.warn(
+            `[MaintenanceManager] Removed terminal ${queueState} queue record for waiting job ${jobId} in ${jobType}.`,
+          );
+        } catch (err) {
+          console.warn(
+            `[MaintenanceManager] Failed to remove terminal queue record ${jobId} in ${jobType}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          continue;
+        }
       }
 
       try {

@@ -28,7 +28,30 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     response: z.any() as z.ZodType<TranscriptionResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string } | null> {
+  async getInferenceProvider(): Promise<{
+    baseUrl: string;
+    apiKey: string;
+    model?: string;
+    source: "stt_env" | "inference_config";
+  } | null> {
+    const sttBaseUrl = Deno.env.get("STT_SERVER_URL")?.trim();
+    const sttApiKey = Deno.env.get("PROXY_API_KEY")?.trim();
+
+    if (sttBaseUrl || sttApiKey) {
+      if (!sttBaseUrl || !sttApiKey) {
+        throw new Error(
+          "STT_SERVER_URL and PROXY_API_KEY must both be set for dedicated STT.",
+        );
+      }
+
+      return {
+        baseUrl: sttBaseUrl,
+        apiKey: sttApiKey,
+        model: Deno.env.get("STT_MODEL")?.trim() || "whisper",
+        source: "stt_env",
+      };
+    }
+
     const config = await getServerConfig();
     const inference = config.inference;
     if (!inference?.baseUrl || !inference?.apiKey) {
@@ -37,6 +60,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     return {
       baseUrl: inference.baseUrl,
       apiKey: inference.apiKey,
+      source: "inference_config",
     };
   }
 
@@ -87,13 +111,16 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
           const fileName = input.fileName || "audio.mp3";
           const file = new File([blob], fileName, { type: input.fileType || "audio/mpeg" });
           formData.append("file", file);
-          if (input.language) {
+          // OpenAI-compatible Whisper servers auto-detect language when the
+          // field is omitted. Some faster-whisper servers reject the literal
+          // value "auto" with a 500 response.
+          if (input.language && input.language !== "auto") {
             formData.append("language", input.language);
           }
           if (input.prompt) {
             formData.append("prompt", input.prompt);
           }
-          formData.append("model", "whisper");
+          formData.append("model", provider.model || "whisper");
 
           const proxyResponse = await fetch(
             provider.baseUrl.replace(/\/$/, "") + "/v1/audio/transcriptions",
@@ -124,6 +151,20 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
 
           try {
             const jsonResponse = JSON.parse(responseText);
+            const reportedModel = proxyResponse.headers.get("X-Whisper-Model")
+              || provider.model
+              || "unknown";
+            const responseMetadata = jsonResponse.metadata
+              && typeof jsonResponse.metadata === "object"
+              ? jsonResponse.metadata
+              : {};
+            jsonResponse.metadata = {
+              ...responseMetadata,
+              model: reportedModel,
+              provider: provider.source === "stt_env"
+                ? "remote_openai_compatible"
+                : "configured_inference",
+            };
             span.setStatus({ code: 1 });
             return jsonResponse;
           } catch (parseError) {
@@ -166,4 +207,3 @@ export async function getTranscriptionResource(
 ): Promise<(input: TranscriptionRequest) => Promise<TranscriptionResponse>> {
   return auth.getResource("transcription");
 }
-

@@ -174,11 +174,57 @@ uv run daemon.py --once
 uv run daemon.py --reset-errors
 ```
 
+#### Run the Complete Automatic Pipeline
+
+The recommended end-to-end command is:
+
+```bash
+cd /path/to/mycelia
+./scripts/run-audio-pipeline.sh
+```
+
+It starts the Docker services and then runs local discovery/import on the host,
+where Apple Voice Memos and other local files are accessible. After each audio
+chunk is inserted, the backend automatically runs the remaining stages:
+
+```text
+daemon import -> VAD -> speech sequence creation -> remote STT -> conversations
+```
+
+The automatic transcription resource prefers the dedicated `STT_SERVER_URL`,
+`PROXY_API_KEY`, and optional `STT_MODEL` values from `.env`. If those dedicated
+variables are absent, it keeps the previous behavior and uses the inference
+provider configured in Mycelia Settings.
+
+Before running it, configure at least:
+
+```dotenv
+STT_SERVER_URL=http://100.119.163.116:8001
+PROXY_API_KEY=your-proxy-key
+STT_MODEL=whisper
+```
+
+Use the `whisper` alias when the Portainer stack should use whichever
+`ASR_MODEL` it has loaded. The service reports the actual model, and Mycelia
+stores it in `transcriptions.metadata.model`.
+
+Historically, `daemon.py` also performed only discovery and ingestion. VAD was
+not calculated inside that process: the backend change-stream trigger created a
+VAD job, `python-worker` calculated VAD, and later backend jobs created and
+transcribed speech sequences. In other words, the normal old startup was
+`docker compose up -d` plus `uv run daemon.py`; VAD appeared automatic because
+the Docker backend and worker were already running.
+
+`daemon.py --vad-only` and `stt.py` remain recovery/manual tools. Do not run
+them alongside a healthy automatic pipeline: direct STT can race the backend
+transcription jobs for the same chunks.
+
 #### Run Import and VAD in Parallel
 
-Use two terminals. Keep file discovery/import on the host so it can access your
-local recordings, and run VAD in the Python worker container where the Silero
-model and cache are already available.
+Use this recovery path only when the backend job queue is unavailable or
+blocked. Keep file discovery/import on the host so it can access your local
+recordings, and run VAD in the Python worker container where the Silero model
+and cache are already available.
 
 Terminal 1:
 
@@ -209,8 +255,8 @@ Do not start multiple VAD-only processes against the same database; the current
 Silero worker uses shared state within each process and VAD chunks are not
 claimed for multi-worker execution.
 
-After VAD marks speech chunks, inspect and run the separately configured STT
-worker:
+After VAD marks speech chunks, inspect and run the direct STT worker only if the
+automatic transcription queue is not running:
 
 ```bash
 docker compose exec -T python-worker python stt.py --count
