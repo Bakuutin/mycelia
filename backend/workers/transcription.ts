@@ -221,6 +221,10 @@ const capability: JobCapability = {
         // Calculate word count
         const wordCount = transcriptionText.split(/\s+/).filter((w: string) => w.length > 0).length;
 
+        const responseMetadata = (transcript as any).metadata
+          && typeof (transcript as any).metadata === "object"
+          ? (transcript as any).metadata
+          : {};
         const transcriptionDoc = {
           original: sequence.original_id,
           start: sequence.start,
@@ -231,7 +235,8 @@ const capability: JobCapability = {
           createdAt: new Date(),
           // Metadata for display
           metadata: {
-            model: "whisper",
+            ...responseMetadata,
+            model: responseMetadata.model || "whisper",
             processingTimeMs: transcriptDuration,
             wordCount,
             segmentCount: filteredSegments.length,
