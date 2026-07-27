@@ -2,6 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import {
+  getMaximumAudioHours,
+  MAX_AUDIO_CHUNK_SECONDS,
+} from "@/lib/audioPipelineStats";
 import { format, formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -223,6 +227,9 @@ export default function AudioPipelinePage() {
     : 0;
   const queuedVadJobs = (stats?.vadJobs?.waiting ?? 0) +
     (stats?.vadJobs?.delayed ?? 0);
+  const vadMaximumAudioHours = getMaximumAudioHours(
+    stats?.chunksAwaitingVad ?? 0,
+  );
 
   const toggleSession = (id: string) => {
     setExpandedSessions((prev) => {
@@ -371,9 +378,17 @@ export default function AudioPipelinePage() {
               <span className="font-medium">{vadCompletion.toFixed(1)}%</span>
             </div>
             <Progress value={vadCompletion} className="h-3" />
+            <p className="text-xs text-muted-foreground">
+              Remaining upper bound: {(stats?.chunksAwaitingVad ?? 0)
+                .toLocaleString()} chunks × {MAX_AUDIO_CHUNK_SECONDS} sec ={" "}
+              {vadMaximumAudioHours.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })} hours of audio
+            </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Total chunks</p>
               <p className="mt-1 text-xl font-semibold">
@@ -415,7 +430,21 @@ export default function AudioPipelinePage() {
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Timer className="h-3 w-3" /> Estimated time left
+                <Clock className="h-3 w-3" /> Audio left (maximum)
+              </p>
+              <p className="mt-1 text-xl font-semibold">
+                {vadMaximumAudioHours.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}h
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                assumes {MAX_AUDIO_CHUNK_SECONDS}s per chunk
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/40 p-3">
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Timer className="h-3 w-3" /> Estimated wall time
               </p>
               <p className="mt-1 text-sm font-semibold">
                 {(stats?.chunksAwaitingVad ?? 0) === 0
