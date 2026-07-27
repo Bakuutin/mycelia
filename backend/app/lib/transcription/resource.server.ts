@@ -32,7 +32,7 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     baseUrl: string;
     apiKey: string;
     model?: string;
-    source: "stt_env" | "inference_config";
+    source: "stt_env" | "transcription_config" | "inference_config";
   } | null> {
     const sttBaseUrl = Deno.env.get("STT_SERVER_URL")?.trim();
     const sttApiKey = Deno.env.get("PROXY_API_KEY")?.trim();
@@ -53,14 +53,15 @@ export class TranscriptionResource implements Resource<TranscriptionRequest, Tra
     }
 
     const config = await getServerConfig();
-    const inference = config.inference;
-    if (!inference?.baseUrl || !inference?.apiKey) {
+    const provider = config.transcription || config.inference;
+    if (!provider?.baseUrl || !provider?.apiKey) {
       return null;
     }
     return {
-      baseUrl: inference.baseUrl,
-      apiKey: inference.apiKey,
-      source: "inference_config",
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model,
+      source: config.transcription ? "transcription_config" : "inference_config",
     };
   }
 

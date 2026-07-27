@@ -85,7 +85,10 @@ async function loadTranscripts(jwt: string, myceliaUrl: string, start: Date, end
     action: "find",
     collection: "transcriptions",
     query: {
-      start: { $gte: start, $lte: end },
+      // Include every transcription that overlaps the conversation range, not
+      // only records whose start timestamp falls inside it.
+      start: { $lte: end },
+      end: { $gte: start },
     },
     options: { sort: { start: 1 } },
   }, { jwt, myceliaUrl });
@@ -555,9 +558,13 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
   if (mode === "manual") {
     if (targets.length === 0) {
-      return { success: false, message: "No valid targets found" };
+      throw new Error("Summarization has no valid targets");
     }
-    return processConversation(job, jobData, targets[0], jwt, myceliaUrl);
+    const result = await processConversation(job, jobData, targets[0], jwt, myceliaUrl);
+    if (!result.success) {
+      throw new Error(String(result.message ?? "Summarization did not produce a result"));
+    }
+    return result;
   }
 
   if (targets.length === 0) {
@@ -567,6 +574,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
   let processed = 0;
   let skipped = 0;
+  const errors: string[] = [];
   const jobId = job.id ?? "unknown";
 
   for (const target of targets) {
@@ -576,6 +584,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       if (!claimed) {
         console.log(`[summarization] Job ${job.id}: skipping ${target.objectId} (already claimed or has summaries)`);
         skipped++;
+        errors.push(`Conversation ${target.objectId} is already claimed or already has a summary`);
         continue;
       }
     }
@@ -585,7 +594,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       if (result.success) {
         processed++;
       } else {
+        if (target.objectId) {
+          await releaseClaim(target.objectId, jwt, myceliaUrl);
+        }
         skipped++;
+        errors.push(String(result.message ?? `Conversation ${target.objectId ?? "unknown"} produced no summary`));
       }
     } catch (error) {
       console.error(`[summarization] Job ${job.id}: failed to summarize conversation ${target.objectId ?? "unknown"}`, error);
@@ -593,10 +606,24 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         await releaseClaim(target.objectId, jwt, myceliaUrl);
       }
       skipped++;
+      errors.push(error instanceof Error ? error.message : String(error));
     }
   }
 
-  return { success: processed > 0, processed, skipped, hasMore: hasMore ?? false };
+  if (processed === 0) {
+    const firstError = errors[0] ?? "No conversation could be summarized";
+    throw new Error(
+      `Summarization processed 0 of ${targets.length} conversation(s); ${skipped} skipped or failed. ${firstError}`,
+    );
+  }
+
+  return {
+    success: true,
+    processed,
+    skipped,
+    hasMore: hasMore ?? false,
+    errors: errors.slice(0, 10),
+  };
 }
 
 const capability: JobCapability = {
@@ -613,6 +640,7 @@ const capability: JobCapability = {
     skipped: z.number().optional(),
     hasMore: z.boolean().optional(),
     message: z.string().optional(),
+    errors: z.array(z.string()).optional(),
   })),
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
@@ -627,13 +655,28 @@ const capability: JobCapability = {
         name: "conversation_missing_summary",
         filter: {
           event: "mongo.change",
-          "data.operationType": { $in: ["insert", "update"] },
           "data.document.isConversation": true,
           "data.document.summaries.0": { $exists: false },
+          $or: [
+            { "data.operationType": "insert" },
+            {
+              "data.operationType": "update",
+              "data.updateDescription.updatedFields._summarizationClaim": {
+                $exists: false,
+              },
+              "data.updateDescription.removedFields": {
+                $nin: ["_summarizationClaim"],
+              },
+            },
+          ],
         },
       },
     ],
     debounceMs: 5000,
+    // Revisit historical conversations that were created while this worker or
+    // the inference provider was unavailable. TriggerManager only enqueues the
+    // check when this worker has no active/waiting job.
+    interval: 300,
   },
 };
 

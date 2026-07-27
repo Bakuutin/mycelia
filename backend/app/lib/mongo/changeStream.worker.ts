@@ -24,12 +24,14 @@ async function publishMongoChange(
   operationType: string,
   documentId: string,
   document?: any,
+  updateDescription?: unknown,
 ): Promise<void> {
   const eventData = {
     collection: collectionName,
     operationType,
     documentId,
     document,
+    updateDescription,
     timestamp: new Date().toISOString(),
   };
 
@@ -89,6 +91,7 @@ export async function startChangeStreamWorker(): Promise<void> {
             const operationType = change.operationType;
             let documentId: string;
             let document: any = null;
+            let updateDescription: unknown;
 
             switch (operationType) {
               case "insert":
@@ -96,6 +99,10 @@ export async function startChangeStreamWorker(): Promise<void> {
                 document = change.fullDocument;
                 break;
               case "update":
+                updateDescription = change.updateDescription;
+                documentId = getDocumentId(change.documentKey);
+                document = change.fullDocument;
+                break;
               case "replace":
                 documentId = getDocumentId(change.documentKey);
                 document = change.fullDocument;
@@ -110,7 +117,13 @@ export async function startChangeStreamWorker(): Promise<void> {
                 return;
             }
 
-            await publishMongoChange(collectionName, operationType, documentId, document);
+            await publishMongoChange(
+              collectionName,
+              operationType,
+              documentId,
+              document,
+              updateDescription,
+            );
           } catch (error) {
             console.error(`[ChangeStream] Error processing change for ${collectionName}:`, error);
           }
@@ -152,4 +165,3 @@ export async function stopChangeStreamWorker(): Promise<void> {
     await changeStreamWorker.stop();
   }
 }
-

@@ -25,6 +25,22 @@ const inferenceConfigSchema = z.object({
   baseUrl: z.string().url("Must be a valid URL"),
   apiKey: z.string(),
   model: z.string().min(1, "Choose a global default model"),
+  transcriptionBaseUrl: z.union([
+    z.literal(""),
+    z.string().url("Must be a valid STT URL"),
+  ]),
+  transcriptionApiKey: z.string(),
+  transcriptionModel: z.string(),
+}).superRefine((value, ctx) => {
+  const hasUrl = value.transcriptionBaseUrl.trim().length > 0;
+  const hasKey = value.transcriptionApiKey.trim().length > 0;
+  if (hasUrl !== hasKey) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "STT URL and API key must both be set, or both left empty",
+      path: hasUrl ? ["transcriptionApiKey"] : ["transcriptionBaseUrl"],
+    });
+  }
 });
 
 type InferenceConfig = z.infer<typeof inferenceConfigSchema>;
@@ -81,6 +97,9 @@ const InferenceSettingsPage = () => {
       baseUrl: "",
       apiKey: "",
       model: "",
+      transcriptionBaseUrl: "",
+      transcriptionApiKey: "",
+      transcriptionModel: "whisper",
     },
   });
 
@@ -88,10 +107,7 @@ const InferenceSettingsPage = () => {
     const fetchConfig = async () => {
       try {
         const [configResult, ...defaultsResults] = await Promise.all([
-          callResource("config", {
-            action: "get",
-            path: "inference",
-          }),
+          callResource("config", { action: "get" }),
           ...ROUTING_WORKER_TYPES.map((workerType) =>
             callResource("jobs", {
               action: "get_worker_defaults",
@@ -122,10 +138,15 @@ const InferenceSettingsPage = () => {
         setTaskFallbackModels(fallbackModelsByWorker);
 
         if (configResult) {
+          const llmConfig = configResult.llm || configResult.inference || {};
+          const transcriptionConfig = configResult.transcription || {};
           form.reset({
-            baseUrl: configResult.baseUrl || "",
-            apiKey: configResult.apiKey || "",
-            model: configResult.model || "",
+            baseUrl: llmConfig.baseUrl || "",
+            apiKey: llmConfig.apiKey || "",
+            model: llmConfig.model || "",
+            transcriptionBaseUrl: transcriptionConfig.baseUrl || "",
+            transcriptionApiKey: transcriptionConfig.apiKey || "",
+            transcriptionModel: transcriptionConfig.model || "whisper",
           });
         }
       } catch (err) {
@@ -185,13 +206,24 @@ const InferenceSettingsPage = () => {
       await Promise.all([
         callResource("config", {
           action: "patch",
-          path: "inference",
+          path: "llm",
           updates: {
             baseUrl: data.baseUrl,
             apiKey: data.apiKey,
             model: data.model,
             // All current AI features declare their own failure policy below.
             // Disable the legacy provider-wide fallback to avoid hidden retries.
+            fallbackEnabled: false,
+            fallbackModel: "",
+          },
+        }),
+        callResource("config", {
+          action: "patch",
+          path: "transcription",
+          updates: {
+            baseUrl: data.transcriptionBaseUrl.trim(),
+            apiKey: data.transcriptionApiKey.trim(),
+            model: data.transcriptionModel.trim() || "whisper",
             fallbackEnabled: false,
             fallbackModel: "",
           },
@@ -315,7 +347,7 @@ const InferenceSettingsPage = () => {
       <div>
         <h2 className="text-2xl font-semibold mb-2">Inference</h2>
         <p className="text-muted-foreground">
-          Configure the provider and make model routing explicit for every AI feature.
+          Configure separate LLM and speech-to-text routes, then make model routing explicit for every AI feature.
         </p>
       </div>
 
@@ -339,7 +371,7 @@ const InferenceSettingsPage = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="baseUrl">Base URL *</Label>
+              <Label htmlFor="baseUrl">LLM Base URL *</Label>
               <Input
                 id="baseUrl"
                 {...form.register("baseUrl")}
@@ -356,7 +388,7 @@ const InferenceSettingsPage = () => {
             </div>
 
             <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="apiKey">API Key *</Label>
+              <Label htmlFor="apiKey">LLM API Key *</Label>
               <Input
                 id="apiKey"
                 type="password"
@@ -369,6 +401,52 @@ const InferenceSettingsPage = () => {
                   {form.formState.errors.apiKey.message}
                 </p>
               )}
+            </div>
+          </div>
+
+          <div className="space-y-4 rounded-lg border p-5">
+            <div>
+              <h3 className="text-lg font-semibold">Speech-to-text route</h3>
+              <p className="text-sm text-muted-foreground">
+                Used by the transcription worker. If STT_SERVER_URL and PROXY_API_KEY are set in the backend environment, they take precedence; the effective source is shown on Jobs.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="transcriptionBaseUrl">STT Base URL</Label>
+                <Input
+                  id="transcriptionBaseUrl"
+                  {...form.register("transcriptionBaseUrl")}
+                  placeholder="http://your-whisper-proxy:8001"
+                />
+                {form.formState.errors.transcriptionBaseUrl && (
+                  <p className="text-sm text-red-500">
+                    {form.formState.errors.transcriptionBaseUrl.message}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="transcriptionApiKey">STT API Key</Label>
+                <Input
+                  id="transcriptionApiKey"
+                  type="password"
+                  {...form.register("transcriptionApiKey")}
+                  placeholder="Proxy API key"
+                />
+                {form.formState.errors.transcriptionApiKey && (
+                  <p className="text-sm text-red-500">
+                    {form.formState.errors.transcriptionApiKey.message}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="transcriptionModel">STT model</Label>
+                <Input
+                  id="transcriptionModel"
+                  {...form.register("transcriptionModel")}
+                  placeholder="large-v3"
+                />
+              </div>
             </div>
           </div>
 

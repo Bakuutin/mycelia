@@ -113,15 +113,23 @@ export async function startWorkers() {
       console.log(`[${jobType}] Local worker started job ${job.id}`);
     });
 
-    worker.on("completed", (job) => {
+    worker.on("completed", async (job) => {
       console.log(`[${jobType}] Local worker completed job ${job.id}`);
       console.log(`[${jobType}] Job ${job.id} result:`, JSON.stringify(job.returnvalue));
 
       if (shouldContinueJobChain(job.returnvalue)) {
         console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);
-        enqueueJob(job.data, {
-          trigger: { type: "auto", reason: "hasMore" },
-        });
+        try {
+          await enqueueJob(job.data, {
+            trigger: { type: "auto", reason: "hasMore" },
+          });
+        } catch (error) {
+          console.warn(
+            `[${jobType}] Deferred hasMore continuation: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       } else if (job.returnvalue?.hasMore === true) {
         console.warn(
           `[${jobType}] Not scheduling another ${job.data.type} job because the previous run made no measurable progress`,

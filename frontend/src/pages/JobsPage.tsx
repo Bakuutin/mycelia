@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X, Copy, Check } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X, Copy, Check, Server, Wifi, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -35,6 +35,46 @@ import { parseJobError } from "@/lib/jobs";
 
 type WorkerStatus = {
   workers: Record<string, { paused: boolean }>;
+};
+
+type ExternalServiceHealth = {
+  id: "stt" | "llm";
+  label: string;
+  status: "healthy" | "loading" | "unavailable" | "misconfigured";
+  configured: boolean;
+  baseUrl?: string;
+  modelsUrl?: string;
+  source?: string;
+  model?: string;
+  models?: string[];
+  httpStatus?: number;
+  latencyMs?: number;
+  message: string;
+  checkedAt: string;
+  usedBy: string[];
+};
+
+type PipelineBacklog = {
+  ready: number;
+  retryableErrors?: number;
+  processing?: number;
+  missingTotal?: number;
+  blockedWithoutTranscripts?: number;
+  failedJobsUnretried: number;
+};
+
+type PipelineHealth = {
+  checkedAt: string;
+  services: ExternalServiceHealth[];
+  backlogs: Record<
+    "transcription" | "conversation_extractor" | "summarization",
+    PipelineBacklog
+  >;
+  recovery: {
+    startupChecks: boolean;
+    periodicRetrySeconds: number;
+    note: string;
+  };
 };
 
 type VadJobFormData = {
@@ -60,6 +100,15 @@ const WORKER_PIPELINE = [
   { type: "diarization", order: 8, description: "Speaker identification/diarization" },
   { type: "histRecalculation", order: 9, description: "Recalculates timeline histograms" },
 ] as const;
+
+const CRITICAL_PIPELINE_WORKERS = new Set([
+  "vad",
+  "transcription_sequence_creator",
+  "transcription",
+  "conversation_chunk_creator",
+  "conversation_extractor",
+  "summarization",
+]);
 
 /** Status priority for sorting - lower number = higher priority (shown first) */
 const STATUS_PRIORITY: Record<string, number> = {
@@ -653,6 +702,21 @@ export default function JobsPage() {
     },
   });
 
+  const {
+    data: pipelineHealth,
+    isFetching: isFetchingPipelineHealth,
+    refetch: refetchPipelineHealth,
+  } = useQuery({
+    queryKey: ["pipeline-health"],
+    queryFn: async () => {
+      return await api.callResource("jobs", {
+        action: "pipeline_health",
+      }) as PipelineHealth;
+    },
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
+
   // Fetch job statistics from backend (aggregates ALL jobs, not just the 1000 loaded in frontend)
   const { data: jobStatsResponse } = useQuery({
     queryKey: ["job-stats"],
@@ -733,6 +797,106 @@ export default function JobsPage() {
     },
   });
 
+  const resumePipelineMutation = useMutation({
+    mutationFn: async (workerTypes: string[]) => {
+      // Worker pause flags share one config document. Persist sequentially so
+      // concurrent read-modify-write requests cannot overwrite each other.
+      for (const workerType of workerTypes) {
+        await api.callResource("jobs", {
+          action: "resume_worker",
+          workerType,
+        });
+      }
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+    },
+  });
+
+  const setServiceWorkersPausedMutation = useMutation({
+    mutationFn: async ({
+      workerTypes,
+      paused,
+    }: {
+      workerTypes: string[];
+      paused: boolean;
+    }) => {
+      for (const workerType of workerTypes) {
+        await api.callResource("jobs", {
+          action: paused ? "pause_worker" : "resume_worker",
+          workerType,
+        });
+      }
+    },
+    onSuccess: () => {
+      refetchWorkerStatus();
+      refetchPipelineHealth();
+    },
+  });
+
+  const runBacklogMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      return await api.callResource("jobs", {
+        action: "enqueue",
+        data: { type: workerType },
+        trigger: {
+          type: "manual",
+          reason: "pipeline_health_run_now",
+        },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+      refetchPipelineHealth();
+    },
+    onError: (error) => {
+      alert(error instanceof Error ? error.message : "Failed to launch job");
+    },
+  });
+
+  const retryFailedMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      return await api.callResource("jobs", {
+        action: "retry_failed",
+        workerType,
+        limit: 1,
+      }) as { retriedCount: number; workerType: string; errors?: string[] };
+    },
+    onSuccess: (result) => {
+      alert(
+        result.retriedCount > 0
+          ? `Started a recovery job for ${result.workerType}. The original failure remains in history.`
+          : `No unretried ${result.workerType} failures found.`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+      refetchPipelineHealth();
+    },
+    onError: (error) => {
+      alert(error instanceof Error ? error.message : "Failed to retry job");
+    },
+  });
+
+  const testServicesMutation = useMutation({
+    mutationFn: async () => {
+      return await api.callResource("jobs", {
+        action: "pipeline_health",
+        force: true,
+      }) as PipelineHealth;
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(["pipeline-health"], result);
+    },
+    onError: (error) => {
+      alert(
+        error instanceof Error ? error.message : "Connection test failed",
+      );
+    },
+  });
+
   const clearQueueMutation = useMutation({
     mutationFn: async (workerType: string) => {
       return await api.callResource("jobs", {
@@ -763,6 +927,16 @@ export default function JobsPage() {
   const somePaused = useMemo(() => {
     if (!workerStatus?.workers) return false;
     return Object.values(workerStatus.workers).some(w => w.paused);
+  }, [workerStatus]);
+
+  const pausedPipelineWorkers = useMemo(() => {
+    if (!workerStatus?.workers) return [];
+    return WORKER_PIPELINE
+      .filter((worker) =>
+        CRITICAL_PIPELINE_WORKERS.has(worker.type) &&
+        workerStatus.workers[worker.type]?.paused
+      )
+      .map((worker) => worker.type);
   }, [workerStatus]);
 
   // Job counts by status (respects type filter)
@@ -1232,7 +1406,7 @@ export default function JobsPage() {
             variant="default"
             size="sm"
             onClick={() => resumeAllMutation.mutate()}
-            disabled={resumeAllMutation.isPending || allPaused === false}
+            disabled={resumeAllMutation.isPending || !somePaused}
           >
             <PlayCircle className="h-4 w-4 mr-2" />
             Resume All
@@ -1277,6 +1451,202 @@ export default function JobsPage() {
           </Button>
         </div>
       </div>
+
+      {pausedPipelineWorkers.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-500/5">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex gap-3">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+              <div>
+                <div className="font-medium text-amber-500">Processing pipeline is paused</div>
+                <div className="text-sm text-muted-foreground">
+                  Waiting jobs will not start while these stages are paused: {pausedPipelineWorkers.join(", ")}.
+                </div>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => resumePipelineMutation.mutate(pausedPipelineWorkers)}
+              disabled={resumePipelineMutation.isPending}
+            >
+              <PlayCircle className="mr-2 h-4 w-4" />
+              {resumePipelineMutation.isPending ? "Resuming…" : "Resume processing pipeline"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Server className="h-4 w-4" />
+                External services & routing
+              </CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Dependent jobs are held before execution while a provider is unavailable or loading.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => testServicesMutation.mutate()}
+                disabled={testServicesMutation.isPending || isFetchingPipelineHealth}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${testServicesMutation.isPending ? "animate-spin" : ""}`} />
+                Test connections
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <Link to="/settings/inference">Configure routing</Link>
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!pipelineHealth ? (
+            <div className="text-sm text-muted-foreground">Checking external services…</div>
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {pipelineHealth.services.map((service) => {
+                const allPausedForService = service.usedBy.every(
+                  (workerType) => workerStatus?.workers[workerType]?.paused,
+                );
+                const statusClass = service.status === "healthy"
+                  ? "bg-green-500/10 text-green-600"
+                  : service.status === "loading"
+                  ? "bg-amber-500/10 text-amber-600"
+                  : "bg-red-500/10 text-red-600";
+                return (
+                  <div key={service.id} className="space-y-3 rounded-lg border p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        {service.status === "healthy"
+                          ? <Wifi className="mt-0.5 h-5 w-5 text-green-500" />
+                          : <WifiOff className="mt-0.5 h-5 w-5 text-red-500" />}
+                        <div>
+                          <div className="font-medium">{service.label}</div>
+                          <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                            {service.baseUrl || "Not configured"}
+                          </div>
+                        </div>
+                      </div>
+                      <Badge variant="secondary" className={statusClass}>
+                        {service.status}
+                        {service.httpStatus ? ` · HTTP ${service.httpStatus}` : ""}
+                      </Badge>
+                    </div>
+
+                    <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                      <div>Source: <span className="font-mono text-foreground">{service.source || "none"}</span></div>
+                      <div>Model: <span className="font-mono text-foreground">{service.model || service.models?.[0] || "unknown"}</span></div>
+                      <div>Latency: <span className="text-foreground">{service.latencyMs != null ? `${service.latencyMs} ms` : "—"}</span></div>
+                      <div>Checked: <span className="text-foreground">{format(new Date(service.checkedAt), "HH:mm:ss")}</span></div>
+                    </div>
+
+                    <div className={`rounded p-2 text-xs ${service.status === "healthy" ? "bg-green-500/5" : "bg-red-500/5 text-red-500"}`}>
+                      {service.message}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground">
+                        Routed workers: {service.usedBy.join(", ")}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setServiceWorkersPausedMutation.mutate({
+                            workerTypes: service.usedBy,
+                            paused: !allPausedForService,
+                          })}
+                        disabled={setServiceWorkersPausedMutation.isPending}
+                      >
+                        {allPausedForService
+                          ? <PlayCircle className="mr-2 h-4 w-4" />
+                          : <PauseCircle className="mr-2 h-4 w-4" />}
+                        {allPausedForService ? "Resume affected workers" : "Pause affected workers"}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Work ready now</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Domain backlog is counted independently of whether upstream workers are enabled. Failed job history is retained.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {!pipelineHealth ? (
+            <div className="text-sm text-muted-foreground">Calculating backlog…</div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-3">
+              {([
+                ["transcription", "Ready for transcription", "stt"],
+                ["conversation_extractor", "Ready for conversation extraction", "llm"],
+                ["summarization", "Ready for summarization", "llm"],
+              ] as const).map(([workerType, label, serviceId]) => {
+                const backlog = pipelineHealth.backlogs[workerType];
+                const service = pipelineHealth.services.find((item) => item.id === serviceId);
+                const stats = jobTypeStats.find((item) => item.type === workerType);
+                const busy = (stats?.active ?? 0) + (stats?.waiting ?? 0) > 0;
+                const workerPaused = workerStatus?.workers[workerType]?.paused ?? false;
+                const runnable = service?.status === "healthy" && !workerPaused && !busy;
+                return (
+                  <div key={workerType} className="space-y-3 rounded-lg border p-4">
+                    <div>
+                      <div className="text-sm font-medium">{label}</div>
+                      <div className="mt-1 text-3xl font-semibold">{backlog.ready}</div>
+                    </div>
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      {backlog.processing != null && <div>Processing: {backlog.processing}</div>}
+                      {backlog.retryableErrors != null && <div>Retryable source errors: {backlog.retryableErrors}</div>}
+                      {backlog.missingTotal != null && <div>Conversations missing summaries: {backlog.missingTotal}</div>}
+                      {backlog.blockedWithoutTranscripts != null && <div>Blocked without transcript: {backlog.blockedWithoutTranscripts}</div>}
+                      <div>Unretried failed jobs: {backlog.failedJobsUnretried}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => runBacklogMutation.mutate(workerType)}
+                        disabled={!runnable || backlog.ready === 0 || runBacklogMutation.isPending}
+                        title={workerPaused ? "Resume this worker first" : service?.status !== "healthy" ? "Provider must be healthy" : busy ? "A job is already active or waiting" : undefined}
+                      >
+                        <Play className="mr-2 h-3.5 w-3.5" />
+                        Run now
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => retryFailedMutation.mutate(workerType)}
+                        disabled={service?.status !== "healthy" || backlog.failedJobsUnretried === 0 || retryFailedMutation.isPending}
+                      >
+                        <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                        Retry one failed
+                      </Button>
+                    </div>
+                    {workerPaused && <div className="text-xs text-amber-500">Worker is paused</div>}
+                    {busy && <div className="text-xs text-blue-500">A job is already active or waiting</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {pipelineHealth?.recovery && (
+            <div className="mt-4 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
+              {pipelineHealth.recovery.note}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Workers & Statistics */}
       <Card>

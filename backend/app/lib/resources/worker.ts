@@ -8,6 +8,10 @@ import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
+import {
+  assertJobServicesHealthy,
+  getExternalServicesHealth,
+} from "@/lib/jobs/service-health.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -117,6 +121,17 @@ const StatsSchema = z.object({
   action: z.literal("stats"),
 });
 
+const PipelineHealthSchema = z.object({
+  action: z.literal("pipeline_health"),
+  force: z.boolean().optional(),
+});
+
+const RetryFailedJobsSchema = z.object({
+  action: z.literal("retry_failed"),
+  workerType: z.string(),
+  limit: z.number().int().min(1).max(100).default(25),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
@@ -137,6 +152,8 @@ const RequestSchema = z.union([
   GetWorkerDefaultsSchema,
   UpdateWorkerDefaultsSchema,
   StatsSchema,
+  PipelineHealthSchema,
+  RetryFailedJobsSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -198,6 +215,10 @@ export class JobsResource
         return this.updateWorkerDefaults(input, auth);
       case "stats":
         return this.stats(auth);
+      case "pipeline_health":
+        return this.pipelineHealth(input, auth);
+      case "retry_failed":
+        return this.retryFailed(input, auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -408,6 +429,238 @@ export class JobsResource
       success: true,
       workerType: input.workerType,
       cancelledCount: result.modifiedCount || 0,
+    };
+  }
+
+  private async retryFailed(
+    input: z.infer<typeof RetryFailedJobsSchema>,
+    auth: Auth,
+  ) {
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+
+    // A manual retry must not create another batch of known provider errors.
+    await assertJobServicesHealthy(input.workerType, true);
+
+    const mongo = await getMongoResource(auth);
+    const failedJobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        type: input.workerType,
+        state: "failed",
+        retriedAt: { $exists: false },
+      },
+      options: { sort: { createdAt: 1 }, limit: input.limit },
+    }) as any[];
+
+    const serverAuth = await getServerAuth();
+    const retried: Array<{ failedJobId: string; retryJobId: string }> = [];
+    const errors: string[] = [];
+
+    for (const failedJob of failedJobs) {
+      try {
+        const retryJob = await enqueueJob(failedJob.data, {
+          trigger: {
+            type: "manual",
+            reason: `retry_failed:${failedJob._id.toString()}`,
+          },
+        }, serverAuth);
+        const retriedAt = new Date();
+        await mongo({
+          action: "updateOne",
+          collection: "jobs",
+          query: { _id: failedJob._id },
+          update: {
+            $set: {
+              retriedAt,
+              retryJobId: retryJob.id,
+              updatedAt: retriedAt,
+            },
+          },
+        });
+        retried.push({
+          failedJobId: failedJob._id.toString(),
+          retryJobId: retryJob.id!,
+        });
+      } catch (error) {
+        errors.push(
+          `${failedJob._id.toString()}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        break;
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      workerType: input.workerType,
+      retriedCount: retried.length,
+      retried,
+      errors,
+    };
+  }
+
+  private async pipelineHealth(
+    input: z.infer<typeof PipelineHealthSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+
+    const [
+      services,
+      transcriptionReady,
+      transcriptionRetryable,
+      transcriptionProcessing,
+      extractionReady,
+      extractionRetryable,
+      extractionProcessing,
+      summariesMissing,
+      summaryReadyResult,
+      failedByWorker,
+    ] = await Promise.all([
+      getExternalServicesHealth(input.force ?? false),
+      mongo({
+        action: "count",
+        collection: "transcription_sequences",
+        query: { state: "ready" },
+      }),
+      mongo({
+        action: "count",
+        collection: "transcription_sequences",
+        query: { state: "error" },
+      }),
+      mongo({
+        action: "count",
+        collection: "transcription_sequences",
+        query: { state: "processing" },
+      }),
+      mongo({
+        action: "count",
+        collection: "conversation_chunks",
+        query: { state: "ready" },
+      }),
+      mongo({
+        action: "count",
+        collection: "conversation_chunks",
+        query: { state: "error" },
+      }),
+      mongo({
+        action: "count",
+        collection: "conversation_chunks",
+        query: { state: "processing" },
+      }),
+      mongo({
+        action: "count",
+        collection: "objects",
+        query: {
+          isConversation: true,
+          "summaries.0": { $exists: false },
+        },
+      }),
+      mongo({
+        action: "aggregate",
+        collection: "objects",
+        pipeline: [
+          {
+            $match: {
+              isConversation: true,
+              "summaries.0": { $exists: false },
+            },
+          },
+          { $unwind: "$timeRanges" },
+          {
+            $lookup: {
+              from: "transcriptions",
+              let: {
+                rangeStart: "$timeRanges.start",
+                rangeEnd: "$timeRanges.end",
+              },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $lte: ["$start", "$$rangeEnd"] },
+                        { $gte: ["$end", "$$rangeStart"] },
+                      ],
+                    },
+                  },
+                },
+                { $limit: 1 },
+              ],
+              as: "matchingTranscriptions",
+            },
+          },
+          { $match: { "matchingTranscriptions.0": { $exists: true } } },
+          { $group: { _id: "$_id" } },
+          { $count: "count" },
+        ],
+      }),
+      mongo({
+        action: "aggregate",
+        collection: "jobs",
+        pipeline: [
+          {
+            $match: {
+              state: "failed",
+              retriedAt: { $exists: false },
+              type: {
+                $in: [
+                  "transcription",
+                  "conversation_extractor",
+                  "summarization",
+                ],
+              },
+            },
+          },
+          { $group: { _id: "$type", count: { $sum: 1 } } },
+        ],
+      }),
+    ]);
+
+    const summaryReady = Number(summaryReadyResult?.[0]?.count ?? 0);
+    const failedCounts = Object.fromEntries(
+      (failedByWorker as any[]).map((entry) => [entry._id, entry.count]),
+    );
+
+    return {
+      checkedAt: new Date().toISOString(),
+      services,
+      backlogs: {
+        transcription: {
+          ready: Number(transcriptionReady),
+          retryableErrors: Number(transcriptionRetryable),
+          processing: Number(transcriptionProcessing),
+          failedJobsUnretried: Number(failedCounts.transcription ?? 0),
+        },
+        conversation_extractor: {
+          ready: Number(extractionReady),
+          retryableErrors: Number(extractionRetryable),
+          processing: Number(extractionProcessing),
+          failedJobsUnretried: Number(
+            failedCounts.conversation_extractor ?? 0,
+          ),
+        },
+        summarization: {
+          ready: summaryReady,
+          missingTotal: Number(summariesMissing),
+          blockedWithoutTranscripts: Math.max(
+            0,
+            Number(summariesMissing) - summaryReady,
+          ),
+          failedJobsUnretried: Number(failedCounts.summarization ?? 0),
+        },
+      },
+      recovery: {
+        startupChecks: true,
+        periodicRetrySeconds: 300,
+        note:
+          "Failed job history is retained. Retryable source records are checked on startup and every 5 minutes after dependencies recover.",
+      },
     };
   }
 

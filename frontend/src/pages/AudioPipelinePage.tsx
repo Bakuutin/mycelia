@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import {
   getMaximumAudioHours,
   MAX_AUDIO_CHUNK_SECONDS,
+  normalizeAudioSourceFileStats,
 } from "@/lib/audioPipelineStats";
 import { format, formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -295,6 +296,10 @@ export default function AudioPipelinePage() {
       const rawStats = deserialized.stats as PipelineStats;
       const stats: PipelineStats = {
         ...rawStats,
+        sourceFiles: normalizeAudioSourceFileStats(
+          rawStats.sourceFiles,
+          rawStats.totalSessions,
+        ),
         vadLastProcessedAt: rawStats.vadLastProcessedAt
           ? new Date(rawStats.vadLastProcessedAt)
           : undefined,
@@ -358,11 +363,11 @@ export default function AudioPipelinePage() {
   const vadMaximumAudioHours = getMaximumAudioHours(
     stats?.chunksAwaitingVad ?? 0,
   );
-  const activeStages = stats?.stages.filter((stage) => stage.active > 0) ?? [];
-  const blockedStages = stats?.stages.filter(
+  const activeStages = stats?.stages?.filter((stage) => stage.active > 0) ?? [];
+  const blockedStages = stats?.stages?.filter(
     (stage) => stage.paused && stage.backlog > 0,
   ) ?? [];
-  const stagesWithErrors = stats?.stages.filter((stage) => stage.errors > 0) ??
+  const stagesWithErrors = stats?.stages?.filter((stage) => stage.errors > 0) ??
     [];
   const pipelineHealth = !stats
     ? "loading"
@@ -637,10 +642,10 @@ export default function AudioPipelinePage() {
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
               {[
-                ["Total", stats?.sourceFiles.total ?? 0],
-                ["Ingested", stats?.sourceFiles.ingested ?? 0],
-                ["Pending", stats?.sourceFiles.pending ?? 0],
-                ["Errors", stats?.sourceFiles.errors ?? 0],
+                ["Total", stats?.sourceFiles?.total ?? 0],
+                ["Ingested", stats?.sourceFiles?.ingested ?? 0],
+                ["Pending", stats?.sourceFiles?.pending ?? 0],
+                ["Errors", stats?.sourceFiles?.errors ?? 0],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg bg-muted/40 p-3">
                   <p className="text-xs text-muted-foreground">{label}</p>
@@ -651,7 +656,7 @@ export default function AudioPipelinePage() {
               ))}
             </div>
             <div className="flex flex-wrap gap-2">
-              {(stats?.sourceFiles.byKind ?? []).map((source) => (
+              {(stats?.sourceFiles?.byKind ?? []).map((source) => (
                 <Badge key={source.kind} variant="outline">
                   {source.kind}: {source.count.toLocaleString()}
                 </Badge>
