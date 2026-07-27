@@ -59,6 +59,14 @@ interface DiarizationDoc {
   };
 }
 
+interface ConversationDoc {
+  _id: unknown;
+  timeRanges?: Array<{
+    start: Date | string;
+    end?: Date | string;
+  }>;
+}
+
 function parseDateParam(value: string | null): Date | null {
   if (!value) return null;
   // Support ISO strings and millis since epoch
@@ -111,6 +119,9 @@ const TranscriptPage = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchSegments, setSearchSegments] = useState<RenderSegment[]>([]);
   const [lastSearchedQ, setLastSearchedQ] = useState<string>(initialQ);
+  const [openingConversationKey, setOpeningConversationKey] = useState<
+    string | null
+  >(null);
 
   const [formStartDate, setFormStartDate] = useState<Date | undefined>(
     undefined,
@@ -275,6 +286,7 @@ const TranscriptPage = () => {
         $project: {
           start: 1,
           end: 1,
+          original: 1,
           segments: 1,
           score: { $meta: "textScore" },
         },
@@ -385,6 +397,93 @@ const TranscriptPage = () => {
   function handlePlayFromSegment(segmentTime: Date) {
     resetDate(segmentTime);
     setIsPlaying(true);
+  }
+
+  async function handleOpenFullConversation(seg: RenderSegment) {
+    const key = `${seg.time.getTime()}-${seg.endTime.getTime()}`;
+    setOpeningConversationKey(key);
+    setSearchError(null);
+
+    try {
+      const conversations = await callResource("mongo", {
+        action: "find",
+        collection: "objects",
+        query: {
+          isConversation: true,
+          timeRanges: {
+            $elemMatch: {
+              start: { $lte: seg.time },
+              end: { $gte: seg.endTime },
+            },
+          },
+        },
+        options: { limit: 50 },
+      }) as ConversationDoc[];
+
+      const containingRanges = conversations.flatMap((conversation) =>
+        (conversation.timeRanges ?? []).flatMap((range) => {
+          if (!range.end) return [];
+          const start = new Date(range.start);
+          const end = new Date(range.end);
+          if (
+            Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ||
+            start > seg.time || end < seg.endTime
+          ) {
+            return [];
+          }
+          return [{ start, end }];
+        })
+      ).sort((a, b) =>
+        (a.end.getTime() - a.start.getTime()) -
+        (b.end.getTime() - b.start.getTime())
+      );
+
+      let range = containingRanges[0];
+
+      // Older recordings may not have an extracted Conversation object yet.
+      // In that case, use all transcription chunks from the same source audio.
+      if (!range && seg.original_id) {
+        const [firstDocs, lastDocs] = await Promise.all([
+          callResource("mongo", {
+            action: "find",
+            collection: "transcriptions",
+            query: { original: seg.original_id },
+            options: { sort: { start: 1 }, limit: 1 },
+          }) as Promise<TranscriptionDoc[]>,
+          callResource("mongo", {
+            action: "find",
+            collection: "transcriptions",
+            query: { original: seg.original_id },
+            options: { sort: { end: -1 }, limit: 1 },
+          }) as Promise<TranscriptionDoc[]>,
+        ]);
+
+        if (firstDocs[0] && lastDocs[0]) {
+          range = {
+            start: new Date(firstDocs[0].start),
+            end: new Date(lastDocs[0].end),
+          };
+        }
+      }
+
+      if (!range) {
+        throw new Error("Could not find the full conversation for this phrase");
+      }
+
+      setQ("");
+      setLastSearchedQ("");
+      setSearchSegments([]);
+      setSegments([]);
+      navigate(
+        `?start=${range.start.getTime()}&end=${range.end.getTime()}`,
+      );
+    } catch (err) {
+      setSearchError(
+        err instanceof Error ? err.message : "Failed to open conversation",
+      );
+    } finally {
+      setOpeningConversationKey(null);
+    }
   }
 
   useEffect(() => {
@@ -672,25 +771,40 @@ const TranscriptPage = () => {
                                 {formatTimeRangeDuration(seg.time, seg.endTime)}
                               </span>
                               {lastSearchedQ && (
-                                <button
-                                  type="button"
-                                  className="ml-2 text-blue-600 hover:text-blue-800 hover:underline"
-                                  onClick={() => {
-                                    const center = seg.time.getTime();
-                                    const offset = 5 * 60 * 1000;
-                                    setQ("");
-                                    setLastSearchedQ("");
-                                    setSearchSegments([]);
-                                    setSegments([]);
-                                    navigate(
-                                      `?start=${center - offset}&end=${
-                                        center + offset
-                                      }`,
-                                    );
-                                  }}
-                                >
-                                  Context
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    className="ml-2 text-blue-600 hover:text-blue-800 hover:underline"
+                                    onClick={() => {
+                                      const center = seg.time.getTime();
+                                      const offset = 5 * 60 * 1000;
+                                      setQ("");
+                                      setLastSearchedQ("");
+                                      setSearchSegments([]);
+                                      setSegments([]);
+                                      navigate(
+                                        `?start=${center - offset}&end=${
+                                          center + offset
+                                        }`,
+                                      );
+                                    }}
+                                  >
+                                    Context
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ml-2 text-blue-600 hover:text-blue-800 hover:underline disabled:cursor-wait disabled:opacity-50"
+                                    disabled={openingConversationKey ===
+                                      `${seg.time.getTime()}-${seg.endTime.getTime()}`}
+                                    onClick={() =>
+                                      handleOpenFullConversation(seg)}
+                                  >
+                                    {openingConversationKey ===
+                                        `${seg.time.getTime()}-${seg.endTime.getTime()}`
+                                      ? "Opening…"
+                                      : "Full conversation"}
+                                  </button>
+                                </>
                               )}
                             </div>
                             {identifiedSpeakers.map((diarization) => (
