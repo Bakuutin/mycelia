@@ -97,8 +97,6 @@ interface PipelineStats {
   totalChunks: number;
   chunksVadProcessed: number;
   chunksAwaitingVad: number;
-  chunksWithSpeech: number;
-  chunksWithoutSpeech: number;
   vadProcessedLast15Minutes: number;
   vadRatePerMinute: number;
   vadEtaSeconds?: number;
@@ -375,7 +373,7 @@ export default function AudioPipelinePage() {
             <Progress value={vadCompletion} className="h-3" />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Total chunks</p>
               <p className="mt-1 text-xl font-semibold">
@@ -394,18 +392,6 @@ export default function AudioPipelinePage() {
               </p>
               <p className="mt-1 text-xl font-semibold text-amber-600">
                 {(stats?.chunksAwaitingVad ?? 0).toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Speech detected</p>
-              <p className="mt-1 text-xl font-semibold">
-                {(stats?.chunksWithSpeech ?? 0).toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">No speech</p>
-              <p className="mt-1 text-xl font-semibold">
-                {(stats?.chunksWithoutSpeech ?? 0).toLocaleString()}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
