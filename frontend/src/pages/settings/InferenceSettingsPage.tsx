@@ -41,6 +41,13 @@ const inferenceConfigSchema = z.object({
       path: hasUrl ? ["transcriptionApiKey"] : ["transcriptionBaseUrl"],
     });
   }
+  if (/^https?:\/\//i.test(value.transcriptionApiKey.trim())) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "This looks like a URL, not an STT API key",
+      path: ["transcriptionApiKey"],
+    });
+  }
 });
 
 type InferenceConfig = z.infer<typeof inferenceConfigSchema>;
@@ -140,14 +147,24 @@ const InferenceSettingsPage = () => {
         if (configResult) {
           const llmConfig = configResult.llm || configResult.inference || {};
           const transcriptionConfig = configResult.transcription || {};
+          const storedTranscriptionKey = transcriptionConfig.apiKey || "";
+          const malformedTranscriptionKey =
+            /^https?:\/\//i.test(storedTranscriptionKey.trim());
           form.reset({
             baseUrl: llmConfig.baseUrl || "",
             apiKey: llmConfig.apiKey || "",
             model: llmConfig.model || "",
             transcriptionBaseUrl: transcriptionConfig.baseUrl || "",
-            transcriptionApiKey: transcriptionConfig.apiKey || "",
+            transcriptionApiKey: malformedTranscriptionKey
+              ? ""
+              : storedTranscriptionKey,
             transcriptionModel: transcriptionConfig.model || "whisper",
           });
+          if (malformedTranscriptionKey) {
+            setError(
+              "Stored STT routing is malformed: the API key contains a URL. The effective environment route is unchanged; enter the correct key before saving.",
+            );
+          }
         }
       } catch (err) {
         setError(
