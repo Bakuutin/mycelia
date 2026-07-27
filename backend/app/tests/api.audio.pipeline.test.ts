@@ -28,6 +28,13 @@ Deno.test(
     expect(typeof data.hasMore).toBe("boolean");
     expect(typeof data.stats).toBe("object");
     expect(typeof data.stats.totalSessions).toBe("number");
+    expect(typeof data.stats.totalChunks).toBe("number");
+    expect(typeof data.stats.chunksVadProcessed).toBe("number");
+    expect(typeof data.stats.chunksAwaitingVad).toBe("number");
+    expect(typeof data.stats.vadRatePerMinute).toBe("number");
+    expect(typeof data.stats.vadJobs).toBe("object");
+    expect(typeof data.stats.vadJobs.active).toBe("number");
+    expect(typeof data.stats.vadJobs.failed).toBe("number");
   }),
 );
 
