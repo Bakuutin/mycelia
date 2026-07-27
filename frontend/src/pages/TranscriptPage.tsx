@@ -412,6 +412,9 @@ const TranscriptPage = () => {
       pipeline,
     });
 
+    // MongoDB text indexes may omit pure numbers and some short/stemmed words.
+    // Fall back to a literal case-insensitive match so saved phrase links such
+    // as `q=300` still work as users expect.
     if (docs.length === 0) {
       docs = await callResource("mongo", {
         action: "find",
@@ -599,6 +602,8 @@ const TranscriptPage = () => {
         ? { start: conversation.start, end: conversation.end }
         : undefined;
 
+      // Older recordings may not have an extracted Conversation object yet.
+      // In that case, use all transcription chunks from the same source audio.
       if (!range && seg.original_id) {
         const [firstDocs, lastDocs] = await Promise.all([
           callResource("mongo", {
@@ -631,7 +636,9 @@ const TranscriptPage = () => {
       setLastSearchedQ("");
       setSearchSegments([]);
       setSegments([]);
-      navigate(`?start=${range.start.getTime()}&end=${range.end.getTime()}`);
+      navigate(
+        `?start=${range.start.getTime()}&end=${range.end.getTime()}`,
+      );
     } catch (err) {
       setSearchError(
         err instanceof Error ? err.message : "Failed to open conversation",

@@ -575,6 +575,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   let processed = 0;
   let skipped = 0;
   const errors: string[] = [];
+  const summaries: Array<{ objectId: string; title?: string }> = [];
   const jobId = job.id ?? "unknown";
 
   for (const target of targets) {
@@ -593,6 +594,9 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       const result = await processConversation(job, jobData, target, jwt, myceliaUrl);
       if (result.success) {
         processed++;
+        if (typeof result.objectId === "string" && typeof result.title === "string") {
+          summaries.push({ objectId: result.objectId, title: result.title });
+        }
       } else {
         if (target.objectId) {
           await releaseClaim(target.objectId, jwt, myceliaUrl);
@@ -621,6 +625,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     success: true,
     processed,
     skipped,
+    summaries,
     hasMore: hasMore ?? false,
     errors: errors.slice(0, 10),
   };
@@ -628,6 +633,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
 const capability: JobCapability = {
   name,
+  maxConcurrency: 1,
   inputSchema: z.toJSONSchema(schema),
   outputSchema: z.toJSONSchema(z.object({
     success: z.boolean(),
@@ -638,6 +644,10 @@ const capability: JobCapability = {
     description: z.string().optional(),
     processed: z.number().optional(),
     skipped: z.number().optional(),
+    summaries: z.array(z.object({
+      objectId: z.string(),
+      title: z.string().optional(),
+    })).optional(),
     hasMore: z.boolean().optional(),
     message: z.string().optional(),
     errors: z.array(z.string()).optional(),

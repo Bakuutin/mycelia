@@ -244,14 +244,14 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           let proxyResponse: Response;
           let primaryError: string | null = null;
+          let responseErrorBody: string | null = null;
           let fallbackUsed = false;
 
           try {
             proxyResponse = await sendRequest(resolvedModel);
             if (!proxyResponse.ok) {
-              primaryError = `HTTP ${proxyResponse.status}: ${
-                (await proxyResponse.text()).slice(0, 500)
-              }`;
+              responseErrorBody = await proxyResponse.text();
+              primaryError = `HTTP ${proxyResponse.status}: ${responseErrorBody.slice(0, 500)}`;
             }
           } catch (error) {
             primaryError = error instanceof Error ? error.message : String(error);
@@ -266,6 +266,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             fallbackUsed = true;
             resolvedModel = fallbackModel;
             proxyResponse = await sendRequest(resolvedModel);
+            responseErrorBody = null;
           }
 
           span.setAttributes({
@@ -274,7 +275,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           });
 
           if (!proxyResponse.ok) {
-            const errorBody = await proxyResponse.text();
+            // The primary response body may already have been read while
+            // deciding whether to invoke the configured fallback. Reuse that
+            // captured body so the actual provider error is preserved.
+            const errorBody = responseErrorBody ?? await proxyResponse.text();
             llmErrorsCounter.add(1, {
               error_type: "api_error",
               model: resolvedModel,

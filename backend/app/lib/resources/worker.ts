@@ -12,6 +12,7 @@ import {
   assertJobServicesHealthy,
   getExternalServicesHealth,
 } from "@/lib/jobs/service-health.ts";
+import { cancelRunningJob } from "@/lib/jobs/processor.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -54,6 +55,12 @@ const ClearFailedJobsSchema = z.object({
 const ClearQueueSchema = z.object({
   action: z.literal("clear_queue"),
   workerType: z.string(),
+});
+
+const ResetWorkerSchema = z.object({
+  action: z.literal("reset_worker"),
+  workerType: z.string(),
+  restart: z.boolean().optional().default(false),
 });
 
 const CancelJobSchema = z.object({
@@ -139,6 +146,7 @@ const RequestSchema = z.union([
   ClearCompletedJobsSchema,
   ClearFailedJobsSchema,
   ClearQueueSchema,
+  ResetWorkerSchema,
   CancelJobSchema,
   GetJobSchema,
   EnqueueJobSchema,
@@ -191,6 +199,8 @@ export class JobsResource
         return this.clearFailed(input, auth);
       case "clear_queue":
         return this.clearQueue(input, auth);
+      case "reset_worker":
+        return this.resetWorker(input, auth);
       case "list":
         return this.list(input, auth);
       case "progressUpdate":
@@ -243,6 +253,16 @@ export class JobsResource
       throw new Error(`Job ${input.id} not found`);
     }
 
+    const queueJob = await getQueue(job.type).getJob(input.id);
+    let queueState: string | null = null;
+    if (queueJob) {
+      try {
+        queueState = await queueJob.getState();
+      } catch {
+        queueState = "unknown";
+      }
+    }
+
     return {
       id: job._id.toString(),
       type: job.type,
@@ -255,6 +275,10 @@ export class JobsResource
       finishedOn: job.finishedAt?.getTime(),
       processedOn: job.startedAt?.getTime(),
       failedReason: job.failedReason,
+      restarted: job.restartInfo != null,
+      updatedOn: job.updatedAt?.getTime(),
+      queueState,
+      queuePresent: queueJob != null,
     };
   }
 
@@ -290,6 +314,7 @@ export class JobsResource
     }
 
     const jobType = jobDoc.type as string;
+    const wasActive = jobDoc.state === "active";
     const queue = getQueue(jobType);
     const job = await queue.getJob(id);
 
@@ -305,50 +330,80 @@ export class JobsResource
       }
     }
 
-    await mongo({
+    const cancelResult = await mongo({
       action: "updateOne",
       collection: "jobs",
-      query: { _id: new ObjectId(id) },
+      query: {
+        _id: new ObjectId(id),
+        state: { $in: ["waiting", "active", "delayed"] },
+      },
       update: {
         $set: {
           state: "cancelled",
+          cancelReason: "user_cancelled",
           finishedAt: new Date(),
           updatedAt: new Date(),
         },
       },
     });
+
+    if ((cancelResult.modifiedCount ?? 0) === 0) {
+      console.warn(
+        `[jobs] Job ${id} reached a terminal state before cancellation could be recorded`,
+      );
+      return { success: true, cancelled: false };
+    }
+
+    const processTerminated = wasActive ? cancelRunningJob(id) : false;
+
+    if (jobType === "summarization") {
+      await mongo({
+        action: "updateMany",
+        collection: "objects",
+        query: { "_summarizationClaim.jobId": id },
+        update: { $unset: { _summarizationClaim: "" } },
+      });
+    }
 
     await publishJobUpdate(id, jobType, "job.state", {
       state: "cancelled",
       finishedOn: Date.now(),
     });
 
-    return { success: true };
+    return { success: true, cancelled: true, processTerminated };
   }
 
   private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
 
+    // Never force-remove active BullMQ jobs: their processors keep running
+    // without a lock and later surface as stalled, even after committing side
+    // effects. Drain only jobs that have not started; active work completes.
     const types = jobRegistry.getJobTypes();
     for (const type of types) {
       const queue = getQueue(type);
-      await queue.obliterate({ force: true });
+      await queue.drain(true);
     }
 
-    await mongo({
+    const result = await mongo({
       action: "updateMany",
       collection: "jobs",
-      query: { state: { $in: ["waiting", "active", "delayed"] } },
+      query: { state: { $in: ["waiting", "delayed"] } },
       update: {
         $set: {
           state: "cancelled",
+          cancelReason: "all_queues_cleared",
           finishedAt: new Date(),
           updatedAt: new Date(),
         },
       },
     });
 
-    return { success: true };
+    return {
+      success: true,
+      cancelledCount: result.modifiedCount ?? 0,
+      activeJobsContinued: true,
+    };
   }
 
   private async clearCompleted(_input: z.infer<typeof ClearCompletedJobsSchema>, auth: Auth) {
@@ -519,7 +574,6 @@ export class JobsResource
       extractionRetryable,
       extractionProcessing,
       summariesMissing,
-      summaryReadyResult,
       failedByWorker,
     ] = await Promise.all([
       getExternalServicesHealth(input.force ?? false),
@@ -563,45 +617,6 @@ export class JobsResource
       }),
       mongo({
         action: "aggregate",
-        collection: "objects",
-        pipeline: [
-          {
-            $match: {
-              isConversation: true,
-              "summaries.0": { $exists: false },
-            },
-          },
-          { $unwind: "$timeRanges" },
-          {
-            $lookup: {
-              from: "transcriptions",
-              let: {
-                rangeStart: "$timeRanges.start",
-                rangeEnd: "$timeRanges.end",
-              },
-              pipeline: [
-                {
-                  $match: {
-                    $expr: {
-                      $and: [
-                        { $lte: ["$start", "$$rangeEnd"] },
-                        { $gte: ["$end", "$$rangeStart"] },
-                      ],
-                    },
-                  },
-                },
-                { $limit: 1 },
-              ],
-              as: "matchingTranscriptions",
-            },
-          },
-          { $match: { "matchingTranscriptions.0": { $exists: true } } },
-          { $group: { _id: "$_id" } },
-          { $count: "count" },
-        ],
-      }),
-      mongo({
-        action: "aggregate",
         collection: "jobs",
         pipeline: [
           {
@@ -622,7 +637,6 @@ export class JobsResource
       }),
     ]);
 
-    const summaryReady = Number(summaryReadyResult?.[0]?.count ?? 0);
     const failedCounts = Object.fromEntries(
       (failedByWorker as any[]).map((entry) => [entry._id, entry.count]),
     );
@@ -646,12 +660,11 @@ export class JobsResource
           ),
         },
         summarization: {
-          ready: summaryReady,
+          // Conversation extraction already derives these objects from
+          // transcript-backed chunks. Avoid a dashboard-wide range join here:
+          // on a large library it can take minutes and block every health card.
+          ready: Number(summariesMissing),
           missingTotal: Number(summariesMissing),
-          blockedWithoutTranscripts: Math.max(
-            0,
-            Number(summariesMissing) - summaryReady,
-          ),
           failedJobsUnretried: Number(failedCounts.summarization ?? 0),
         },
       },
@@ -661,6 +674,94 @@ export class JobsResource
         note:
           "Failed job history is retained. Retryable source records are checked on startup and every 5 minutes after dependencies recover.",
       },
+    };
+  }
+
+  private async resetWorker(
+    input: z.infer<typeof ResetWorkerSchema>,
+    auth: Auth,
+  ) {
+    const { workerType, restart } = input;
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(workerType)) {
+      throw new Error(`Unknown worker type: ${workerType}`);
+    }
+
+    // Pause first so draining the queue cannot race with a worker taking the
+    // next waiting job.
+    await workerPauseManager.pauseWorker(workerType);
+    await this.persistWorkerConfig(workerType, { paused: true }, auth);
+
+    const mongo = await getMongoResource(auth);
+    const liveJobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        type: workerType,
+        state: { $in: ["active", "waiting", "delayed"] },
+      },
+      options: { limit: 5000 },
+    });
+
+    const queue = getQueue(workerType);
+    await queue.drain(true);
+
+    let terminatedCount = 0;
+    for (const job of liveJobs) {
+      if (job.state === "active" && cancelRunningJob(job._id.toString())) {
+        terminatedCount++;
+      }
+    }
+
+    const now = new Date();
+    const cancelled = await mongo({
+      action: "updateMany",
+      collection: "jobs",
+      query: {
+        type: workerType,
+        state: { $in: ["active", "waiting", "delayed"] },
+      },
+      update: {
+        $set: {
+          state: "cancelled",
+          cancelReason: "worker_reset",
+          finishedAt: now,
+          updatedAt: now,
+        },
+      },
+    });
+
+    let claimsCleared = 0;
+    if (workerType === "summarization") {
+      const claimResult = await mongo({
+        action: "updateMany",
+        collection: "objects",
+        query: { "_summarizationClaim.jobId": { $exists: true } },
+        update: { $unset: { _summarizationClaim: "" } },
+      });
+      claimsCleared = claimResult.modifiedCount ?? 0;
+    }
+
+    let restartedJobId: string | undefined;
+    if (restart) {
+      const newJob = await enqueueJob(
+        { type: workerType },
+        { trigger: { type: "manual", reason: "worker_reset" } },
+        await getServerAuth(),
+      );
+      restartedJobId = newJob.id;
+      await workerPauseManager.resumeWorker(workerType);
+      await this.persistWorkerConfig(workerType, { paused: false }, auth);
+    }
+
+    return {
+      success: true,
+      workerType,
+      cancelledCount: cancelled.modifiedCount ?? 0,
+      terminatedCount,
+      claimsCleared,
+      restartedJobId,
+      paused: !restart,
     };
   }
 
@@ -698,6 +799,7 @@ export class JobsResource
       finishedOn: job.finishedAt?.getTime(),
       processedOn: job.startedAt?.getTime(),
       failedReason: job.failedReason,
+      restarted: job.restartInfo != null,
     }));
   }
 
@@ -845,6 +947,7 @@ export class JobsResource
 
   private async stats(auth: Auth) {
     const mongo = await getMongoResource(auth);
+    const staleCutoff = new Date(Date.now() - 15 * 60 * 1000);
     // TODO: worker specific logic should belong to the worker file
 
     // Get overall counts by status (across ALL jobs, not limited)
@@ -888,6 +991,16 @@ export class JobsResource
           totalRuns: { $sum: 1 },
           active: {
             $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] }
+          },
+          staleActive: {
+            $sum: {
+              $cond: [{
+                $and: [
+                  { $eq: ["$state", "active"] },
+                  { $lte: ["$startedAt", staleCutoff] },
+                ],
+              }, 1, 0],
+            },
           },
           waiting: {
             $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] }
@@ -1014,6 +1127,16 @@ export class JobsResource
     });
 
     // Calculate frequency from timestamps
+    const staleClaims = await mongo({
+      action: "count",
+      collection: "objects",
+      query: {
+        "_summarizationClaim.startedAt": {
+          $lte: staleCutoff.toISOString(),
+        },
+      },
+    }) as number;
+
     const result = stats.map((stat: any) => {
       const timestamps = stat.recentTimestamps || [];
       let avgFrequency = "-";
@@ -1035,6 +1158,8 @@ export class JobsResource
         type: stat.type,
         totalRuns: stat.totalRuns ?? 0,
         active: stat.active ?? 0,
+        staleActive: stat.staleActive ?? 0,
+        staleClaims: stat.type === "summarization" ? staleClaims : 0,
         waiting: stat.waiting ?? 0,
         delayed: stat.delayed ?? 0,
         completed: stat.completed ?? 0,
@@ -1123,6 +1248,11 @@ export class JobsResource
         }];
       case "clear_queue":
         return [{ path: ["jobs", input.workerType], actions: ["cancel"] }];
+      case "reset_worker":
+        return [{
+          path: ["jobs", input.workerType],
+          actions: ["cancel", "pause", "resume", "enqueue"],
+        }];
       case "cancel":
         return [{ path: ["jobs", input.id], actions: ["cancel"] }];
       case "enqueue":

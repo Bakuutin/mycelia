@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X, Copy, Check, Server, Wifi, WifiOff } from "lucide-react";
+import { RefreshCw, Trash2, Play, Search, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, PlayCircle, PauseCircle, Activity, Clock, AlertCircle, CheckCircle, X, Copy, Check, RotateCcw, Server, Wifi, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -32,6 +32,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
 import { parseJobError } from "@/lib/jobs";
+import { formatJobDuration } from "@/lib/jobDuration";
 
 type WorkerStatus = {
   workers: Record<string, { paused: boolean }>;
@@ -370,7 +371,15 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   if (job.type === "conversation_extractor") {
     if (isCompleted) {
       if ((result.conversationsCreated ?? 0) === 0 && (result.chunksProcessed ?? 0) === 0) {
-        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-500 text-xs">Empty</Badge>;
+        return (
+          <Badge
+            variant="secondary"
+            className="bg-muted text-muted-foreground text-xs"
+            title="No conversation chunks were ready to process"
+          >
+            Idling
+          </Badge>
+        );
       }
       return (
         <div className="space-y-1">
@@ -729,6 +738,8 @@ export default function JobsPage() {
           type: string;
           totalRuns: number;
           active: number;
+          staleActive: number;
+          staleClaims: number;
           waiting: number;
           delayed: number;
           completed: number;
@@ -917,6 +928,36 @@ export default function JobsPage() {
     },
   });
 
+  const resetWorkerMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      return await api.callResource("jobs", {
+        action: "reset_worker",
+        workerType,
+        restart: true,
+      }) as {
+        workerType: string;
+        cancelledCount: number;
+        terminatedCount: number;
+        claimsCleared: number;
+        restartedJobId?: string;
+      };
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+      refetchWorkerStatus();
+      alert(
+        `Reset ${result.workerType}: cancelled ${result.cancelledCount} job(s), ` +
+          `stopped ${result.terminatedCount} active process(es), cleared ` +
+          `${result.claimsCleared} claim(s), and started one fresh job.`,
+      );
+    },
+    onError: (error) => {
+      console.error("Failed to reset worker:", error);
+      alert("Failed to reset worker");
+    },
+  });
+
   const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
 
   const allPaused = useMemo(() => {
@@ -1077,6 +1118,25 @@ export default function JobsPage() {
       )
     ) {
       clearQueueMutation.mutate(workerType);
+    }
+  };
+
+  const handleResetWorker = (
+    workerType: string,
+    active: number,
+    waiting: number,
+    delayed: number,
+    staleClaims: number,
+  ) => {
+    if (
+      confirm(
+        `Reset and restart ${workerType}?\n\n` +
+          `This will stop ${active} active job(s), cancel ${waiting + delayed} queued job(s), ` +
+          `and clear ${staleClaims} stale claim(s).\n\n` +
+          "Exactly one fresh job will then be started.",
+      )
+    ) {
+      resetWorkerMutation.mutate(workerType);
     }
   };
 
@@ -1319,21 +1379,10 @@ export default function JobsPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const formatDuration = (start?: number, end?: number) => {
-    if (!start) return "-";
-    const endTime = end || currentTime;
-    const ms = endTime - start;
-    if (ms < 1000) return `${ms}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-    const minutes = Math.floor(ms / 60000);
-    const seconds = Math.floor((ms % 60000) / 1000);
-    return `${minutes}m ${seconds}s`;
-  };
-
   const handleCancelAll = async () => {
     if (
       !confirm(
-        "Are you sure you want to cancel all running jobs and clear queues? This action cannot be undone."
+        "Clear all queued jobs? Active jobs will keep running so their locks and saved results remain consistent."
       )
     ) {
       return;
@@ -1426,7 +1475,7 @@ export default function JobsPage() {
             onClick={handleCancelAll}
           >
             <Trash2 className="h-4 w-4 mr-2" />
-            Cancel All
+            Clear Queued
           </Button>
           {import.meta.env.DEV && (
             <Button
@@ -1592,7 +1641,7 @@ export default function JobsPage() {
               {([
                 ["transcription", "Ready for transcription", "stt"],
                 ["conversation_extractor", "Ready for conversation extraction", "llm"],
-                ["summarization", "Ready for summarization", "llm"],
+                ["summarization", "Summary candidates", "llm"],
               ] as const).map(([workerType, label, serviceId]) => {
                 const backlog = pipelineHealth.backlogs[workerType];
                 const service = pipelineHealth.services.find((item) => item.id === serviceId);
@@ -1672,6 +1721,7 @@ export default function JobsPage() {
                   <TableHead>Worker</TableHead>
                   <TableHead className="text-center w-[50px]">Active</TableHead>
                   <TableHead className="text-center w-[50px]">Queue</TableHead>
+                  <TableHead className="text-center w-[50px]">Stale</TableHead>
                   <TableHead className="text-center w-[50px]">Err</TableHead>
                   <TableHead className="text-center w-[60px]">Runs</TableHead>
                   <TableHead className="text-center w-[70px]">Success</TableHead>
@@ -1733,6 +1783,29 @@ export default function JobsPage() {
                             </TooltipTrigger>
                             <TooltipContent>Clear {worker.type} queue</TooltipContent>
                           </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                disabled={resetWorkerMutation.isPending}
+                                onClick={() =>
+                                  handleResetWorker(
+                                    worker.type,
+                                    stats?.active ?? 0,
+                                    stats?.waiting ?? 0,
+                                    stats?.delayed ?? 0,
+                                    stats?.staleClaims ?? 0,
+                                  )}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              Reset state and start one fresh {worker.type} job
+                            </TooltipContent>
+                          </Tooltip>
                         </div>
                       </TableCell>
                       <TableCell className="py-1">
@@ -1752,6 +1825,22 @@ export default function JobsPage() {
                       <TableCell className="text-center py-1">
                         {(stats?.waiting ?? 0) > 0 ? (
                           <span className="text-yellow-500 text-sm font-medium">{stats?.waiting}</span>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center py-1">
+                        {((stats?.staleActive ?? 0) + (stats?.staleClaims ?? 0)) > 0 ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-amber-500 text-sm font-medium cursor-help">
+                                {(stats?.staleActive ?? 0) + (stats?.staleClaims ?? 0)}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {stats?.staleActive ?? 0} stale active job(s), {stats?.staleClaims ?? 0} stale claim(s)
+                            </TooltipContent>
+                          </Tooltip>
                         ) : (
                           <span className="text-muted-foreground/50">-</span>
                         )}
@@ -2062,8 +2151,28 @@ export default function JobsPage() {
                         ? format(new Date(job.timestamp), "MMM d, HH:mm:ss")
                         : "-"}
                     </TableCell>
-                    <TableCell className="text-sm">
-                      {formatDuration(job.processedOn, job.finishedOn)}
+                    <TableCell
+                      className={job.restarted ||
+                          (job.finishedOn && job.processedOn &&
+                            job.finishedOn < job.processedOn)
+                        ? "text-sm text-amber-500"
+                        : "text-sm"}
+                      title={job.finishedOn && job.processedOn &&
+                          job.finishedOn < job.processedOn
+                        ? "This job was restarted and still has stale timestamps from an earlier attempt"
+                        : job.restarted
+                        ? "This job has been restarted; duration is for the latest attempt"
+                        : undefined}
+                    >
+                      {formatJobDuration(
+                        job.processedOn,
+                        job.finishedOn,
+                        currentTime,
+                      )}
+                      {job.restarted && !(job.finishedOn && job.processedOn &&
+                          job.finishedOn < job.processedOn) && (
+                        <span className="ml-1 text-xs">(retry)</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <JobProgressCell job={job} />
@@ -2072,6 +2181,7 @@ export default function JobsPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
+                            type="button"
                             onClick={() => {
                               navigator.clipboard.writeText(job.id);
                               setCopiedId(job.id);

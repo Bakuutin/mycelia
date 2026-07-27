@@ -257,24 +257,24 @@ async function callLLMStructured<T>(
 }
 
 function buildSegmentationMessages(input: ConversationExtractorJobData, prompt: string) {
+  const systemPrompt = input.segmentation_guidance_prompt
+    ? `${input.segmentation_system_prompt}\n\nOutput guidance:\n${input.segmentation_guidance_prompt}`
+    : input.segmentation_system_prompt;
   const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: input.segmentation_system_prompt },
+    { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
   ];
-  if (input.segmentation_guidance_prompt) {
-    messages.push({ role: "assistant", content: input.segmentation_guidance_prompt });
-  }
   return messages;
 }
 
 function buildMetadataMessages(input: ConversationExtractorJobData, prompt: string) {
+  const systemPrompt = input.extraction_guidance_prompt
+    ? `${input.extraction_system_prompt}\n\nOutput guidance:\n${input.extraction_guidance_prompt}`
+    : input.extraction_system_prompt;
   const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: input.extraction_system_prompt },
+    { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
   ];
-  if (input.extraction_guidance_prompt) {
-    messages.push({ role: "assistant", content: input.extraction_guidance_prompt });
-  }
   return messages;
 }
 
