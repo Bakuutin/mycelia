@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import type { IncomingMessage } from "node:http";
+import { getAuthorizationHeader } from "@/lib/auth/core.server.ts";
 import { createRequestFromUpgrade } from "./updates.websocket.server.ts";
 
 function upgradeRequest(
@@ -18,6 +19,7 @@ Deno.test("updates websocket accepts JWT from the token query parameter", async 
   );
 
   expect(request.headers.get("Authorization")).toBe("Bearer signed-jwt");
+  expect(getAuthorizationHeader(request)).toBe("Bearer signed-jwt");
 });
 
 Deno.test("updates websocket preserves an Authorization header", async () => {

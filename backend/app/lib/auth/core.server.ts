@@ -123,8 +123,20 @@ export const verifyToken = async (token: string): Promise<null | Auth> => {
   return null;
 };
 
-export const authenticate = async (req: Request): Promise<Auth | null> => {
-  const authHeader = req.headers.authorization;
+export function getAuthorizationHeader(
+  req: { headers: Headers | { authorization?: string } },
+): string | undefined {
+  if ("get" in req.headers && typeof req.headers.get === "function") {
+    return req.headers.get("authorization") ?? undefined;
+  }
+
+  return (req.headers as { authorization?: string }).authorization;
+}
+
+export const authenticate = async (
+  req: { headers: Headers | { authorization?: string } },
+): Promise<Auth | null> => {
+  const authHeader = getAuthorizationHeader(req);
 
   if (!authHeader) {
     return null;
