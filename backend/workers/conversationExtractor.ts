@@ -80,6 +80,9 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().default(1),
   extractorVersion: z.string().default("v1"),
+  fallbackModel: z.string()
+    .default(Deno.env.get("CONVERSATION_EXTRACTION_FALLBACK_MODEL") ?? "")
+    .describe("Optional model retried once after a primary LLM error; empty means stop with error"),
   
   // Prompt overrides (migrated from config.prompts)
   segmentation_system_prompt: z.string()
@@ -194,6 +197,7 @@ function generateExtractionKey(
 async function callLLMStructured<T>(
   llm: (input: any) => Promise<any>,
   model: string,
+  fallbackModel: string,
   messages: Array<{ role: string; content: string }>,
   responseFormat: { type: "json_object" } | { type: "json_schema"; json_schema: any },
   parseResponse: (content: string) => T,
@@ -212,6 +216,7 @@ async function callLLMStructured<T>(
   const response = await llm({
     action: "completions",
     model,
+    fallbackModel,
     messages: adjustedMessages,
     response_format: { type: "json_object" },
   });
@@ -234,6 +239,7 @@ async function callLLMStructured<T>(
     const retryResponse = await llm({
       action: "completions",
       model,
+      fallbackModel,
       messages: [
         { role: "user", content: `Fix this JSON to be valid:\n${content}` },
       ],
@@ -754,6 +760,7 @@ async function processChunk(params: {
     const segments = await callLLMStructured(
       llm,
       chunk.params.model,
+      input.fallbackModel,
       segmentationMessages,
       {
         type: "json_schema",
@@ -818,6 +825,7 @@ async function processChunk(params: {
       const metadata = await callLLMStructured(
         llm,
         chunk.params.model,
+        input.fallbackModel,
         messages,
         {
           type: "json_schema",
