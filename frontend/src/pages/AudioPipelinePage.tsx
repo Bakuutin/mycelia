@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { EJSON } from "bson";
+import { toast } from "sonner";
 import {
   Activity,
   AlertCircle,
@@ -31,6 +32,7 @@ import {
   Mic,
   RefreshCw,
   Timer,
+  Trash2,
 } from "lucide-react";
 import {
   Collapsible,
@@ -113,6 +115,12 @@ interface PipelineStats {
     failed: number;
     cancelled: number;
     latestFailure?: string;
+    latestFailureAt?: Date;
+    recentFailures: Array<{
+      id: string;
+      failedAt?: Date;
+      reason?: string;
+    }>;
   };
   sequencesReady: number;
   sequencesProcessing: number;
@@ -204,10 +212,32 @@ export default function AudioPipelinePage() {
         })),
       }));
 
+      const rawStats = deserialized.stats as PipelineStats;
+      const stats: PipelineStats = {
+        ...rawStats,
+        vadLastProcessedAt: rawStats.vadLastProcessedAt
+          ? new Date(rawStats.vadLastProcessedAt)
+          : undefined,
+        vadJobs: {
+          ...rawStats.vadJobs,
+          latestFailureAt: rawStats.vadJobs.latestFailureAt
+            ? new Date(rawStats.vadJobs.latestFailureAt)
+            : undefined,
+          recentFailures: (rawStats.vadJobs.recentFailures ?? []).map(
+            (failure) => ({
+              ...failure,
+              failedAt: failure.failedAt
+                ? new Date(failure.failedAt)
+                : undefined,
+            }),
+          ),
+        },
+      };
+
       return {
         sessions,
         hasMore: deserialized.hasMore,
-        stats: deserialized.stats as PipelineStats,
+        stats,
       };
     },
     refetchInterval: autoRefresh ? 5000 : false,
@@ -230,6 +260,39 @@ export default function AudioPipelinePage() {
   const vadMaximumAudioHours = getMaximumAudioHours(
     stats?.chunksAwaitingVad ?? 0,
   );
+
+  const clearFailedVadMutation = useMutation({
+    mutationFn: async () => {
+      return await api.callResource("jobs", {
+        action: "clear_failed",
+        workerType: "vad",
+      }) as { deletedCount?: number };
+    },
+    onSuccess: async (result) => {
+      await refetch();
+      toast.success(
+        `Cleared ${result.deletedCount ?? 0} failed VAD job record(s).`,
+      );
+    },
+    onError: (error) => {
+      console.error("Failed to clear VAD error history:", error);
+      toast.error("Failed to clear VAD error history.");
+    },
+  });
+
+  const handleClearFailedVad = () => {
+    const failedCount = stats?.vadJobs.failed ?? 0;
+    if (failedCount === 0) return;
+
+    if (
+      window.confirm(
+        `Clear ${failedCount} failed VAD job record(s)?\n\n` +
+          "This permanently removes only failed VAD history. Active, waiting, delayed, completed, and other worker jobs are not changed. New VAD failures will appear here normally.",
+      )
+    ) {
+      clearFailedVadMutation.mutate();
+    }
+  };
 
   const toggleSession = (id: string) => {
     setExpandedSessions((prev) => {
@@ -457,12 +520,64 @@ export default function AudioPipelinePage() {
           {(stats?.vadJobs?.failed ?? 0) > 0 && (
             <details className="rounded-lg border border-destructive/40 bg-destructive/5">
               <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-destructive">
-                {stats?.vadJobs.failed.toLocaleString()}{" "}
-                failed VAD job(s) — show latest error
+                {stats?.vadJobs.failed.toLocaleString()} failed VAD job(s)
+                {stats?.vadJobs.latestFailureAt
+                  ? ` — latest ${
+                    format(
+                      stats.vadJobs.latestFailureAt,
+                      "MMM d, yyyy · HH:mm:ss",
+                    )
+                  }`
+                  : ""}
               </summary>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-destructive/30 px-4 py-3 text-xs text-destructive">
-                {stats?.vadJobs.latestFailure || "No error message was stored."}
-              </pre>
+              <div className="space-y-3 border-t border-destructive/30 px-4 py-3">
+                <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+                  <p className="text-xs text-muted-foreground">
+                    Showing the five most recent failures. Clearing removes only
+                    failed VAD history.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={clearFailedVadMutation.isPending}
+                    onClick={handleClearFailedVad}
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    {clearFailedVadMutation.isPending
+                      ? "Clearing…"
+                      : "Clear failed VAD history"}
+                  </Button>
+                </div>
+
+                <div className="space-y-2">
+                  {(stats?.vadJobs.recentFailures ?? []).map((failure) => (
+                    <div
+                      key={failure.id}
+                      className="rounded-md border border-destructive/20 bg-background/60 p-3"
+                    >
+                      <div className="mb-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                        <span>
+                          {failure.failedAt
+                            ? format(failure.failedAt, "MMM d, yyyy · HH:mm:ss")
+                            : "Failure time unavailable"}
+                        </span>
+                        {failure.failedAt && (
+                          <span>
+                            ({formatDistanceToNow(failure.failedAt, {
+                              addSuffix: true,
+                            })})
+                          </span>
+                        )}
+                      </div>
+                      <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs text-destructive">
+                        {failure.reason || "No error message was stored."}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </details>
           )}
         </CardContent>

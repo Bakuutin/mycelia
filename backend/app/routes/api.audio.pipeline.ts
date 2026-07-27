@@ -79,6 +79,12 @@ interface PipelineStats {
     failed: number;
     cancelled: number;
     latestFailure?: string;
+    latestFailureAt?: Date;
+    recentFailures: Array<{
+      id: string;
+      failedAt?: Date;
+      reason?: string;
+    }>;
   };
   sequencesReady: number;
   sequencesProcessing: number;
@@ -100,31 +106,27 @@ type VadPipelineStats = Pick<
   | "vadJobs"
 >;
 
-const VAD_STATS_CACHE_MS = 30_000;
-let vadStatsCache:
-  | { expiresAt: number; value: VadPipelineStats }
-  | undefined;
-let vadStatsInFlight: Promise<VadPipelineStats> | undefined;
+type VadChunkStats = Pick<
+  PipelineStats,
+  "totalChunks" | "chunksVadProcessed" | "chunksAwaitingVad"
+>;
 
-async function getVadPipelineStats(
+const VAD_CHUNK_STATS_CACHE_MS = 30_000;
+let vadChunkStatsCache:
+  | { expiresAt: number; value: VadChunkStats }
+  | undefined;
+let vadChunkStatsInFlight: Promise<VadChunkStats> | undefined;
+
+async function getVadChunkStats(
   mongo: ReturnType<typeof getMongoResource>,
-): Promise<VadPipelineStats> {
-  if (vadStatsCache && vadStatsCache.expiresAt > Date.now()) {
-    return vadStatsCache.value;
+): Promise<VadChunkStats> {
+  if (vadChunkStatsCache && vadChunkStatsCache.expiresAt > Date.now()) {
+    return vadChunkStatsCache.value;
   }
 
-  if (!vadStatsInFlight) {
-    vadStatsInFlight = (async () => {
-      const vadRateWindowMinutes = 15;
-      const vadRateWindowStart = new Date(
-        Date.now() - vadRateWindowMinutes * 60 * 1000,
-      );
-      const [
-        totalChunkStats,
-        processedVadStats,
-        vadJobStatsResult,
-        latestFailedVadJobs,
-      ] = await Promise.all([
+  if (!vadChunkStatsInFlight) {
+    vadChunkStatsInFlight = (async () => {
+      const [totalChunkStats, processedVadStats] = await Promise.all([
         mongo({
           action: "aggregate",
           collection: "audio_chunks",
@@ -142,101 +144,124 @@ async function getVadPipelineStats(
           ],
           options: { hint: "audio_chunks_vad_processed" },
         }),
-        mongo({
-          action: "aggregate",
-          collection: "jobs",
-          pipeline: [
-            { $match: { type: "vad" } },
-            {
-              $group: {
-                _id: null,
-                active: {
-                  $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] },
-                },
-                waiting: {
-                  $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] },
-                },
-                delayed: {
-                  $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] },
-                },
-                completed: {
-                  $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] },
-                },
-                failed: {
-                  $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] },
-                },
-                cancelled: {
-                  $sum: { $cond: [{ $eq: ["$state", "cancelled"] }, 1, 0] },
-                },
-                vadProcessedLast15Minutes: {
-                  $sum: {
-                    $cond: [
-                      { $gte: ["$finishedAt", vadRateWindowStart] },
-                      { $ifNull: ["$result.processed", 0] },
-                      0,
-                    ],
-                  },
-                },
-                vadLastProcessedAt: { $max: "$finishedAt" },
-              },
-            },
-            { $project: { _id: 0 } },
-          ],
-        }),
-        mongo({
-          action: "find",
-          collection: "jobs",
-          query: { type: "vad", state: "failed" },
-          options: {
-            projection: { failedReason: 1 },
-            sort: { finishedAt: -1, createdAt: -1 },
-            limit: 1,
-          },
-        }),
       ]);
 
       const totalChunks = totalChunkStats[0]?.count ?? 0;
       const chunksVadProcessed = processedVadStats[0]?.count ?? 0;
       const chunksAwaitingVad = Math.max(totalChunks - chunksVadProcessed, 0);
-      const vadJobStats = vadJobStatsResult[0] ?? {};
-      const vadProcessedLast15Minutes = vadJobStats.vadProcessedLast15Minutes ??
-        0;
-      const vadRatePerMinute = vadProcessedLast15Minutes /
-        vadRateWindowMinutes;
-      const vadEtaSeconds = vadRatePerMinute > 0 && chunksAwaitingVad > 0
-        ? Math.ceil(chunksAwaitingVad / vadRatePerMinute * 60)
-        : undefined;
 
-      const value: VadPipelineStats = {
+      const value: VadChunkStats = {
         totalChunks,
         chunksVadProcessed,
         chunksAwaitingVad,
-        vadProcessedLast15Minutes,
-        vadRatePerMinute,
-        vadEtaSeconds,
-        vadLastProcessedAt: vadJobStats.vadLastProcessedAt,
-        vadJobs: {
-          active: vadJobStats.active ?? 0,
-          waiting: vadJobStats.waiting ?? 0,
-          delayed: vadJobStats.delayed ?? 0,
-          completed: vadJobStats.completed ?? 0,
-          failed: vadJobStats.failed ?? 0,
-          cancelled: vadJobStats.cancelled ?? 0,
-          latestFailure: latestFailedVadJobs[0]?.failedReason,
-        },
       };
 
-      vadStatsCache = {
-        expiresAt: Date.now() + VAD_STATS_CACHE_MS,
+      vadChunkStatsCache = {
+        expiresAt: Date.now() + VAD_CHUNK_STATS_CACHE_MS,
         value,
       };
       return value;
     })().finally(() => {
-      vadStatsInFlight = undefined;
+      vadChunkStatsInFlight = undefined;
     });
   }
 
-  return vadStatsInFlight;
+  return vadChunkStatsInFlight;
+}
+
+async function getVadPipelineStats(
+  mongo: ReturnType<typeof getMongoResource>,
+): Promise<VadPipelineStats> {
+  const vadRateWindowMinutes = 15;
+  const vadRateWindowStart = new Date(
+    Date.now() - vadRateWindowMinutes * 60 * 1000,
+  );
+  const [chunkStats, vadJobStatsResult, recentFailedVadJobs] = await Promise
+    .all([
+      getVadChunkStats(mongo),
+      mongo({
+        action: "aggregate",
+        collection: "jobs",
+        pipeline: [
+          { $match: { type: "vad" } },
+          {
+            $group: {
+              _id: null,
+              active: {
+                $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] },
+              },
+              waiting: {
+                $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] },
+              },
+              delayed: {
+                $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] },
+              },
+              completed: {
+                $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] },
+              },
+              failed: {
+                $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] },
+              },
+              cancelled: {
+                $sum: { $cond: [{ $eq: ["$state", "cancelled"] }, 1, 0] },
+              },
+              vadProcessedLast15Minutes: {
+                $sum: {
+                  $cond: [
+                    { $gte: ["$finishedAt", vadRateWindowStart] },
+                    { $ifNull: ["$result.processed", 0] },
+                    0,
+                  ],
+                },
+              },
+              vadLastProcessedAt: { $max: "$finishedAt" },
+            },
+          },
+          { $project: { _id: 0 } },
+        ],
+      }),
+      mongo({
+        action: "find",
+        collection: "jobs",
+        query: { type: "vad", state: "failed" },
+        options: {
+          projection: { failedReason: 1, finishedAt: 1, createdAt: 1 },
+          sort: { finishedAt: -1, createdAt: -1 },
+          limit: 5,
+        },
+      }),
+    ]);
+
+  const vadJobStats = vadJobStatsResult[0] ?? {};
+  const vadProcessedLast15Minutes = vadJobStats.vadProcessedLast15Minutes ?? 0;
+  const vadRatePerMinute = vadProcessedLast15Minutes / vadRateWindowMinutes;
+  const vadEtaSeconds = vadRatePerMinute > 0 && chunkStats.chunksAwaitingVad > 0
+    ? Math.ceil(chunkStats.chunksAwaitingVad / vadRatePerMinute * 60)
+    : undefined;
+  const recentFailures = recentFailedVadJobs.map((job: any) => ({
+    id: job._id.toString(),
+    failedAt: job.finishedAt ?? job.createdAt,
+    reason: job.failedReason,
+  }));
+
+  return {
+    ...chunkStats,
+    vadProcessedLast15Minutes,
+    vadRatePerMinute,
+    vadEtaSeconds,
+    vadLastProcessedAt: vadJobStats.vadLastProcessedAt,
+    vadJobs: {
+      active: vadJobStats.active ?? 0,
+      waiting: vadJobStats.waiting ?? 0,
+      delayed: vadJobStats.delayed ?? 0,
+      completed: vadJobStats.completed ?? 0,
+      failed: vadJobStats.failed ?? 0,
+      cancelled: vadJobStats.cancelled ?? 0,
+      latestFailure: recentFailures[0]?.reason,
+      latestFailureAt: recentFailures[0]?.failedAt,
+      recentFailures,
+    },
+  };
 }
 
 export async function apiAudioPipelineHandler(req: Request, res: Response) {
