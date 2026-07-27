@@ -13,7 +13,7 @@ export default function InferenceSetupPage() {
   const navigate = useNavigate();
   const { clientId, clientSecret } = useSettingsStore();
 
-  const [baseUrl, setBaseUrl] = useState("https://inference.mycelia.tech");
+  const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<SetupStatus>("checking");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -147,7 +147,7 @@ export default function InferenceSetupPage() {
                     type="url"
                     value={baseUrl}
                     onChange={(e) => setBaseUrl(e.target.value)}
-                    placeholder="https://inference.mycelia.tech"
+                    placeholder="http://your-openai-compatible-server:8080/v1"
                     disabled={status === "saving"}
                     className="bg-white/10 border-white/20 text-white placeholder:text-slate-400 focus:border-cyan-400 disabled:opacity-50"
                   />
@@ -230,4 +230,3 @@ export default function InferenceSetupPage() {
     </div>
   );
 }
-

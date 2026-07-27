@@ -109,6 +109,9 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().default(1),
   model: z.string().default("small"),
+  fallbackModel: z.string()
+    .default(Deno.env.get("TAGGER_FALLBACK_MODEL") ?? "")
+    .describe("Optional model retried once after a primary LLM error; empty means stop with error"),
   force: z.boolean().default(false),
   minTags: z.number().default(0),
   maxTags: z.number().default(5),
@@ -262,6 +265,7 @@ function parseTagsResponse(content: string, validTagNames: Set<string>): string[
 async function callLLMForTags(
   llm: (input: any) => Promise<any>,
   model: string,
+  fallbackModel: string,
   systemPrompt: string,
   tagsPrompt: string,
   conversationPrompt: string,
@@ -271,6 +275,7 @@ async function callLLMForTags(
   const response = await llm({
     action: "completions",
     model,
+    fallbackModel,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: `${tagsPrompt}\n\nConversation:\n${conversationPrompt}` },
@@ -461,6 +466,7 @@ const capability: JobCapability = {
         const applicableTags = await callLLMForTags(
           llm,
           input.model,
+          input.fallbackModel,
           input.system_prompt,
           tagsPrompt,
           conversationPrompt,

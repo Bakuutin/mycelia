@@ -223,6 +223,7 @@ export function SummarizeDialog({
               onChange={setSelectedModel}
               disabled={isJobInProgress || isJobComplete}
               placeholder="Select model..."
+              prefetch={open}
             />
           </div>
 
@@ -297,5 +298,4 @@ export function SummarizeDialog({
     </Dialog>
   );
 }
-
 

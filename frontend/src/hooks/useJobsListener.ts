@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import type { JobInfo } from "@/types/jobs";
 import { useNotificationStore } from "@/stores/notificationStore";
+import { buildSummarizationCompletionNotification } from "@/lib/jobNotifications";
 
 /** Format job type for display */
 function formatJobType(type: string): string {
@@ -153,35 +154,22 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       });
 
       if (event.event === "job.completed" && event.data) {
-        if (jobData.jobType === "summarization" && jobData.result?.objectId) {
-          const result = jobData.result as { objectId: string; title?: string; end?: string };
-          const title = result.title || "Conversation";
-          const dateStr = result.end
-            ? new Date(result.end).toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit"
-              })
-            : "";
+        if (jobData.jobType === "summarization") {
+          const notification = buildSummarizationCompletionNotification(
+            jobData.result,
+          );
 
-          const description = `"${title}"${dateStr ? ` • ${dateStr}` : ""}`;
+          if (!notification) return;
 
-          // Add to notification center
-          addNotification({
-            type: "success",
-            title: "Summarization completed",
-            description,
-            action: { label: "View", path: `/objects/${result.objectId}` },
-          });
+          addNotification(notification);
 
           // Show popup toast if enabled
           if (showPopups) {
-            toast.success("Summarization completed", {
-              description,
-              action: {
-                label: "View",
-                onClick: () => navigate(`/objects/${result.objectId}`),
+            toast.success(notification.title, {
+              description: notification.description,
+              action: notification.action && {
+                label: notification.action.label,
+                onClick: () => navigate(notification.action!.path),
               },
               duration: 10000,
             });

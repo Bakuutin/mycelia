@@ -190,7 +190,7 @@ const ConfigSettingsPage = () => {
                   <Label htmlFor="baseUrl">Base URL</Label>
                   <Input
                     id="baseUrl"
-                    placeholder="https://inference.mycelia.tech"
+                    placeholder="http://your-openai-compatible-server:8080/v1"
                     {...form.register("inference.baseUrl")}
                   />
                   {form.formState.errors.inference?.baseUrl && (

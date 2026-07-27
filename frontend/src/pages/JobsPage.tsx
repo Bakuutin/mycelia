@@ -733,6 +733,26 @@ export default function JobsPage() {
     },
   });
 
+  const clearQueueMutation = useMutation({
+    mutationFn: async (workerType: string) => {
+      return await api.callResource("jobs", {
+        action: "clear_queue",
+        workerType,
+      }) as { cancelledCount?: number; workerType: string };
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+      alert(
+        `Cleared ${result.cancelledCount ?? 0} queued ${result.workerType} job(s).`,
+      );
+    },
+    onError: (error) => {
+      console.error("Failed to clear worker queue:", error);
+      alert("Failed to clear worker queue");
+    },
+  });
+
   const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
 
   const allPaused = useMemo(() => {
@@ -857,6 +877,32 @@ export default function JobsPage() {
       resumeWorkerMutation.mutate(workerType);
     } else {
       pauseWorkerMutation.mutate(workerType);
+    }
+  };
+
+  const handleClearWorkerQueue = (
+    workerType: string,
+    active: number,
+    waiting: number,
+    delayed: number,
+  ) => {
+    const total = waiting + delayed;
+    if (total === 0) return;
+
+    const activeNotice = active > 0
+      ? `\n\n${active} active job(s) will keep running. Pause the worker first if you do not want another queued job to start.`
+      : "";
+
+    if (
+      confirm(
+        `Clear the ${workerType} queue?\n\n` +
+          `${waiting} waiting and ${delayed} delayed job(s) will be cancelled.` +
+          activeNotice +
+          "\n\n" +
+          "Other worker queues and completed job history will not be changed.",
+      )
+    ) {
+      clearQueueMutation.mutate(workerType);
     }
   };
 
@@ -1252,7 +1298,7 @@ export default function JobsPage() {
               <TableHeader>
                 <TableRow className="h-8">
                   <TableHead className="w-[40px] pl-4">On</TableHead>
-                  <TableHead className="w-[40px]"></TableHead>
+                  <TableHead className="w-[80px]">Actions</TableHead>
                   <TableHead>Worker</TableHead>
                   <TableHead className="text-center w-[50px]">Active</TableHead>
                   <TableHead className="text-center w-[50px]">Queue</TableHead>
@@ -1282,16 +1328,42 @@ export default function JobsPage() {
                         />
                       </TableCell>
                       <TableCell className="py-1">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Link to={`/jobs/new?type=${worker.type}`}>
-                              <Button variant="ghost" size="icon" className="h-7 w-7">
-                                <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                        <div className="flex items-center">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Link to={`/jobs/new?type=${worker.type}`}>
+                                <Button variant="ghost" size="icon" className="h-7 w-7">
+                                  <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                                </Button>
+                              </Link>
+                            </TooltipTrigger>
+                            <TooltipContent>Run {worker.type} job</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                disabled={
+                                  clearQueueMutation.isPending ||
+                                  ((stats?.waiting ?? 0) +
+                                      (stats?.delayed ?? 0) === 0)
+                                }
+                                onClick={() =>
+                                  handleClearWorkerQueue(
+                                    worker.type,
+                                    stats?.active ?? 0,
+                                    stats?.waiting ?? 0,
+                                    stats?.delayed ?? 0,
+                                  )}
+                              >
+                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
                               </Button>
-                            </Link>
-                          </TooltipTrigger>
-                          <TooltipContent>Run {worker.type} job</TooltipContent>
-                        </Tooltip>
+                            </TooltipTrigger>
+                            <TooltipContent>Clear {worker.type} queue</TooltipContent>
+                          </Tooltip>
+                        </div>
                       </TableCell>
                       <TableCell className="py-1">
                         <div className="flex items-center gap-1.5">

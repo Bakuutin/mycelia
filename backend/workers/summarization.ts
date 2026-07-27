@@ -7,6 +7,7 @@ import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import type { MongoRequest, MongoResponse } from "@/lib/mongo/core.server.ts";
 import type { ObjectsRequest, ObjectsResponse } from "@/lib/objects/resource.server.ts";
+import { getSummaryCompletionOptions } from "@/lib/llm/completion-options.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -24,6 +25,9 @@ export const schema = z.object({
   model: z.string()
     .default("small")
     .describe("LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')"),
+  fallbackModel: z.string()
+    .default(Deno.env.get("SUMMARIZATION_FALLBACK_MODEL") ?? "")
+    .describe("Optional model retried once after a primary LLM error; empty means stop with error"),
   objectId: zObjectId().nullish(),
   minDurationForLlm: z.number()
     .default(10)
@@ -132,10 +136,15 @@ function createLLMSummaryEntry(
   jobData: SummarizationJobData,
   jobId: string,
 ) {
+  const routing = completion.mycelia_routing;
   return {
     text: summary,
     model: jobData.model || "small",
     modelName: completion.model,
+    requestedModel: routing?.requestedModel || jobData.model || "small",
+    resolvedModel: routing?.resolvedModel || completion.model,
+    fallbackModel: routing?.fallbackModel || jobData.fallbackModel || undefined,
+    fallbackUsed: routing?.fallbackUsed ?? false,
     date: new Date(),
     prompt: systemPrompt,
     promptName: jobData.promptName,
@@ -207,10 +216,18 @@ async function createConversationWithSummary(
   return resultObject.insertedId.toString();
 }
 
-async function generateTitle(modelAlias: string, summaryText: string, jwt: string, myceliaUrl: string): Promise<string> {
+async function generateTitle(
+  modelAlias: string,
+  fallbackModel: string,
+  summaryText: string,
+  jwt: string,
+  myceliaUrl: string,
+): Promise<string> {
   const titleResponse = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
+    fallbackModel,
+    ...getSummaryCompletionOptions(modelAlias),
     messages: [
       { role: "system", content: "Generate a short title for this conversation, no formatting" },
       { role: "user", content: summaryText },
@@ -376,6 +393,8 @@ async function summarizeConversationRange(
   const completion = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
+    fallbackModel: jobData.fallbackModel,
+    ...getSummaryCompletionOptions(modelAlias),
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: promptText },
@@ -405,7 +424,13 @@ async function summarizeConversationRange(
   }
 
   console.log(`[summarization] Job ${job.id}: calling LLM for title generation`);
-  const title = await generateTitle(modelAlias, summaryEntry.text, jwt, myceliaUrl);
+  const title = await generateTitle(
+    modelAlias,
+    jobData.fallbackModel,
+    summaryEntry.text,
+    jwt,
+    myceliaUrl,
+  );
   console.log(`[summarization] Job ${job.id}: LLM generated title: "${title}"`);
 
   const objectId = await createConversationWithSummary(

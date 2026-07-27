@@ -35,6 +35,7 @@ import JobDetailPage from "./pages/JobDetailPage";
 import CreateJobPage from "./pages/CreateJobPage";
 import ConversationsPage from "./pages/ConversationsPage";
 import AudioPipelinePage from "./pages/AudioPipelinePage";
+import SummaryHistoryPage from "./pages/SummaryHistoryPage";
 
 export const router = createBrowserRouter([
   {
@@ -72,6 +73,10 @@ export const router = createBrowserRouter([
       {
         path: "jobs/:id",
         element: <JobDetailPage />,
+      },
+      {
+        path: "summaries",
+        element: <SummaryHistoryPage />,
       },
       {
         path: "messaging",

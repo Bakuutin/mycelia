@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertCircle, Check, ChevronsUpDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +17,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { callResource } from "@/lib/api";
+import { extractModelIds } from "@/lib/inferenceModels";
 
 // Model categories with hints
 const MODEL_CATEGORIES = [
@@ -31,6 +32,7 @@ interface ModelSelectorProps {
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  prefetch?: boolean;
 }
 
 export function ModelSelector({
@@ -39,33 +41,47 @@ export function ModelSelector({
   disabled = false,
   placeholder = "Select model...",
   className,
+  prefetch = false,
 }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
-  const [models, setModels] = useState<{ id: string }[]>([]);
+  const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Fetch models when popover opens
-  useEffect(() => {
-    if (open && !loadedOnce) {
-      const fetchModels = async () => {
-        setLoading(true);
-        try {
-          const response = await callResource("llm", { action: "list" }) as {
-            models: { id: string }[];
-            categories: Record<string, { default: string; models: string[] }>;
-          };
-          setModels(response.models || []);
-          setLoadedOnce(true);
-        } catch (e) {
-          console.error("Failed to fetch models:", e);
-        } finally {
-          setLoading(false);
-        }
+  const fetchModels = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const response = await callResource("llm", { action: "list" }) as {
+        models?: unknown;
       };
-      fetchModels();
+      setModels(extractModelIds(response.models));
+      setLoadedOnce(true);
+    } catch (e) {
+      console.error("Failed to fetch models:", e);
+      setLoadError(e instanceof Error ? e.message : "Failed to fetch models");
+    } finally {
+      setLoading(false);
     }
-  }, [open, loadedOnce]);
+  }, []);
+
+  // Summarization dialogs prefetch whenever they open so provider changes are
+  // reflected before the user opens the model picker.
+  useEffect(() => {
+    if (prefetch) {
+      void fetchModels();
+    }
+  }, [prefetch, fetchModels]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    // Other screens keep lazy loading. A new open also provides an explicit
+    // retry after an earlier provider error.
+    if (nextOpen && !loading && (!loadedOnce || loadError)) {
+      void fetchModels();
+    }
+  };
 
   // Determine display label
   const displayLabel = useMemo(() => {
@@ -81,7 +97,7 @@ export function ModelSelector({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -99,14 +115,16 @@ export function ModelSelector({
           <CommandInput placeholder="Search models..." />
           <CommandList>
             <CommandEmpty>
-              {loading ? (
-                <div className="flex items-center justify-center py-6">
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Loading models...
-                </div>
-              ) : (
-                "No model found."
-              )}
+              {loading
+                ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Loading models...
+                  </div>
+                )
+                : (
+                  "No model found."
+                )}
             </CommandEmpty>
 
             {/* Categories */}
@@ -120,7 +138,7 @@ export function ModelSelector({
                   <Check
                     className={cn(
                       "mr-2 h-4 w-4",
-                      value === category.value ? "opacity-100" : "opacity-0"
+                      value === category.value ? "opacity-100" : "opacity-0",
                     )}
                   />
                   <span className="font-medium">{category.label}</span>
@@ -138,17 +156,17 @@ export function ModelSelector({
                 <CommandGroup heading="Available Models">
                   {models.map((model) => (
                     <CommandItem
-                      key={model.id}
-                      value={model.id}
+                      key={model}
+                      value={model}
                       onSelect={handleSelect}
                     >
                       <Check
                         className={cn(
                           "mr-2 h-4 w-4",
-                          value === model.id ? "opacity-100" : "opacity-0"
+                          value === model ? "opacity-100" : "opacity-0",
                         )}
                       />
-                      <span className="font-mono text-sm">{model.id}</span>
+                      <span className="font-mono text-sm">{model}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -158,7 +176,23 @@ export function ModelSelector({
             {loading && models.length === 0 && (
               <div className="flex items-center justify-center py-4">
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                <span className="text-sm text-muted-foreground">Loading models...</span>
+                <span className="text-sm text-muted-foreground">
+                  Loading models...
+                </span>
+              </div>
+            )}
+
+            {loadError && !loading && (
+              <div className="flex items-start gap-2 border-t px-3 py-3 text-xs text-destructive">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>Could not load provider models: {loadError}</span>
+              </div>
+            )}
+
+            {!loading && !loadError && loadedOnce && models.length === 0 && (
+              <div className="border-t px-3 py-3 text-xs text-muted-foreground">
+                The provider returned no named models. You can still use a
+                configured alias.
               </div>
             )}
           </CommandList>

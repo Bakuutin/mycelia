@@ -3,6 +3,10 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
+import {
+  getConfiguredFallback,
+  resolveConfiguredModel,
+} from "./model-routing.ts";
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
   description: "Total number of LLM requests",
@@ -64,6 +68,9 @@ const chatCompletionRequestSchema = z.object({
   tools: z.array(toolSchema).optional(),
   tool_choice: toolChoiceSchema.optional(),
   parallel_tool_calls: z.boolean().optional(),
+  fallbackModel: z.string().optional(),
+  reasoning_budget: z.number().int().min(-1).optional(),
+  chat_template_kwargs: z.record(z.string(), z.unknown()).optional(),
   response_format: z
     .union([
       z.object({ type: z.literal("text") }),
@@ -85,6 +92,14 @@ const llmRequestSchema = z.discriminatedUnion("action", [
 type LLMRequest = z.infer<typeof llmRequestSchema>;
 type LLMResponse = any | Response;
 
+export interface InferenceProviderConfig {
+  baseUrl: string;
+  apiKey: string;
+  model?: string;
+  fallbackEnabled: boolean;
+  fallbackModel?: string;
+}
+
 export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   code = "llm";
   description = "LLM chat completions";
@@ -96,7 +111,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     response: z.any() as z.ZodType<LLMResponse>,
   };
 
-  async getInferenceProvider(): Promise<{ baseUrl: string; apiKey: string; model?: string } | null> {
+  async getInferenceProvider(): Promise<InferenceProviderConfig | null> {
     // TODO: move env vars logic to getServerConfig,
     // also to allow setting any config value as flattened nested env vars
     // (e.g. MYCELIA__INFERENCE__API_KEY, MYCELIA__INFERENCE__MODEL)
@@ -106,12 +121,17 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     const envApiKey = Deno.env.get("OPENAI_API_KEY");
     // Model resolution: OPENAI_MODEL (for override) > BASE_MODEL (primary config)
     const envModel = Deno.env.get("OPENAI_MODEL") || Deno.env.get("BASE_MODEL");
+    const envFallbackModel = Deno.env.get("OPENAI_FALLBACK_MODEL");
+    const envFallbackEnabledValue = Deno.env.get("OPENAI_FALLBACK_ENABLED");
+    const envFallbackEnabled = envFallbackEnabledValue === "true";
 
     if (envBaseUrl && envApiKey) {
       return {
         baseUrl: envBaseUrl,
         apiKey: envApiKey,
         model: envModel,
+        fallbackEnabled: envFallbackEnabled,
+        fallbackModel: envFallbackModel,
       };
     }
 
@@ -124,35 +144,26 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     return {
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
-      model: provider.model,
+      model: envModel || provider.model,
+      fallbackEnabled: envFallbackEnabledValue === undefined
+        ? provider.fallbackEnabled ?? false
+        : envFallbackEnabled,
+      fallbackModel: envFallbackModel || provider.fallbackModel,
     };
   }
 
   /**
    * Resolve model aliases (small/medium/large) to actual model names.
-   * Priority: BASE_MODEL env var > inference.mycelia.tech passthrough > MODEL_* env vars
+   * Priority: BASE_MODEL env var > explicit task model > MODEL_* alias > configured global model
    */
-  resolveModelAlias(modelName: string, baseUrl: string): string {
-    const baseModel = Deno.env.get('BASE_MODEL');
-
-    // Highest priority: explicit BASE_MODEL override applies to all requests
-    if (baseModel) {
-      return baseModel;
-    }
-
-    // If using Mycelia inference gateway, pass through aliases (they handle it server-side)
-    if (baseUrl.includes('inference.mycelia.tech')) {
-      return modelName;
-    }
-
-    // Resolve aliases to actual model names for direct providers
-    const aliases: Record<string, string> = {
-      small: Deno.env.get('MODEL_SMALL') || modelName,
-      medium: Deno.env.get('MODEL_MEDIUM') || modelName,
-      large: Deno.env.get('MODEL_LARGE') || modelName,
-    };
-
-    return aliases[modelName] || modelName;
+  resolveModelAlias(modelName: string, defaultModel?: string): string {
+    return resolveConfiguredModel(modelName, {
+      defaultModel,
+      baseModel: Deno.env.get("BASE_MODEL"),
+      smallModel: Deno.env.get("MODEL_SMALL"),
+      mediumModel: Deno.env.get("MODEL_MEDIUM"),
+      largeModel: Deno.env.get("MODEL_LARGE"),
+    });
   }
 
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {
@@ -170,7 +181,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     try {
       switch (input.action) {
         case "completions": {
-          const { action, ...body } = input;
+          const { action, fallbackModel: _fallbackModel, ...body } = input;
 
           const provider = await this.getInferenceProvider();
           if (!provider) {
@@ -191,8 +202,26 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             baseUrl = `${baseUrl}/v1`;
           }
 
-          // Resolve model aliases (small/medium/large) to actual model names
-          resolvedModel = this.resolveModelAlias(input.model, baseUrl);
+          // Legacy aliases resolve to the configured global default. Explicit
+          // task models remain explicit and are never silently replaced.
+          resolvedModel = this.resolveModelAlias(input.model, provider.model);
+          // A caller can explicitly provide a fallback model, or provide an
+          // empty string to opt out. Calls that do not declare a policy retain
+          // the provider-level fallback for backwards compatibility.
+          const requestControlsFallback = input.fallbackModel !== undefined;
+          const requestedFallback = requestControlsFallback
+            ? input.fallbackModel
+            : provider.fallbackModel;
+          const configuredFallback = requestedFallback
+            ? this.resolveModelAlias(requestedFallback, provider.model)
+            : undefined;
+          const fallbackModel = getConfiguredFallback(
+            resolvedModel,
+            requestControlsFallback
+              ? Boolean(requestedFallback?.trim())
+              : provider.fallbackEnabled,
+            configuredFallback,
+          );
 
           // Record request with resolved model
           llmRequestCounter.add(1, { action: input.action, model: resolvedModel });
@@ -203,22 +232,41 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             "llm.has_api_key": !!provider.apiKey,
           });
 
-          const requestBody = {
-            ...body,
-            model: resolvedModel,
-          };
-
-          const proxyResponse = await fetch(
-            `${baseUrl}/chat/completions`,
-            {
+          const sendRequest = (model: string) =>
+            fetch(`${baseUrl}/chat/completions`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${provider.apiKey}`,
               },
-              body: JSON.stringify(requestBody),
-            },
-          );
+              body: JSON.stringify({ ...body, model }),
+            });
+
+          let proxyResponse: Response;
+          let primaryError: string | null = null;
+          let fallbackUsed = false;
+
+          try {
+            proxyResponse = await sendRequest(resolvedModel);
+            if (!proxyResponse.ok) {
+              primaryError = `HTTP ${proxyResponse.status}: ${
+                (await proxyResponse.text()).slice(0, 500)
+              }`;
+            }
+          } catch (error) {
+            primaryError = error instanceof Error ? error.message : String(error);
+            proxyResponse = new Response(null, { status: 502 });
+          }
+
+          if (primaryError && fallbackModel) {
+            console.warn(
+              `[llm] Primary model "${resolvedModel}" failed; retrying explicitly configured fallback "${fallbackModel}": ${primaryError}`,
+            );
+            span.setAttribute("llm.fallback_used", true);
+            fallbackUsed = true;
+            resolvedModel = fallbackModel;
+            proxyResponse = await sendRequest(resolvedModel);
+          }
 
           span.setAttributes({
             "llm.response_status": proxyResponse.status,
@@ -236,7 +284,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               code: 2,
               message: `API error: ${proxyResponse.status}`,
             });
-            throw new Error(`LLM API error (${proxyResponse.status}) for model "${resolvedModel}" at ${baseUrl}: ${errorBody.slice(0, 500)}`);
+            const primaryContext = primaryError
+              ? ` Primary model error: ${primaryError}.`
+              : "";
+            throw new Error(`LLM API error (${proxyResponse.status}) for model "${resolvedModel}" at ${baseUrl}: ${errorBody.slice(0, 500)}${primaryContext}`);
           }
 
           // Check if streaming is requested
@@ -255,6 +306,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           try {
             const jsonResponse = JSON.parse(responseText);
+
+            // Persistable routing provenance for workers. This makes it
+            // possible to distinguish requested aliases, the model that
+            // actually ran, and an explicit fallback retry.
+            jsonResponse.mycelia_routing = {
+              requestedModel: input.model,
+              resolvedModel,
+              fallbackModel: fallbackModel || undefined,
+              fallbackUsed,
+            };
 
             // Extract cost from litellm response header (x-litellm-response-cost)
             const responseCostHeader = proxyResponse.headers.get("x-litellm-response-cost");
@@ -320,15 +381,15 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           // Get category config from env vars
           const categories = {
             small: {
-              default: Deno.env.get("MODEL_SMALL") || "small",
+              default: Deno.env.get("MODEL_SMALL") || provider.model || "small",
               models: [] as string[],
             },
             medium: {
-              default: Deno.env.get("MODEL_MEDIUM") || "medium",
+              default: Deno.env.get("MODEL_MEDIUM") || provider.model || "medium",
               models: [] as string[],
             },
             large: {
-              default: Deno.env.get("MODEL_LARGE") || "large",
+              default: Deno.env.get("MODEL_LARGE") || provider.model || "large",
               models: [] as string[],
             },
           };

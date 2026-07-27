@@ -42,6 +42,16 @@ const ClearCompletedJobsSchema = z.object({
   action: z.literal("clear_completed"),
 });
 
+const ClearFailedJobsSchema = z.object({
+  action: z.literal("clear_failed"),
+  workerType: z.string(),
+});
+
+const ClearQueueSchema = z.object({
+  action: z.literal("clear_queue"),
+  workerType: z.string(),
+});
+
 const CancelJobSchema = z.object({
   action: z.literal("cancel"),
   id: z.string(),
@@ -112,6 +122,8 @@ const RequestSchema = z.union([
   ListJobsSchema,
   CancelAllJobsSchema,
   ClearCompletedJobsSchema,
+  ClearFailedJobsSchema,
+  ClearQueueSchema,
   CancelJobSchema,
   GetJobSchema,
   EnqueueJobSchema,
@@ -128,6 +140,13 @@ const RequestSchema = z.union([
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
+
+export function getFailedJobsQuery(workerType: string) {
+  return {
+    type: workerType,
+    state: "failed",
+  } as const;
+}
 
 export class JobsResource
   implements Resource<WorkerProgressRequest, any> {
@@ -151,6 +170,10 @@ export class JobsResource
         return this.cancelAll(input, auth);
       case "clear_completed":
         return this.clearCompleted(input, auth);
+      case "clear_failed":
+        return this.clearFailed(input, auth);
+      case "clear_queue":
+        return this.clearQueue(input, auth);
       case "list":
         return this.list(input, auth);
       case "progressUpdate":
@@ -320,6 +343,71 @@ export class JobsResource
     return {
       success: true,
       deletedCount: result.deletedCount || 0,
+    };
+  }
+
+  private async clearFailed(
+    input: z.infer<typeof ClearFailedJobsSchema>,
+    auth: Auth,
+  ) {
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+
+    const mongo = await getMongoResource(auth);
+    const result = await mongo({
+      action: "deleteMany",
+      collection: "jobs",
+      query: getFailedJobsQuery(input.workerType),
+    });
+
+    return {
+      success: true,
+      workerType: input.workerType,
+      deletedCount: result.deletedCount || 0,
+    };
+  }
+
+  private async clearQueue(
+    input: z.infer<typeof ClearQueueSchema>,
+    auth: Auth,
+  ) {
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+
+    // Drain only work that has not started. Removing an active BullMQ job with
+    // obliterate(force) invalidates its lock while its processor is still
+    // running, which can produce duplicate side effects and requires a worker
+    // restart. Active jobs therefore finish normally.
+    const queue = getQueue(input.workerType);
+    await queue.drain(true);
+
+    const now = new Date();
+    const mongo = await getMongoResource(auth);
+    const result = await mongo({
+      action: "updateMany",
+      collection: "jobs",
+      query: {
+        type: input.workerType,
+        state: { $in: ["waiting", "delayed"] },
+      },
+      update: {
+        $set: {
+          state: "cancelled",
+          cancelReason: "queue_cleared",
+          finishedAt: now,
+          updatedAt: now,
+        },
+      },
+    });
+
+    return {
+      success: true,
+      workerType: input.workerType,
+      cancelledCount: result.modifiedCount || 0,
     };
   }
 
@@ -775,6 +863,13 @@ export class JobsResource
         return [{ path: ["jobs", "all"], actions: ["cancel"] }];
       case "clear_completed":
         return [{ path: ["jobs", "completed"], actions: ["delete"] }];
+      case "clear_failed":
+        return [{
+          path: ["jobs", input.workerType, "failed"],
+          actions: ["delete"],
+        }];
+      case "clear_queue":
+        return [{ path: ["jobs", input.workerType], actions: ["cancel"] }];
       case "cancel":
         return [{ path: ["jobs", input.id], actions: ["cancel"] }];
       case "enqueue":

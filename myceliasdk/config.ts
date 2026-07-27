@@ -8,6 +8,8 @@ export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
   model: z.string().optional(),
+  fallbackEnabled: z.boolean().optional().default(false),
+  fallbackModel: z.string().optional(),
 });
 
 // Deprecated: use llm and transcription instead
