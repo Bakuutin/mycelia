@@ -137,7 +137,7 @@ async function getVadPipelineStats(
           action: "aggregate",
           collection: "audio_chunks",
           pipeline: [
-            { $match: { "vad.ran_at": { $exists: true } } },
+            { $match: { "vad.ran_at": { $lte: new Date() } } },
             { $count: "count" },
           ],
           options: { hint: "audio_chunks_vad_processed" },
