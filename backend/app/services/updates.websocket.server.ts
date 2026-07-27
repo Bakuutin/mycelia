@@ -6,7 +6,7 @@ import type { Redis } from "ioredis";
 import { getQueue } from "@/lib/jobs/queue.ts";
 import { jobRegistry } from "@/lib/jobs/job-registry.ts";
 
-async function createRequestFromUpgrade(
+export async function createRequestFromUpgrade(
   upgrade: IncomingMessage,
 ): Promise<Request> {
   const url = upgrade.url || "/";
@@ -24,8 +24,14 @@ async function createRequestFromUpgrade(
 
   const protocol = "http";
   const host = upgrade.headers.host || "localhost";
+  const urlObject = new URL(url, `${protocol}://${host}`);
+  const token = urlObject.searchParams.get("token");
 
-  return new Request(`${protocol}://${host}${url}`, {
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return new Request(urlObject, {
     method: "GET",
     headers,
   });
