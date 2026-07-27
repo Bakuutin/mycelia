@@ -589,6 +589,9 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
           summaries.push({ objectId: result.objectId, title: result.title });
         }
       } else {
+        if (target.objectId) {
+          await releaseClaim(target.objectId, jwt, myceliaUrl);
+        }
         skipped++;
       }
     } catch (error) {
@@ -642,9 +645,20 @@ const capability: JobCapability = {
         name: "conversation_missing_summary",
         filter: {
           event: "mongo.change",
-          "data.operationType": { $in: ["insert", "update"] },
           "data.document.isConversation": true,
           "data.document.summaries.0": { $exists: false },
+          $or: [
+            { "data.operationType": "insert" },
+            {
+              "data.operationType": "update",
+              "data.updateDescription.updatedFields._summarizationClaim": {
+                $exists: false,
+              },
+              "data.updateDescription.removedFields": {
+                $nin: ["_summarizationClaim"],
+              },
+            },
+          ],
         },
       },
     ],
