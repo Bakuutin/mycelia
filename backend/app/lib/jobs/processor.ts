@@ -110,7 +110,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
 
   const child = cmd.spawn();
   if (job.id) activeChildren.set(job.id, child);
-  let timeoutId: number | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const mongo = await getMongoResource(await getServerAuth());
   let logQueue = Promise.resolve();
