@@ -80,6 +80,7 @@ const ROUTING_WORKER_TYPES = [...new Set(
 const InferenceSettingsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [configWarning, setConfigWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -161,7 +162,7 @@ const InferenceSettingsPage = () => {
             transcriptionModel: transcriptionConfig.model || "whisper",
           });
           if (malformedTranscriptionKey) {
-            setError(
+            setConfigWarning(
               "Stored STT routing is malformed: the API key contains a URL. The effective environment route is unchanged; enter the correct key before saving.",
             );
           }
@@ -376,6 +377,12 @@ const InferenceSettingsPage = () => {
           {error && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-md">
               <p className="text-red-600">{error}</p>
+            </div>
+          )}
+
+          {configWarning && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-md">
+              <p className="text-amber-800">{configWarning}</p>
             </div>
           )}
 
