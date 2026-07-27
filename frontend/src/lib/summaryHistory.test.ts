@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSummaryHistoryPipeline,
+  buildSummaryTaskPipeline,
   normalizeSummaryHistoryResult,
+  normalizeSummaryTaskResult,
 } from "./summaryHistory";
 
 describe("summary history aggregation", () => {
@@ -33,6 +35,42 @@ describe("summary history aggregation", () => {
       entries: [],
       models: [],
       total: 0,
+    });
+  });
+});
+
+describe("summary task aggregation", () => {
+  it("filters unfinished jobs and keeps status counts independent", () => {
+    const pipeline = buildSummaryTaskPipeline({
+      status: "unfinished",
+      model: "small",
+      from: "2026-07-01",
+      limit: 25,
+    });
+    const facet = pipeline[1].$facet as any;
+
+    expect(facet.entries[0].$match.state.$in).toEqual([
+      "active",
+      "waiting",
+      "delayed",
+      "paused",
+    ]);
+    expect(facet.entries[0].$match["data.model"]).toBe("small");
+    expect(facet.entries[2].$limit).toBe(25);
+    expect(facet.counts[0].$match.state).toBeUndefined();
+  });
+
+  it("normalizes empty task statistics", () => {
+    expect(normalizeSummaryTaskResult([])).toEqual({
+      entries: [],
+      models: [],
+      counts: {
+        total: 0,
+        completed: 0,
+        unfinished: 0,
+        failed: 0,
+        cancelled: 0,
+      },
     });
   });
 });

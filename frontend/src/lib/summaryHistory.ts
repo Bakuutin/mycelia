@@ -41,6 +41,52 @@ export type SummaryHistoryResult = {
   total: number;
 };
 
+export type SummaryTaskStatus =
+  | "all"
+  | "completed"
+  | "unfinished"
+  | "failed"
+  | "cancelled";
+
+export type SummaryTaskFilters = {
+  status?: SummaryTaskStatus;
+  model?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+};
+
+export type SummaryTaskEntry = {
+  id: string;
+  state: string;
+  createdAt: string | Date;
+  startedAt?: string | Date;
+  finishedAt?: string | Date;
+  failedReason?: string;
+  requestedModel: string;
+  fallbackModel?: string;
+  trigger?: {
+    type?: string;
+    reason?: string;
+  };
+  progress?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+};
+
+export type SummaryTaskCounts = {
+  total: number;
+  completed: number;
+  unfinished: number;
+  failed: number;
+  cancelled: number;
+};
+
+export type SummaryTaskResult = {
+  entries: SummaryTaskEntry[];
+  counts: SummaryTaskCounts;
+  models: SummaryHistoryModel[];
+};
+
 function endOfLocalDay(value: string): Date {
   const date = new Date(`${value}T23:59:59.999`);
   return date;
@@ -201,5 +247,140 @@ export function normalizeSummaryHistoryResult(
     entries: Array.isArray(facet?.entries) ? facet.entries : [],
     models: Array.isArray(facet?.models) ? facet.models : [],
     total: facet?.total?.[0]?.value ?? 0,
+  };
+}
+
+export function buildSummaryTaskPipeline(
+  filters: SummaryTaskFilters,
+): Record<string, unknown>[] {
+  const commonMatch: Record<string, unknown> = {};
+  const createdAt: Record<string, Date> = {};
+
+  if (filters.from) createdAt.$gte = startOfLocalDay(filters.from);
+  if (filters.to) createdAt.$lte = endOfLocalDay(filters.to);
+  if (Object.keys(createdAt).length > 0) commonMatch.createdAt = createdAt;
+
+  if (filters.model && filters.model !== "all") {
+    commonMatch["data.model"] = filters.model;
+  }
+
+  const entryMatch: Record<string, unknown> = { ...commonMatch };
+  switch (filters.status) {
+    case "completed":
+    case "failed":
+    case "cancelled":
+      entryMatch.state = filters.status;
+      break;
+    case "unfinished":
+      entryMatch.state = { $in: ["active", "waiting", "delayed", "paused"] };
+      break;
+  }
+
+  const countsMatch = Object.keys(commonMatch).length > 0
+    ? [{ $match: commonMatch }]
+    : [];
+
+  return [
+    { $match: { type: "summarization" } },
+    {
+      $facet: {
+        entries: [
+          ...(Object.keys(entryMatch).length > 0
+            ? [{ $match: entryMatch }]
+            : []),
+          { $sort: { createdAt: -1 } },
+          { $limit: Math.min(Math.max(filters.limit ?? 100, 1), 500) },
+          {
+            $project: {
+              _id: 0,
+              id: { $toString: "$_id" },
+              state: 1,
+              createdAt: 1,
+              startedAt: 1,
+              finishedAt: 1,
+              failedReason: 1,
+              requestedModel: { $ifNull: ["$data.model", "small"] },
+              fallbackModel: "$data.fallbackModel",
+              trigger: 1,
+              progress: 1,
+              result: 1,
+            },
+          },
+        ],
+        counts: [
+          ...countsMatch,
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              completed: {
+                $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] },
+              },
+              unfinished: {
+                $sum: {
+                  $cond: [
+                    {
+                      $in: ["$state", [
+                        "active",
+                        "waiting",
+                        "delayed",
+                        "paused",
+                      ]],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              failed: {
+                $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] },
+              },
+              cancelled: {
+                $sum: { $cond: [{ $eq: ["$state", "cancelled"] }, 1, 0] },
+              },
+            },
+          },
+          { $project: { _id: 0 } },
+        ],
+        models: [
+          {
+            $match: {
+              "data.model": { $type: "string", $ne: "" },
+            },
+          },
+          {
+            $group: {
+              _id: "$data.model",
+              count: { $sum: 1 },
+              latestAt: { $max: "$createdAt" },
+            },
+          },
+          { $sort: { latestAt: -1, _id: 1 } },
+          {
+            $project: {
+              _id: 0,
+              model: "$_id",
+              count: 1,
+              latestAt: 1,
+            },
+          },
+        ],
+      },
+    },
+  ];
+}
+
+export function normalizeSummaryTaskResult(result: unknown): SummaryTaskResult {
+  const facet = Array.isArray(result) ? result[0] : undefined;
+  return {
+    entries: Array.isArray(facet?.entries) ? facet.entries : [],
+    models: Array.isArray(facet?.models) ? facet.models : [],
+    counts: {
+      total: facet?.counts?.[0]?.total ?? 0,
+      completed: facet?.counts?.[0]?.completed ?? 0,
+      unfinished: facet?.counts?.[0]?.unfinished ?? 0,
+      failed: facet?.counts?.[0]?.failed ?? 0,
+      cancelled: facet?.counts?.[0]?.cancelled ?? 0,
+    },
   };
 }
