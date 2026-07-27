@@ -9,6 +9,7 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
+import { shouldContinueJobChain } from "./job-chain.ts";
 
 const workers: Worker[] = [];
 
@@ -116,11 +117,15 @@ export async function startWorkers() {
       console.log(`[${jobType}] Local worker completed job ${job.id}`);
       console.log(`[${jobType}] Job ${job.id} result:`, JSON.stringify(job.returnvalue));
 
-      if (job.returnvalue?.hasMore === true) {
+      if (shouldContinueJobChain(job.returnvalue)) {
         console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);
         enqueueJob(job.data, {
           trigger: { type: "auto", reason: "hasMore" },
         });
+      } else if (job.returnvalue?.hasMore === true) {
+        console.warn(
+          `[${jobType}] Not scheduling another ${job.data.type} job because the previous run made no measurable progress`,
+        );
       }
     });
 

@@ -762,6 +762,7 @@ const capability: JobCapability = {
     streamed: z.number(),
     backfilled: z.number(),
     chunksCreated: z.number(),
+    processed: z.number(),
     hasMore: z.boolean(),
   })),
   policies: [
@@ -813,6 +814,7 @@ const capability: JobCapability = {
         streamed: 0,
         backfilled: result.transcriptionsProcessed,
         chunksCreated: result.chunksCreated,
+        processed: result.transcriptionsProcessed,
         hasMore: result.hasMore,
       };
     }
@@ -879,6 +881,7 @@ const capability: JobCapability = {
       streamed: totalStreamed,
       backfilled: totalBackfilled,
       chunksCreated: totalChunksCreated,
+      processed: totalFinalized + totalStreamed + totalBackfilled,
       hasMore,
     };
 

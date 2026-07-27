@@ -311,6 +311,7 @@ const capability: JobCapability = {
     status: z.literal("completed"),
     success: z.boolean(),
     conversationsProcessed: z.number(),
+    processed: z.number(),
     tagsApplied: z.number(),
     hasMore: z.boolean(),
     errors: z.array(z.object({
@@ -349,6 +350,7 @@ const capability: JobCapability = {
         status: "completed" as const,
         success: true,
         conversationsProcessed: 0,
+        processed: 0,
         tagsApplied: 0,
         hasMore: false,
       };
@@ -387,6 +389,7 @@ const capability: JobCapability = {
         status: "completed" as const,
         success: true,
         conversationsProcessed: 0,
+        processed: 0,
         tagsApplied: 0,
         hasMore: false,
       };
@@ -527,6 +530,7 @@ const capability: JobCapability = {
       status: "completed" as const,
       success: errors.length === 0,
       conversationsProcessed,
+      processed: conversationsProcessed,
       tagsApplied,
       hasMore,
       ...(errors.length > 0 && { errors }),
