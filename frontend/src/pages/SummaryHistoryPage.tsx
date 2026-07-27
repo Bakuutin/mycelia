@@ -89,8 +89,24 @@ function SummaryHistoryCard({ entry }: { entry: SummaryHistoryEntry }) {
                 <CheckCircle2 className="h-3 w-3" />
                 Summary saved
               </Badge>
-              {entry.jobState && entry.jobState !== "completed" && (
-                <Badge variant="secondary">Job record: {entry.jobState}</Badge>
+              {entry.jobState === "failed" && (
+                <Badge variant="destructive">
+                  Batch job failed after this summary was saved
+                </Badge>
+              )}
+              {entry.jobState === "cancelled" && (
+                <Badge variant="secondary">
+                  Batch job was cancelled after this summary was saved
+                </Badge>
+              )}
+              {entry.jobState && ![
+                  "completed",
+                  "failed",
+                  "cancelled",
+                ].includes(entry.jobState) && (
+                <Badge variant="secondary">
+                  Batch job record: {entry.jobState}
+                </Badge>
               )}
               {entry.fallbackUsed && (
                 <Badge variant="destructive">Fallback used</Badge>

@@ -17,11 +17,12 @@ import type { Object } from "@/types/objects";
 
 interface SummarySectionProps {
   object: Object;
+  summaryJobId?: string | null;
   onSummaryClick?: (summary: NonNullable<Object["summaries"]>[number]) => void;
   onStarSummary?: (index: number) => void;
 }
 
-export function SummarySection({ object, onSummaryClick, onStarSummary }: SummarySectionProps) {
+export function SummarySection({ object, summaryJobId, onSummaryClick, onStarSummary }: SummarySectionProps) {
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
 
@@ -45,9 +46,16 @@ export function SummarySection({ object, onSummaryClick, onStarSummary }: Summar
 
   // Reset to starred or latest summary when summaries array changes
   useEffect(() => {
+    if (summaryJobId) {
+      const linkedIndex = summaries.findIndex((summary) => summary.jobId === summaryJobId);
+      if (linkedIndex !== -1) {
+        setCurrentIndex(linkedIndex);
+        return;
+      }
+    }
     const starredIndex = summaries.findIndex((s) => s.starred);
     setCurrentIndex(starredIndex !== -1 ? starredIndex : (summaries.length > 0 ? summaries.length - 1 : 0));
-  }, [summaries.length, summaries]);
+  }, [summaries.length, summaries, summaryJobId]);
 
   const goToPrevious = () => {
     setCurrentIndex((prev) => (prev > 0 ? prev - 1 : summaries.length - 1));
