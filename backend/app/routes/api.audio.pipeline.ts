@@ -241,7 +241,11 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       Date.now() - vadRateWindowMinutes * 60 * 1000,
     );
     const [
-      vadChunkStatsResult,
+      totalChunks,
+      chunksVadProcessed,
+      chunksWithSpeech,
+      vadProcessedLast15Minutes,
+      lastVadChunks,
       vadJobStatsResult,
       latestFailedVadJobs,
       sequencesReady,
@@ -252,39 +256,34 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       totalConversations,
     ] = await Promise.all([
       mongo({
-        action: "aggregate",
+        action: "count",
         collection: "audio_chunks",
-        pipeline: [
-          {
-            $group: {
-              _id: null,
-              totalChunks: { $sum: 1 },
-              chunksVadProcessed: {
-                $sum: {
-                  $cond: [
-                    { $ne: [{ $ifNull: ["$vad.ran_at", null] }, null] },
-                    1,
-                    0,
-                  ],
-                },
-              },
-              chunksWithSpeech: {
-                $sum: { $cond: [{ $eq: ["$vad.has_speech", true] }, 1, 0] },
-              },
-              vadProcessedLast15Minutes: {
-                $sum: {
-                  $cond: [
-                    { $gte: ["$vad.ran_at", vadRateWindowStart] },
-                    1,
-                    0,
-                  ],
-                },
-              },
-              vadLastProcessedAt: { $max: "$vad.ran_at" },
-            },
-          },
-          { $project: { _id: 0 } },
-        ],
+        query: {},
+      }),
+      mongo({
+        action: "count",
+        collection: "audio_chunks",
+        query: { "vad.ran_at": { $exists: true } },
+      }),
+      mongo({
+        action: "count",
+        collection: "audio_chunks",
+        query: { "vad.has_speech": true },
+      }),
+      mongo({
+        action: "count",
+        collection: "audio_chunks",
+        query: { "vad.ran_at": { $gte: vadRateWindowStart } },
+      }),
+      mongo({
+        action: "find",
+        collection: "audio_chunks",
+        query: { "vad.ran_at": { $exists: true } },
+        options: {
+          projection: { "vad.ran_at": 1 },
+          sort: { "vad.ran_at": -1 },
+          limit: 1,
+        },
       }),
       mongo({
         action: "aggregate",
@@ -359,17 +358,11 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       }),
     ]);
 
-    const vadChunkStats = vadChunkStatsResult[0] ?? {};
-    const totalChunks = vadChunkStats.totalChunks ?? 0;
-    const chunksVadProcessed = vadChunkStats.chunksVadProcessed ?? 0;
     const chunksAwaitingVad = Math.max(totalChunks - chunksVadProcessed, 0);
-    const chunksWithSpeech = vadChunkStats.chunksWithSpeech ?? 0;
     const chunksWithoutSpeech = Math.max(
       chunksVadProcessed - chunksWithSpeech,
       0,
     );
-    const vadProcessedLast15Minutes = vadChunkStats.vadProcessedLast15Minutes ??
-      0;
     const vadRatePerMinute = vadProcessedLast15Minutes / vadRateWindowMinutes;
     const vadEtaSeconds = vadRatePerMinute > 0 && chunksAwaitingVad > 0
       ? Math.ceil(chunksAwaitingVad / vadRatePerMinute * 60)
@@ -386,7 +379,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       vadProcessedLast15Minutes,
       vadRatePerMinute,
       vadEtaSeconds,
-      vadLastProcessedAt: vadChunkStats.vadLastProcessedAt,
+      vadLastProcessedAt: lastVadChunks[0]?.vad?.ran_at,
       vadJobs: {
         active: vadJobStats.active ?? 0,
         waiting: vadJobStats.waiting ?? 0,
