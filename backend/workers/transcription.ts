@@ -193,6 +193,7 @@ const capability: JobCapability = {
           return { 
             status: "success", 
             result: "empty",
+            processed: 1,
             transcriptionId: null,
             audioDuration: 0,
             wordCount: 0,
@@ -297,6 +298,7 @@ const capability: JobCapability = {
         return { 
           status: "success", 
           result: "transcribed",
+          processed: 1,
           transcriptionId,
           audioDuration: duration,
           audioSize: combinedAudio.length,

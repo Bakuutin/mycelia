@@ -35,6 +35,19 @@ Deno.test(
     expect(typeof data.stats.vadJobs).toBe("object");
     expect(typeof data.stats.vadJobs.active).toBe("number");
     expect(typeof data.stats.vadJobs.failed).toBe("number");
+    expect(typeof data.stats.sourceFiles.total).toBe("number");
+    expect(Array.isArray(data.stats.sourceFiles.byKind)).toBe(true);
+    expect(Array.isArray(data.stats.stages)).toBe(true);
+    expect(data.stats.stages.map((stage: any) => stage.type)).toEqual([
+      "ingestion",
+      "vad",
+      "transcription_sequence_creator",
+      "transcription",
+      "conversation_chunk_creator",
+      "conversation_extractor",
+      "summarization",
+    ]);
+    expect(Array.isArray(data.stats.recentJobs)).toBe(true);
   }),
 );
 

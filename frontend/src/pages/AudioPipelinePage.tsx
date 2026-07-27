@@ -23,6 +23,7 @@ import {
   Activity,
   AlertCircle,
   AudioWaveform,
+  CheckCircle2,
   ChevronRight,
   Clock,
   FileText,
@@ -30,6 +31,7 @@ import {
   Layers,
   MessageSquare,
   Mic,
+  PauseCircle,
   RefreshCw,
   Timer,
   Trash2,
@@ -42,7 +44,12 @@ import {
 
 interface AudioSession {
   _id: string;
-  start: Date;
+  start?: Date;
+  lastActivityAt?: Date;
+  path?: string;
+  sourceKind: string;
+  ingested: boolean;
+  ingestionError?: string;
   client_id?: string;
   device?: string;
   metadata?: {
@@ -127,7 +134,46 @@ interface PipelineStats {
   sequencesError: number;
   convChunksReady: number;
   convChunksProcessing: number;
+  convChunksError: number;
   totalConversations: number;
+  sourceFiles: {
+    total: number;
+    ingested: number;
+    pending: number;
+    errors: number;
+    byKind: Array<{ kind: string; count: number }>;
+  };
+  stages: PipelineStage[];
+  recentJobs: PipelineJob[];
+}
+
+interface PipelineStage {
+  type: string;
+  label: string;
+  backlog: number;
+  errors: number;
+  paused: boolean;
+  active: number;
+  waiting: number;
+  delayed: number;
+  failed: number;
+  latestJob?: {
+    id: string;
+    state: string;
+    updatedAt?: Date;
+    failedReason?: string;
+  };
+}
+
+interface PipelineJob {
+  id: string;
+  type: string;
+  state: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  startedAt?: Date;
+  finishedAt?: Date;
+  failedReason?: string;
 }
 
 const DEFAULT_SESSION_LIMIT = 10;
@@ -140,6 +186,33 @@ function formatEta(seconds?: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.ceil((seconds % 3600) / 60);
   return `About ${hours}h${minutes ? ` ${minutes}m` : ""}`;
+}
+
+function stageState(stage: PipelineStage): {
+  label: string;
+  className: string;
+} {
+  if (stage.paused && stage.backlog > 0) {
+    return { label: "Blocked · paused", className: "text-red-600" };
+  }
+  if (stage.active > 0) {
+    return { label: `${stage.active} running`, className: "text-blue-600" };
+  }
+  const queued = stage.waiting + stage.delayed;
+  if (queued > 0) {
+    return { label: `${queued} queued`, className: "text-amber-600" };
+  }
+  if (stage.errors > 0) {
+    return { label: `${stage.errors} errors`, className: "text-red-600" };
+  }
+  if (stage.backlog > 0) {
+    return { label: "Waiting for worker", className: "text-amber-600" };
+  }
+  return { label: "Caught up", className: "text-green-600" };
+}
+
+function formatWorkerType(type: string): string {
+  return type.replaceAll("_", " ");
 }
 
 export default function AudioPipelinePage() {
@@ -174,7 +247,14 @@ export default function AudioPipelinePage() {
       // Convert any remaining date strings to Date objects
       const sessions: AudioSession[] = deserialized.sessions.map((s: any) => ({
         ...s,
-        start: s.start instanceof Date ? s.start : new Date(s.start),
+        start: s.start
+          ? (s.start instanceof Date ? s.start : new Date(s.start))
+          : undefined,
+        lastActivityAt: s.lastActivityAt
+          ? (s.lastActivityAt instanceof Date
+            ? s.lastActivityAt
+            : new Date(s.lastActivityAt))
+          : undefined,
         sequences: s.sequences.map((seq: any) => ({
           ...seq,
           updatedAt: seq.updatedAt
@@ -232,6 +312,24 @@ export default function AudioPipelinePage() {
             }),
           ),
         },
+        stages: (rawStats.stages ?? []).map((stage) => ({
+          ...stage,
+          latestJob: stage.latestJob
+            ? {
+              ...stage.latestJob,
+              updatedAt: stage.latestJob.updatedAt
+                ? new Date(stage.latestJob.updatedAt)
+                : undefined,
+            }
+            : undefined,
+        })),
+        recentJobs: (rawStats.recentJobs ?? []).map((job) => ({
+          ...job,
+          createdAt: job.createdAt ? new Date(job.createdAt) : undefined,
+          updatedAt: job.updatedAt ? new Date(job.updatedAt) : undefined,
+          startedAt: job.startedAt ? new Date(job.startedAt) : undefined,
+          finishedAt: job.finishedAt ? new Date(job.finishedAt) : undefined,
+        })),
       };
 
       return {
@@ -260,6 +358,21 @@ export default function AudioPipelinePage() {
   const vadMaximumAudioHours = getMaximumAudioHours(
     stats?.chunksAwaitingVad ?? 0,
   );
+  const activeStages = stats?.stages.filter((stage) => stage.active > 0) ?? [];
+  const blockedStages = stats?.stages.filter(
+    (stage) => stage.paused && stage.backlog > 0,
+  ) ?? [];
+  const stagesWithErrors = stats?.stages.filter((stage) => stage.errors > 0) ??
+    [];
+  const pipelineHealth = !stats
+    ? "loading"
+    : blockedStages.length > 0
+    ? "blocked"
+    : activeStages.length > 0
+    ? "processing"
+    : stagesWithErrors.length > 0
+    ? "attention"
+    : "idle";
 
   const clearFailedVadMutation = useMutation({
     mutationFn: async () => {
@@ -311,10 +424,14 @@ export default function AudioPipelinePage() {
       case "completed":
         return "bg-green-500/10 text-green-500";
       case "ready":
+      case "waiting":
         return "bg-blue-500/10 text-blue-500";
       case "processing":
+      case "active":
+      case "delayed":
         return "bg-yellow-500/10 text-yellow-500";
       case "error":
+      case "failed":
         return "bg-red-500/10 text-red-500";
       case "empty":
         return "bg-gray-500/10 text-gray-500";
@@ -379,7 +496,7 @@ export default function AudioPipelinePage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Audio Pipeline</h1>
           <p className="text-muted-foreground">
-            Track audio sessions through VAD and transcription
+            Live state from source ingestion through conversations and summaries
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -404,6 +521,180 @@ export default function AudioPipelinePage() {
             Refresh
           </Button>
         </div>
+      </div>
+
+      <Card
+        className={pipelineHealth === "loading"
+          ? "border-muted bg-muted/10"
+          : pipelineHealth === "blocked"
+          ? "border-red-500/50 bg-red-500/5"
+          : pipelineHealth === "processing"
+          ? "border-blue-500/40 bg-blue-500/5"
+          : pipelineHealth === "attention"
+          ? "border-amber-500/40 bg-amber-500/5"
+          : "border-green-500/30 bg-green-500/5"}
+        data-testid="pipeline-health"
+      >
+        <CardContent className="flex flex-col justify-between gap-4 pt-6 md:flex-row md:items-center">
+          <div className="flex items-start gap-3">
+            {pipelineHealth === "loading"
+              ? <RefreshCw className="mt-0.5 h-5 w-5 animate-spin" />
+              : pipelineHealth === "blocked"
+              ? <PauseCircle className="mt-0.5 h-5 w-5 text-red-600" />
+              : pipelineHealth === "processing"
+              ? (
+                <Activity className="mt-0.5 h-5 w-5 animate-pulse text-blue-600" />
+              )
+              : pipelineHealth === "attention"
+              ? <AlertCircle className="mt-0.5 h-5 w-5 text-amber-600" />
+              : <CheckCircle2 className="mt-0.5 h-5 w-5 text-green-600" />}
+            <div>
+              <p className="font-semibold capitalize">
+                Pipeline {pipelineHealth}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {pipelineHealth === "loading"
+                  ? "Loading source, backlog, worker, and job state."
+                  : blockedStages.length > 0
+                  ? `${blockedStages.map((stage) => stage.label).join(", ")} ${
+                    blockedStages.length === 1 ? "is" : "are"
+                  } paused with work waiting.`
+                  : activeStages.length > 0
+                  ? `${activeStages.map((stage) => stage.label).join(", ")} ${
+                    activeStages.length === 1 ? "is" : "are"
+                  } processing now.`
+                  : stagesWithErrors.length > 0
+                  ? "No worker is active and some stages need attention."
+                  : "No stage has queued work or a current error."}
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/jobs"
+            className="text-sm font-medium text-primary hover:underline"
+          >
+            Open all jobs →
+          </Link>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>End-to-end stage status</CardTitle>
+          <CardDescription>
+            Backlog comes from pipeline collections; running and queued state
+            comes from jobs. Paused workers are called out explicitly.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+            {(stats?.stages ?? []).map((stage, index) => {
+              const state = stageState(stage);
+              return (
+                <div
+                  key={stage.type}
+                  className="relative rounded-lg border bg-muted/20 p-3"
+                  data-testid={`pipeline-stage-${stage.type}`}
+                >
+                  {index > 0 && (
+                    <ChevronRight className="absolute -left-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 rounded-full bg-background text-muted-foreground xl:block" />
+                  )}
+                  <p className="text-xs font-medium text-muted-foreground">
+                    {index + 1}. {stage.label}
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {stage.backlog.toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    items waiting
+                  </p>
+                  <p className={`mt-2 text-xs font-medium ${state.className}`}>
+                    {state.label}
+                  </p>
+                  {stage.latestJob && (
+                    <Link
+                      to={`/jobs/${stage.latestJob.id}`}
+                      className="mt-2 block truncate text-[11px] text-primary hover:underline"
+                    >
+                      Latest: {stage.latestJob.state}
+                    </Link>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_1.4fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Audio sources</CardTitle>
+            <CardDescription>
+              Every source type, not only legacy websocket recordings.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+              {[
+                ["Total", stats?.sourceFiles.total ?? 0],
+                ["Ingested", stats?.sourceFiles.ingested ?? 0],
+                ["Pending", stats?.sourceFiles.pending ?? 0],
+                ["Errors", stats?.sourceFiles.errors ?? 0],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="mt-1 text-xl font-semibold">
+                    {(value as number).toLocaleString()}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(stats?.sourceFiles.byKind ?? []).map((source) => (
+                <Badge key={source.kind} variant="outline">
+                  {source.kind}: {source.count.toLocaleString()}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Latest pipeline jobs</CardTitle>
+            <CardDescription>
+              This activity can belong to older recordings, so it is shown
+              separately from recently added sources.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {(stats?.recentJobs ?? []).slice(0, 6).map((job) => (
+              <Link
+                key={job.id}
+                to={`/jobs/${job.id}`}
+                className="flex items-center justify-between gap-4 rounded-md border p-2.5 hover:bg-muted/40"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium capitalize">
+                    {formatWorkerType(job.type)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {job.updatedAt
+                      ? formatDistanceToNow(job.updatedAt, { addSuffix: true })
+                      : "time unavailable"}
+                  </p>
+                </div>
+                <Badge className={getStateColor(job.state)}>{job.state}</Badge>
+              </Link>
+            ))}
+            {(stats?.recentJobs?.length ?? 0) === 0 && (
+              <p className="py-5 text-center text-sm text-muted-foreground">
+                No pipeline jobs recorded yet.
+              </p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Pipeline Stats */}
@@ -651,9 +942,10 @@ export default function AudioPipelinePage() {
       {/* Sessions List */}
       <Card>
         <CardHeader>
-          <CardTitle>Recent Audio Sessions</CardTitle>
+          <CardTitle>Recently active audio sources</CardTitle>
           <CardDescription>
-            Click a session to see detailed pipeline status
+            Ordered by ingestion or processing activity, not only by recording
+            time. Click a source to see its downstream records.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -666,7 +958,7 @@ export default function AudioPipelinePage() {
             : !sessions?.length
             ? (
               <div className="p-8 text-center text-muted-foreground">
-                No audio sessions found
+                No audio sources found
               </div>
             )
             : (
@@ -679,14 +971,33 @@ export default function AudioPipelinePage() {
                   >
                     <CollapsibleTrigger asChild>
                       <div
-                        className="flex items-center justify-between p-4 hover:bg-muted/50 cursor-pointer"
+                        className="flex cursor-pointer flex-col gap-4 p-4 hover:bg-muted/50 xl:flex-row xl:items-center xl:justify-between"
                         data-testid={`session-row-${session._id}`}
                       >
                         <div className="flex items-center gap-4">
                           <Mic className="h-5 w-5 text-muted-foreground" />
                           <div>
                             <div className="font-medium flex items-center gap-2">
-                              {format(session.start, "MMM d, HH:mm:ss")}
+                              {session.start
+                                ? format(session.start, "MMM d, HH:mm:ss")
+                                : session.path?.split("/").pop() ||
+                                  "Recording time unavailable"}
+                              <Badge variant="outline" className="font-normal">
+                                {session.sourceKind}
+                              </Badge>
+                              <Badge
+                                className={session.ingestionError
+                                  ? "bg-red-500/10 text-red-600"
+                                  : session.ingested
+                                  ? "bg-green-500/10 text-green-600"
+                                  : "bg-amber-500/10 text-amber-600"}
+                              >
+                                {session.ingestionError
+                                  ? "ingestion error"
+                                  : session.ingested
+                                  ? "ingested"
+                                  : "pending"}
+                              </Badge>
                               {session.client_id && (
                                 <span className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">
                                   {session.device || session.client_id}
@@ -697,17 +1008,29 @@ export default function AudioPipelinePage() {
                               {session.metadata?.codec ||
                                 session.metadata?.format || "unknown"}{" "}
                               {session.metadata?.rate}Hz &middot;{" "}
-                              {formatDistanceToNow(session.start, {
-                                addSuffix: true,
-                              })} &middot;{" "}
+                              {session.lastActivityAt
+                                ? `active ${
+                                  formatDistanceToNow(session.lastActivityAt, {
+                                    addSuffix: true,
+                                  })
+                                } · `
+                                : ""}
                               <span className="font-mono text-xs">
                                 {session._id.substring(0, 8)}
                               </span>
                             </div>
+                            {session.path && (
+                              <div
+                                className="max-w-xl truncate text-xs text-muted-foreground"
+                                title={session.path}
+                              >
+                                {session.path}
+                              </div>
+                            )}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-6">
+                        <div className="flex w-full items-center gap-6 overflow-x-auto pb-1 xl:w-auto xl:pb-0">
                           {/* Pipeline stages mini-view */}
                           <div className="flex items-center gap-2">
                             {getStageProgress(session).map((stage, i) => (
@@ -743,6 +1066,11 @@ export default function AudioPipelinePage() {
 
                     <CollapsibleContent>
                       <div className="px-4 pb-3 pt-2 bg-muted/30 space-y-3">
+                        {session.ingestionError && (
+                          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600">
+                            {session.ingestionError}
+                          </div>
+                        )}
                         {/* Compact stats row */}
                         <div className="flex items-center gap-4 text-xs">
                           <span className="text-muted-foreground">

@@ -932,6 +932,7 @@ const capability: JobCapability = {
     success: z.boolean(),
     conversationsCreated: z.number(),
     chunksProcessed: z.number(),
+    processed: z.number(),
     hasMore: z.boolean(),
     errors: z.array(z.object({
       type: z.string(),
@@ -1050,6 +1051,7 @@ const capability: JobCapability = {
       success: errors.length === 0,
       conversationsCreated,
       chunksProcessed,
+      processed: chunksProcessed,
       hasMore,
       ...(errors.length > 0 && { errors }),
     };
