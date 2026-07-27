@@ -244,6 +244,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           let proxyResponse: Response;
           let primaryError: string | null = null;
+          let fallbackUsed = false;
 
           try {
             proxyResponse = await sendRequest(resolvedModel);
@@ -262,6 +263,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               `[llm] Primary model "${resolvedModel}" failed; retrying explicitly configured fallback "${fallbackModel}": ${primaryError}`,
             );
             span.setAttribute("llm.fallback_used", true);
+            fallbackUsed = true;
             resolvedModel = fallbackModel;
             proxyResponse = await sendRequest(resolvedModel);
           }
@@ -304,6 +306,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
           try {
             const jsonResponse = JSON.parse(responseText);
+
+            // Persistable routing provenance for workers. This makes it
+            // possible to distinguish requested aliases, the model that
+            // actually ran, and an explicit fallback retry.
+            jsonResponse.mycelia_routing = {
+              requestedModel: input.model,
+              resolvedModel,
+              fallbackModel: fallbackModel || undefined,
+              fallbackUsed,
+            };
 
             // Extract cost from litellm response header (x-litellm-response-cost)
             const responseCostHeader = proxyResponse.headers.get("x-litellm-response-cost");

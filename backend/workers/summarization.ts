@@ -136,10 +136,15 @@ function createLLMSummaryEntry(
   jobData: SummarizationJobData,
   jobId: string,
 ) {
+  const routing = completion.mycelia_routing;
   return {
     text: summary,
     model: jobData.model || "small",
     modelName: completion.model,
+    requestedModel: routing?.requestedModel || jobData.model || "small",
+    resolvedModel: routing?.resolvedModel || completion.model,
+    fallbackModel: routing?.fallbackModel || jobData.fallbackModel || undefined,
+    fallbackUsed: routing?.fallbackUsed ?? false,
     date: new Date(),
     prompt: systemPrompt,
     promptName: jobData.promptName,
