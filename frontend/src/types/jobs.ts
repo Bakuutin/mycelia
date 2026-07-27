@@ -16,6 +16,10 @@ export type JobInfo = {
   processedOn?: number;
   failedReason?: string;
   attemptsMade?: number;
+  restarted?: boolean;
+  updatedOn?: number;
+  queueState?: string | null;
+  queuePresent?: boolean;
 };
 
 export interface JobLogEntry {

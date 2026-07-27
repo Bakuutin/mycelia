@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { Object, ObjectFormData } from "@/types/objects";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -150,6 +150,8 @@ function EditableTitle({
 
 const ObjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const summaryJobId = searchParams.get("summaryJobId");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   // Use React Query hooks
@@ -490,6 +492,7 @@ const ObjectDetailPage = () => {
           {/* Summary - with model selector, generate button, and history navigation */}
           <SummarySection
             object={pendingChanges.summaries ? { ...object, summaries: pendingChanges.summaries } : object}
+            summaryJobId={summaryJobId}
             onSummaryClick={setSelectedSummary}
             onStarSummary={handleStarSummary}
           />

@@ -37,6 +37,24 @@ export async function startWorkers() {
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const startedAt = new Date();
+      const existingJobs = await mongo({
+        action: "find",
+        collection: "jobs",
+        query: { _id: new ObjectId(jobId) },
+        options: { limit: 1 },
+      });
+      const existingJob = existingJobs[0];
+      const isRestart = (existingJob?.attempts ?? 0) > 0 ||
+        existingJob?.finishedAt != null;
+
+      if (isRestart) {
+        console.warn(
+          `[${jobType}] Job ${jobId} restarted: clearing stale terminal data ` +
+            `(previous state=${existingJob?.state ?? "unknown"}, ` +
+            `attempts=${existingJob?.attempts ?? 0})`,
+        );
+      }
+
       await mongo({
         action: "updateOne",
         collection: "jobs",
@@ -45,15 +63,33 @@ export async function startWorkers() {
           $set: { 
             state: "active", 
             startedAt,
-            updatedAt: new Date() 
+            updatedAt: new Date(),
+            ...(isRestart
+              ? {
+                restartInfo: {
+                  detectedAt: startedAt,
+                  previousState: existingJob?.state,
+                  previousStartedAt: existingJob?.startedAt,
+                  previousFinishedAt: existingJob?.finishedAt,
+                  attempt: (existingJob?.attempts ?? 0) + 1,
+                },
+              }
+              : {}),
           },
-          $inc: { attempts: 1 }
+          $inc: { attempts: 1 },
+          $unset: {
+            finishedAt: "",
+            failedReason: "",
+            result: "",
+            cancelReason: "",
+          },
         },
       });
 
       await publishJobUpdate(jobId, jobType, "job.active", {
         state: "active",
         processedOn: startedAt.getTime(),
+        restarted: isRestart,
       });
     });
 
@@ -87,7 +123,51 @@ export async function startWorkers() {
       console.error(`[${jobType}] Job ${jobId} failed globally:`, failedReason);
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
+      const existingJobs = await mongo({
+        action: "find",
+        collection: "jobs",
+        query: { _id: new ObjectId(jobId) },
+        options: { limit: 1 },
+      });
+      if (existingJobs[0]?.state === "cancelled") {
+        console.log(
+          `[${jobType}] Job ${jobId} was cancelled; preserving cancelled state after worker exit`,
+        );
+        return;
+      }
       const finishedAt = new Date();
+      let partialResult: Record<string, unknown> | undefined;
+
+      if (jobType === "summarization") {
+        const savedSummaryStats = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline: [
+            { $match: { "summaries.jobId": jobId } },
+            { $unwind: "$summaries" },
+            { $match: { "summaries.jobId": jobId } },
+            {
+              $group: {
+                _id: null,
+                summariesSaved: { $sum: 1 },
+                lastSummaryAt: { $max: "$summaries.date" },
+              },
+            },
+            { $project: { _id: 0 } },
+          ],
+        });
+        if ((savedSummaryStats[0]?.summariesSaved ?? 0) > 0) {
+          partialResult = {
+            ...savedSummaryStats[0],
+            reason: "summaries_saved_before_job_failure",
+          };
+          console.warn(
+            `[${jobType}] Job ${jobId} failed after saving ` +
+              `${savedSummaryStats[0].summariesSaved} summary result(s)`,
+          );
+        }
+      }
+
       await mongo({
         action: "updateOne",
         collection: "jobs",
@@ -97,7 +177,8 @@ export async function startWorkers() {
             state: "failed", 
             finishedAt,
             failedReason: failedReason,
-            updatedAt: new Date() 
+            updatedAt: new Date(),
+            ...(partialResult ? { partialResult } : {}),
           } 
         },
       });
