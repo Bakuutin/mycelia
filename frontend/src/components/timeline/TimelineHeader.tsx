@@ -10,6 +10,7 @@ interface TimelineHeaderProps {
   timeSelectionEnd?: Date;
   isShortRange: boolean;
   onZoomToFit: () => void;
+  onGoToAudio: (date: Date) => void;
   onTimeRangeSelect: (range: string) => void;
   onZoomToSelection: () => void;
   onCreateEvent: () => void;
@@ -22,6 +23,7 @@ export function TimelineHeader({
   timeSelectionEnd,
   isShortRange,
   onZoomToFit,
+  onGoToAudio,
   onTimeRangeSelect,
   onZoomToSelection,
   onCreateEvent,
@@ -30,7 +32,7 @@ export function TimelineHeader({
   return (
     <div className="flex items-start justify-between gap-2">
       {/* Player Controls - Left side */}
-      <TimelinePlayerControls />
+      <TimelinePlayerControls onGoToAudio={onGoToAudio} />
 
       {/* Right side controls */}
       <div className="flex items-start gap-2">

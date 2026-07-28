@@ -1,4 +1,4 @@
-import { Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { LocateFixed, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -17,6 +17,10 @@ import { useAudioPlayer } from "@/modules/audio/player";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+interface TimelinePlayerControlsProps {
+  onGoToAudio: (date: Date) => void;
+}
 
 function formatTime(date: Date | null): string {
   if (!date) return "--:--:--";
@@ -37,7 +41,9 @@ function formatDate(date: Date | null): string {
   });
 }
 
-export function TimelinePlayerControls() {
+export function TimelinePlayerControls({
+  onGoToAudio,
+}: TimelinePlayerControlsProps) {
   const { isPlaying, toggleIsPlaying, currentDate } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate } =
     useSettingsStore();
@@ -74,6 +80,25 @@ export function TimelinePlayerControls() {
           {formatDate(currentDate)}
         </span>
       </div>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => currentDate && onGoToAudio(currentDate)}
+            disabled={!currentDate}
+            aria-label="Go to current audio position"
+          >
+            <LocateFixed className="mr-1.5 h-4 w-4" />
+            Go to audio
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>Center the timeline on the current audio position</p>
+        </TooltipContent>
+      </Tooltip>
 
       {/* Divider */}
       <div className="h-6 w-px bg-border" />

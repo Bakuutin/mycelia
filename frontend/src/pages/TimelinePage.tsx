@@ -15,6 +15,7 @@ import { api } from "@/lib/api";
 import { useTimelineTimeZoneStore } from "@/stores/timelineTimeZoneStore";
 import { useTimelineTimeZone } from "@/hooks/useTimelineTimeZone";
 import { getTimelinePresetRange, type TimelinePreset } from "@/lib/timeZones";
+import { getAudioFocusRange } from "@/lib/audioTimeline";
 
 const TimelinePage = () => {
   const location = useLocation();
@@ -99,6 +100,11 @@ const TimelinePage = () => {
     }
   };
 
+  const handleGoToAudio = useCallback((date: Date) => {
+    const { start, end } = getAudioFocusRange(date);
+    zoomTo(start, end);
+  }, [zoomTo]);
+
   const handleCreateEvent = () => {
     if (!timeSelection.start) return;
 
@@ -181,6 +187,7 @@ const TimelinePage = () => {
             timeSelectionEnd={timeSelection.end ?? undefined}
             isShortRange={isShortRange}
             onZoomToFit={handleZoomToFit}
+            onGoToAudio={handleGoToAudio}
             onTimeRangeSelect={handleTimeRangeSelect}
             onZoomToSelection={handleZoomToSelection}
             onCreateEvent={handleCreateEvent}

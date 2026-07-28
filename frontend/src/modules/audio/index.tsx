@@ -1,9 +1,9 @@
-import { Layer, LayerComponentProps, Tool } from "@/core/core.ts";
+import { Layer, type LayerComponentProps, Tool } from "@/core/core.ts";
 import React, { useMemo, useRef } from "react";
 
 import { AudioPlayer, useAudioPlayer } from "./player.tsx";
+import { AudioTimelineTrack } from "./AudioTimelineTrack.tsx";
 import { TimelineItems } from "./TimelineItems.tsx";
-import { CursorLine } from "./cursorLine.tsx";
 import { useTimelineRange } from "@/stores/timelineRange.ts";
 import { PlayPauseButton } from "./PlayPauseButton.tsx";
 import GainSlider from "./GainSlider.tsx";
@@ -64,40 +64,7 @@ export const DateTimePickerTool: Tool = {
 
 export const AudioLayer: () => Layer = () => {
   return {
-    component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { currentDate, resetDate, setIsPlaying } = useAudioPlayer();
-
-      return (
-        <svg
-          className="w-full h-full zoomable"
-          width={width}
-          height={35}
-          onClick={(event) => {
-            const svgElement = event.currentTarget;
-            const rect = svgElement.getBoundingClientRect();
-            const x = event.clientX - rect.left;
-            const newScale = transform.rescaleX(scale);
-            const clickedDate = newScale.invert(x);
-            resetDate(clickedDate);
-            setIsPlaying(true);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            setIsPlaying(false);
-            resetDate(null);
-          }}
-        >
-          <g>
-            {currentDate !== null && (
-              <CursorLine
-                position={transform.applyX(scale(currentDate))}
-                height={80}
-              />
-            )}
-          </g>
-        </svg>
-      );
-    },
+    component: AudioTimelineTrack,
   } as Layer;
 };
 
