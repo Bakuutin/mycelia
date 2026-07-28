@@ -2,6 +2,7 @@ import { TimelineToolbar } from "./TimelineToolbar";
 import { TimelineSelectionActions } from "./TimelineSelectionActions";
 import { TrackVisibilityButton } from "./controls/TrackVisibilityPanel";
 import { TimelinePlayerControls } from "./TimelinePlayerControls";
+import { TimelineTimeZoneControl } from "./TimelineTimeZoneControl";
 
 interface TimelineHeaderProps {
   hasTimeSelection: boolean;
@@ -43,6 +44,10 @@ export function TimelineHeader({
             onClearSelection={onClearTimeSelection}
           />
         )}
+        <TimelineTimeZoneControl
+          selectionStart={timeSelectionStart}
+          selectionEnd={timeSelectionEnd}
+        />
         <TimelineToolbar
           onZoomToFit={onZoomToFit}
           onTimeRangeSelect={onTimeRangeSelect}

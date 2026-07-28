@@ -15,4 +15,7 @@ export type Formatter = (
   scale: d3.ScaleTime<number, number>,
   transform: d3.ZoomTransform,
   width: number,
+  context?: {
+    resolveTimeZone?: (date: Date) => string;
+  },
 ) => Label[];

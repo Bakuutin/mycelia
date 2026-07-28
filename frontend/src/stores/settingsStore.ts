@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { BROWSER_TIME_ZONE, type DefaultTimeZone } from "@/lib/timeZones";
 
 type Theme = "light" | "dark" | "system";
+export type TimelineTimeZoneMode = "contextual" | "browser" | "fixed";
 
 type TimeFormat =
   | "gregorian-local-natural"
@@ -22,6 +24,9 @@ interface SettingsState {
   clientSecret: string;
   theme: Theme;
   timeFormat: TimeFormat;
+  defaultTimeZone: DefaultTimeZone;
+  timelineTimeZoneMode: TimelineTimeZoneMode;
+  timelineTimeZoneOverride: string;
   transcriptThresholdHours: number;
   preferredAudioDeviceId: string | null;
   echoCancellation: boolean;
@@ -35,6 +40,9 @@ interface SettingsState {
   setClientSecret: (secret: string) => void;
   setTheme: (theme: Theme) => void;
   setTimeFormat: (format: TimeFormat) => void;
+  setDefaultTimeZone: (timeZone: DefaultTimeZone) => void;
+  setTimelineTimeZoneMode: (mode: TimelineTimeZoneMode) => void;
+  setTimelineTimeZoneOverride: (timeZone: string) => void;
   setTranscriptThresholdHours: (hours: number) => void;
   setPreferredAudioDeviceId: (deviceId: string | null) => void;
   setEchoCancellation: (enabled: boolean) => void;
@@ -64,6 +72,9 @@ export const useSettingsStore = create<SettingsState>()(
       clientSecret: "",
       theme: "system",
       timeFormat: DEFAULT_TIME_FORMAT,
+      defaultTimeZone: BROWSER_TIME_ZONE,
+      timelineTimeZoneMode: "contextual",
+      timelineTimeZoneOverride: "UTC",
       transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
       preferredAudioDeviceId: null,
       echoCancellation: true,
@@ -77,6 +88,10 @@ export const useSettingsStore = create<SettingsState>()(
       setClientSecret: (secret) => set({ clientSecret: secret }),
       setTheme: (theme) => set({ theme }),
       setTimeFormat: (format) => set({ timeFormat: format }),
+      setDefaultTimeZone: (timeZone) => set({ defaultTimeZone: timeZone }),
+      setTimelineTimeZoneMode: (mode) => set({ timelineTimeZoneMode: mode }),
+      setTimelineTimeZoneOverride: (timeZone) =>
+        set({ timelineTimeZoneOverride: timeZone }),
       setTranscriptThresholdHours: (hours) =>
         set({ transcriptThresholdHours: hours }),
       setPreferredAudioDeviceId: (deviceId) =>
@@ -94,6 +109,9 @@ export const useSettingsStore = create<SettingsState>()(
           clientSecret: "",
           theme: "system",
           timeFormat: DEFAULT_TIME_FORMAT,
+          defaultTimeZone: BROWSER_TIME_ZONE,
+          timelineTimeZoneMode: "contextual",
+          timelineTimeZoneOverride: "UTC",
           transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
           preferredAudioDeviceId: null,
           echoCancellation: true,
