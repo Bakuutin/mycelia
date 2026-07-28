@@ -5,7 +5,6 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ModelSelector } from "@/components/ModelSelector";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Trash2, Star, Loader2 } from "lucide-react";
+import { Loader2, Pencil, Plus, Star, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { zPrompt, zServerConfig } from "@myceliasdk/config.ts";
 import { toast } from "sonner";
@@ -36,7 +35,6 @@ const PromptsPage = () => {
   const [formName, setFormName] = useState("");
   const [formText, setFormText] = useState("");
   const [formDescription, setFormDescription] = useState("");
-  const [formModel, setFormModel] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Delete confirmation state
@@ -66,7 +64,9 @@ const PromptsPage = () => {
 
       if (configData) {
         const config = zServerConfig.parse(configData);
-        setDefaultPromptId(config.prompts?.summarization_system?.toString() || null);
+        setDefaultPromptId(
+          config.prompts?.summarization_system?.toString() || null,
+        );
       }
     } catch (err) {
       console.error("Failed to fetch prompts:", err);
@@ -85,7 +85,6 @@ const PromptsPage = () => {
     setFormName("");
     setFormText("");
     setFormDescription("");
-    setFormModel("");
     setDialogOpen(true);
   };
 
@@ -94,7 +93,6 @@ const PromptsPage = () => {
     setFormName(prompt.name);
     setFormText(prompt.text);
     setFormDescription(prompt.description || "");
-    setFormModel(prompt.model || "");
     setDialogOpen(true);
   };
 
@@ -117,7 +115,6 @@ const PromptsPage = () => {
               name: formName.trim(),
               text: formText.trim(),
               description: formDescription.trim() || undefined,
-              model: formModel.trim() || undefined,
             },
           },
         });
@@ -131,7 +128,6 @@ const PromptsPage = () => {
             name: formName.trim(),
             text: formText.trim(),
             description: formDescription.trim() || undefined,
-            model: formModel.trim() || undefined,
           },
         });
         toast.success("Prompt created");
@@ -195,9 +191,8 @@ const PromptsPage = () => {
         <div>
           <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
           <p className="text-muted-foreground">
-            Automatic summaries use the prompt and model marked as default.
-            Without a prompt-specific model, they use the Summaries route from
-            Inference settings.
+            Prompt templates contain instructions only. Summary models are
+            configured separately in Inference settings.
           </p>
         </div>
         <div className="border rounded-lg p-8 text-center">
@@ -214,9 +209,8 @@ const PromptsPage = () => {
         <div>
           <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
           <p className="text-muted-foreground">
-            Automatic summaries use the prompt and model marked as default.
-            Without a prompt-specific model, they use the Summaries route from
-            Inference settings.
+            Prompt templates contain instructions only. Summary models are
+            configured separately in Inference settings.
           </p>
         </div>
         <div className="border rounded-lg p-8 text-center">
@@ -235,9 +229,8 @@ const PromptsPage = () => {
         <div>
           <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
           <p className="text-muted-foreground">
-            Automatic summaries use the prompt and model marked as default.
-            Without a prompt-specific model, they use the Summaries route from
-            Inference settings.
+            Prompt templates contain instructions only. Summary models are
+            configured separately in Inference settings.
           </p>
         </div>
         <Button onClick={openCreateDialog}>
@@ -246,85 +239,82 @@ const PromptsPage = () => {
         </Button>
       </div>
 
-      {prompts.length === 0 ? (
-        <Card className="p-8 text-center">
-          <p className="text-muted-foreground mb-4">No prompts found</p>
-          <Button onClick={openCreateDialog}>
-            <Plus className="w-4 h-4 mr-2" />
-            Create your first prompt
-          </Button>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {prompts.map((prompt) => {
-            const isDefault = prompt._id.toString() === defaultPromptId;
-            return (
-              <Card key={prompt._id.toString()} className="p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-medium">{prompt.name}</h3>
-                      {isDefault && (
-                        <Badge variant="secondary" className="text-xs">
-                          <Star className="w-3 h-3 mr-1 fill-current" />
-                          Default prompt
-                        </Badge>
+      {prompts.length === 0
+        ? (
+          <Card className="p-8 text-center">
+            <p className="text-muted-foreground mb-4">No prompts found</p>
+            <Button onClick={openCreateDialog}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create your first prompt
+            </Button>
+          </Card>
+        )
+        : (
+          <div className="space-y-3">
+            {prompts.map((prompt) => {
+              const isDefault = prompt._id.toString() === defaultPromptId;
+              return (
+                <Card key={prompt._id.toString()} className="p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h3 className="font-medium">{prompt.name}</h3>
+                        {isDefault && (
+                          <Badge variant="secondary" className="text-xs">
+                            <Star className="w-3 h-3 mr-1 fill-current" />
+                            Default prompt
+                          </Badge>
+                        )}
+                        {isDefault && (
+                          <Badge variant="outline" className="text-xs">
+                            Model: Summaries route
+                          </Badge>
+                        )}
+                      </div>
+                      {prompt.description && (
+                        <p className="text-sm text-muted-foreground mb-2">
+                          {prompt.description}
+                        </p>
                       )}
-                      {prompt.model && (
-                        <Badge variant="outline" className="text-xs font-mono">
-                          {isDefault ? "Default model" : "Model"}: {prompt.model}
-                        </Badge>
-                      )}
-                      {isDefault && !prompt.model && (
-                        <Badge variant="outline" className="text-xs">
-                          Default model: Inference route
-                        </Badge>
-                      )}
-                    </div>
-                    {prompt.description && (
-                      <p className="text-sm text-muted-foreground mb-2">
-                        {prompt.description}
+                      <p className="text-xs text-muted-foreground font-mono line-clamp-2">
+                        {prompt.text}
                       </p>
-                    )}
-                    <p className="text-xs text-muted-foreground font-mono line-clamp-2">
-                      {prompt.text}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {!isDefault && (
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {!isDefault && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleSetDefault(prompt)}
+                          title="Set as default"
+                        >
+                          <Star className="w-4 h-4" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleSetDefault(prompt)}
-                        title="Set as default"
+                        onClick={() => openEditDialog(prompt)}
                       >
-                        <Star className="w-4 h-4" />
+                        <Pencil className="w-4 h-4" />
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openEditDialog(prompt)}
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setPromptToDelete(prompt);
-                        setDeleteDialogOpen(true);
-                      }}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setPromptToDelete(prompt);
+                          setDeleteDialogOpen(true);
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -359,17 +349,6 @@ const PromptsPage = () => {
               />
             </div>
             <div className="grid gap-2">
-              <Label>Model (optional)</Label>
-              <ModelSelector
-                value={formModel}
-                onChange={setFormModel}
-                placeholder="Select model or leave empty..."
-              />
-              <p className="text-xs text-muted-foreground">
-                Specify a model to use with this prompt, or leave empty to use the selected category
-              </p>
-            </div>
-            <div className="grid gap-2">
               <Label htmlFor="text">Prompt Text</Label>
               <Textarea
                 id="text"
@@ -398,12 +377,15 @@ const PromptsPage = () => {
           <DialogHeader>
             <DialogTitle>Delete Prompt</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{promptToDelete?.name}"? This action
-              cannot be undone.
+              Are you sure you want to delete "{promptToDelete?.name}"? This
+              action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+            >
               Cancel
             </Button>
             <Button

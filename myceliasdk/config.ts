@@ -85,7 +85,6 @@ export const zPrompt = z.object({
   name: z.string(),
   text: z.string(),
   description: z.string().optional(),
-  model: z.string().optional(),
 });
 
 export type Prompt = z.infer<typeof zPrompt>;

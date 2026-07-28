@@ -6,9 +6,8 @@ const configured = {
     id: "prompt-v7",
     name: "sky summariser v7",
     text: "Sky Summarizer Prompt (v7)",
-    model: "small",
   },
-  defaultModel: "medium",
+  defaultModel: "small",
 };
 
 Deno.test("configured default prompt wins over stale worker prompt snapshot", () => {
@@ -16,7 +15,7 @@ Deno.test("configured default prompt wins over stale worker prompt snapshot", ()
     { type: "summarization" },
     {
       prompt: "Sky Summarizer Prompt (v5)",
-      model: "large",
+      model: "small",
     },
     configured,
   );
@@ -47,17 +46,21 @@ Deno.test("explicit summary job values remain authoritative", () => {
   });
 });
 
-Deno.test("worker model is used when default prompt has no model", () => {
+Deno.test("prompt metadata never overrides the summaries model route", () => {
   const result = applySummarizationDefaults(
     { type: "summarization" },
-    { model: "large" },
+    { model: "small" },
     {
-      prompt: { name: "Default prompt", text: "Prompt text" },
+      prompt: {
+        name: "Default prompt",
+        text: "Prompt text",
+        model: "large",
+      } as any,
       defaultModel: "medium",
     },
   );
 
-  expect(result.model).toBe("large");
+  expect(result.model).toBe("small");
 });
 
 Deno.test("active preset default is used when no prompt or worker model exists", () => {
@@ -66,9 +69,9 @@ Deno.test("active preset default is used when no prompt or worker model exists",
     undefined,
     {
       prompt: { name: "Default prompt", text: "Prompt text" },
-      defaultModel: "medium",
+      defaultModel: "small",
     },
   );
 
-  expect(result.model).toBe("medium");
+  expect(result.model).toBe("small");
 });

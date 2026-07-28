@@ -32,7 +32,7 @@ export const schema = z.object({
   promptName: z.string().optional()
     .describe("Name of the prompt template used (for display in UI)"),
   model: z.string()
-    .default("medium")
+    .default("small")
     .describe(
       "LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')",
     ),
@@ -185,12 +185,12 @@ function createLLMSummaryEntry(
 ) {
   const provenance = getInferenceProvenance(
     completion,
-    jobData.model || "medium",
+    jobData.model || "small",
     jobData.fallbackModel,
   );
   return {
     text: summary,
-    model: jobData.model || "medium",
+    model: jobData.model || "small",
     modelName: completion.model,
     requestedModel: provenance.requestedModel,
     resolvedModel: provenance.resolvedModel,
@@ -341,8 +341,17 @@ function deriveTitleFromPrompt(promptText: string): string {
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 
 export function isTerminalSummarizationResponseError(message: string): boolean {
-  return message.includes("LLM_INVALID_RESPONSE") ||
+  const isCompletionResponseError = message.includes("LLM_INVALID_RESPONSE") ||
     message.includes("LLM_EMPTY_RESPONSE");
+  return isCompletionResponseError &&
+    /(content_filter|prohibited_content|safety)/i.test(message);
+}
+
+export function isProviderSummarizationResponseError(message: string): boolean {
+  return message.includes("LLM_INVALID_RESPONSE") ||
+    message.includes("LLM_EMPTY_RESPONSE") ||
+    message.includes("Failed to call resource llm") ||
+    message.includes("LLM API error");
 }
 
 async function setSummarizationFailure(
@@ -473,7 +482,7 @@ async function summarizeConversationRange(
   );
   const promptText = buildPromptFromTranscripts(transcripts);
 
-  const modelAlias = jobData.model || "medium";
+  const modelAlias = jobData.model || "small";
   const minDurationForLlm = jobData.minDurationForLlm ?? 10;
   const durationSeconds = (end.getTime() - start.getTime()) / 1000;
 
@@ -810,16 +819,19 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         targets[0].objectId &&
         isTerminalSummarizationResponseError(message)
       ) {
-        await setSummarizationFailure(targets[0].objectId, {
-          status: "failed",
-          code: message.includes("LLM_EMPTY_RESPONSE")
-            ? "LLM_EMPTY_RESPONSE"
-            : "LLM_INVALID_RESPONSE",
-          message: message.slice(0, 1000),
-          requestedModel: jobData.model || "medium",
-          jobId: job.id ?? "unknown",
-          failedAt: new Date().toISOString(),
-        }, jwt, myceliaUrl);
+        await setSummarizationFailure(
+          targets[0].objectId,
+          {
+            status: "failed",
+            code: "LLM_CONTENT_FILTERED",
+            message: message.slice(0, 1000),
+            requestedModel: jobData.model || "small",
+            jobId: job.id ?? "unknown",
+            failedAt: new Date().toISOString(),
+          },
+          jwt,
+          myceliaUrl,
+        );
       }
       throw error;
     }
@@ -932,25 +944,25 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         : String(error);
       if (isTerminalSummarizationResponseError(errorMessage)) {
         if (target.objectId) {
-          await setSummarizationFailure(target.objectId, {
-            status: "failed",
-            code: errorMessage.includes("LLM_EMPTY_RESPONSE")
-              ? "LLM_EMPTY_RESPONSE"
-              : "LLM_INVALID_RESPONSE",
-            message: errorMessage.slice(0, 1000),
-            requestedModel: jobData.model || "medium",
-            jobId,
-            failedAt: new Date().toISOString(),
-          }, jwt, myceliaUrl);
+          await setSummarizationFailure(
+            target.objectId,
+            {
+              status: "failed",
+              code: "LLM_CONTENT_FILTERED",
+              message: errorMessage.slice(0, 1000),
+              requestedModel: jobData.model || "small",
+              jobId,
+              failedAt: new Date().toISOString(),
+            },
+            jwt,
+            myceliaUrl,
+          );
         }
         skipped++;
         errors.push(errorMessage);
         continue;
       }
-      if (
-        errorMessage.includes("Failed to call resource llm") ||
-        errorMessage.includes("LLM API error")
-      ) {
+      if (isProviderSummarizationResponseError(errorMessage)) {
         throw error;
       }
       skipped++;

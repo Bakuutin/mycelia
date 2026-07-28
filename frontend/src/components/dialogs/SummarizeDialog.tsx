@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { callResource } from "@/lib/api";
 import { z } from "zod";
-import { zServerConfig, zPrompt } from "@myceliasdk/config.ts";
+import { zPrompt, zServerConfig } from "@myceliasdk/config.ts";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { ModelSelector } from "@/components/ModelSelector";
-import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import type { Prompt } from "@/types/config";
 
@@ -46,14 +46,19 @@ export function SummarizeDialog({
   endDate,
   objectId,
   title = "Summarize Range",
-  description = "Create a summary of all conversations within the selected time range.",
-  defaultModel = "medium",
+  description =
+    "Create a summary of all conversations within the selected time range.",
+  defaultModel = "small",
 }: SummarizeDialogProps) {
   const [summarizePrompt, setSummarizePrompt] = useState("");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(defaultModel);
-  const [configuredDefaultModel, setConfiguredDefaultModel] = useState(defaultModel);
-  const [configuredModelSource, setConfiguredModelSource] = useState("Inference default");
+  const [configuredDefaultModel, setConfiguredDefaultModel] = useState(
+    defaultModel,
+  );
+  const [configuredModelSource, setConfiguredModelSource] = useState(
+    "Inference default",
+  );
   const [modelSource, setModelSource] = useState("Inference default");
   const [selectedPromptId, setSelectedPromptId] = useState<string>("custom");
   const [jobStatus, setJobStatus] = useState<string | null>(null);
@@ -64,42 +69,45 @@ export function SummarizeDialog({
     if (open) {
       const fetchData = async () => {
         setLoadingDefaults(true);
-        // Reset model to defaultModel at the start, before async operations
-        // This ensures deterministic order: reset first, then override with prompt's model if found
+        // Prompt selection never changes the model route.
         setSelectedModel(defaultModel);
 
         try {
-          const [configData, promptsData, workerDefaultsData] = await Promise.all([
-            callResource("mongo", {
-              action: "findOne",
-              collection: "configs",
-              query: { _id: { $oid: SERVER_CONFIG_ID } },
-            }),
-            callResource("mongo", {
-              action: "find",
-              collection: "prompts",
-              query: {},
-              options: { sort: { name: 1 } },
-            }),
-            callResource("jobs", {
-              action: "get_worker_defaults",
-              workerType: "summarization",
-            }),
-          ]);
+          const [configData, promptsData, workerDefaultsData] = await Promise
+            .all([
+              callResource("mongo", {
+                action: "findOne",
+                collection: "configs",
+                query: { _id: { $oid: SERVER_CONFIG_ID } },
+              }),
+              callResource("mongo", {
+                action: "find",
+                collection: "prompts",
+                query: {},
+                options: { sort: { name: 1 } },
+              }),
+              callResource("jobs", {
+                action: "get_worker_defaults",
+                workerType: "summarization",
+              }),
+            ]);
 
           const config = configData ? zServerConfig.parse(configData) : null;
           const parsedPrompts = z.array(zPrompt).parse(promptsData);
           setPrompts(parsedPrompts);
 
-          const workerModel = typeof workerDefaultsData?.defaults?.model === "string"
-            ? workerDefaultsData.defaults.model.trim()
-            : "";
+          const workerModel =
+            typeof workerDefaultsData?.defaults?.model === "string"
+              ? workerDefaultsData.defaults.model.trim()
+              : "";
           const activeProfile = config?.llmProfiles?.profiles.find((profile) =>
             profile.id === config.llmProfiles?.activeProfileId
           );
           const inferenceDefault = workerModel || activeProfile?.defaultAlias ||
             config?.llm?.model || config?.inference?.model || defaultModel;
-          const inferenceSource = workerModel ? "Summaries route" : "Inference default";
+          const inferenceSource = workerModel
+            ? "Summaries route"
+            : "Inference default";
           setConfiguredDefaultModel(inferenceDefault);
           setConfiguredModelSource(inferenceSource);
           setSelectedModel(inferenceDefault);
@@ -107,15 +115,12 @@ export function SummarizeDialog({
 
           const defaultId = config?.prompts?.summarization_system?.toString();
           if (defaultId) {
-            const defaultPrompt = parsedPrompts.find((p) => p._id.toString() === defaultId);
+            const defaultPrompt = parsedPrompts.find((p) =>
+              p._id.toString() === defaultId
+            );
             if (defaultPrompt) {
               setSelectedPromptId(defaultId);
               setSummarizePrompt(defaultPrompt.text);
-              // If the default prompt has a model configured, use it
-              if (defaultPrompt.model) {
-                setSelectedModel(defaultPrompt.model);
-                setModelSource(`Default prompt: ${defaultPrompt.name}`);
-              }
             }
           }
         } catch (e) {
@@ -149,15 +154,8 @@ export function SummarizeDialog({
       const prompt = prompts.find((p) => p._id.toString() === promptId);
       if (prompt) {
         setSummarizePrompt(prompt.text);
-        // If the prompt has a model configured, use it
-        if (prompt.model) {
-          setSelectedModel(prompt.model);
-          setModelSource(`Prompt: ${prompt.name}`);
-        } else {
-          // Reset to default if prompt doesn't have a model configured
-          setSelectedModel(configuredDefaultModel);
-          setModelSource(configuredModelSource);
-        }
+        setSelectedModel(configuredDefaultModel);
+        setModelSource(configuredModelSource);
       }
     }
   };
@@ -168,8 +166,11 @@ export function SummarizeDialog({
     setError(null);
 
     // Get the selected prompt's name for tracking
-    const selectedPrompt = prompts.find((p) => p._id.toString() === selectedPromptId);
-    const promptName = selectedPrompt?.name || (selectedPromptId === "custom" ? "Custom" : undefined);
+    const selectedPrompt = prompts.find((p) =>
+      p._id.toString() === selectedPromptId
+    );
+    const promptName = selectedPrompt?.name ||
+      (selectedPromptId === "custom" ? "Custom" : undefined);
 
     try {
       const response = await callResource("jobs", {
@@ -185,7 +186,9 @@ export function SummarizeDialog({
         },
         trigger: {
           type: "manual",
-          reason: `Manual summarization from ${objectId ? "conversation" : "timeline"}`,
+          reason: `Manual summarization from ${
+            objectId ? "conversation" : "timeline"
+          }`,
         },
       }) as { jobId?: string; jobType?: string };
 
@@ -227,7 +230,8 @@ export function SummarizeDialog({
     }
   };
 
-  const isJobInProgress = jobStatus && ["starting", "waiting", "active", "delayed"].includes(jobStatus);
+  const isJobInProgress = jobStatus &&
+    ["starting", "waiting", "active", "delayed"].includes(jobStatus);
   const isJobComplete = jobStatus === "completed";
   const isJobFailed = jobStatus === "failed";
   const isButtonDisabled = loadingDefaults || isJobInProgress || isJobComplete;
@@ -291,11 +295,6 @@ export function SummarizeDialog({
                     value={prompt._id.toString()}
                   >
                     {prompt.name}
-                    {prompt.model && (
-                      <span className="ml-2 text-muted-foreground text-xs">
-                        ({prompt.model})
-                      </span>
-                    )}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -310,7 +309,9 @@ export function SummarizeDialog({
               value={summarizePrompt}
               onChange={(e) => {
                 setSummarizePrompt(e.target.value);
-                if (selectedPromptId !== "custom") setSelectedPromptId("custom");
+                if (selectedPromptId !== "custom") {
+                  setSelectedPromptId("custom");
+                }
               }}
               className="min-h-[100px]"
               disabled={loadingDefaults || isJobInProgress || isJobComplete}
@@ -322,12 +323,8 @@ export function SummarizeDialog({
             {isJobInProgress && (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             )}
-            {isJobComplete && (
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-            )}
-            {isJobFailed && (
-              <XCircle className="mr-2 h-4 w-4" />
-            )}
+            {isJobComplete && <CheckCircle2 className="mr-2 h-4 w-4" />}
+            {isJobFailed && <XCircle className="mr-2 h-4 w-4" />}
             {getButtonText()}
           </Button>
         </DialogFooter>

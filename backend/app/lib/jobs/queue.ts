@@ -3,7 +3,7 @@ import { ObjectId } from "bson";
 import { redis } from "@/lib/redis.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import type { JobData, JobResult, EnqueueJobOptions } from "./types.ts";
+import type { EnqueueJobOptions, JobData, JobResult } from "./types.ts";
 export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
 import { assertJobServicesHealthy } from "./service-health.ts";
@@ -77,7 +77,7 @@ export async function enqueueJob(
       profile.id === config?.llmProfiles?.activeProfileId
     );
     summarizationDefaults.defaultModel = activeProfile?.defaultAlias ||
-      config?.llm?.model || config?.inference?.model || "medium";
+      config?.llm?.model || config?.inference?.model || "small";
 
     const promptId = config?.prompts?.summarization_system;
     if (promptId) {
@@ -85,14 +85,13 @@ export async function enqueueJob(
         action: "findOne",
         collection: "prompts",
         query: { _id: promptId },
-        options: { projection: { name: 1, text: 1, model: 1 } },
+        options: { projection: { name: 1, text: 1 } },
       });
       if (prompt?.name && prompt?.text) {
         summarizationDefaults.prompt = {
           id: prompt._id?.toString(),
           name: prompt.name,
           text: prompt.text,
-          model: prompt.model,
         };
       }
     }
@@ -103,7 +102,9 @@ export async function enqueueJob(
   let mergedData = { ...data };
   if (data.type) {
     const { workerDiscovery } = await import("./worker-discovery.ts");
-    const defaultOverrides = await workerDiscovery.getDefaultOverrides(data.type);
+    const defaultOverrides = await workerDiscovery.getDefaultOverrides(
+      data.type,
+    );
     if (data.type === "summarization") {
       mergedData = applySummarizationDefaults(
         data,
@@ -122,7 +123,9 @@ export async function enqueueJob(
   const parsedData = jobRegistry.validateJobData(mergedData);
 
   if (!parsedData.type) {
-    throw new Error(`Job data is missing 'type' field after validation for job ID: ${jobId}. Check if the schema for this job type includes the 'type' field.`);
+    throw new Error(
+      `Job data is missing 'type' field after validation for job ID: ${jobId}. Check if the schema for this job type includes the 'type' field.`,
+    );
   }
 
   // Do not create a stream of doomed jobs while a required remote provider is

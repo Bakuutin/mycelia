@@ -4,7 +4,6 @@ export interface ConfiguredSummarizationPrompt {
   id?: string;
   name: string;
   text: string;
-  model?: string;
 }
 
 export interface SummarizationDefaults {
@@ -21,8 +20,8 @@ function hasText(value: unknown): value is string {
  *
  * Priority:
  * 1. Explicit job data
- * 2. Model attached to the configured default prompt
- * 3. Summarization worker overrides
+ * 2. Configured default prompt text/name (prompt selection only)
+ * 3. Summarization worker overrides (including the summary model route)
  * 4. Active inference preset default
  * 5. Worker schema defaults (applied later by validation)
  */
@@ -38,9 +37,6 @@ export function applySummarizationDefaults(
     merged.prompt = configured.prompt.text;
     if (!hasText(merged.promptName)) {
       merged.promptName = configured.prompt.name;
-    }
-    if (!hasText(merged.model) && hasText(configured.prompt.model)) {
-      merged.model = configured.prompt.model;
     }
   }
 
