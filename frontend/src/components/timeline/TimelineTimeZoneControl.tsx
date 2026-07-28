@@ -15,6 +15,7 @@ import { useTimelineTimeZone } from "@/hooks/useTimelineTimeZone";
 import {
   getPeriodId,
   getShortTimeZoneName,
+  getTimeZoneSearchOptions,
   type TimelineTimeZonePeriod,
 } from "@/lib/timeZones";
 
@@ -49,6 +50,9 @@ export function TimelineTimeZoneControl({
   const setOverride = useSettingsStore(
     (state) => state.setTimelineTimeZoneOverride,
   );
+  const favoriteTimeZones = useSettingsStore((state) =>
+    state.favoriteTimeZones
+  );
   const { activeTimeZone, browserTimeZone, periods } = useTimelineTimeZone();
   const createPeriod = useTimelineTimeZoneStore((state) => state.createPeriod);
   const deletePeriod = useTimelineTimeZoneStore((state) => state.deletePeriod);
@@ -57,6 +61,13 @@ export function TimelineTimeZoneControl({
   const [periodTimeZone, setPeriodTimeZone] = useState(activeTimeZone);
   const [location, setLocation] = useState("");
   const [saved, setSaved] = useState(false);
+  const favoriteOptions = useMemo(() => {
+    const options = getTimeZoneSearchOptions();
+    return favoriteTimeZones.flatMap((timeZone) => {
+      const option = options.find((item) => item.timeZone === timeZone);
+      return option ? [option] : [];
+    });
+  }, [favoriteTimeZones]);
 
   const selectedPeriods = useMemo(() => {
     if (!selectionStart || !selectionEnd) return periods;
@@ -105,7 +116,7 @@ export function TimelineTimeZoneControl({
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[380px] space-y-5">
+      <PopoverContent align="end" className="w-[420px] space-y-5">
         <div className="space-y-1">
           <h3 className="font-medium">Timeline time zone</h3>
           <p className="text-xs text-muted-foreground">
@@ -143,8 +154,36 @@ export function TimelineTimeZoneControl({
           <TimeZoneSelect
             value={periodTimeZone}
             onChange={setPeriodTimeZone}
+            onPlaceSelect={(place) => {
+              if (!location.trim()) setLocation(place);
+            }}
             disabled={!selectionStart || !selectionEnd}
           />
+          {favoriteOptions.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">Quick favorites</p>
+              <div className="flex flex-wrap gap-1.5">
+                {favoriteOptions.map((option) => (
+                  <Button
+                    key={option.timeZone}
+                    type="button"
+                    size="sm"
+                    variant={periodTimeZone === option.timeZone
+                      ? "default"
+                      : "outline"}
+                    className="h-7 px-2 text-xs"
+                    disabled={!selectionStart || !selectionEnd}
+                    onClick={() => {
+                      setPeriodTimeZone(option.timeZone);
+                      if (!location.trim()) setLocation(option.city);
+                    }}
+                  >
+                    {option.city}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="relative">
             <MapPin className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input

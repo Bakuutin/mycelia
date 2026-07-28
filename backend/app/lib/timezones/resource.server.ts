@@ -27,11 +27,15 @@ const locationSchema = z.object({
   { message: "Latitude and longitude must be provided together" },
 );
 
+const optionalLocationSchema = locationSchema.nullish().transform((value) =>
+  value ?? undefined
+);
+
 const periodInputSchema = z.object({
   start: zDateOrString(),
   end: zDateOrString(),
   timeZone: timeZoneSchema,
-  location: locationSchema.optional(),
+  location: optionalLocationSchema,
   source: z.enum(["manual", "import", "metadata"]).default("manual"),
   metadata: z.record(z.string(), z.any()).optional(),
 }).refine((value) => value.end.getTime() > value.start.getTime(), {

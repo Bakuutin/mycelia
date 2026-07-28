@@ -60,9 +60,15 @@ export const useTimelineTimeZoneStore = create<TimelineTimeZoneState>(
     createPeriod: async (period) => {
       set({ saving: true, error: null });
       try {
+        const normalizedPeriod = {
+          ...period,
+          ...(period.location ? { location: period.location } : {}),
+          source: period.source ?? "manual",
+        };
+        if (!period.location) delete normalizedPeriod.location;
         const created = await callResource("timeline-timezones", {
           action: "create",
-          period: { ...period, source: period.source ?? "manual" },
+          period: normalizedPeriod,
         }) as TimelineTimeZonePeriod;
         set((state) => ({
           periods: [...state.periods, created].sort(

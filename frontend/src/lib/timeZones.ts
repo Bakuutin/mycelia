@@ -57,6 +57,55 @@ const FALLBACK_TIME_ZONES = [
   "Pacific/Auckland",
 ];
 
+const TIME_ZONE_CITY_ALIASES: Record<string, string[]> = {
+  "America/Los_Angeles": ["San Francisco", "San Diego", "Seattle"],
+  "America/New_York": ["Boston", "Miami", "Washington DC"],
+  "America/Toronto": ["Ottawa"],
+  "America/Mexico_City": ["Mexico City"],
+  "America/Sao_Paulo": ["São Paulo"],
+  "Europe/London": ["Belfast", "Edinburgh", "Manchester"],
+  "Europe/Paris": ["Metz", "Nancy", "Lyon", "Strasbourg"],
+  "Europe/Berlin": ["Hamburg", "Munich", "Frankfurt"],
+  "Europe/Amsterdam": ["Rotterdam", "The Hague"],
+  "Europe/Moscow": ["Saint Petersburg"],
+  "Asia/Tbilisi": ["Batumi", "Kutaisi"],
+  "Asia/Dubai": ["Abu Dhabi"],
+  "Asia/Calcutta": ["Kolkata", "Delhi", "Mumbai", "Bengaluru"],
+  "Asia/Kolkata": ["Delhi", "Mumbai", "Bengaluru"],
+  "Asia/Bangkok": ["Chiang Mai", "Phuket"],
+  "Asia/Tokyo": ["Osaka", "Kyoto"],
+  "Australia/Sydney": ["Canberra"],
+  "Pacific/Auckland": ["Wellington"],
+};
+
+export interface TimeZoneSearchOption {
+  timeZone: string;
+  city: string;
+  aliases: string[];
+  searchValue: string;
+}
+
+function humanizeTimeZonePart(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+export function getTimeZoneSearchOptions(): TimeZoneSearchOption[] {
+  return getSupportedTimeZones().map((timeZone) => {
+    const parts = timeZone.split("/");
+    const city = timeZone === "UTC"
+      ? "UTC"
+      : humanizeTimeZonePart(parts.at(-1) ?? timeZone);
+    const region = parts.length > 1 ? humanizeTimeZonePart(parts[0]) : "";
+    const aliases = TIME_ZONE_CITY_ALIASES[timeZone] ?? [];
+    return {
+      timeZone,
+      city,
+      aliases,
+      searchValue: [city, timeZone, region, ...aliases].join(" "),
+    };
+  });
+}
+
 export function getSupportedTimeZones(): string[] {
   const intl = Intl as typeof Intl & {
     supportedValuesOf?: (key: "timeZone") => string[];

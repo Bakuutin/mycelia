@@ -40,3 +40,18 @@ Deno.test("timeline time zone periods preserve import provenance", () => {
   expect(result.period.source).toBe("metadata");
   expect(result.period.location?.name).toBe("Metz");
 });
+
+Deno.test("timeline time zone periods accept null location from EJSON clients", () => {
+  const result = timelineTimeZonesRequestSchema.parse({
+    action: "create",
+    period: {
+      start: "2026-07-28T10:00:00.000Z",
+      end: "2026-07-28T11:00:00.000Z",
+      timeZone: "Asia/Bangkok",
+      location: null,
+    },
+  });
+
+  if (result.action !== "create") throw new Error("Expected create action");
+  expect(result.period.location).toBe(undefined);
+});
