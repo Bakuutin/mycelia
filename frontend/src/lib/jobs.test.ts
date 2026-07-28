@@ -69,6 +69,22 @@ describe("parseJobError", () => {
       detail: "API rate limit exceeded",
     });
   });
+
+  it("does not mislabel depleted Gemini prepaid credits as rate limiting", () => {
+    expect(parseJobError(
+      `Worker exited with code 1: LLM API error (429); requested model "small" resolved to "gemini-3.5-flash-lite": [{
+        "error": {
+          "code": 429,
+          "message": "Your prepayment credits are depleted. Please go to AI Studio to manage your project and billing. ",
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      }]`,
+    )).toEqual({
+      label: "Prepaid credits depleted",
+      detail:
+        "Your prepayment credits are depleted. Please go to AI Studio to manage your project and billing.",
+    });
+  });
 });
 
 describe("formatJobDuration", () => {

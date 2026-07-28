@@ -1,11 +1,25 @@
 /**
  * Parses a job failedReason into a short human-readable error label and detail.
  */
+function extractProviderMessage(reason: string): string | undefined {
+  const match = reason.match(
+    /"message"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  );
+  if (!match) return undefined;
+
+  try {
+    return JSON.parse(`"${match[1]}"`).trim();
+  } catch {
+    return match[1].trim();
+  }
+}
+
 export function parseJobError(
   failedReason?: string,
 ): { label: string; detail: string } | null {
   if (!failedReason) return null;
   const r = failedReason;
+  const providerMessage = extractProviderMessage(r);
 
   if (r.includes("requires more credits") || r.includes("can only afford")) {
     const match = r.match(
@@ -16,6 +30,26 @@ export function parseJobError(
       detail: match
         ? `Requested ${match[1]} tokens, only ${match[2]} available`
         : "Insufficient credits for request",
+    };
+  }
+  // Some providers use HTTP 429 for both temporary throttling and permanent
+  // billing failures. Classify explicit credit failures before generic 429s.
+  if (
+    /(?:prepayment|prepaid) credits? (?:are )?(?:depleted|exhausted)/i.test(r)
+  ) {
+    return {
+      label: "Prepaid credits depleted",
+      detail: providerMessage ||
+        "The provider account has no prepaid credits remaining",
+    };
+  }
+  if (
+    r.includes("402") || r.includes("Payment Required") ||
+    r.includes("insufficient_quota")
+  ) {
+    return {
+      label: "Payment required",
+      detail: providerMessage || "API quota or credits exhausted",
     };
   }
   if (
@@ -29,15 +63,6 @@ export function parseJobError(
     r.includes("invalid_api_key") || r.includes("Unauthorized")
   ) {
     return { label: "Auth error", detail: "Invalid or expired API key" };
-  }
-  if (
-    r.includes("402") || r.includes("Payment Required") ||
-    r.includes("insufficient_quota")
-  ) {
-    return {
-      label: "Payment required",
-      detail: "API quota or credits exhausted",
-    };
   }
   if (
     r === "timeout" || r.includes("timed out") || r.includes("TimeoutError") ||
