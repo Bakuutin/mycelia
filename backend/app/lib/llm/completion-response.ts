@@ -21,8 +21,14 @@ function describeResponseShape(response: unknown): string {
       ", ",
     )
     : "none";
+  const finishReason = firstChoice && typeof firstChoice === "object"
+    ? (firstChoice as Record<string, unknown>).finish_reason
+    : undefined;
+  const finishReasonDescription = finishReason === undefined
+    ? ""
+    : `; finish_reason: ${JSON.stringify(finishReason)}`;
 
-  return `response keys: ${responseKeys}; first choice keys: ${choiceKeys}`;
+  return `response keys: ${responseKeys}; first choice keys: ${choiceKeys}${finishReasonDescription}`;
 }
 
 function getContextDescription(context: CompletionResponseContext): string {

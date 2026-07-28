@@ -26,7 +26,7 @@ Deno.test("normalizes a legacy completion choice with text", () => {
 });
 
 Deno.test("rejects a successful response whose first choice has no message", () => {
-  expect(() =>
+  const invalidResponse = () =>
     normalizeChatCompletionResponse(
       { choices: [{ finish_reason: "stop" }] },
       {
@@ -34,10 +34,12 @@ Deno.test("rejects a successful response whose first choice has no message", () 
         resolvedModel: "gemini-3.5-flash-lite",
         purpose: "summary",
       },
-    )
-  ).toThrow(
+    );
+
+  expect(invalidResponse).toThrow(
     "LLM_INVALID_RESPONSE: Provider returned HTTP 200, but choices[0].message was missing",
   );
+  expect(invalidResponse).toThrow('finish_reason: "stop"');
 });
 
 Deno.test("extracts text parts from structured assistant content", () => {
