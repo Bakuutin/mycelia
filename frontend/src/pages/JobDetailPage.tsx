@@ -125,14 +125,31 @@ function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
 }
 
 function JobErrorPanel({ failedReason }: { failedReason: string }) {
-    const [copied, setCopied] = useState(false);
+    const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
     const parsed = parseJobError(failedReason);
     const errorCode = getJobErrorCode(failedReason);
 
     const copyError = async () => {
-        await navigator.clipboard.writeText(failedReason);
-        setCopied(true);
-        globalThis.setTimeout(() => setCopied(false), 2000);
+        try {
+            try {
+                await navigator.clipboard.writeText(failedReason);
+            } catch {
+                const textarea = document.createElement("textarea");
+                textarea.value = failedReason;
+                textarea.setAttribute("readonly", "");
+                textarea.style.position = "fixed";
+                textarea.style.opacity = "0";
+                document.body.appendChild(textarea);
+                textarea.select();
+                const copied = document.execCommand("copy");
+                textarea.remove();
+                if (!copied) throw new Error("Browser refused clipboard access");
+            }
+            setCopyState("copied");
+        } catch {
+            setCopyState("failed");
+        }
+        globalThis.setTimeout(() => setCopyState("idle"), 2000);
     };
 
     return (
@@ -169,10 +186,14 @@ function JobErrorPanel({ failedReason }: { failedReason: string }) {
                     className="shrink-0"
                     aria-label="Copy full error"
                 >
-                    {copied
+                    {copyState === "copied"
                         ? <Check className="h-4 w-4 mr-2" />
                         : <Copy className="h-4 w-4 mr-2" />}
-                    {copied ? "Copied" : "Copy error"}
+                    {copyState === "copied"
+                        ? "Copied"
+                        : copyState === "failed"
+                        ? "Select below"
+                        : "Copy error"}
                 </Button>
             </div>
             <pre className="max-h-64 overflow-auto rounded-md bg-background/70 p-3 text-xs text-red-300 whitespace-pre-wrap break-words select-text">
