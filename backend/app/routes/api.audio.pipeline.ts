@@ -190,6 +190,10 @@ function sourceKind(sourceFile: any): string {
 }
 
 function ingestionError(sourceFile: any): string | undefined {
+  // Older daemon versions retained the cached error after a successful retry.
+  // The completed state is authoritative; do not present stale history as a
+  // current pipeline failure.
+  if (sourceFile.ingested === true) return undefined;
   const error = sourceFile.ingestion?.error;
   if (!error) return undefined;
   if (typeof error === "string") return error;

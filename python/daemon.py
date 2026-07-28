@@ -133,10 +133,16 @@ def ingests_missing_sources(limit=None, retry_errors=False):
                 "action": "updateOne",
                 "collection": "source_files",
                 "query": {"_id": source["_id"]},
-                "update": {"$set": {
-                "ingested": True,
-                "ingested_at": datetime.now(tz=UTC),
-            }}
+                "update": {
+                    "$set": {
+                        "ingested": True,
+                        "ingested_at": datetime.now(tz=UTC),
+                    },
+                    # A successful retry supersedes the cached failure. Keeping
+                    # it makes the pipeline UI label an ingested source as an
+                    # error forever.
+                    "$unset": {"ingestion": ""},
+                }
             })
             processed += 1
             logger.info(f"✓ Successfully ingested: {file_name}")

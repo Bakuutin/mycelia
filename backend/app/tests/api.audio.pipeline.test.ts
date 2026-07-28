@@ -66,6 +66,40 @@ Deno.test(
 );
 
 Deno.test(
+  "audio pipeline handler: hides cached ingestion error after a successful retry",
+  withFixtures(
+    ["AdminAuthHeaders", "Mongo"],
+    async (headers: HeadersInit, { db }) => {
+      await db.collection("source_files").insertOne({
+        start: new Date("2026-07-19T09:07:19.053Z"),
+        path: "/tmp/retried-voice-memo.m4a",
+        platform: { importer: "apple_voicememos" },
+        ingested: true,
+        ingested_at: new Date("2026-07-25T02:46:21.760Z"),
+        ingestion: {
+          error: "old ffmpeg failure",
+          last_attempt: new Date("2026-07-25T02:20:26.357Z"),
+        },
+      });
+
+      const response = await callExpressHandler(
+        apiAudioPipelineHandler,
+        "http://localhost:3000/api/audio/pipeline",
+        { headers },
+      );
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.sessions).toHaveLength(1);
+      expect(data.sessions[0].ingested).toBe(true);
+      // EJSON serializes an omitted optional field as null in the JSON payload.
+      expect(data.sessions[0].ingestionError).toBeNull();
+      expect(data.stats.sourceFiles.errors).toBe(0);
+    },
+  ),
+);
+
+Deno.test(
   "audio pipeline handler: caps limit at 100 to prevent DoS",
   withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     // Request an absurdly large limit — handler must cap it at 100

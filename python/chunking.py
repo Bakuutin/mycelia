@@ -33,7 +33,9 @@ def split_to_opus_chunks(original, *, quiet=False):
     dest_dir = get_tmp_dir(original)
 
     if os.path.exists(dest_dir):
-        os.rmdir(dest_dir)
+        # A previous interrupted attempt can leave hundreds of chunks behind.
+        # Remove the whole staging directory so an explicit retry starts cleanly.
+        shutil.rmtree(dest_dir)
     os.makedirs(dest_dir, exist_ok=True)
 
     command = [
@@ -46,15 +48,30 @@ def split_to_opus_chunks(original, *, quiet=False):
         os.path.join(dest_dir, "%010d.opus"),
         '-y',
         '-v', 'error',
-        '-stats',
+        '-nostats',
     ]
 
-    # Run the command using subprocess.run
-    subprocess.run(
-        command,
-        check=True,  # This will raise an exception if the command fails
-        stderr=subprocess.STDOUT  # Capture error messages as part of stdout
-    )
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or error.stdout or "").strip()
+        if "Operation not permitted" in details:
+            details += (
+                "\nmacOS denied access to the audio source. Grant Full Disk "
+                "Access to the terminal or service that starts Mycelia, then "
+                "retry ingestion."
+            )
+        if not details:
+            details = "ffmpeg did not provide diagnostic output"
+        raise RuntimeError(
+            f"ffmpeg failed to split {os.path.basename(original)} "
+            f"(exit {error.returncode}): {details}"
+        ) from error
 
     return [
         (i * CHUNK_MAX_LEN, os.path.join(dest_dir, f))

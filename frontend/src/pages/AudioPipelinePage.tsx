@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import {
@@ -25,6 +25,7 @@ import {
   AlertCircle,
   AudioWaveform,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clock,
   FileText,
@@ -214,6 +215,51 @@ function stageState(stage: PipelineStage): {
 
 function formatWorkerType(type: string): string {
   return type.replaceAll("_", " ");
+}
+
+export function PipelineDetailSection({
+  title,
+  summary,
+  icon,
+  children,
+  defaultOpen = false,
+  testId,
+}: {
+  title: string;
+  summary: string;
+  icon: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  testId: string;
+}) {
+  return (
+    <Collapsible
+      defaultOpen={defaultOpen}
+      className="rounded-md border bg-background/60"
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="group flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/50"
+          data-testid={testId}
+        >
+          <span className="flex min-w-0 items-center gap-2 text-xs font-medium">
+            {icon}
+            <span>{title}</span>
+          </span>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-xs text-muted-foreground">
+              {summary}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+          </span>
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="border-t px-3 py-2.5">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
 }
 
 export default function AudioPipelinePage() {
@@ -1101,7 +1147,7 @@ export default function AudioPipelinePage() {
                                       : "bg-muted text-muted-foreground"
                                   }`}
                                 >
-                                  {stage.name}: {stage.count}
+                                  {stage.name}: {stage.count.toLocaleString()}
                                 </div>
                               </div>
                             ))}
@@ -1119,100 +1165,141 @@ export default function AudioPipelinePage() {
 
                     <CollapsibleContent>
                       <div className="px-4 pb-3 pt-2 bg-muted/30 space-y-3">
-                        {session.ingestionError && (
-                          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600">
-                            {session.ingestionError}
+                        <PipelineDetailSection
+                          title="Ingestion"
+                          summary={session.ingestionError
+                            ? "Error"
+                            : session.ingested
+                            ? "Complete"
+                            : "Pending"}
+                          icon={<Mic className="h-3 w-3" />}
+                          defaultOpen={Boolean(session.ingestionError)}
+                          testId={`session-${session._id}-ingestion`}
+                        >
+                          <div className="space-y-2 text-xs">
+                            <p className="break-all font-mono text-muted-foreground">
+                              {session.path || "No local source path"}
+                            </p>
+                            {session.ingestionError
+                              ? (
+                                <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-red-500/30 bg-red-500/5 p-3 text-red-600">
+                                  {session.ingestionError}
+                                </pre>
+                              )
+                              : (
+                                <p
+                                  className={session.ingested
+                                    ? "text-green-600"
+                                    : "text-amber-600"}
+                                >
+                                  {session.ingested
+                                    ? "Source audio was ingested successfully."
+                                    : "Source audio is waiting for ingestion."}
+                                </p>
+                              )}
                           </div>
-                        )}
-                        {/* Compact stats row */}
-                        <div className="flex items-center gap-4 text-xs">
-                          <span className="text-muted-foreground">
-                            Chunks:{" "}
-                            <span className="font-medium text-foreground">
-                              {session.chunks.total}
+                        </PipelineDetailSection>
+
+                        <PipelineDetailSection
+                          title="Audio chunks & VAD"
+                          summary={`${session.chunks.vadProcessed.toLocaleString()} / ${session.chunks.total.toLocaleString()} processed · ${session.chunks.withSpeech.toLocaleString()} speech`}
+                          icon={<AudioWaveform className="h-3 w-3" />}
+                          testId={`session-${session._id}-vad`}
+                        >
+                          <div className="flex flex-wrap items-center gap-4 text-xs">
+                            <span className="text-muted-foreground">
+                              Chunks:{" "}
+                              <span className="font-medium text-foreground">
+                                {session.chunks.total.toLocaleString()}
+                              </span>
                             </span>
-                          </span>
-                          <span className="text-muted-foreground">
-                            VAD:{" "}
-                            <span className="font-medium text-foreground">
-                              {session.chunks.vadProcessed}
+                            <span className="text-muted-foreground">
+                              VAD:{" "}
+                              <span className="font-medium text-foreground">
+                                {session.chunks.vadProcessed.toLocaleString()}
+                              </span>
+                              {session.chunks.total > 0 && (
+                                <span className="ml-1">
+                                  ({Math.round(
+                                    (session.chunks.vadProcessed /
+                                      session.chunks.total) * 100,
+                                  )}%)
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-muted-foreground">
+                              Speech:{" "}
+                              <span className="font-medium text-foreground">
+                                {session.chunks.withSpeech.toLocaleString()}
+                              </span>
                             </span>
                             {session.chunks.total > 0 && (
-                              <span className="text-muted-foreground ml-1">
-                                ({Math.round(
-                                  (session.chunks.vadProcessed /
-                                    session.chunks.total) * 100,
-                                )}%)
-                              </span>
+                              <Progress
+                                value={(session.chunks.vadProcessed /
+                                  session.chunks.total) * 100}
+                                className="h-1.5 min-w-24 flex-1"
+                              />
                             )}
-                          </span>
-                          <span className="text-muted-foreground">
-                            Speech:{" "}
-                            <span className="font-medium text-foreground">
-                              {session.chunks.withSpeech}
-                            </span>
-                          </span>
-                          {session.chunks.total > 0 && (
-                            <Progress
-                              value={(session.chunks.vadProcessed /
-                                session.chunks.total) * 100}
-                              className="h-1 w-24"
-                            />
-                          )}
-                        </div>
+                          </div>
+                        </PipelineDetailSection>
 
                         {/* Sequences - compact inline */}
                         {session.sequences.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <span className="text-muted-foreground font-medium">
-                              Sequences:
-                            </span>
-                            {session.sequences.map((seq) => (
-                              <div
-                                key={seq._id}
-                                className="flex items-center gap-1"
-                              >
-                                <Badge
-                                  className={`${
-                                    getStateColor(seq.state)
-                                  } text-xs py-0 px-1.5`}
+                          <PipelineDetailSection
+                            title="Transcription sequences"
+                            summary={`${session.sequences.length.toLocaleString()} sequence(s)`}
+                            icon={<Layers className="h-3 w-3 text-blue-500" />}
+                            testId={`session-${session._id}-sequences`}
+                          >
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              {session.sequences.map((seq) => (
+                                <div
+                                  key={seq._id}
+                                  className="flex items-center gap-1"
                                 >
-                                  {seq.state}
-                                </Badge>
-                                <span className="font-mono text-muted-foreground">
-                                  [{seq.fromIndex}-{seq.toIndex}]
-                                </span>
-                                {(seq.state === "error" ||
-                                  seq.state === "processing") && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-5 px-1 text-xs"
-                                    onClick={() => resetSequence(seq._id)}
+                                  <Badge
+                                    className={`${
+                                      getStateColor(seq.state)
+                                    } text-xs py-0 px-1.5`}
                                   >
-                                    ↻
-                                  </Button>
-                                )}
-                              </div>
-                            ))}
-                            {session.sequences.some((s) => s.error) && (
-                              <span className="text-red-500 text-xs">
-                                Error: {session.sequences.find((s) =>
-                                  s.error
-                                )?.error?.slice(0, 50)}...
-                              </span>
-                            )}
-                          </div>
+                                    {seq.state}
+                                  </Badge>
+                                  <span className="font-mono text-muted-foreground">
+                                    [{seq.fromIndex}-{seq.toIndex}]
+                                  </span>
+                                  {(seq.state === "error" ||
+                                    seq.state === "processing") && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-5 px-1 text-xs"
+                                      onClick={() => resetSequence(seq._id)}
+                                    >
+                                      ↻
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                              {session.sequences.some((s) => s.error) && (
+                                <span className="text-red-500 text-xs">
+                                  Error: {session.sequences.find((s) =>
+                                    s.error
+                                  )?.error?.slice(0, 50)}...
+                                </span>
+                              )}
+                            </div>
+                          </PipelineDetailSection>
                         )}
 
                         {/* Transcriptions - compact list */}
                         {session.transcriptionDetails.length > 0 && (
-                          <div className="space-y-1">
-                            <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                              <FileText className="h-3 w-3" />
-                              Transcriptions ({session.transcriptions})
-                            </div>
-                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                          <PipelineDetailSection
+                            title="Transcriptions"
+                            summary={`${session.transcriptions.toLocaleString()} total`}
+                            icon={<FileText className="h-3 w-3" />}
+                            testId={`session-${session._id}-transcriptions`}
+                          >
+                            <div className="max-h-64 space-y-1 overflow-y-auto">
                               {session.transcriptionDetails.map((t) => (
                                 <div
                                   key={t._id}
@@ -1234,17 +1321,28 @@ export default function AudioPipelinePage() {
                                 </div>
                               ))}
                             </div>
-                          </div>
+                            {session.transcriptions >
+                                session.transcriptionDetails.length && (
+                              <p className="mt-2 text-[11px] text-muted-foreground">
+                                Showing the first {session.transcriptionDetails
+                                  .length.toLocaleString()} of {session
+                                  .transcriptions.toLocaleString()}.
+                              </p>
+                            )}
+                          </PipelineDetailSection>
                         )}
 
                         {/* Conversation Chunks - compact inline */}
                         {session.conversationChunks.length > 0 && (
-                          <div className="space-y-1">
-                            <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                          <PipelineDetailSection
+                            title="Conversation chunks"
+                            summary={`${session.conversationChunks.length.toLocaleString()} chunk(s)`}
+                            icon={
                               <Layers className="h-3 w-3 text-purple-500" />
-                              Conv Chunks ({session.conversationChunks.length})
-                            </div>
-                            <div className="flex flex-wrap gap-1">
+                            }
+                            testId={`session-${session._id}-conversation-chunks`}
+                          >
+                            <div className="max-h-80 overflow-y-auto flex flex-wrap gap-1">
                               {session.conversationChunks.map((chunk) => (
                                 <div
                                   key={chunk._id}
@@ -1290,17 +1388,20 @@ export default function AudioPipelinePage() {
                                 </div>
                               ))}
                             </div>
-                          </div>
+                          </PipelineDetailSection>
                         )}
 
                         {/* Conversations - 2 column grid */}
                         {session.conversations.length > 0 && (
-                          <div className="space-y-2">
-                            <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                          <PipelineDetailSection
+                            title="Parsed conversations"
+                            summary={`${session.conversations.length.toLocaleString()} conversation(s)`}
+                            icon={
                               <MessageSquare className="h-3 w-3 text-green-500" />
-                              Conversations ({session.conversations.length})
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
+                            }
+                            testId={`session-${session._id}-conversations`}
+                          >
+                            <div className="grid max-h-[32rem] gap-2 overflow-y-auto sm:grid-cols-2">
                               {session.conversations.map((conv) => {
                                 const start = conv.timeRanges?.[0]?.start
                                   ? new Date(conv.timeRanges[0].start)
@@ -1354,7 +1455,7 @@ export default function AudioPipelinePage() {
                                 );
                               })}
                             </div>
-                          </div>
+                          </PipelineDetailSection>
                         )}
 
                         {/* Empty states - inline */}

@@ -9,6 +9,26 @@ import daemon  # noqa: E402
 
 
 class DaemonCliTest(TestCase):
+    def test_successful_retry_clears_cached_ingestion_error(self):
+        source = {
+            "_id": "source-1",
+            "path": "/tmp/voice-memo.m4a",
+            "platform": {"importer": "apple_voicememos"},
+        }
+        importer = type("Importer", (), {"upload": lambda self, value: None})()
+        responses = iter([1, 0, 0, [source], {"modifiedCount": 1}])
+
+        with (
+            patch("daemon.call_resource", side_effect=lambda *_: next(responses)) as call_resource,
+            patch.dict(daemon.importer_map, {"apple_voicememos": importer}, clear=True),
+        ):
+            daemon.ingests_missing_sources(limit=1, retry_errors=True)
+
+        update_call = call_resource.call_args_list[-1].args[1]
+        self.assertEqual(update_call["action"], "updateOne")
+        self.assertTrue(update_call["update"]["$set"]["ingested"])
+        self.assertEqual(update_call["update"]["$unset"], {"ingestion": ""})
+
     def test_vad_only_runs_vad_cycle_without_import_cycle(self):
         with (
             patch("daemon.initialize_auth") as initialize_auth,
