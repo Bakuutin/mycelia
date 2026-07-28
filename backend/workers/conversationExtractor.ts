@@ -112,6 +112,26 @@ function emptyChunkResult(claimed: boolean): ChunkProcessingResult {
   };
 }
 
+export function describeExtractionResult(result: {
+  chunksProcessed: number;
+  segmentsFound: number;
+  conversationsCreated: number;
+  emojiCount: number;
+  entityCount: number;
+  agreementCount: number;
+  relationshipsCreated: number;
+  relationshipsAttempted: number;
+  relationshipErrors: number;
+}): string {
+  if (result.chunksProcessed === 0) {
+    return "No conversation chunks were ready to process; no extraction artifacts were created.";
+  }
+  if (result.conversationsCreated === 0) {
+    return `Processed ${result.chunksProcessed} chunk(s), but found 0 usable conversation segments; created 0 conversations, 0 emoji, 0 entities, 0 agreements, and 0 entity links.`;
+  }
+  return `Processed ${result.chunksProcessed} chunk(s) and found ${result.segmentsFound} segment(s); created ${result.conversationsCreated} conversation(s), extracted ${result.emojiCount} emoji, ${result.entityCount} entities, and ${result.agreementCount} agreement(s), with ${result.relationshipsCreated}/${result.relationshipsAttempted} entity links created and ${result.relationshipErrors} link error(s).`;
+}
+
 type StructuredLLMResult<T> = {
   value: T;
   provenance: InferenceProvenance;
@@ -1442,6 +1462,7 @@ const capability: JobCapability = {
     conversationsCreated: z.number(),
     chunksProcessed: z.number(),
     processed: z.number(),
+    description: z.string(),
     segmentsFound: z.number(),
     emojiCount: z.number(),
     entityCount: z.number(),
@@ -1601,12 +1622,25 @@ const capability: JobCapability = {
       artifacts.push(...result.artifacts);
     }
 
+    const metrics = {
+      chunksProcessed,
+      segmentsFound,
+      conversationsCreated,
+      emojiCount,
+      entityCount,
+      agreementCount,
+      relationshipsCreated,
+      relationshipsAttempted,
+      relationshipErrors,
+    };
+
     return {
       status: "completed" as const,
       success: errors.length === 0,
       conversationsCreated,
       chunksProcessed,
       processed: chunksProcessed,
+      description: describeExtractionResult(metrics),
       segmentsFound,
       emojiCount,
       entityCount,

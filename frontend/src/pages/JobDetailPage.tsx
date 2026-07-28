@@ -847,6 +847,11 @@ export default function JobDetailPage() {
                                     <span className="text-xs uppercase tracking-wide">Date Range:</span> {dateRange}
                                 </div>
                             )}
+                            {job.type === "conversation_extractor" && r.description && (
+                                <div className="rounded-lg bg-muted/50 p-3 text-sm">
+                                    {r.description}
+                                </div>
+                            )}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 {config.metrics.map((m) => (
                                     <MetricCell key={m.label} icon={m.icon} label={m.label} value={m.value} />

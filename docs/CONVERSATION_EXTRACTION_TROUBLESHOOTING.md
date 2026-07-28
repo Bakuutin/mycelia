@@ -26,6 +26,7 @@ New jobs expose these totals in both Job List and Job Detail, including zeros:
 | Job result field | Meaning |
 | --- | --- |
 | `chunksProcessed` | Claimed chunks completed by this job |
+| `description` | Human-readable outcome with explicit zero or non-zero counts |
 | `segmentsFound` | Conversation segments retained after time-range filtering |
 | `conversationsCreated` | Conversation objects created |
 | `emojiCount` | Conversations with a valid emoji |

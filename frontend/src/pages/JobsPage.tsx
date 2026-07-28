@@ -568,6 +568,14 @@ function JobProgressCell({ job }: { job: JobInfo }) {
       return (
         <div className="space-y-1">
           <JobDateRange job={job} />
+          {result.description && (
+            <div
+              className="max-w-xl truncate text-xs text-foreground"
+              title={result.description}
+            >
+              {result.description}
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             {result.conversationsCreated != null && (
               <span>{result.conversationsCreated} conversations</span>

@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import {
   createSegmentParser,
+  describeExtractionResult,
   formatChunkAsPrompt,
   metadataResponseSchema,
   normalizeEmoji,
@@ -93,6 +94,20 @@ Deno.test("forced historical extraction requires a targeted chunk", () => {
   });
   expect(input.force).toBe(true);
   expect(input.model).toBe("medium");
+});
+
+Deno.test("extraction result description keeps explicit zero counts", () => {
+  expect(describeExtractionResult({
+    chunksProcessed: 1,
+    segmentsFound: 0,
+    conversationsCreated: 0,
+    emojiCount: 0,
+    entityCount: 0,
+    agreementCount: 0,
+    relationshipsCreated: 0,
+    relationshipsAttempted: 0,
+    relationshipErrors: 0,
+  })).toContain("0 usable conversation segments");
 });
 
 Deno.test("metadata schema requires every extraction field", () => {
