@@ -6,8 +6,12 @@ import { callResource } from "@myceliasdk/resources.ts";
 import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import type { MongoRequest, MongoResponse } from "@/lib/mongo/core.server.ts";
-import type { ObjectsRequest, ObjectsResponse } from "@/lib/objects/resource.server.ts";
+import type {
+  ObjectsRequest,
+  ObjectsResponse,
+} from "@/lib/objects/resource.server.ts";
 import { getSummaryCompletionOptions } from "@/lib/llm/completion-options.ts";
+import { getInferenceProvenance } from "@/lib/llm/provenance.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -18,20 +22,34 @@ export const schema = z.object({
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
   prompt: z.string()
-    .default("You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.")
-    .describe("System prompt for the summarization. This guides how the AI analyzes the conversation."),
+    .default(
+      "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.",
+    )
+    .describe(
+      "System prompt for the summarization. This guides how the AI analyzes the conversation.",
+    ),
   promptName: z.string().optional()
     .describe("Name of the prompt template used (for display in UI)"),
   model: z.string()
     .default("small")
-    .describe("LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')"),
+    .describe(
+      "LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')",
+    ),
   fallbackModel: z.string()
     .default(Deno.env.get("SUMMARIZATION_FALLBACK_MODEL") ?? "")
-    .describe("Optional model retried once after a primary LLM error; empty means stop with error"),
+    .describe(
+      "Optional model retried once after a primary LLM error; empty means stop with error",
+    ),
   objectId: zObjectId().nullish(),
+  allowExisting: z.boolean().default(false)
+    .describe(
+      "Append a new summary version even when the conversation already has summaries",
+    ),
   minDurationForLlm: z.number()
     .default(10)
-    .describe("Minimum duration in seconds to use LLM. Shorter periods use transcript directly."),
+    .describe(
+      "Minimum duration in seconds to use LLM. Shorter periods use transcript directly.",
+    ),
 }).superRefine((value, ctx) => {
   const hasStart = value.start != null;
   const hasEnd = value.end != null;
@@ -66,21 +84,36 @@ function getConversationRange(obj: any): { start: Date; end: Date } | null {
       start: new Date(range.start),
       end: range.end ? new Date(range.end) : null,
     }))
-    .filter((range: any) => !isNaN(range.start.getTime()) && range.end && !isNaN(range.end.getTime()));
+    .filter((range: any) =>
+      !isNaN(range.start.getTime()) && range.end && !isNaN(range.end.getTime())
+    );
 
   if (parsed.length === 0) {
     if (ranges.length > 0) {
-      console.warn(`[summarization] Object has ${ranges.length} time range(s) but none are valid`);
+      console.warn(
+        `[summarization] Object has ${ranges.length} time range(s) but none are valid`,
+      );
     }
     return null;
   }
 
-  const start = parsed.reduce((min: Date, cur: any) => (cur.start < min ? cur.start : min), parsed[0].start);
-  const end = parsed.reduce((max: Date, cur: any) => (cur.end > max ? cur.end : max), parsed[0].end);
+  const start = parsed.reduce(
+    (min: Date, cur: any) => (cur.start < min ? cur.start : min),
+    parsed[0].start,
+  );
+  const end = parsed.reduce(
+    (max: Date, cur: any) => (cur.end > max ? cur.end : max),
+    parsed[0].end,
+  );
   return { start, end };
 }
 
-async function loadTranscripts(jwt: string, myceliaUrl: string, start: Date, end: Date) {
+async function loadTranscripts(
+  jwt: string,
+  myceliaUrl: string,
+  start: Date,
+  end: Date,
+) {
   return await callResource<MongoRequest, MongoResponse>("mongo", {
     action: "find",
     collection: "transcriptions",
@@ -120,7 +153,11 @@ function buildPromptFromTranscripts(transcripts: any[]): string {
   return promptText;
 }
 
-function createTranscriptSummaryEntry(promptText: string, jobData: SummarizationJobData, jobId: string) {
+function createTranscriptSummaryEntry(
+  promptText: string,
+  jobData: SummarizationJobData,
+  jobId: string,
+) {
   return {
     text: promptText.trim(),
     model: "passthrough",
@@ -129,6 +166,12 @@ function createTranscriptSummaryEntry(promptText: string, jobData: Summarization
     prompt: "Short duration - transcript used directly",
     promptName: jobData.promptName,
     jobId,
+    provenance: {
+      task: "summarization",
+      requestedModel: "passthrough",
+      resolvedModel: "transcript-only",
+      fallbackUsed: false,
+    },
   };
 }
 
@@ -139,25 +182,36 @@ function createLLMSummaryEntry(
   jobData: SummarizationJobData,
   jobId: string,
 ) {
-  const routing = completion.mycelia_routing;
+  const provenance = getInferenceProvenance(
+    completion,
+    jobData.model || "small",
+    jobData.fallbackModel,
+  );
   return {
     text: summary,
     model: jobData.model || "small",
     modelName: completion.model,
-    requestedModel: routing?.requestedModel || jobData.model || "small",
-    resolvedModel: routing?.resolvedModel || completion.model,
-    fallbackModel: routing?.fallbackModel || jobData.fallbackModel || undefined,
-    fallbackUsed: routing?.fallbackUsed ?? false,
+    requestedModel: provenance.requestedModel,
+    resolvedModel: provenance.resolvedModel,
+    fallbackModel: provenance.fallbackModel,
+    fallbackUsed: provenance.fallbackUsed,
+    providerBaseUrl: provenance.providerBaseUrl,
+    provenance: {
+      task: "summarization",
+      ...provenance,
+    },
     date: new Date(),
     prompt: systemPrompt,
     promptName: jobData.promptName,
-    usage: completion.usage ? {
-      promptTokens: completion.usage.prompt_tokens,
-      completionTokens: completion.usage.completion_tokens,
-      totalTokens: completion.usage.total_tokens,
-      // litellm returns cost in response_cost (extracted from x-litellm-response-cost header)
-      cost: completion.response_cost,
-    } : undefined,
+    usage: completion.usage
+      ? {
+        promptTokens: completion.usage.prompt_tokens,
+        completionTokens: completion.usage.completion_tokens,
+        totalTokens: completion.usage.total_tokens,
+        // litellm returns cost in response_cost (extracted from x-litellm-response-cost header)
+        cost: completion.response_cost,
+      }
+      : undefined,
     jobId,
   };
 }
@@ -165,20 +219,29 @@ function createLLMSummaryEntry(
 async function updateObjectSummaries(
   existingObjectId: string,
   summaryEntry: any,
+  allowExisting: boolean,
   jwt: string,
   myceliaUrl: string,
 ): Promise<{ objectId: string; title: string; skipped: boolean }> {
-  const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
-    action: "get",
-    id: existingObjectId.toString(),
-  }, { jwt, myceliaUrl });
+  const currentObject = await callResource<ObjectsRequest, ObjectsResponse>(
+    "objects",
+    {
+      action: "get",
+      id: existingObjectId.toString(),
+    },
+    { jwt, myceliaUrl },
+  );
 
   if (!currentObject) {
     throw new Error(`Object ${existingObjectId} not found`);
   }
 
-  if (!hasNoSummaries(currentObject)) {
-    return { objectId: existingObjectId.toString(), title: currentObject.name || "Conversation", skipped: true };
+  if (!allowExisting && !hasNoSummaries(currentObject)) {
+    return {
+      objectId: existingObjectId.toString(),
+      title: currentObject.name || "Conversation",
+      skipped: true,
+    };
   }
 
   const title = currentObject.name || "Conversation";
@@ -205,16 +268,20 @@ async function createConversationWithSummary(
   jwt: string,
   myceliaUrl: string,
 ): Promise<string> {
-  const resultObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
-    action: "create",
-    object: {
-      isConversation: true,
-      name: title,
-      summaries: [summaryEntry],
-      timeRanges: [{ start, end }],
-      metadata,
+  const resultObject = await callResource<ObjectsRequest, ObjectsResponse>(
+    "objects",
+    {
+      action: "create",
+      object: {
+        isConversation: true,
+        name: title,
+        summaries: [summaryEntry],
+        timeRanges: [{ start, end }],
+        metadata,
+      },
     },
-  }, { jwt, myceliaUrl });
+    { jwt, myceliaUrl },
+  );
 
   return resultObject.insertedId.toString();
 }
@@ -225,23 +292,38 @@ async function generateTitle(
   summaryText: string,
   jwt: string,
   myceliaUrl: string,
-): Promise<string> {
+): Promise<
+  { title: string; provenance: ReturnType<typeof getInferenceProvenance> }
+> {
   const titleResponse = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
     fallbackModel,
     ...getSummaryCompletionOptions(modelAlias),
     messages: [
-      { role: "system", content: "Generate a short title for this conversation, no formatting" },
+      {
+        role: "system",
+        content: "Generate a short title for this conversation, no formatting",
+      },
       { role: "user", content: summaryText },
     ],
   }, { jwt, myceliaUrl });
 
-  return titleResponse.choices[0].message.content;
+  return {
+    title: titleResponse.choices[0].message.content,
+    provenance: getInferenceProvenance(
+      titleResponse,
+      modelAlias,
+      fallbackModel,
+    ),
+  };
 }
 
 function deriveTitleFromPrompt(promptText: string): string {
-  const firstLine = promptText.split('\n').find(line => !line.startsWith('[') && line.trim()) || "Brief conversation";
+  const firstLine =
+    promptText.split("\n").find((line) =>
+      !line.startsWith("[") && line.trim()
+    ) || "Brief conversation";
   return firstLine.slice(0, 100).trim();
 }
 
@@ -271,10 +353,14 @@ async function claimConversation(
   if (claim?.startedAt) {
     const claimAge = Date.now() - new Date(claim.startedAt).getTime();
     if (claimAge < JOB_TIMEOUT_MS) {
-      console.log(`[summarization] Object ${objectId} already claimed by job ${claim.jobId}, skipping`);
+      console.log(
+        `[summarization] Object ${objectId} already claimed by job ${claim.jobId}, skipping`,
+      );
       return false;
     }
-    console.log(`[summarization] Object ${objectId} has stale claim from job ${claim.jobId}, reclaiming`);
+    console.log(
+      `[summarization] Object ${objectId} has stale claim from job ${claim.jobId}, reclaiming`,
+    );
   }
 
   try {
@@ -287,12 +373,18 @@ async function claimConversation(
     }, { jwt, myceliaUrl });
     return true;
   } catch {
-    console.log(`[summarization] Failed to claim ${objectId} (version conflict), skipping`);
+    console.log(
+      `[summarization] Failed to claim ${objectId} (version conflict), skipping`,
+    );
     return false;
   }
 }
 
-async function releaseClaim(objectId: string, jwt: string, myceliaUrl: string): Promise<void> {
+async function releaseClaim(
+  objectId: string,
+  jwt: string,
+  myceliaUrl: string,
+): Promise<void> {
   try {
     const obj = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "get",
@@ -321,9 +413,15 @@ async function summarizeConversationRange(
   jwt: string,
   myceliaUrl: string,
 ): Promise<JobResult> {
-  console.log(`[summarization] Job ${job.id}: processing time range ${start.toISOString()} to ${end.toISOString()} (${Math.round((end.getTime() - start.getTime()) / 1000 / 60)}min)`);
+  console.log(
+    `[summarization] Job ${job.id}: processing time range ${start.toISOString()} to ${end.toISOString()} (${
+      Math.round((end.getTime() - start.getTime()) / 1000 / 60)
+    }min)`,
+  );
   if (existingObjectId) {
-    console.log(`[summarization] Job ${job.id}: updating existing object ${existingObjectId}`);
+    console.log(
+      `[summarization] Job ${job.id}: updating existing object ${existingObjectId}`,
+    );
   }
   const jobId = job.id ?? "unknown";
 
@@ -332,7 +430,9 @@ async function summarizeConversationRange(
     console.log(`[summarization] Job ${job.id}: NO transcripts found in range`);
     return { success: false, message: "No transcripts found in range" };
   }
-  console.log(`[summarization] Job ${job.id}: found ${transcripts.length} transcripts`);
+  console.log(
+    `[summarization] Job ${job.id}: found ${transcripts.length} transcripts`,
+  );
   const promptText = buildPromptFromTranscripts(transcripts);
 
   const modelAlias = jobData.model || "small";
@@ -341,13 +441,29 @@ async function summarizeConversationRange(
 
   // Short duration optimization: skip LLM for very short periods
   if (durationSeconds < minDurationForLlm) {
-    console.log(`[summarization] Job ${job.id}: duration ${durationSeconds}s < ${minDurationForLlm}s threshold, using transcript directly`);
-    const summaryEntry = createTranscriptSummaryEntry(promptText, jobData, jobId);
+    console.log(
+      `[summarization] Job ${job.id}: duration ${durationSeconds}s < ${minDurationForLlm}s threshold, using transcript directly`,
+    );
+    const summaryEntry = createTranscriptSummaryEntry(
+      promptText,
+      jobData,
+      jobId,
+    );
 
     if (existingObjectId) {
-      const updateResult = await updateObjectSummaries(existingObjectId.toString(), summaryEntry, jwt, myceliaUrl);
+      const updateResult = await updateObjectSummaries(
+        existingObjectId.toString(),
+        summaryEntry,
+        jobData.allowExisting,
+        jwt,
+        myceliaUrl,
+      );
       if (updateResult.skipped) {
-        return { success: true, objectId: updateResult.objectId, message: "Summaries already present, skipping" };
+        return {
+          success: true,
+          objectId: updateResult.objectId,
+          message: "Summaries already present, skipping",
+        };
       }
 
       return {
@@ -386,13 +502,18 @@ async function summarizeConversationRange(
   }
 
   // Load system prompt with priority: job data (includes default overrides) > schema default
-  const defaultPrompt = "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.";
+  const defaultPrompt =
+    "You are a helpful assistant. Summarize the following conversation transcript. Extract key points, topics discussed, decisions made, and any action items. Be concise but comprehensive.";
   const systemPrompt = jobData.prompt || defaultPrompt;
   const promptSource = jobData.prompt ? "job_data" : "default";
 
-  console.log(`[summarization] Job ${job.id}: using system prompt from ${promptSource}`);
+  console.log(
+    `[summarization] Job ${job.id}: using system prompt from ${promptSource}`,
+  );
 
-  console.log(`[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`);
+  console.log(
+    `[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`,
+  );
   const completion = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
@@ -405,15 +526,35 @@ async function summarizeConversationRange(
   }, { jwt, myceliaUrl });
 
   const summary: string = completion.choices[0].message.content;
-  const truncatedSummary = summary.length > 200 ? summary.slice(0, 200) + '...' : summary;
-  console.log(`[summarization] Job ${job.id}: LLM returned summary (${summary.length} chars): "${truncatedSummary}"`);
+  const truncatedSummary = summary.length > 200
+    ? summary.slice(0, 200) + "..."
+    : summary;
+  console.log(
+    `[summarization] Job ${job.id}: LLM returned summary (${summary.length} chars): "${truncatedSummary}"`,
+  );
 
-  const summaryEntry = createLLMSummaryEntry(summary, completion, systemPrompt, jobData, jobId);
+  const summaryEntry = createLLMSummaryEntry(
+    summary,
+    completion,
+    systemPrompt,
+    jobData,
+    jobId,
+  );
 
   if (existingObjectId) {
-    const updateResult = await updateObjectSummaries(existingObjectId.toString(), summaryEntry, jwt, myceliaUrl);
+    const updateResult = await updateObjectSummaries(
+      existingObjectId.toString(),
+      summaryEntry,
+      jobData.allowExisting,
+      jwt,
+      myceliaUrl,
+    );
     if (updateResult.skipped) {
-      return { success: true, objectId: updateResult.objectId, message: "Summaries already present, skipping" };
+      return {
+        success: true,
+        objectId: updateResult.objectId,
+        message: "Summaries already present, skipping",
+      };
     }
 
     return {
@@ -426,14 +567,21 @@ async function summarizeConversationRange(
     };
   }
 
-  console.log(`[summarization] Job ${job.id}: calling LLM for title generation`);
-  const title = await generateTitle(
+  console.log(
+    `[summarization] Job ${job.id}: calling LLM for title generation`,
+  );
+  const titleCompletion = await generateTitle(
     modelAlias,
     jobData.fallbackModel,
     summaryEntry.text,
     jwt,
     myceliaUrl,
   );
+  const title = titleCompletion.title;
+  (summaryEntry as any).titleProvenance = {
+    task: "summary_title",
+    ...titleCompletion.provenance,
+  };
   console.log(`[summarization] Job ${job.id}: LLM generated title: "${title}"`);
 
   const objectId = await createConversationWithSummary(
@@ -469,7 +617,14 @@ async function resolveTargets(
   jobData: SummarizationJobData,
   jwt: string,
   myceliaUrl: string,
-): Promise<{ targets: SummaryTarget[]; failure?: JobResult; mode: "manual" | "auto"; hasMore?: boolean }> {
+): Promise<
+  {
+    targets: SummaryTarget[];
+    failure?: JobResult;
+    mode: "manual" | "auto";
+    hasMore?: boolean;
+  }
+> {
   const { start: startStr, end: endStr, objectId: existingObjectId } = jobData;
 
   if (startStr && endStr) {
@@ -484,15 +639,23 @@ async function resolveTargets(
   }
 
   if (existingObjectId) {
-    const currentObject = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
-      action: "get",
-      id: existingObjectId.toString(),
-    }, { jwt, myceliaUrl });
+    const currentObject = await callResource<ObjectsRequest, ObjectsResponse>(
+      "objects",
+      {
+        action: "get",
+        id: existingObjectId.toString(),
+      },
+      { jwt, myceliaUrl },
+    );
 
     if (!currentObject) {
       return {
         targets: [],
-        failure: { success: false, objectId: existingObjectId.toString(), message: "Object not found" },
+        failure: {
+          success: false,
+          objectId: existingObjectId.toString(),
+          message: "Object not found",
+        },
         mode: "manual",
       };
     }
@@ -501,36 +664,52 @@ async function resolveTargets(
     if (!range) {
       return {
         targets: [],
-        failure: { success: false, objectId: existingObjectId.toString(), message: "No valid time range for conversation" },
+        failure: {
+          success: false,
+          objectId: existingObjectId.toString(),
+          message: "No valid time range for conversation",
+        },
         mode: "manual",
       };
     }
 
     return {
-      targets: [{ start: range.start, end: range.end, objectId: existingObjectId.toString() }],
+      targets: [{
+        start: range.start,
+        end: range.end,
+        objectId: existingObjectId.toString(),
+      }],
       mode: "manual",
     };
   }
 
   const BATCH_LIMIT = 25;
-  const conversations = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
-    action: "list",
-    filters: {
-      isConversation: true,
-      "summaries.0": { $exists: false },
+  const conversations = await callResource<ObjectsRequest, ObjectsResponse>(
+    "objects",
+    {
+      action: "list",
+      filters: {
+        isConversation: true,
+        "summaries.0": { $exists: false },
+      },
+      options: {
+        limit: BATCH_LIMIT + 1,
+        sort: { updatedAt: -1 },
+      },
     },
-    options: {
-      limit: BATCH_LIMIT + 1,
-      sort: { updatedAt: -1 },
-    },
-  }, { jwt, myceliaUrl }) as any[];
+    { jwt, myceliaUrl },
+  ) as any[];
 
   const hasMore = (conversations || []).length > BATCH_LIMIT;
   const targets = (conversations || []).slice(0, BATCH_LIMIT)
     .map((conversation) => {
       const range = getConversationRange(conversation);
       if (!range) return null;
-      return { start: range.start, end: range.end, objectId: conversation._id?.toString() };
+      return {
+        start: range.start,
+        end: range.end,
+        objectId: conversation._id?.toString(),
+      };
     })
     .filter(Boolean) as SummaryTarget[];
 
@@ -544,7 +723,15 @@ async function processConversation(
   jwt: string,
   myceliaUrl: string,
 ): Promise<JobResult> {
-  return summarizeConversationRange(job, jobData, target.start, target.end, target.objectId, jwt, myceliaUrl);
+  return summarizeConversationRange(
+    job,
+    jobData,
+    target.start,
+    target.end,
+    target.objectId,
+    jwt,
+    myceliaUrl,
+  );
 }
 
 /** Process the summarization job */
@@ -553,23 +740,43 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const jwt = Deno.env.get("MYCELIA_JWT")!;
   const myceliaUrl = env.MYCELIA_URL;
 
-  const { targets, failure, mode, hasMore } = await resolveTargets(jobData, jwt, myceliaUrl);
+  const { targets, failure, mode, hasMore } = await resolveTargets(
+    jobData,
+    jwt,
+    myceliaUrl,
+  );
   if (failure) return failure;
 
   if (mode === "manual") {
     if (targets.length === 0) {
       throw new Error("Summarization has no valid targets");
     }
-    const result = await processConversation(job, jobData, targets[0], jwt, myceliaUrl);
+    const result = await processConversation(
+      job,
+      jobData,
+      targets[0],
+      jwt,
+      myceliaUrl,
+    );
     if (!result.success) {
-      throw new Error(String(result.message ?? "Summarization did not produce a result"));
+      throw new Error(
+        String(result.message ?? "Summarization did not produce a result"),
+      );
     }
     return result;
   }
 
   if (targets.length === 0) {
-    console.log(`[summarization] Job ${job.id}: NO conversations missing summaries`);
-    return { success: true, processed: 0, skipped: 0, hasMore: false, message: "No conversations missing summaries" };
+    console.log(
+      `[summarization] Job ${job.id}: NO conversations missing summaries`,
+    );
+    return {
+      success: true,
+      processed: 0,
+      skipped: 0,
+      hasMore: false,
+      message: "No conversations missing summaries",
+    };
   }
 
   let processed = 0;
@@ -581,20 +788,38 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   for (const target of targets) {
     // Claim before processing to prevent duplicate LLM work
     if (target.objectId) {
-      const claimed = await claimConversation(target.objectId, jobId, jwt, myceliaUrl);
+      const claimed = await claimConversation(
+        target.objectId,
+        jobId,
+        jwt,
+        myceliaUrl,
+      );
       if (!claimed) {
-        console.log(`[summarization] Job ${job.id}: skipping ${target.objectId} (already claimed or has summaries)`);
+        console.log(
+          `[summarization] Job ${job.id}: skipping ${target.objectId} (already claimed or has summaries)`,
+        );
         skipped++;
-        errors.push(`Conversation ${target.objectId} is already claimed or already has a summary`);
+        errors.push(
+          `Conversation ${target.objectId} is already claimed or already has a summary`,
+        );
         continue;
       }
     }
 
     try {
-      const result = await processConversation(job, jobData, target, jwt, myceliaUrl);
+      const result = await processConversation(
+        job,
+        jobData,
+        target,
+        jwt,
+        myceliaUrl,
+      );
       if (result.success) {
         processed++;
-        if (typeof result.objectId === "string" && typeof result.title === "string") {
+        if (
+          typeof result.objectId === "string" &&
+          typeof result.title === "string"
+        ) {
           summaries.push({ objectId: result.objectId, title: result.title });
         }
       } else {
@@ -602,10 +827,22 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
           await releaseClaim(target.objectId, jwt, myceliaUrl);
         }
         skipped++;
-        errors.push(String(result.message ?? `Conversation ${target.objectId ?? "unknown"} produced no summary`));
+        errors.push(
+          String(
+            result.message ??
+              `Conversation ${
+                target.objectId ?? "unknown"
+              } produced no summary`,
+          ),
+        );
       }
     } catch (error) {
-      console.error(`[summarization] Job ${job.id}: failed to summarize conversation ${target.objectId ?? "unknown"}`, error);
+      console.error(
+        `[summarization] Job ${job.id}: failed to summarize conversation ${
+          target.objectId ?? "unknown"
+        }`,
+        error,
+      );
       if (target.objectId) {
         await releaseClaim(target.objectId, jwt, myceliaUrl);
       }

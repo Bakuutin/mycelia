@@ -222,11 +222,35 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
           </h3>
           <dl className="space-y-3 text-sm">
             <div className="flex justify-between items-center">
-              <dt className="text-muted-foreground">Model:</dt>
-              <dd className="font-mono text-foreground">
-                {extractedWith.model}
+              <dt className="text-muted-foreground">Executed model:</dt>
+              <dd className="max-w-[65%] break-all text-right font-mono text-foreground">
+                {extractedWith.resolvedModel || extractedWith.model}
               </dd>
             </div>
+            {extractedWith.requestedModel && (
+              <div className="flex justify-between items-center">
+                <dt className="text-muted-foreground">Requested model:</dt>
+                <dd className="max-w-[65%] break-all text-right font-mono text-foreground">
+                  {extractedWith.requestedModel}
+                </dd>
+              </div>
+            )}
+            {extractedWith.fallbackUsed && (
+              <div className="flex justify-between items-center">
+                <dt className="text-muted-foreground">Fallback:</dt>
+                <dd className="max-w-[65%] break-all text-right text-foreground">
+                  Used {extractedWith.fallbackModel || "configured fallback"}
+                </dd>
+              </div>
+            )}
+            {extractedWith.providerBaseUrl && (
+              <div className="flex justify-between items-center">
+                <dt className="text-muted-foreground">Provider:</dt>
+                <dd className="max-w-[65%] break-all text-right font-mono text-xs text-foreground">
+                  {extractedWith.providerBaseUrl}
+                </dd>
+              </div>
+            )}
             <div className="flex justify-between items-center">
               <dt className="text-muted-foreground">Extracted:</dt>
               <dd className="text-foreground">

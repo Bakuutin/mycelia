@@ -60,6 +60,31 @@ const zObjectBase = z.object({
     resolvedModel: z.string().optional(),
     fallbackModel: z.string().optional(),
     fallbackUsed: z.boolean().optional(),
+    providerBaseUrl: z.string().optional(),
+    providerProfileId: z.string().optional(),
+    providerProfileName: z.string().optional(),
+    provenance: z.object({
+      task: z.string(),
+      requestedModel: z.string(),
+      resolvedModel: z.string(),
+      responseModel: z.string().optional(),
+      fallbackModel: z.string().optional(),
+      fallbackUsed: z.boolean(),
+      providerBaseUrl: z.string().optional(),
+      providerProfileId: z.string().optional(),
+      providerProfileName: z.string().optional(),
+    }).optional(),
+    titleProvenance: z.object({
+      task: z.string(),
+      requestedModel: z.string(),
+      resolvedModel: z.string(),
+      responseModel: z.string().optional(),
+      fallbackModel: z.string().optional(),
+      fallbackUsed: z.boolean(),
+      providerBaseUrl: z.string().optional(),
+      providerProfileId: z.string().optional(),
+      providerProfileName: z.string().optional(),
+    }).optional(),
     date: z.date(),
     prompt: z.string().optional(),
     promptName: z.string().optional(),
@@ -76,8 +101,19 @@ const zObjectBase = z.object({
   metadata: z.object({
     extractedWith: z.object({
       model: z.string(),
+      requestedModel: z.string().optional(),
+      resolvedModel: z.string().optional(),
+      responseModel: z.string().optional(),
+      fallbackModel: z.string().optional(),
+      fallbackUsed: z.boolean().optional(),
+      providerBaseUrl: z.string().optional(),
+      providerProfileId: z.string().optional(),
+      providerProfileName: z.string().optional(),
+      extractorVersion: z.string().optional(),
+      chunkId: z.string().optional(),
+      jobId: z.string().optional(),
       timestamp: z.date(),
-    }).optional(),
+    }).loose().optional(),
   }).loose().optional(),
 
   createdAt: z.date(),
@@ -103,11 +139,11 @@ export const zObject = zObjectBase.loose().refine(
 
 export type Object = z.infer<typeof zObject>;
 
-
 type ObjectBase = z.infer<typeof zObjectBase>;
 
 export type ObjectFormData =
-  Partial<Omit<ObjectBase, '_id' | 'relationship' | 'icon'>> & {
+  & Partial<Omit<ObjectBase, "_id" | "relationship" | "icon">>
+  & {
     _id?: ObjectId;
     icon?: { text: string } | { base64: string };
     relationship?: {
