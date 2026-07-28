@@ -218,16 +218,18 @@ Use the `whisper` alias when the Portainer stack should use whichever
 `ASR_MODEL` it has loaded. The service reports the actual model, and Mycelia
 stores it in `transcriptions.metadata.model`.
 
-Historically, `daemon.py` also performed only discovery and ingestion. VAD was
-not calculated inside that process: the backend change-stream trigger created a
-VAD job, `python-worker` calculated VAD, and later backend jobs created and
-transcribed speech sequences. In other words, the normal old startup was
-`docker compose up -d` plus `uv run daemon.py`; VAD appeared automatic because
-the Docker backend and worker were already running.
+The normal `daemon.py` process performs discovery, ingestion, and device-info
+backfill only. It does not calculate VAD. After a chunk is inserted, the backend
+change-stream trigger creates a `vad` job, and `python-worker` runs the shared
+Silero implementation from `python/jobs/vad.py`. This queued path records job
+state and progress in the Jobs UI and is the normal production path.
 
-`daemon.py --vad-only` and `stt.py` remain recovery/manual tools. Do not run
-them alongside a healthy automatic pipeline: direct STT can race the backend
-transcription jobs for the same chunks.
+`daemon.py --vad-only` calls that same Python VAD implementation directly while
+bypassing the backend job queue. It does not create a Jobs UI record and is
+intended only for recovery or manual backfills when the automatic queue is
+unavailable or blocked. `stt.py` is likewise a direct recovery tool. Do not run
+direct VAD or STT alongside a healthy automatic pipeline: the direct processes
+can select work that the queued pipeline is also processing.
 
 #### Run Import and VAD in Parallel
 
@@ -261,9 +263,10 @@ docker compose exec python-worker python daemon.py \
 ```
 
 This is process-level parallelism: importing and VAD can run simultaneously.
-Do not start multiple VAD-only processes against the same database; the current
-Silero worker uses shared state within each process and VAD chunks are not
-claimed for multi-worker execution.
+Do not start multiple VAD-only processes against the same database, or combine
+one with an active queued VAD worker. Direct VAD selects chunks with no VAD
+metadata but does not claim them, so concurrent workers can process the same
+chunks.
 
 After VAD marks speech chunks, inspect and run the direct STT worker only if the
 automatic transcription queue is not running:

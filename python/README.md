@@ -34,10 +34,14 @@ sudo apt install portaudio19-dev
 
 ### Daemon (`daemon.py`)
 
-The main daemon service that continuously:
+The main daemon service continuously:
 - Imports new audio files from configured sources
 - Ingests audio files into the system
-- Runs voice activity detection on audio chunks
+- Backfills device information for imported recordings
+
+The normal daemon does **not** run voice activity detection. VAD normally runs
+as a backend job in `python-worker`; use `daemon.py --vad-only` only as a direct
+recovery or backfill path.
 
 #### Running the Daemon
 
@@ -46,6 +50,26 @@ uv run daemon.py
 ```
 
 The daemon runs continuously and logs to `~/Library/mycelia/logs/daemon.log`.
+
+Useful modes:
+
+```bash
+# Run one discovery/import cycle and exit
+uv run daemon.py --once
+
+# Directly process chunks without VAD metadata, bypassing the job queue
+uv run daemon.py --vad-only
+
+# Run one bounded direct VAD cycle
+uv run daemon.py --vad-only --once --vad-limit 1000 --vad-batch-size 100
+```
+
+Both the queued worker and `--vad-only` use the Silero implementation in
+`jobs/vad.py` and write the same `audio_chunks.vad` fields. The difference is
+orchestration: queued VAD is triggered and tracked by the backend Jobs system,
+while `--vad-only` runs directly and creates no job record. Do not run direct
+VAD alongside an active queued VAD worker or start multiple direct VAD
+processes, because direct workers do not claim chunks before processing them.
 
 #### Error Handling
 
@@ -159,7 +183,7 @@ uv run python -m convos.cli --not-later-than 1730500000
 
 Writes logs to `~/Library/mycelia/logs/convos.log` and also prints progress to the console.
 
-## Improved Logging
+## Daemon Logging
 
 The daemon now provides detailed progress information:
 
@@ -180,8 +204,12 @@ Handles audio file splitting and conversion to Opus chunks.
 ### Discovery (`discovery.py`)
 Discovers and imports new audio files from configured sources.
 
-### Voice Activity Detection (`diarization.py`)
-Runs VAD on audio chunks to detect speech segments.
+### Voice Activity Detection (`jobs/vad.py`)
+
+Runs Silero VAD on audio chunks and stores `vad.ran_at`, `vad.prob`, and
+`vad.has_speech`. The automatic path is exposed by `worker_server.py` at
+`POST /jobs/vad` and invoked by the backend Jobs worker. `daemon.py --vad-only`
+calls the same processor directly for recovery and manual backfills.
 
 ### Diarization Worker (`diarization_worker.py`)
 Consumes pending audio chunks, merges them into short WAVs, and calls the diarization server to write speaker segments back to MongoDB.
