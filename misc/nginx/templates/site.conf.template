@@ -25,7 +25,7 @@ server {
     set $backend_upstream "http://backend:5173";
 
     # Backend routes
-    location ~ ^/(ws|api|data|oauth|llm|v1|mcp|health|\.well-known) {
+    location ~ ^/(ws|api|data|oauth|llm|v1|mcp|health|readiness|\.well-known) {
         proxy_pass $backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

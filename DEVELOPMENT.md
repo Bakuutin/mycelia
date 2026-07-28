@@ -9,11 +9,13 @@ This guide is for developers who want to contribute to Mycelia or run it in deve
 The fastest way to get a development environment with hot reload:
 
 ```bash
-# Enable dev mode for both frontend and backend
-echo "FRONTEND_MODE=dev" >> .env
-echo "BACKEND_TASK=dev" >> .env
-docker compose build frontend
-docker compose up -d
+# Set exactly one value for each key in .env:
+# FRONTEND_MODE=dev
+# BACKEND_TASK=dev
+
+FRONTEND_MODE=dev BACKEND_TASK=dev \
+  docker compose up -d --build --force-recreate frontend backend
+docker compose restart nginx
 ```
 
 #### Development Mode Variables
@@ -23,9 +25,60 @@ docker compose up -d
 | `FRONTEND_MODE` | `prod` | `dev` | Enables Vite hot reload instead of nginx static build |
 | `BACKEND_TASK` | `start` | `dev` | Enables file watcher for auto-restart on code changes |
 
-Both variables are optional and default to production mode if not set.
+Both variables are optional and default to production mode if not set. In dev
+mode, frontend changes are handled by Vite HMR and backend changes restart the
+Deno process through `deno --watch`.
 
 Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` dependencies, you might still need to run `docker compose build` again
+
+#### Readiness and reload diagnostics
+
+Container `running` status is not sufficient evidence that the application has
+loaded its current source. Follow the readiness logs and Docker health state:
+
+```bash
+docker compose ps
+docker compose logs -f frontend backend \
+  | rg --line-buffered '\[SERVICE\]|\[READY\]|ready in|Restarting'
+
+curl -fsS http://localhost:3210/ >/dev/null
+curl -fkSs https://localhost:4433/health >/dev/null
+```
+
+Expected readiness records:
+
+```text
+[READY] frontend ready mode=development hmr=enabled ...
+[READY] backend ready mode=dev workers=true ... readiness=/readiness ...
+```
+
+The backend `/readiness` endpoint returns `503` while resources and workers are
+starting and `200` only after workers, triggers, and maintenance have started.
+An ordinary frontend `src/` edit uses HMR without a full restart. Editing
+`vite.config.ts` restarts Vite and can briefly return `502` until the next
+frontend `[READY]` record. A backend source edit restarts the Deno process and
+may keep `/readiness` unavailable while worker startup checks run.
+
+When a change is not visible:
+
+1. Run `git status --short` and preserve unrelated work from parallel agents.
+2. Verify the live bind mounts point at this checkout:
+
+   ```bash
+   docker inspect mycelia-backend-1 \
+     --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+   docker inspect mycelia-frontend-1 \
+     --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+   ```
+
+3. Confirm the effective commands with `docker compose config`: backend must
+   use `deno task dev`, while frontend must use `Dockerfile.dev`.
+4. Source changes should reload automatically. Changes to Dockerfiles,
+   dependencies, Compose configuration, or `.env` require rebuilding or
+   recreating the affected service.
+5. After recreating frontend or backend, restart nginx because the container IP
+   may have changed: `docker compose restart nginx`.
+6. Do not restart MongoDB or Redis for an application-code reload.
 
 Ports can be customized via environment variables (in `.env` or inline):
 

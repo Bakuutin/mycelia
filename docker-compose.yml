@@ -89,6 +89,16 @@ services:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk
       - ./docs:/docs:ro
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - "const response = await fetch('http://127.0.0.1:5173/readiness'); if (!response.ok) Deno.exit(1);"
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 6
     deploy:
       resources:
         limits:

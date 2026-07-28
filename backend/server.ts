@@ -47,6 +47,7 @@ import {
 } from "@/lib/auth/accessLog.worker.ts";
 import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
 import { down, status, to, up } from "@/lib/mongo/migrator.ts";
+import { setServiceReady } from "@/routes/health.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -141,6 +142,13 @@ async function startServer(
   skipChecks = false,
   noWorkers = false,
 ) {
+  const backendMode = Deno.env.get("BACKEND_TASK") ?? "start";
+  const processStartedAt = new Date();
+  setServiceReady(false);
+  console.log(
+    `[SERVICE] backend starting mode=${backendMode} pid=${Deno.pid} ` +
+      `startedAt=${processStartedAt.toISOString()}`,
+  );
   await setupResources();
   if (!skipChecks) {
     const db = await getRootDB();
@@ -321,8 +329,18 @@ async function startServer(
     await maintenanceManager.start();
   }
 
+  setServiceReady(true);
+  console.log(
+    `[READY] backend ready mode=${backendMode} workers=${!noWorkers} ` +
+      `reload=${backendMode === "dev" ? "watch" : "manual"} ` +
+      `url=http://${host}:${port} readiness=/readiness ` +
+      `startedAt=${processStartedAt.toISOString()} ` +
+      `readyAt=${new Date().toISOString()}`,
+  );
+
   ["SIGTERM", "SIGINT"].forEach((signal) => {
     process.once(signal, async () => {
+      setServiceReady(false);
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await stopWorkers();

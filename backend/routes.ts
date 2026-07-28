@@ -1,5 +1,9 @@
 import type { Express } from "express";
-import { healthHandler, rootHandler } from "@/routes/health.ts";
+import {
+  healthHandler,
+  readinessHandler,
+  rootHandler,
+} from "@/routes/health.ts";
 import { setupHandler } from "@/routes/setup.ts";
 import { dataAudioHandler } from "@/routes/data.audio.ts";
 import { dataAudioItemsHandler } from "@/routes/data.audio.items.ts";
@@ -33,6 +37,7 @@ const uploadKeyGenerator = (req: any) =>
 export function registerRoutes(app: Express): void {
   app.get("/", rootHandler);
   app.get("/health", healthHandler);
+  app.get("/readiness", readinessHandler);
   app.post("/api/setup", asyncHandler(setupHandler));
   app.get("/data/audio", dataAudioHandler);
   app.get("/data/audio/items", dataAudioItemsHandler);

@@ -20,7 +20,9 @@ COPY ./myceliasdk ./myceliasdk
 
 EXPOSE 8080
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
+  CMD deno eval "const response = await fetch('http://127.0.0.1:8080/'); if (!response.ok) Deno.exit(1);"
+
 # Run dev server on port 8080 with host binding for Docker
 # Vite handles HMR internally - no need for deno --watch
 CMD ["deno", "run", "-A", "npm:vite", "--host", "0.0.0.0", "--port", "8080"]
-
