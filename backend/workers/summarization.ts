@@ -46,6 +46,10 @@ export const schema = z.object({
     .describe(
       "Append a new summary version even when the conversation already has summaries",
     ),
+  retryNow: z.boolean().default(false)
+    .describe(
+      "Manual recovery: retry failed conversations immediately instead of waiting for backoff",
+    ),
   minDurationForLlm: z.number()
     .default(10)
     .describe(
@@ -411,6 +415,16 @@ function deriveTitleFromPrompt(promptText: string): string {
 
 // Matches JOB_TIMEOUT_MS in processor.ts / maintenance-manager.ts
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const SUMMARIZATION_RETRY_BASE_MS = 15 * 60 * 1000;
+const SUMMARIZATION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
+
+export function getSummarizationRetryDelayMs(attempt: number): number {
+  const safeAttempt = Math.max(1, Math.floor(attempt));
+  return Math.min(
+    SUMMARIZATION_RETRY_BASE_MS * 2 ** (safeAttempt - 1),
+    SUMMARIZATION_RETRY_MAX_MS,
+  );
+}
 
 export function isTerminalSummarizationResponseError(message: string): boolean {
   const isCompletionResponseError = message.includes("LLM_INVALID_RESPONSE") ||
@@ -438,12 +452,26 @@ async function setSummarizationFailure(
       id: objectId,
     }, { jwt, myceliaUrl }) as any;
     if (!obj) return;
+    let value: Record<string, unknown> | null = failure;
+    if (failure?.status === "failed") {
+      const previousAttempts = Number(obj._summarizationFailure?.attempts) || 0;
+      const attempts = previousAttempts + 1;
+      const failedAt = new Date();
+      value = {
+        ...failure,
+        attempts,
+        failedAt: failedAt.toISOString(),
+        retryAfter: new Date(
+          failedAt.getTime() + getSummarizationRetryDelayMs(attempts),
+        ).toISOString(),
+      };
+    }
     await callResource<ObjectsRequest, ObjectsResponse>("objects", {
       action: "update",
       id: objectId,
       version: obj.version ?? 0,
       field: "_summarizationFailure",
-      value: failure,
+      value,
     }, { jwt, myceliaUrl });
   } catch (error) {
     console.warn(
@@ -855,7 +883,17 @@ async function resolveTargets(
       filters: {
         isConversation: true,
         "summaries.0": { $exists: false },
-        "_summarizationFailure.status": { $ne: "failed" },
+        $or: [
+          { "_summarizationFailure.status": { $ne: "failed" } },
+          { "_summarizationFailure.retryAfter": { $exists: false } },
+          {
+            "_summarizationFailure.retryAfter": {
+              $lte: jobData.retryNow
+                ? "9999-12-31T23:59:59.999Z"
+                : new Date().toISOString(),
+            },
+          },
+        ],
       },
       options: {
         limit: BATCH_LIMIT + 1,
@@ -1026,6 +1064,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
             jwt,
             myceliaUrl,
           );
+          await releaseClaim(target.objectId, jwt, myceliaUrl);
         }
         if (
           typeof result.objectId === "string" &&

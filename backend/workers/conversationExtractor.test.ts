@@ -3,6 +3,7 @@ import {
   createSegmentParser,
   describeExtractionResult,
   formatChunkAsPrompt,
+  getExtractionRetryDelayMs,
   metadataResponseSchema,
   normalizeEmoji,
   parseMetadataResponse,
@@ -10,6 +11,12 @@ import {
   shouldReplaceChunkArtifacts,
   transcriptionToUtterances,
 } from "./conversationExtractor.ts";
+
+Deno.test("conversation extraction retries back off and remain bounded", () => {
+  expect(getExtractionRetryDelayMs(1)).toBe(5 * 60 * 1000);
+  expect(getExtractionRetryDelayMs(2)).toBe(10 * 60 * 1000);
+  expect(getExtractionRetryDelayMs(99)).toBe(6 * 60 * 60 * 1000);
+});
 
 Deno.test("STT segments become timestamped prompt utterances", () => {
   const utterances = transcriptionToUtterances({
@@ -76,6 +83,7 @@ Deno.test("conversation extractor defaults explicitly request metadata", () => {
 
   expect(input.extractorVersion).toBe("v2");
   expect(input.force).toBe(false);
+  expect(input.retryNow).toBe(false);
   expect(input.model).toBeUndefined();
   expect(input.extraction_system_prompt).toContain("entities");
   expect(input.extraction_system_prompt).toContain("emoji");
@@ -131,6 +139,7 @@ Deno.test("metadata parser normalizes emoji and deduplicates entities", () => {
     entities: ["Mycelia", "OpenAI"],
     emoji: "🧠",
   });
+  expect(normalizeEmoji("🇬🇧")).toBe("🇬🇧");
 });
 
 Deno.test("metadata parser rejects a response without an emoji", () => {

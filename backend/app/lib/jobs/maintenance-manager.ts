@@ -8,6 +8,7 @@ import { getQueue } from "./queue.ts";
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
+const ACTIVE_MISSING_GRACE_MS = 30 * 1000;
 const LIVE_QUEUE_STATES = new Set([
   "active",
   "delayed",
@@ -38,10 +39,107 @@ export class MaintenanceManager {
     if (this.running) return;
     this.running = true;
     try {
+      await this.cancelMissingActiveJobs();
       await this.cancelLongRunningJobs();
       await this.cancelMissingWaitingJobs();
+      await this.releaseCompletedSummarizationClaims();
     } finally {
       this.running = false;
+    }
+  }
+
+  private async cancelMissingActiveJobs() {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    const cutoff = new Date(Date.now() - ACTIVE_MISSING_GRACE_MS);
+    const activeJobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        state: "active",
+        updatedAt: { $lte: cutoff },
+      },
+      options: { limit: 500 },
+    });
+
+    for (const job of activeJobs) {
+      const jobId = job._id?.toString();
+      const jobType = job.type as string | undefined;
+      if (!jobId || !jobType || !jobRegistry.get(jobType)) continue;
+
+      const queueJob = await getQueue(jobType).getJob(jobId);
+      if (queueJob && LIVE_QUEUE_STATES.has(await queueJob.getState())) {
+        continue;
+      }
+
+      const now = new Date();
+      const result = await mongo({
+        action: "updateOne",
+        collection: "jobs",
+        query: { _id: new ObjectId(jobId), state: "active" },
+        update: {
+          $set: {
+            state: "cancelled",
+            cancelReason: "queue_record_missing",
+            failedReason: "queue_record_missing",
+            finishedAt: now,
+            updatedAt: now,
+          },
+        },
+      });
+      if ((result.modifiedCount ?? 0) === 0) continue;
+
+      if (jobType === "summarization") {
+        await mongo({
+          action: "updateMany",
+          collection: "objects",
+          query: { "_summarizationClaim.jobId": jobId },
+          update: { $unset: { _summarizationClaim: "" } },
+        });
+      } else if (jobType === "conversation_extractor") {
+        await mongo({
+          action: "updateMany",
+          collection: "conversation_chunks",
+          query: { state: "processing", processedByJobId: jobId },
+          update: {
+            $set: {
+              state: "error",
+              error: "Worker process disappeared before completing the job",
+              extractionLastErrorAt: now,
+              extractionRetryAfter: now,
+            },
+            $unset: { processingStartedAt: "" },
+          },
+        });
+      }
+
+      await publishJobUpdate(jobId, jobType, "job.state", {
+        state: "cancelled",
+        finishedOn: now.getTime(),
+      });
+      console.warn(
+        `[SELF-HEAL] Cancelled orphaned active job ${jobId} in ${jobType}; its BullMQ record is missing.`,
+      );
+    }
+  }
+
+  private async releaseCompletedSummarizationClaims() {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    const result = await mongo({
+      action: "updateMany",
+      collection: "objects",
+      query: {
+        "_summarizationClaim.jobId": { $exists: true },
+        "summaries.0": { $exists: true },
+      },
+      update: { $unset: { _summarizationClaim: "" } },
+    });
+
+    if ((result.modifiedCount ?? 0) > 0) {
+      console.warn(
+        `[SELF-HEAL] Released ${result.modifiedCount} completed summarization claim(s).`,
+      );
     }
   }
 

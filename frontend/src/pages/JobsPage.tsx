@@ -1231,7 +1231,11 @@ export default function JobsPage() {
     mutationFn: async (workerType: string) => {
       return await api.callResource("jobs", {
         action: "enqueue",
-        data: { type: workerType },
+        data: {
+          type: workerType,
+          retryNow: workerType === "conversation_extractor" ||
+            workerType === "summarization",
+        },
         trigger: {
           type: "manual",
           reason: "pipeline_health_run_now",
@@ -2456,6 +2460,8 @@ export default function JobsPage() {
                     workerStatus?.workers[workerType]?.paused ?? false;
                   const runnable = service?.status === "healthy" &&
                     !workerPaused && !busy;
+                  const availableWork = backlog.ready +
+                    (backlog.retryableErrors ?? 0);
                   return (
                     <div
                       key={workerType}
@@ -2496,7 +2502,7 @@ export default function JobsPage() {
                         <Button
                           size="sm"
                           onClick={() => runBacklogMutation.mutate(workerType)}
-                          disabled={!runnable || backlog.ready === 0 ||
+                          disabled={!runnable || availableWork === 0 ||
                             runBacklogMutation.isPending}
                           title={workerPaused
                             ? "Resume this worker first"

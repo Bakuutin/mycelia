@@ -206,6 +206,71 @@ See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for details.
 
 ## Troubleshooting
 
+### Queue recovery and process restarts
+
+For unattended local use, prefer the stable runtime (`FRONTEND_MODE=prod` and
+`BACKEND_TASK=start`). Use Docker hot reload only while actively editing: Vite
+and the Deno watcher consume more memory, and a watcher can keep its container
+alive after the child application has failed.
+
+Check the whole stack without changing data:
+
+```bash
+docker compose ps
+docker compose logs --tail=150 mongo redis backend frontend nginx \
+  | rg '\[READY\]|\[WATCHDOG\]|\[SELF-HEAL\]|error|unhealthy|OOM|Killed'
+curl -fkSs https://localhost:4433/readiness
+```
+
+MongoDB and Redis now have Docker health checks, and the backend waits for both
+before starting. Once ready, the backend checks them every 30 seconds. After
+three consecutive failed checks it logs a `[SELF-HEAL]` record and exits;
+Docker's `restart: unless-stopped` policy then starts it again. The backend log
+also emits `[READY]` only after workers, periodic triggers, and maintenance are
+running.
+
+Extraction and summarization triggers run every five minutes. Source failures
+are retained and retried with bounded exponential backoff:
+
+- conversation extraction: 5 minutes, increasing up to 6 hours;
+- summarization content-filter failures: 15 minutes, increasing up to 24 hours;
+- completed summarization claims left by an interrupted run are released by
+  maintenance once the summary exists.
+- active Mongo job records whose BullMQ record disappeared after a process
+  restart are cancelled with `queue_record_missing`; summarization claims are
+  released and interrupted extraction chunks return to the retry backlog.
+
+Open **Jobs → Pipeline health & recovery** at
+<https://localhost:4433/jobs>. `Run now` immediately retries eligible and
+previously errored source records (bypassing backoff for that manual run).
+`Retry one failed` recreates one historical failed job while preserving the
+original failure. Resume only the affected worker if its card says it is
+paused. Do not use **Reset worker** merely to retry errors: reset drains live
+queue state and is reserved for an explicitly confirmed queue reset.
+
+Restart application code without touching MongoDB or Redis:
+
+```bash
+docker compose up -d --build --force-recreate frontend backend
+docker compose restart nginx
+docker compose ps
+docker compose logs --tail=100 backend frontend nginx \
+  | rg '\[READY\]|\[WATCHDOG\]|\[SELF-HEAL\]|error'
+```
+
+Restart a failed dependency only when its health check or logs identify it:
+
+```bash
+docker compose restart redis       # queue unavailable
+docker compose restart mongo       # database unavailable
+docker compose restart backend     # reconnect workers after dependency recovery
+docker compose ps
+```
+
+Speech-to-text is a separate external dependency. An unavailable STT provider
+blocks transcription but does not block conversation extraction or
+summarization when their LLM provider is healthy.
+
 ### FFmpeg Import Errors
 
 1. Check `~/Library/mycelia/logs/daemon.log` for details

@@ -11,6 +11,12 @@ services:
     restart: unless-stopped
     environment:
       - REDIS_PASSWORD
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
   mongo:
     image: mongo:8.2
     entrypoint: ["/mongo-entrypoint.sh"]
@@ -30,6 +36,12 @@ services:
         limits:
           cpus: '2.0'
           memory: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
 
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
@@ -76,8 +88,10 @@ services:
       - "5173"
     restart: unless-stopped
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: deno task ${BACKEND_TASK:-start}
     env_file:
       - .env
@@ -148,8 +162,10 @@ services:
       - ./misc/nginx/ssl:/etc/nginx/ssl
       - ./misc/nginx/nginx-entrypoint.sh:/nginx-entrypoint.sh:ro
     depends_on:
-      - frontend
-      - backend
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 

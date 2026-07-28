@@ -14,5 +14,9 @@ Before claiming that a code change is live:
    restart nginx. Do not restart MongoDB or Redis for code reloads.
 6. Treat startup, listening, healthy, and ready as separate states. Report which
    state was actually verified.
+7. For stalled extraction or summarization, inspect Jobs → Pipeline health &
+   recovery before resetting anything. Failed history is intentional; use
+   `Run now` for source recovery, and remember that automatic retries use
+   backoff. Look for `[WATCHDOG]` and `[SELF-HEAL]` in backend logs.
 
 The exact commands and recovery steps are maintained in `DEVELOPMENT.md`.

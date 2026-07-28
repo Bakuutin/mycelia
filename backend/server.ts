@@ -35,6 +35,7 @@ import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { registerRoutes } from "./routes.ts";
 import { errorHandler } from "@/middleware/errorHandler.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
+import { redis } from "@/lib/redis.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { maintenanceManager } from "@/lib/jobs/maintenance-manager.ts";
 import {
@@ -50,6 +51,74 @@ import { down, status, to, up } from "@/lib/mongo/migrator.ts";
 import { setServiceReady } from "@/routes/health.ts";
 
 let logFile: Deno.FsFile | null = null;
+let dependencyWatchdogInterval: number | null = null;
+const dependencyRedis = redis.duplicate();
+let dependencyWatchdogRunning = false;
+let dependencyFailures = 0;
+
+const DEPENDENCY_WATCHDOG_INTERVAL_MS = 30_000;
+const DEPENDENCY_WATCHDOG_TIMEOUT_MS = 8_000;
+const DEPENDENCY_FAILURE_LIMIT = 3;
+
+async function checkCriticalDependencies(): Promise<void> {
+  if (dependencyWatchdogRunning) return;
+  dependencyWatchdogRunning = true;
+  try {
+    const check = Promise.all([
+      dependencyRedis.ping(),
+      getRootDB().then((db) => db.command({ ping: 1 }, { timeoutMS: 5_000 })),
+    ]);
+    await Promise.race([
+      check,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("critical dependency check timed out")),
+          DEPENDENCY_WATCHDOG_TIMEOUT_MS,
+        )
+      ),
+    ]);
+    if (dependencyFailures > 0) {
+      console.log(
+        `[SELF-HEAL] Critical dependencies recovered after ${dependencyFailures} failed check(s).`,
+      );
+    }
+    dependencyFailures = 0;
+  } catch (error) {
+    dependencyFailures++;
+    console.error(
+      `[WATCHDOG] Critical dependency check ${dependencyFailures}/${DEPENDENCY_FAILURE_LIMIT} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    if (dependencyFailures >= DEPENDENCY_FAILURE_LIMIT) {
+      setServiceReady(false);
+      console.error(
+        "[SELF-HEAL] MongoDB or Redis remained unavailable; exiting so Docker restart policy can recover the backend.",
+      );
+      exit(1);
+    }
+  } finally {
+    dependencyWatchdogRunning = false;
+  }
+}
+
+function startDependencyWatchdog(): void {
+  if (dependencyWatchdogInterval !== null) return;
+  dependencyWatchdogInterval = setInterval(
+    checkCriticalDependencies,
+    DEPENDENCY_WATCHDOG_INTERVAL_MS,
+  );
+  console.log(
+    `[WATCHDOG] Critical dependency monitor started interval=${DEPENDENCY_WATCHDOG_INTERVAL_MS}ms failureLimit=${DEPENDENCY_FAILURE_LIMIT}.`,
+  );
+}
+
+function stopDependencyWatchdog(): void {
+  if (dependencyWatchdogInterval === null) return;
+  clearInterval(dependencyWatchdogInterval);
+  dependencyWatchdogInterval = null;
+  dependencyRedis.disconnect();
+}
 
 function setupLogging() {
   const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
@@ -330,6 +399,7 @@ async function startServer(
   }
 
   setServiceReady(true);
+  startDependencyWatchdog();
   console.log(
     `[READY] backend ready mode=${backendMode} workers=${!noWorkers} ` +
       `reload=${backendMode === "dev" ? "watch" : "manual"} ` +
@@ -341,6 +411,7 @@ async function startServer(
   ["SIGTERM", "SIGINT"].forEach((signal) => {
     process.once(signal, async () => {
       setServiceReady(false);
+      stopDependencyWatchdog();
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await stopWorkers();

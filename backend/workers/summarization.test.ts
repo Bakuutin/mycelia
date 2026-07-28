@@ -1,8 +1,15 @@
 import { expect } from "@std/expect";
 import {
   buildSummarySourceRefs,
+  getSummarizationRetryDelayMs,
   isTerminalSummarizationResponseError,
 } from "./summarization.ts";
+
+Deno.test("summarization retries back off and remain bounded", () => {
+  expect(getSummarizationRetryDelayMs(1)).toBe(15 * 60 * 1000);
+  expect(getSummarizationRetryDelayMs(2)).toBe(30 * 60 * 1000);
+  expect(getSummarizationRetryDelayMs(99)).toBe(24 * 60 * 60 * 1000);
+});
 
 Deno.test("summary source receipt records exact chunks and transcripts", () => {
   const refs = buildSummarySourceRefs(

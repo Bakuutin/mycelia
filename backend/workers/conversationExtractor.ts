@@ -146,6 +146,8 @@ interface ConversationChunk {
   transcriptionIds: ObjectId[];
   totalTextLength: number;
   state: string;
+  extractionRetryCount?: number;
+  extractionRetryAfter?: Date;
   params: {
     model: string;
     force: boolean;
@@ -175,6 +177,10 @@ export const schema = z.object({
     .default(Deno.env.get("CONVERSATION_EXTRACTION_FALLBACK_MODEL") ?? "")
     .describe(
       "Optional model retried once after a primary LLM error; empty means stop with error",
+    ),
+  retryNow: z.boolean().default(false)
+    .describe(
+      "Manual recovery: retry errored chunks immediately instead of waiting for backoff",
     ),
 
   // Prompt overrides (migrated from config.prompts)
@@ -227,6 +233,44 @@ export function shouldReplaceChunkArtifacts(
   force: boolean,
 ): boolean {
   return force || chunkState === "processing";
+}
+
+const EXTRACTION_RETRY_BASE_MS = 5 * 60 * 1000;
+const EXTRACTION_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
+
+export function getExtractionRetryDelayMs(attempt: number): number {
+  const safeAttempt = Math.max(1, Math.floor(attempt));
+  return Math.min(
+    EXTRACTION_RETRY_BASE_MS * 2 ** (safeAttempt - 1),
+    EXTRACTION_RETRY_MAX_MS,
+  );
+}
+
+function retryableChunkStateFilter(
+  now: Date,
+  processingTimeoutMs: number,
+  retryNow = false,
+) {
+  return {
+    $or: [
+      { state: "ready" },
+      {
+        state: "processing",
+        processingStartedAt: {
+          $lt: new Date(now.getTime() - processingTimeoutMs),
+        },
+      },
+      {
+        state: "error",
+        ...(retryNow ? {} : {
+          $or: [
+            { extractionRetryAfter: { $exists: false } },
+            { extractionRetryAfter: { $lte: now } },
+          ],
+        }),
+      },
+    ],
+  };
 }
 
 export function transcriptionToUtterances(
@@ -776,7 +820,8 @@ export function normalizeEmoji(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
 
-  const emojiPattern = /\p{Extended_Pictographic}/u;
+  const emojiPattern =
+    /(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2})/u;
   const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
     .segment(trimmed);
   for (const { segment } of graphemes) {
@@ -979,15 +1024,20 @@ async function processChunk(params: {
         }
         : {
           _id: chunk._id,
-          $or: [
-            { state: "ready" },
-            {
-              state: "processing",
-              processingStartedAt: {
-                $lt: new Date(Date.now() - processingTimeoutMs),
-              },
-            },
-          ],
+          ...(input.chunkId
+            ? {
+              $or: [
+                { state: "ready" },
+                { state: "error" },
+                {
+                  state: "processing",
+                  processingStartedAt: {
+                    $lt: new Date(Date.now() - processingTimeoutMs),
+                  },
+                },
+              ],
+            }
+            : retryableChunkStateFilter(new Date(), processingTimeoutMs)),
         },
       update: {
         $set: {
@@ -1412,7 +1462,11 @@ async function processChunk(params: {
             metadata: metadataRuns,
           },
         },
-        $unset: { processingStartedAt: "" },
+        $unset: {
+          processingStartedAt: "",
+          extractionRetryAfter: "",
+          error: "",
+        },
       },
     });
 
@@ -1431,6 +1485,12 @@ async function processChunk(params: {
   } catch (error) {
     console.error(`Failed to process chunk ${chunk._id}:`, error);
 
+    const retryCount = (chunk.extractionRetryCount ?? 0) + 1;
+    const failedAt = new Date();
+    const retryAfter = new Date(
+      failedAt.getTime() + getExtractionRetryDelayMs(retryCount),
+    );
+
     await mongo({
       action: "updateOne",
       collection: "conversation_chunks",
@@ -1439,6 +1499,9 @@ async function processChunk(params: {
         $set: {
           state: "error",
           error: error instanceof Error ? error.message : String(error),
+          extractionRetryCount: retryCount,
+          extractionLastErrorAt: failedAt,
+          extractionRetryAfter: retryAfter,
         },
         $unset: { processingStartedAt: "" },
       },
@@ -1524,17 +1587,11 @@ const capability: JobCapability = {
       chunks = chunk ? [chunk] : [];
     } else {
       // Build query with optional date range filters
-      const stateFilter = {
-        $or: [
-          { state: "ready" },
-          {
-            state: { $in: ["processing", "error"] },
-            processingStartedAt: {
-              $lt: new Date(Date.now() - processingTimeoutMs),
-            },
-          },
-        ],
-      };
+      const stateFilter = retryableChunkStateFilter(
+        new Date(),
+        processingTimeoutMs,
+        input.retryNow,
+      );
 
       const dateFilter: Record<string, any> = {};
       if (input.start) dateFilter.$gte = new Date(input.start);
