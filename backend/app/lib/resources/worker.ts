@@ -71,6 +71,12 @@ const CancelJobSchema = z.object({
   id: z.string(),
 });
 
+const DismissFailedJobSchema = z.object({
+  action: z.literal("dismiss_failed"),
+  id: z.string(),
+  reason: z.string().max(500).optional(),
+});
+
 const GetJobSchema = z.object({
   action: z.literal("get"),
   id: z.string(),
@@ -217,6 +223,7 @@ const RequestSchema = z.union([
   ClearQueueSchema,
   ResetWorkerSchema,
   CancelJobSchema,
+  DismissFailedJobSchema,
   GetJobSchema,
   EnqueueJobSchema,
   SchemasSchema,
@@ -322,6 +329,160 @@ export function getFailedJobsQuery(workerType: string) {
   } as const;
 }
 
+export function getFailedJobRetryData(
+  failedJob: {
+    data?: Record<string, any>;
+    progress?: Record<string, any>;
+  },
+  workerType: string,
+) {
+  const data: Record<string, any> & { type: string } = {
+    ...(failedJob.data ?? {}),
+    type: workerType,
+  };
+
+  // Automatic pipeline jobs normally contain only the worker type. Preserve
+  // the source claimed by the failed run so a bulk retry targets each failed
+  // source exactly once instead of creating many competing discovery jobs.
+  if (
+    workerType === "conversation_extractor" && !data.chunkId &&
+    failedJob.progress?.chunkId
+  ) {
+    data.chunkId = failedJob.progress.chunkId;
+  }
+  if (
+    workerType === "transcription" && !data.sequenceId &&
+    failedJob.progress?.sequenceId
+  ) {
+    data.sequenceId = failedJob.progress.sequenceId;
+  }
+
+  return data;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+        .join(",")
+    }}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function groupFailedJobsForRetry(
+  failedJobs: Array<{
+    _id: { toString(): string };
+    data?: Record<string, any>;
+    progress?: Record<string, any>;
+  }>,
+  workerType: string,
+) {
+  const groups = new Map<
+    string,
+    {
+      data: Record<string, any> & { type: string };
+      failedJobs: typeof failedJobs;
+    }
+  >();
+
+  for (const failedJob of failedJobs) {
+    const data = getFailedJobRetryData(failedJob, workerType);
+    const key = stableStringify(data);
+    const group = groups.get(key);
+    if (group) group.failedJobs.push(failedJob);
+    else groups.set(key, { data, failedJobs: [failedJob] });
+  }
+
+  return [...groups.values()];
+}
+
+async function findSupersededFailedJobIds(
+  mongo: ReturnType<typeof getMongoResource>,
+  failedJobs: Array<{
+    _id: { toString(): string };
+    data?: Record<string, any>;
+    progress?: Record<string, any>;
+  }>,
+  workerType: string,
+): Promise<Set<string>> {
+  const sourceToFailedJobs = new Map<string, string[]>();
+  const addSource = (sourceId: unknown, failedJobId: string) => {
+    if (typeof sourceId !== "string" || !ObjectId.isValid(sourceId)) return;
+    const ids = sourceToFailedJobs.get(sourceId) ?? [];
+    ids.push(failedJobId);
+    sourceToFailedJobs.set(sourceId, ids);
+  };
+
+  for (const failedJob of failedJobs) {
+    const failedJobId = failedJob._id.toString();
+    if (workerType === "conversation_extractor") {
+      addSource(
+        failedJob.data?.chunkId ?? failedJob.progress?.chunkId,
+        failedJobId,
+      );
+    } else if (workerType === "transcription") {
+      addSource(
+        failedJob.data?.sequenceId ?? failedJob.progress?.sequenceId,
+        failedJobId,
+      );
+    } else if (workerType === "summarization") {
+      addSource(failedJob.data?.objectId, failedJobId);
+    }
+  }
+
+  if (sourceToFailedJobs.size === 0) return new Set();
+
+  const sourceIds = [...sourceToFailedJobs.keys()].map((id) =>
+    new ObjectId(id)
+  );
+  let completedSources: any[] = [];
+  if (workerType === "conversation_extractor") {
+    completedSources = await mongo({
+      action: "find",
+      collection: "conversation_chunks",
+      query: {
+        _id: { $in: sourceIds },
+        state: { $in: ["completed", "empty"] },
+      },
+      options: { projection: { _id: 1 } },
+    });
+  } else if (workerType === "transcription") {
+    completedSources = await mongo({
+      action: "find",
+      collection: "transcription_sequences",
+      query: { _id: { $in: sourceIds }, state: "completed" },
+      options: { projection: { _id: 1 } },
+    });
+  } else if (workerType === "summarization") {
+    completedSources = await mongo({
+      action: "find",
+      collection: "objects",
+      query: {
+        _id: { $in: sourceIds },
+        "summaries.0": { $exists: true },
+      },
+      options: { projection: { _id: 1 } },
+    });
+  }
+
+  const superseded = new Set<string>();
+  for (const source of completedSources) {
+    for (
+      const failedJobId of sourceToFailedJobs.get(source._id.toString()) ??
+        []
+    ) {
+      superseded.add(failedJobId);
+    }
+  }
+  return superseded;
+}
+
 export class JobsResource implements Resource<WorkerProgressRequest, any> {
   code = "jobs";
   description = "Update job progress, list jobs, or enqueue a new job";
@@ -339,6 +500,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.enqueue(input, auth);
       case "cancel":
         return this.cancel(input, auth);
+      case "dismiss_failed":
+        return this.dismissFailed(input, auth);
       case "cancel_all":
         return this.cancelAll(input, auth);
       case "clear_completed":
@@ -618,6 +781,36 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     return { success: true, cancelled: true, processTerminated };
   }
 
+  private async dismissFailed(
+    input: z.infer<typeof DismissFailedJobSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const dismissedAt = new Date();
+    const result = await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: {
+        _id: new ObjectId(input.id),
+        state: "failed",
+        dismissedAt: { $exists: false },
+      },
+      update: {
+        $set: {
+          dismissedAt,
+          dismissedReason: input.reason ?? "user_dismissed",
+          updatedAt: dismissedAt,
+        },
+      },
+    });
+
+    if ((result.modifiedCount ?? 0) === 0) {
+      throw new Error("Failed job was not found or was already dismissed");
+    }
+
+    return { success: true, id: input.id, dismissedAt };
+  }
+
   private async cancelAll(
     _input: z.infer<typeof CancelAllJobsSchema>,
     auth: Auth,
@@ -758,27 +951,66 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         type: input.workerType,
         state: "failed",
         retriedAt: { $exists: false },
+        dismissedAt: { $exists: false },
       },
       options: { sort: { createdAt: 1 }, limit: input.limit },
     }) as any[];
+
+    const supersededIds = await findSupersededFailedJobIds(
+      mongo,
+      failedJobs,
+      input.workerType,
+    );
+    const retryCandidates = failedJobs.filter((job) =>
+      !supersededIds.has(job._id.toString())
+    );
+    if (supersededIds.size > 0) {
+      const dismissedAt = new Date();
+      await mongo({
+        action: "updateMany",
+        collection: "jobs",
+        query: {
+          _id: {
+            $in: [...supersededIds].map((id) => new ObjectId(id)),
+          },
+          dismissedAt: { $exists: false },
+        },
+        update: {
+          $set: {
+            dismissedAt,
+            dismissedReason: "source_already_completed",
+            updatedAt: dismissedAt,
+          },
+        },
+      });
+    }
 
     const serverAuth = await getServerAuth();
     const retried: Array<{ failedJobId: string; retryJobId: string }> = [];
     const errors: string[] = [];
 
-    for (const failedJob of failedJobs) {
+    for (
+      const group of groupFailedJobsForRetry(
+        retryCandidates,
+        input.workerType,
+      )
+    ) {
+      const firstFailedJob = group.failedJobs[0];
       try {
-        const retryJob = await enqueueJob(failedJob.data, {
+        const retryJob = await enqueueJob(group.data, {
           trigger: {
             type: "manual",
-            reason: `retry_failed:${failedJob._id.toString()}`,
+            reason: `retry_failed:${firstFailedJob._id.toString()}`,
           },
         }, serverAuth);
         const retriedAt = new Date();
         await mongo({
-          action: "updateOne",
+          action: "updateMany",
           collection: "jobs",
-          query: { _id: failedJob._id },
+          query: {
+            _id: { $in: group.failedJobs.map((job) => job._id) },
+            retriedAt: { $exists: false },
+          },
           update: {
             $set: {
               retriedAt,
@@ -787,13 +1019,13 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
             },
           },
         });
-        retried.push({
+        retried.push(...group.failedJobs.map((failedJob) => ({
           failedJobId: failedJob._id.toString(),
           retryJobId: retryJob.id!,
-        });
+        })));
       } catch (error) {
         errors.push(
-          `${failedJob._id.toString()}: ${
+          `${firstFailedJob._id.toString()}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -805,6 +1037,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       success: errors.length === 0,
       workerType: input.workerType,
       retriedCount: retried.length,
+      dismissedCount: supersededIds.size,
+      handledCount: retried.length + supersededIds.size,
+      queuedCount: new Set(retried.map((item) => item.retryJobId)).size,
       retried,
       errors,
     };
@@ -1320,6 +1555,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
             $match: {
               state: "failed",
               retriedAt: { $exists: false },
+              dismissedAt: { $exists: false },
               type: {
                 $in: [
                   "transcription",
@@ -1525,6 +1761,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       query: {
         type: { $in: types },
         state: { $in: queryStatuses },
+        dismissedAt: { $exists: false },
       },
       options: {
         sort: { createdAt: -1 },
@@ -1706,6 +1943,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
     // Get overall counts by status (across ALL jobs, not limited)
     const statusCountsPipeline = [
+      { $match: { dismissedAt: { $exists: false } } },
       {
         $group: {
           _id: "$state",
@@ -1739,6 +1977,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
     // Aggregate job statistics by type
     const pipeline = [
+      { $match: { dismissedAt: { $exists: false } } },
       {
         $group: {
           _id: "$type",
@@ -2088,6 +2327,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         }];
       case "cancel":
         return [{ path: ["jobs", input.id], actions: ["cancel"] }];
+      case "dismiss_failed":
+        return [{ path: ["jobs", input.id], actions: ["delete"] }];
       case "enqueue":
         return [{ path: ["jobs", input.data.type], actions: ["enqueue"] }];
       case "progressUpdate":

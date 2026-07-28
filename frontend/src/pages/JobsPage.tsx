@@ -844,7 +844,8 @@ function JobProgressCell({ job }: { job: JobInfo }) {
               Batch summarization
             </Badge>
             <div className="text-xs text-muted-foreground">
-              {batchSummaries.length} summar{batchSummaries.length === 1 ? "y" : "ies"} created
+              {batchSummaries.length}{" "}
+              summar{batchSummaries.length === 1 ? "y" : "ies"} created
             </div>
             <Link
               to={`/jobs/${job.id}`}
@@ -1366,17 +1367,60 @@ export default function JobsPage() {
   });
 
   const retryFailedMutation = useMutation({
-    mutationFn: async (workerType: string) => {
-      return await api.callResource("jobs", {
-        action: "retry_failed",
+    mutationFn: async ({
+      workerType,
+      failedCount,
+    }: {
+      workerType: string;
+      failedCount: number;
+    }) => {
+      let retriedCount = 0;
+      let dismissedCount = 0;
+      let handledCount = 0;
+      let queuedCount = 0;
+      let errors: string[] = [];
+
+      while (handledCount < failedCount) {
+        const batchSize = Math.min(100, failedCount - handledCount);
+        const result = await api.callResource("jobs", {
+          action: "retry_failed",
+          workerType,
+          limit: batchSize,
+        }) as {
+          retriedCount: number;
+          dismissedCount?: number;
+          handledCount?: number;
+          queuedCount?: number;
+          workerType: string;
+          errors?: string[];
+        };
+
+        retriedCount += result.retriedCount;
+        dismissedCount += result.dismissedCount ?? 0;
+        const batchHandled = result.handledCount ?? result.retriedCount;
+        handledCount += batchHandled;
+        queuedCount += result.queuedCount ?? result.retriedCount;
+        errors = result.errors ?? [];
+        if (errors.length > 0 || batchHandled < batchSize) break;
+      }
+
+      return {
+        retriedCount,
+        dismissedCount,
+        handledCount,
+        queuedCount,
         workerType,
-        limit: 1,
-      }) as { retriedCount: number; workerType: string; errors?: string[] };
+        errors,
+      };
     },
     onSuccess: (result) => {
       alert(
-        result.retriedCount > 0
-          ? `Started a recovery job for ${result.workerType}. The original failure remains in history.`
+        result.handledCount > 0
+          ? `Handled ${result.handledCount} failed ${result.workerType} job(s): queued ${result.queuedCount} recovery job(s) and dismissed ${result.dismissedCount} superseded failure(s). The original records remain in history.${
+            result.errors.length > 0
+              ? `\n\nStopped early: ${result.errors[0]}`
+              : ""
+          }`
           : `No unretried ${result.workerType} failures found.`,
       );
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -1385,6 +1429,26 @@ export default function JobsPage() {
     },
     onError: (error) => {
       alert(error instanceof Error ? error.message : "Failed to retry job");
+    },
+  });
+
+  const dismissFailedMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      return await api.callResource("jobs", {
+        action: "dismiss_failed",
+        id: jobId,
+        reason: "user_dismissed_obsolete_failure",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+      refetchPipelineHealth();
+    },
+    onError: (error) => {
+      alert(
+        error instanceof Error ? error.message : "Failed to dismiss failure",
+      );
     },
   });
 
@@ -2912,13 +2976,24 @@ export default function JobsPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => retryFailedMutation.mutate(workerType)}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
+                              )
+                            ) {
+                              retryFailedMutation.mutate({
+                                workerType,
+                                failedCount: backlog.failedJobsUnretried,
+                              });
+                            }
+                          }}
                           disabled={service?.status !== "healthy" ||
                             backlog.failedJobsUnretried === 0 ||
                             retryFailedMutation.isPending}
                         >
                           <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                          Retry one failed
+                          Retry all failed ({backlog.failedJobsUnretried})
                         </Button>
                       </div>
                       {workerPaused && (

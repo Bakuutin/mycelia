@@ -202,6 +202,40 @@ worker is resumed. Check Jobs > Pipeline Health:
 Do not force extraction again merely because summarization was filtered; use
 the summarization failure status and job error instead.
 
+## Retry or dismiss failed jobs
+
+Open **Jobs**, filter to the affected worker, and use **Retry all failed (N)**.
+The UI sends safe batches of up to 100 jobs until the displayed failure backlog
+is handled. Confirm that the configured provider/model route is healthy before
+starting a large retry.
+
+For conversation extraction and transcription, retries retain the failed
+source (`chunkId` or `sequenceId`), so they retry that exact source rather than
+starting an unrelated worker poll. If a source has already completed since its
+old failed run, the failure is dismissed automatically instead of retried.
+This includes completed/empty conversation chunks, completed transcription
+sequences, and targeted summaries that already exist. Dismissed records remain
+in database history but leave active failure lists and counters.
+
+Use the row-level **Dismiss** action only for a known obsolete failure that
+cannot be reconciled automatically. It hides the historical failure; it does
+not run the source.
+
+### VAD is queued but does not start
+
+Check **Jobs > Workers** and resume VAD if it is paused. Backend startup
+reconciles the configured worker pause setting with BullMQ, so a Redis queue
+left paused by an earlier process is resumed when `workers.vad.paused` is
+false. If it remains inactive after a normal backend restart, use the amber
+worker reset; do not run a direct VAD process alongside the queued worker.
+
+### Check remaining transcription backlog
+
+**Audio > Pipeline** shows **Transcription backlog**: unclaimed
+speech-positive chunks (`transcribed_at: null`, `processing_by: null`, and
+`vad.has_speech: true`). Maximum audio hours is `pending chunks * 10 / 3600`;
+it is an upper-bound estimate because final chunks may be shorter.
+
 ### Summary source references and emoji
 
 New summary versions store an exact `sourceRefs` receipt containing:

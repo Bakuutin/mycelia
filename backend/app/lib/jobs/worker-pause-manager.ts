@@ -46,16 +46,25 @@ class WorkerPauseManager {
    * Initialize pause state from config.
    * Call this on server startup after workers are created.
    */
-  async initFromConfig(workersConfig: Record<string, { paused?: boolean }>): Promise<void> {
+  async initFromConfig(
+    workersConfig: Record<string, { paused?: boolean }>,
+  ): Promise<void> {
     for (const [workerType, config] of Object.entries(workersConfig)) {
       if (config.paused) {
         await this.pauseWorker(workerType);
+      } else {
+        // BullMQ pause state is persisted in Redis. Reconcile both directions
+        // so a queue cannot remain paused after the config was changed while
+        // the backend was offline or interrupted during persistence.
+        await this.resumeWorker(workerType);
       }
     }
-    
+
     const pausedCount = this.pausedWorkers.size;
     if (pausedCount > 0) {
-      console.log(`[WorkerPauseManager] Restored ${pausedCount} paused worker(s) from config`);
+      console.log(
+        `[WorkerPauseManager] Restored ${pausedCount} paused worker(s) from config`,
+      );
     }
   }
 }

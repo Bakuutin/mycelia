@@ -48,8 +48,9 @@ your own words.
 - Worker management UI with pause/resume, statistics, and success rates.
 - Pipeline ordering and progress tracking.
 - Configurable worker defaults and prompt templates.
-- Historical conversation metadata repair and verification:
-  [conversation extraction troubleshooting](docs/CONVERSATION_EXTRACTION_TROUBLESHOOTING.md).
+- Failed-job bulk retry, obsolete-failure dismissal, VAD queue recovery, and
+  historical conversation repair:
+  [pipeline troubleshooting](docs/CONVERSATION_EXTRACTION_TROUBLESHOOTING.md).
 
 ### Infrastructure & Auth
 

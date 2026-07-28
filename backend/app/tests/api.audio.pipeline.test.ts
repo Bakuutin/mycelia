@@ -35,6 +35,8 @@ Deno.test(
     expect(typeof data.stats.vadJobs).toBe("object");
     expect(typeof data.stats.vadJobs.active).toBe("number");
     expect(typeof data.stats.vadJobs.failed).toBe("number");
+    expect(typeof data.stats.transcriptionPendingChunks).toBe("number");
+    expect(typeof data.stats.transcriptionPendingMaximumHours).toBe("number");
     expect(typeof data.stats.sourceFiles.total).toBe("number");
     expect(Array.isArray(data.stats.sourceFiles.byKind)).toBe(true);
     expect(Array.isArray(data.stats.stages)).toBe(true);

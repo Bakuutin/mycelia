@@ -134,6 +134,8 @@ interface PipelineStats {
   sequencesReady: number;
   sequencesProcessing: number;
   sequencesError: number;
+  transcriptionPendingChunks: number;
+  transcriptionPendingMaximumHours: number;
   convChunksReady: number;
   convChunksProcessing: number;
   convChunksError: number;
@@ -970,6 +972,80 @@ export default function AudioPipelinePage() {
               </div>
             </details>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-primary" />
+                Transcription backlog
+              </CardTitle>
+              <CardDescription className="mt-1">
+                Speech-positive chunks that are not transcribed and are not
+                currently claimed by an STT worker.
+              </CardDescription>
+            </div>
+            <Badge
+              variant={(stats?.transcriptionPendingChunks ?? 0) > 0
+                ? "secondary"
+                : "outline"}
+            >
+              {(stats?.transcriptionPendingChunks ?? 0) > 0
+                ? `${stats?.transcriptionPendingChunks.toLocaleString()} pending`
+                : "Up to date"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg bg-muted/40 p-3">
+              <p className="text-xs text-muted-foreground">Pending chunks</p>
+              <p className="mt-1 text-xl font-semibold text-amber-600">
+                {(stats?.transcriptionPendingChunks ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/40 p-3">
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Clock className="h-3 w-3" /> Audio left (maximum)
+              </p>
+              <p className="mt-1 text-xl font-semibold">
+                {(stats?.transcriptionPendingMaximumHours ?? 0).toLocaleString(
+                  undefined,
+                  {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  },
+                )}h
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                assumes {MAX_AUDIO_CHUNK_SECONDS}s per chunk
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/40 p-3">
+              <p className="text-xs text-muted-foreground">Sequences ready</p>
+              <p className="mt-1 text-xl font-semibold">
+                {(stats?.sequencesReady ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/40 p-3">
+              <p className="text-xs text-muted-foreground">
+                Sequences processing / errors
+              </p>
+              <p className="mt-1 text-xl font-semibold">
+                {(stats?.sequencesProcessing ?? 0).toLocaleString()} /{" "}
+                <span
+                  className={(stats?.sequencesError ?? 0) > 0
+                    ? "text-red-500"
+                    : undefined}
+                >
+                  {(stats?.sequencesError ?? 0).toLocaleString()}
+                </span>
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

@@ -16,6 +16,7 @@ const PIPELINE_STAGES = [
 ] as const;
 
 const PIPELINE_STATS_MAX_TIME_MS = 10_000;
+const MAX_AUDIO_CHUNK_SECONDS = 10;
 
 function isMissingIndexHint(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -142,6 +143,8 @@ interface PipelineStats {
   sequencesReady: number;
   sequencesProcessing: number;
   sequencesError: number;
+  transcriptionPendingChunks: number;
+  transcriptionPendingMaximumHours: number;
   convChunksReady: number;
   convChunksProcessing: number;
   convChunksError: number;
@@ -316,7 +319,12 @@ async function getVadPipelineStats(
         action: "aggregate",
         collection: "jobs",
         pipeline: [
-          { $match: { type: "vad" } },
+          {
+            $match: {
+              type: "vad",
+              dismissedAt: { $exists: false },
+            },
+          },
           {
             $group: {
               _id: null,
@@ -356,7 +364,11 @@ async function getVadPipelineStats(
       mongo({
         action: "find",
         collection: "jobs",
-        query: { type: "vad", state: "failed" },
+        query: {
+          type: "vad",
+          state: "failed",
+          dismissedAt: { $exists: false },
+        },
         options: {
           projection: { failedReason: 1, finishedAt: 1, createdAt: 1 },
           sort: { finishedAt: -1, createdAt: -1 },
@@ -620,6 +632,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       sequencesReady,
       sequencesProcessing,
       sequencesError,
+      transcriptionPendingChunkStatsResult,
       convChunksReady,
       convChunksProcessing,
       convChunksError,
@@ -649,6 +662,21 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         collection: "transcription_sequences",
         query: { state: "error" },
       }),
+      aggregatePipelineStats(
+        mongo,
+        "audio_chunks",
+        [
+          {
+            $match: {
+              transcribed_at: null,
+              processing_by: null,
+              "vad.has_speech": true,
+            },
+          },
+          { $count: "count" },
+        ],
+        "audio_chunks_pending_work",
+      ),
       mongo({
         action: "count",
         collection: "conversation_chunks",
@@ -780,6 +808,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
           {
             $match: {
               type: { $in: PIPELINE_STAGES.map((stage) => stage.type) },
+              dismissedAt: { $exists: false },
             },
           },
           { $sort: { updatedAt: -1, createdAt: -1 } },
@@ -813,7 +842,10 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       mongo({
         action: "find",
         collection: "jobs",
-        query: { type: { $in: PIPELINE_STAGES.map((stage) => stage.type) } },
+        query: {
+          type: { $in: PIPELINE_STAGES.map((stage) => stage.type) },
+          dismissedAt: { $exists: false },
+        },
         options: {
           sort: { updatedAt: -1, createdAt: -1 },
           limit: 12,
@@ -838,6 +870,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
 
     const pendingSequenceChunks = pendingSequenceChunkStatsResult[0]?.count ??
       0;
+    const transcriptionPendingChunks =
+      transcriptionPendingChunkStatsResult[0]?.count ?? 0;
     const sourceTotals = sourceStatsResult[0] ?? {};
     const sourceFilesStats = {
       total: sourceTotals.total ?? 0,
@@ -896,6 +930,9 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       sequencesReady,
       sequencesProcessing,
       sequencesError,
+      transcriptionPendingChunks,
+      transcriptionPendingMaximumHours: transcriptionPendingChunks *
+        MAX_AUDIO_CHUNK_SECONDS / 3600,
       convChunksReady,
       convChunksProcessing,
       convChunksError,
