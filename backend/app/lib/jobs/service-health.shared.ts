@@ -1,3 +1,5 @@
+import { normalizeOpenAIBaseUrl } from "../llm/model-routing.ts";
+
 export type ExternalServiceId = "stt" | "llm";
 export type ExternalServiceStatus =
   | "healthy"
@@ -13,6 +15,8 @@ export interface ExternalServiceHealth {
   baseUrl?: string;
   modelsUrl?: string;
   source?: string;
+  providerProfileId?: string;
+  providerProfileName?: string;
   model?: string;
   models?: string[];
   httpStatus?: number;
@@ -36,9 +40,11 @@ export function getJobServiceDependencies(
 }
 
 export function getModelsUrl(baseUrl: string): string {
-  let normalized = baseUrl.trim().replace(/\/$/, "");
-  if (!normalized.endsWith("/v1")) normalized += "/v1";
-  return `${normalized}/models`;
+  return `${normalizeOpenAIBaseUrl(baseUrl)}/models`;
+}
+
+export function normalizeProviderModelId(model: string): string {
+  return model.trim().replace(/^models\//, "");
 }
 
 export function classifyServiceResponse(

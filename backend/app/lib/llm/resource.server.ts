@@ -5,7 +5,9 @@ import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { meter, tracer } from "@/lib/telemetry.ts";
 import {
   getConfiguredFallback,
+  normalizeOpenAIBaseUrl,
   resolveConfiguredModel,
+  sanitizeProviderBaseUrl,
 } from "./model-routing.ts";
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
@@ -96,6 +98,12 @@ export interface InferenceProviderConfig {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  defaultAlias?: "small" | "medium" | "large";
+  smallModel?: string;
+  mediumModel?: string;
+  largeModel?: string;
+  profileId?: string;
+  profileName?: string;
   fallbackEnabled: boolean;
   fallbackModel?: string;
 }
@@ -130,6 +138,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         baseUrl: envBaseUrl,
         apiKey: envApiKey,
         model: envModel,
+        defaultAlias: "medium",
+        smallModel: Deno.env.get("MODEL_SMALL"),
+        mediumModel: Deno.env.get("MODEL_MEDIUM"),
+        largeModel: Deno.env.get("MODEL_LARGE"),
+        profileId: "environment",
+        profileName: "Environment overrides",
         fallbackEnabled: envFallbackEnabled,
         fallbackModel: envFallbackModel,
       };
@@ -137,6 +151,24 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
     // Fallback to MongoDB config for backward compatibility
     const config = await getServerConfig();
+    const activeProfile = config.llmProfiles?.profiles.find((profile) =>
+      profile.id === config.llmProfiles?.activeProfileId
+    );
+    if (activeProfile?.baseUrl && activeProfile.apiKey) {
+      const defaultAlias = activeProfile.defaultAlias ?? "medium";
+      return {
+        baseUrl: activeProfile.baseUrl,
+        apiKey: activeProfile.apiKey,
+        model: activeProfile.aliases[defaultAlias],
+        defaultAlias,
+        smallModel: activeProfile.aliases.small,
+        mediumModel: activeProfile.aliases.medium,
+        largeModel: activeProfile.aliases.large,
+        profileId: activeProfile.id,
+        profileName: activeProfile.name,
+        fallbackEnabled: false,
+      };
+    }
     const provider = config.llm || config.inference;
     if (!provider?.baseUrl || !provider?.apiKey) {
       return null;
@@ -145,6 +177,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       model: envModel || provider.model,
+      defaultAlias: "medium",
+      smallModel: Deno.env.get("MODEL_SMALL"),
+      mediumModel: Deno.env.get("MODEL_MEDIUM"),
+      largeModel: Deno.env.get("MODEL_LARGE"),
+      profileId: "legacy",
+      profileName: "Legacy provider",
       fallbackEnabled: envFallbackEnabledValue === undefined
         ? provider.fallbackEnabled ?? false
         : envFallbackEnabled,
@@ -156,13 +194,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
    * Resolve model aliases (small/medium/large) to actual model names.
    * Priority: BASE_MODEL env var > explicit task model > MODEL_* alias > configured global model
    */
-  resolveModelAlias(modelName: string, defaultModel?: string): string {
+  resolveModelAlias(
+    modelName: string,
+    provider: InferenceProviderConfig,
+  ): string {
     return resolveConfiguredModel(modelName, {
-      defaultModel,
+      defaultModel: provider.model,
       baseModel: Deno.env.get("BASE_MODEL"),
-      smallModel: Deno.env.get("MODEL_SMALL"),
-      mediumModel: Deno.env.get("MODEL_MEDIUM"),
-      largeModel: Deno.env.get("MODEL_LARGE"),
+      smallModel: provider.smallModel || Deno.env.get("MODEL_SMALL"),
+      mediumModel: provider.mediumModel || Deno.env.get("MODEL_MEDIUM"),
+      largeModel: provider.largeModel || Deno.env.get("MODEL_LARGE"),
     });
   }
 
@@ -174,7 +215,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     const span = tracer.startSpan("llm_resource_use", {
       attributes: {
         "llm.action": input.action,
-        "llm.model_requested": input.action === "completions" ? input.model : undefined,
+        "llm.model_requested": input.action === "completions"
+          ? input.model
+          : undefined,
       },
     });
 
@@ -193,18 +236,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               code: 2,
               message: "Inference provider not configured",
             });
-            throw new Error("Inference provider not configured. Please configure it in server settings.");
+            throw new Error(
+              "Inference provider not configured. Please configure it in server settings.",
+            );
           }
 
-          // Normalize base URL: remove trailing slash, ensure /v1 suffix
-          let baseUrl = provider.baseUrl.replace(/\/$/, "");
-          if (!baseUrl.endsWith("/v1")) {
-            baseUrl = `${baseUrl}/v1`;
-          }
+          const baseUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
 
           // Legacy aliases resolve to the configured global default. Explicit
           // task models remain explicit and are never silently replaced.
-          resolvedModel = this.resolveModelAlias(input.model, provider.model);
+          resolvedModel = this.resolveModelAlias(input.model, provider);
           // A caller can explicitly provide a fallback model, or provide an
           // empty string to opt out. Calls that do not declare a policy retain
           // the provider-level fallback for backwards compatibility.
@@ -213,7 +254,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             ? input.fallbackModel
             : provider.fallbackModel;
           const configuredFallback = requestedFallback
-            ? this.resolveModelAlias(requestedFallback, provider.model)
+            ? this.resolveModelAlias(requestedFallback, provider)
             : undefined;
           const fallbackModel = getConfiguredFallback(
             resolvedModel,
@@ -224,7 +265,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           );
 
           // Record request with resolved model
-          llmRequestCounter.add(1, { action: input.action, model: resolvedModel });
+          llmRequestCounter.add(1, {
+            action: input.action,
+            model: resolvedModel,
+          });
 
           span.setAttributes({
             "llm.model": resolvedModel,
@@ -251,10 +295,14 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             proxyResponse = await sendRequest(resolvedModel);
             if (!proxyResponse.ok) {
               responseErrorBody = await proxyResponse.text();
-              primaryError = `HTTP ${proxyResponse.status}: ${responseErrorBody.slice(0, 500)}`;
+              primaryError = `HTTP ${proxyResponse.status}: ${
+                responseErrorBody.slice(0, 500)
+              }`;
             }
           } catch (error) {
-            primaryError = error instanceof Error ? error.message : String(error);
+            primaryError = error instanceof Error
+              ? error.message
+              : String(error);
             proxyResponse = new Response(null, { status: 502 });
           }
 
@@ -291,7 +339,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             const primaryContext = primaryError
               ? ` Primary model error: ${primaryError}.`
               : "";
-            throw new Error(`LLM API error (${proxyResponse.status}) for model "${resolvedModel}" at ${baseUrl}: ${errorBody.slice(0, 500)}${primaryContext}`);
+            throw new Error(
+              `LLM API error (${proxyResponse.status}); requested model "${input.model}" resolved to "${resolvedModel}" at ${baseUrl}: ${
+                errorBody.slice(0, 500)
+              }${primaryContext}`,
+            );
           }
 
           // Check if streaming is requested
@@ -319,10 +371,16 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               resolvedModel,
               fallbackModel: fallbackModel || undefined,
               fallbackUsed,
+              // Persist only the normalized provider route, never credentials.
+              providerBaseUrl: sanitizeProviderBaseUrl(baseUrl),
+              providerProfileId: provider.profileId,
+              providerProfileName: provider.profileName,
             };
 
             // Extract cost from litellm response header (x-litellm-response-cost)
-            const responseCostHeader = proxyResponse.headers.get("x-litellm-response-cost");
+            const responseCostHeader = proxyResponse.headers.get(
+              "x-litellm-response-cost",
+            );
             if (responseCostHeader) {
               const cost = parseFloat(responseCostHeader);
               if (!isNaN(cost)) {
@@ -344,7 +402,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               code: 2,
               message: `JSON parse error: ${errorMessage}`,
             });
-            const preview = responseText.length > 200 ? responseText.slice(0, 200) + '...' : responseText;
+            const preview = responseText.length > 200
+              ? responseText.slice(0, 200) + "..."
+              : responseText;
             throw new Error(
               `Invalid JSON response from model "${resolvedModel}": ${errorMessage}. Response: ${preview}`,
             );
@@ -357,14 +417,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               code: 2,
               message: "Inference provider not configured",
             });
-            throw new Error("Inference provider not configured. Please configure it in server settings.");
+            throw new Error(
+              "Inference provider not configured. Please configure it in server settings.",
+            );
           }
 
-          // Normalize base URL
-          let baseUrl = provider.baseUrl.replace(/\/$/, "");
-          if (!baseUrl.endsWith("/v1")) {
-            baseUrl = `${baseUrl}/v1`;
-          }
+          const baseUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
 
           // Fetch available models from inference provider
           const modelsResponse = await fetch(`${baseUrl}/models`, {
@@ -377,7 +435,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               code: 2,
               message: `Failed to fetch models: ${modelsResponse.status}`,
             });
-            throw new Error(`Failed to fetch models (${modelsResponse.status}): ${errorText.slice(0, 200)}`);
+            throw new Error(
+              `Failed to fetch models (${modelsResponse.status}): ${
+                errorText.slice(0, 200)
+              }`,
+            );
           }
 
           const modelsData = await modelsResponse.json();
@@ -385,15 +447,19 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           // Get category config from env vars
           const categories = {
             small: {
-              default: Deno.env.get("MODEL_SMALL") || provider.model || "small",
+              default: provider.smallModel || Deno.env.get("MODEL_SMALL") ||
+                provider.model || "small",
               models: [] as string[],
             },
             medium: {
-              default: Deno.env.get("MODEL_MEDIUM") || provider.model || "medium",
+              default: provider.mediumModel || Deno.env.get("MODEL_MEDIUM") ||
+                provider.model ||
+                "medium",
               models: [] as string[],
             },
             large: {
-              default: Deno.env.get("MODEL_LARGE") || provider.model || "large",
+              default: provider.largeModel || Deno.env.get("MODEL_LARGE") ||
+                provider.model || "large",
               models: [] as string[],
             },
           };

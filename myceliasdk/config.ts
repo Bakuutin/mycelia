@@ -1,8 +1,6 @@
 import { z } from "zod";
 
-import { zObjectId, zDateOrString } from "./zod-json-schema.ts";
-
-
+import { zDateOrString, zObjectId } from "./zod-json-schema.ts";
 
 export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
@@ -12,11 +10,33 @@ export const zProviderConfig = z.object({
   fallbackModel: z.string().optional(),
 });
 
+export const zModelAliasMap = z.object({
+  small: z.string().min(1),
+  medium: z.string().min(1),
+  large: z.string().min(1),
+});
+
+export const zLlmProviderProfile = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  baseUrl: z.string().url(),
+  apiKey: z.string(),
+  aliases: zModelAliasMap,
+  defaultAlias: z.enum(["small", "medium", "large"]).default("medium"),
+});
+
+export const zLlmProfilesConfig = z.object({
+  activeProfileId: z.string().min(1),
+  profiles: z.array(zLlmProviderProfile).min(1),
+});
+
 // Deprecated: use llm and transcription instead
 export const zInferenceProviderConfig = zProviderConfig;
 
 export const zWorkerConfig = z.object({
-  paused: z.boolean().optional().default(false).describe("Whether this worker is paused and won't process new jobs."),
+  paused: z.boolean().optional().default(false).describe(
+    "Whether this worker is paused and won't process new jobs.",
+  ),
 });
 
 export type WorkerConfig = z.infer<typeof zWorkerConfig>;
@@ -29,14 +49,21 @@ export const zServerConfigPrompts = z.object({
 export const zServerConfig = z.object({
   prompts: zServerConfigPrompts,
   llm: zProviderConfig.optional().nullable(),
+  llmProfiles: zLlmProfilesConfig.optional().nullable(),
   transcription: zProviderConfig.optional().nullable(),
   // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({
-    enable_experimental_processing: z.boolean().describe("Enable experimental processing of conversations. This feature is currently in development and may not work as expected."),
-    enable_speaker_identification: z.boolean().default(false).describe("Enable speaker identification to recognize enrolled voices in diarization results. When enabled, diarization will match segments against enrolled speaker profiles."),
+    enable_experimental_processing: z.boolean().describe(
+      "Enable experimental processing of conversations. This feature is currently in development and may not work as expected.",
+    ),
+    enable_speaker_identification: z.boolean().default(false).describe(
+      "Enable speaker identification to recognize enrolled voices in diarization results. When enabled, diarization will match segments against enrolled speaker profiles.",
+    ),
   }),
-  workers: z.record(z.string(), zWorkerConfig).optional().default({}).describe("Per-worker configuration. Key is worker code/type."),
+  workers: z.record(z.string(), zWorkerConfig).optional().default({}).describe(
+    "Per-worker configuration. Key is worker code/type.",
+  ),
   createdAt: zDateOrString(),
   updatedAt: zDateOrString(),
 });
@@ -63,11 +90,21 @@ export type Prompt = z.infer<typeof zPrompt>;
 
 export const zWorkerEntry = z.object({
   _id: zObjectId(),
-  name: z.string().describe("Worker name/type (e.g., 'summarization', 'transcription')"),
-  discovered: z.boolean().describe("Whether this worker is currently discovered/available"),
-  inputSchema: z.record(z.string(), z.any()).describe("JSON Schema for worker input"),
-  outputSchema: z.record(z.string(), z.any()).describe("JSON Schema for worker output"),
-  defaultOverrides: z.record(z.string(), z.any()).optional().describe("Runtime overrides for schema defaults"),
+  name: z.string().describe(
+    "Worker name/type (e.g., 'summarization', 'transcription')",
+  ),
+  discovered: z.boolean().describe(
+    "Whether this worker is currently discovered/available",
+  ),
+  inputSchema: z.record(z.string(), z.any()).describe(
+    "JSON Schema for worker input",
+  ),
+  outputSchema: z.record(z.string(), z.any()).describe(
+    "JSON Schema for worker output",
+  ),
+  defaultOverrides: z.record(z.string(), z.any()).optional().describe(
+    "Runtime overrides for schema defaults",
+  ),
   lastSeen: z.date().describe("Last time this worker was discovered"),
   createdAt: z.date(),
   updatedAt: z.date(),

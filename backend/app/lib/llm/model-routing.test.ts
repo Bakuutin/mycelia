@@ -1,8 +1,22 @@
 import { expect } from "@std/expect";
 import {
   getConfiguredFallback,
+  normalizeOpenAIBaseUrl,
   resolveConfiguredModel,
+  sanitizeProviderBaseUrl,
 } from "./model-routing.ts";
+
+Deno.test("OpenAI base URL normalization preserves provider-specific API roots", () => {
+  expect(normalizeOpenAIBaseUrl("http://host:8082"))
+    .toBe("http://host:8082/v1");
+  expect(normalizeOpenAIBaseUrl("http://host:8082/v1/"))
+    .toBe("http://host:8082/v1");
+  expect(
+    normalizeOpenAIBaseUrl(
+      "https://generativelanguage.googleapis.com/v1beta/openai/",
+    ),
+  ).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+});
 
 Deno.test("global default resolves legacy model aliases", () => {
   expect(resolveConfiguredModel("small", {
@@ -11,6 +25,14 @@ Deno.test("global default resolves legacy model aliases", () => {
   expect(resolveConfiguredModel("medium", {
     defaultModel: "Qwen3.gguf",
   })).toBe("Qwen3.gguf");
+});
+
+Deno.test("provider provenance never stores URL credentials", () => {
+  expect(
+    sanitizeProviderBaseUrl(
+      "https://user:secret@example.test/v1?token=hidden#fragment",
+    ),
+  ).toBe("https://example.test/v1");
 });
 
 Deno.test("explicit task model is not replaced by global default", () => {

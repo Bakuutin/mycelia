@@ -11,6 +11,16 @@ describe("getModelsEndpoint", () => {
     expect(getModelsEndpoint("https://api.example.com/v1/"))
       .toBe("https://api.example.com/v1/models");
   });
+
+  it("preserves provider-specific OpenAI compatibility roots", () => {
+    expect(
+      getModelsEndpoint(
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+      ),
+    ).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai/models",
+    );
+  });
 });
 
 describe("extractModelIds", () => {
@@ -21,7 +31,13 @@ describe("extractModelIds", () => {
       { id: "z-model" },
       { name: "missing-id" },
       "direct-model",
+      { id: "models/gemini-3.5-flash-lite" },
       null,
-    ])).toEqual(["a-model", "direct-model", "z-model"]);
+    ])).toEqual([
+      "a-model",
+      "direct-model",
+      "gemini-3.5-flash-lite",
+      "z-model",
+    ]);
   });
 });
