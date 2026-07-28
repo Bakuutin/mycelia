@@ -173,6 +173,29 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/v1/models")
+async def list_models(_: bool = Depends(verify_api_key)):
+    """Advertise the single Whisper model loaded by this STT deployment."""
+    if not ASR_MODEL or ASR_MODEL == "unknown":
+        raise HTTPException(
+            status_code=503,
+            detail="ASR_MODEL is not configured",
+        )
+
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": ASR_MODEL,
+                "object": "model",
+                "created": 0,
+                "owned_by": "mycelia-stt",
+                "capabilities": ["audio.transcriptions"],
+            }
+        ],
+    }
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_all(path: str, request: Request, _: bool = Depends(verify_api_key)):
     upstream_url = urljoin(OLLAMA_SERVICE_URL, path)

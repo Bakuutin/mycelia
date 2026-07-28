@@ -4,7 +4,7 @@ This deployment runs speech-to-text as two containers on an NVIDIA GPU host:
 
 | Container | Required | Purpose |
 | --- | --- | --- |
-| `mycelia-stt-whisper-1` | Yes | Loads `large-v3-turbo` with `faster-whisper` on CUDA and performs transcription. Port 9000 stays internal. |
+| `mycelia-stt-whisper-1` | Yes | Loads the configured Whisper model (`large-v3` by default) with `faster-whisper` on CUDA and performs transcription. Port 9000 stays internal. |
 | `mycelia-stt-proxy-1` | Yes | Exposes the authenticated OpenAI-compatible `POST /v1/audio/transcriptions` API. |
 | `cloudflared` | No | Only needed when a Cloudflare Tunnel that owns the chosen hostname is configured to route to this proxy. It is not needed for direct Tailscale access. |
 
@@ -33,21 +33,48 @@ http://100.119.163.116:8001
    | --- | --- | --- |
    | `PROXY_API_KEY` | Generate with `openssl rand -hex 32` | Required. Store it as a secret and use the same value in Mycelia. |
    | `PROXY_PORT` | `8001` | Published host port. Change it if already occupied. |
-   | `ASR_MODEL` | `large-v3-turbo` | Optional Whisper model override. |
+   | `ASR_MODEL` | `large-v3` | Optional Whisper model override. The proxy and Whisper container must use the same value. |
 
 6. Deploy the stack. The first pull is large and can outlive a reverse-proxy request timeout. If Portainer times out, pre-pull `onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu` from **Images**, then deploy again.
 7. Keep both `whisper` and `proxy` running. Do not publish Whisper's internal port 9000.
 
-If the proxy image was already built on the endpoint, Portainer reuses `mycelia-stt-proxy:latest`. A Git-based deployment can also build it from `gpu/proxy/Dockerfile`.
+If the proxy image was already built on the endpoint, Portainer reuses `sky-mycelia-stt-proxy:latest`. A Git-based deployment can also build it from `gpu/proxy/Dockerfile`.
+
+### Build the proxy image in Portainer
+
+Use the `sky-` prefix for locally built Mycelia images so the stack, Portainer,
+and this repository all refer to the same image name:
+
+```text
+sky-mycelia-stt-proxy:latest
+```
+
+To upload the build context manually, create an archive from the repository
+root without putting secrets in it:
+
+```bash
+COPYFILE_DISABLE=1 tar --no-xattrs \
+  -czf /tmp/sky-mycelia-stt-proxy.tar.gz \
+  -C gpu/proxy Dockerfile requirements.txt server.py
+```
+
+`COPYFILE_DISABLE=1` and `--no-xattrs` prevent macOS metadata such as
+`com.apple.provenance` from making a Linux Portainer build fail.
+
+In Portainer, open **Images → Build a new image**, enter
+`sky-mycelia-stt-proxy:latest`, select **Upload**, choose the archive, and build
+it. Then open the `mycelia-stt` stack editor and make sure the proxy service
+uses the same image name. Updating only this image reference recreates the
+proxy; it does not change the configured Whisper model or delete its cache.
 
 ### Change the Whisper model
 
 1. Open the `mycelia-stt` stack in Portainer and select **Editor**.
-2. Under **Environment variables**, set `ASR_MODEL` to the desired model, for example `large-v3-turbo`.
+2. Under **Environment variables**, set `ASR_MODEL` to the desired model, for example `large-v3`.
 3. Select **Update the stack** and confirm the redeploy. Portainer recreates the `whisper` and `proxy` containers with the same model setting.
 4. Watch `mycelia-stt-whisper-1` logs. The first transcription after a model change may take longer while the model is downloaded or loaded.
 
-`large-v3-turbo` is already the default in `docker-compose.portainer.yml`, so removing the `ASR_MODEL` override also selects it. The model cache volume is retained during a normal stack update.
+`large-v3` is already the default in `docker-compose.portainer.yml`, so removing the `ASR_MODEL` override also selects it. The model cache volume is retained during a normal stack update.
 
 ### Unload the model after five idle minutes
 
@@ -75,12 +102,39 @@ Expected response:
 {"status":"ok"}
 ```
 
-Run a real transcription test:
+Verify that the authenticated proxy advertises the model actually loaded by
+the stack:
 
 ```bash
 curl --fail-with-body \
   -H "Authorization: Bearer $PROXY_API_KEY" \
-  -F "file=@sample.wav;type=audio/wav" \
+  http://100.119.163.116:8001/v1/models
+```
+
+The response contains one model whose `id` matches the stack's `ASR_MODEL`.
+This endpoint is served directly by the STT proxy; it must not be forwarded to
+an Ollama or LLM upstream.
+
+If transcription works but this request returns `502 Bad gateway: Name or
+service not known`, the host and API key are already correct. That specific
+failure means an older proxy image does not implement `/v1/models` and its
+catch-all route is trying to send the request to the obsolete default
+`http://ollama:11434`. Rebuild `sky-mycelia-stt-proxy:latest` from the current
+`gpu/proxy` directory and recreate only `mycelia-stt-proxy-1`. The explicit
+transcription endpoint can keep working throughout this failure, which is why
+the same STT configuration may have appeared healthy before model discovery
+was added to the UI.
+
+Run a real transcription test:
+
+The repository includes the short `test.wav` and `test.aiff` fixtures for this
+smoke test. Run the command from the repository root.
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
+  -F "file=@test.wav;type=audio/wav" \
+  -F "model=large-v3" \
   -F "language=en" \
   http://100.119.163.116:8001/v1/audio/transcriptions
 ```
