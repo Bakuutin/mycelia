@@ -73,9 +73,26 @@ Deno.test("segment parser resolves phrase boundaries through prompt time markers
 Deno.test("conversation extractor defaults explicitly request metadata", () => {
   const input = schema.parse({ type: "conversation_extractor" });
 
+  expect(input.extractorVersion).toBe("v2");
+  expect(input.force).toBe(false);
+  expect(input.model).toBeUndefined();
   expect(input.extraction_system_prompt).toContain("entities");
   expect(input.extraction_system_prompt).toContain("emoji");
   expect(input.extraction_system_prompt).toContain("agreed_upon_something");
+});
+
+Deno.test("forced historical extraction requires a targeted chunk", () => {
+  expect(() => schema.parse({ type: "conversation_extractor", force: true }))
+    .toThrow("force requires an explicit chunkId");
+
+  const input = schema.parse({
+    type: "conversation_extractor",
+    chunkId: "6a6844e3dbdd95c011538c90",
+    force: true,
+    model: "medium",
+  });
+  expect(input.force).toBe(true);
+  expect(input.model).toBe("medium");
 });
 
 Deno.test("metadata schema requires every extraction field", () => {

@@ -73,6 +73,45 @@ interface ConversationError {
   entity?: string;
 }
 
+interface ExtractedConversationArtifact {
+  conversationId: string;
+  title: string;
+  emoji: string;
+  entities: string[];
+  agreementDetected: boolean;
+  relationshipsAttempted: number;
+  relationshipsCreated: number;
+  relationshipErrors: number;
+}
+
+interface ChunkProcessingResult {
+  claimed: boolean;
+  conversationsCreated: number;
+  segmentsFound: number;
+  emojiCount: number;
+  entityCount: number;
+  agreementCount: number;
+  relationshipsAttempted: number;
+  relationshipsCreated: number;
+  relationshipErrors: number;
+  artifacts: ExtractedConversationArtifact[];
+}
+
+function emptyChunkResult(claimed: boolean): ChunkProcessingResult {
+  return {
+    claimed,
+    conversationsCreated: 0,
+    segmentsFound: 0,
+    emojiCount: 0,
+    entityCount: 0,
+    agreementCount: 0,
+    relationshipsAttempted: 0,
+    relationshipsCreated: 0,
+    relationshipErrors: 0,
+    artifacts: [],
+  };
+}
+
 type StructuredLLMResult<T> = {
   value: T;
   provenance: InferenceProvenance;
@@ -104,6 +143,14 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().default(1),
   extractorVersion: z.string().default("v2"),
+  model: z.string().optional()
+    .describe(
+      "Optional model alias override for this run (for example small or medium); otherwise the chunk model is used",
+    ),
+  force: z.boolean().default(false)
+    .describe(
+      "Replace existing artifacts for the explicitly selected chunkId; force requires chunkId",
+    ),
   fallbackModel: z.string()
     .default(Deno.env.get("CONVERSATION_EXTRACTION_FALLBACK_MODEL") ?? "")
     .describe(
@@ -139,6 +186,14 @@ Do not summarize the transcript and do not add fields outside the schema.`,
   extraction_guidance_prompt: z.string()
     .default("")
     .describe("Guidance for conversation metadata extraction response format"),
+}).superRefine((value, ctx) => {
+  if (value.force && !value.chunkId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "force requires an explicit chunkId",
+      path: ["chunkId"],
+    });
+  }
 });
 
 export type ConversationExtractorJobData = z.infer<typeof schema>;
@@ -869,9 +924,7 @@ async function processChunk(params: {
   processingTimeoutMs: number;
   chunksProcessed: number;
   errors: ConversationError[];
-}): Promise<
-  { claimed: boolean; conversationsCreated: number; segmentsFound: number }
-> {
+}): Promise<ChunkProcessingResult> {
   const {
     chunk,
     input,
@@ -884,24 +937,38 @@ async function processChunk(params: {
     chunksProcessed,
     errors,
   } = params;
+  const model = input.model?.trim() || chunk.params.model;
 
   try {
     // Claim chunk for processing (atomic)
     const updateResult = await mongo({
       action: "updateOne",
       collection: "conversation_chunks",
-      query: {
-        _id: chunk._id,
-        $or: [
-          { state: "ready" },
-          {
-            state: "processing",
-            processingStartedAt: {
-              $lt: new Date(Date.now() - processingTimeoutMs),
+      query: input.force && input.chunkId
+        ? {
+          _id: chunk._id,
+          $or: [
+            { state: { $ne: "processing" } },
+            {
+              state: "processing",
+              processingStartedAt: {
+                $lt: new Date(Date.now() - processingTimeoutMs),
+              },
             },
-          },
-        ],
-      },
+          ],
+        }
+        : {
+          _id: chunk._id,
+          $or: [
+            { state: "ready" },
+            {
+              state: "processing",
+              processingStartedAt: {
+                $lt: new Date(Date.now() - processingTimeoutMs),
+              },
+            },
+          ],
+        },
       update: {
         $set: {
           state: "processing",
@@ -913,7 +980,7 @@ async function processChunk(params: {
 
     if (updateResult.modifiedCount === 0) {
       // Another worker claimed it
-      return { claimed: false, conversationsCreated: 0, segmentsFound: 0 };
+      return emptyChunkResult(false);
     }
 
     await job.updateProgress({
@@ -926,7 +993,7 @@ async function processChunk(params: {
     const extractionKey = generateExtractionKey(
       chunk._id.toString(),
       promptVersion,
-      chunk.params.model,
+      model,
       input.extractorVersion,
     );
 
@@ -950,7 +1017,7 @@ async function processChunk(params: {
         query: { _id: chunk._id },
         update: { $set: { state: "empty", error: "No transcriptions found" } },
       });
-      return { claimed: true, conversationsCreated: 0, segmentsFound: 0 };
+      return emptyChunkResult(true);
     }
 
     // Convert to utterances
@@ -974,7 +1041,12 @@ async function processChunk(params: {
     // A stale processing chunk may already have partial conversation objects
     // from an interrupted worker. Replace only artifacts owned by this chunk
     // before retrying so recovery cannot create duplicates.
-    if (shouldReplaceChunkArtifacts(chunk.state, chunk.params.force)) {
+    if (
+      shouldReplaceChunkArtifacts(
+        chunk.state,
+        input.force || chunk.params.force,
+      )
+    ) {
       await deleteConversationsForChunk(objects, chunk._id);
     }
 
@@ -999,7 +1071,7 @@ async function processChunk(params: {
     const segmentationMessages = buildSegmentationMessages(input, prompt);
     const segmentationRun = await callLLMStructured(
       llm,
-      chunk.params.model,
+      model,
       input.fallbackModel,
       segmentationMessages,
       {
@@ -1064,11 +1136,18 @@ async function processChunk(params: {
           },
         },
       });
-      return { claimed: true, conversationsCreated: 0, segmentsFound: 0 };
+      return emptyChunkResult(true);
     }
 
     // Process each segment
     let chunkConversations = 0;
+    let emojiCount = 0;
+    let entityCount = 0;
+    let agreementCount = 0;
+    let relationshipsAttempted = 0;
+    let relationshipsCreated = 0;
+    let relationshipErrors = 0;
+    const artifacts: ExtractedConversationArtifact[] = [];
     const metadataRuns: Array<Record<string, unknown>> = [];
 
     for (let i = 0; i < segmentsWithUtterances.length; i++) {
@@ -1089,7 +1168,7 @@ async function processChunk(params: {
 
       const metadataRun = await callLLMStructured(
         llm,
-        chunk.params.model,
+        model,
         input.fallbackModel,
         messages,
         {
@@ -1217,6 +1296,37 @@ async function processChunk(params: {
         },
       );
 
+      emojiCount += metadata.emoji ? 1 : 0;
+      entityCount += metadata.entities.length;
+      agreementCount += metadata.agreed_upon_something ? 1 : 0;
+      relationshipsAttempted += relationshipResult.attempted;
+      relationshipsCreated += relationshipResult.created;
+      relationshipErrors += relationshipResult.failed;
+      artifacts.push({
+        conversationId: conversationId.toString(),
+        title: segment.title.trim(),
+        emoji: metadata.emoji ?? "",
+        entities: metadata.entities,
+        agreementDetected: metadata.agreed_upon_something,
+        relationshipsAttempted: relationshipResult.attempted,
+        relationshipsCreated: relationshipResult.created,
+        relationshipErrors: relationshipResult.failed,
+      });
+
+      await job.updateProgress({
+        stage: "extracting_metadata",
+        chunkId: chunk._id.toString(),
+        chunksProcessed,
+        segment: i + 1,
+        totalSegments: segmentsWithUtterances.length,
+        conversationsCreated: chunkConversations + 1,
+        emojiCount,
+        entityCount,
+        agreementCount,
+        relationshipsCreated,
+        relationshipErrors,
+      });
+
       try {
         const latestConversation = await objects({
           action: "get",
@@ -1290,6 +1400,13 @@ async function processChunk(params: {
       claimed: true,
       conversationsCreated: chunkConversations,
       segmentsFound: segmentsWithUtterances.length,
+      emojiCount,
+      entityCount,
+      agreementCount,
+      relationshipsAttempted,
+      relationshipsCreated,
+      relationshipErrors,
+      artifacts,
     };
   } catch (error) {
     console.error(`Failed to process chunk ${chunk._id}:`, error);
@@ -1325,6 +1442,23 @@ const capability: JobCapability = {
     conversationsCreated: z.number(),
     chunksProcessed: z.number(),
     processed: z.number(),
+    segmentsFound: z.number(),
+    emojiCount: z.number(),
+    entityCount: z.number(),
+    agreementCount: z.number(),
+    relationshipsAttempted: z.number(),
+    relationshipsCreated: z.number(),
+    relationshipErrors: z.number(),
+    artifacts: z.array(z.object({
+      conversationId: z.string(),
+      title: z.string(),
+      emoji: z.string(),
+      entities: z.array(z.string()),
+      agreementDetected: z.boolean(),
+      relationshipsAttempted: z.number(),
+      relationshipsCreated: z.number(),
+      relationshipErrors: z.number(),
+    })),
     hasMore: z.boolean(),
     errors: z.array(z.object({
       type: z.string(),
@@ -1418,6 +1552,14 @@ const capability: JobCapability = {
 
     let conversationsCreated = 0;
     let chunksProcessed = 0;
+    let segmentsFound = 0;
+    let emojiCount = 0;
+    let entityCount = 0;
+    let agreementCount = 0;
+    let relationshipsAttempted = 0;
+    let relationshipsCreated = 0;
+    let relationshipErrors = 0;
+    const artifacts: ExtractedConversationArtifact[] = [];
     const errors: ConversationError[] = [];
 
     // Compute prompt version for idempotency (based on prompts that affect output)
@@ -1449,6 +1591,14 @@ const capability: JobCapability = {
 
       chunksProcessed++;
       conversationsCreated += result.conversationsCreated;
+      segmentsFound += result.segmentsFound;
+      emojiCount += result.emojiCount;
+      entityCount += result.entityCount;
+      agreementCount += result.agreementCount;
+      relationshipsAttempted += result.relationshipsAttempted;
+      relationshipsCreated += result.relationshipsCreated;
+      relationshipErrors += result.relationshipErrors;
+      artifacts.push(...result.artifacts);
     }
 
     return {
@@ -1457,6 +1607,14 @@ const capability: JobCapability = {
       conversationsCreated,
       chunksProcessed,
       processed: chunksProcessed,
+      segmentsFound,
+      emojiCount,
+      entityCount,
+      agreementCount,
+      relationshipsAttempted,
+      relationshipsCreated,
+      relationshipErrors,
+      artifacts,
       hasMore,
       ...(errors.length > 0 && { errors }),
     };

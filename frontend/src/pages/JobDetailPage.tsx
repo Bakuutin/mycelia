@@ -755,6 +755,12 @@ export default function JobDetailPage() {
                             { icon: Clock, label: "Processing Time", value: processingTime },
                             { icon: MessageSquare, label: "Conversations Created", value: r.conversationsCreated ?? 0 },
                             { icon: Layers, label: "Chunks Processed", value: r.chunksProcessed ?? 0 },
+                            { icon: Hash, label: "Segments Found", value: r.segmentsFound ?? (r.artifacts ? 0 : "Legacy: unavailable") },
+                            { icon: MessageSquare, label: "Emoji Extracted", value: r.emojiCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
+                            { icon: Users, label: "Entities Extracted", value: r.entityCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
+                            { icon: ExternalLink, label: "Entity Links", value: r.relationshipsCreated != null ? `${r.relationshipsCreated} / ${r.relationshipsAttempted ?? 0}` : "Legacy: unavailable" },
+                            { icon: AlertTriangle, label: "Link Errors", value: r.relationshipErrors ?? (r.artifacts ? 0 : "Legacy: unavailable") },
+                            { icon: Check, label: "Agreements Detected", value: r.agreementCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
                             { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
                         ],
                         errors: r.errors,
@@ -859,6 +865,43 @@ export default function JobDetailPage() {
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+                            )}
+                            {job.type === "conversation_extractor" && Array.isArray(r.artifacts) && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-2">
+                                        Extracted Artifacts ({r.artifacts.length})
+                                    </div>
+                                    {r.artifacts.length === 0 ? (
+                                        <div className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+                                            No conversations or metadata artifacts were extracted.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {r.artifacts.map((artifact: any) => (
+                                                <div key={artifact.conversationId} className="rounded-lg border p-3 text-sm">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <Link className="font-medium hover:underline" to={`/objects/${artifact.conversationId}`}>
+                                                            {artifact.emoji || "◻︎"} {artifact.title || artifact.conversationId}
+                                                        </Link>
+                                                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                                            <span>{artifact.entities?.length ?? 0} entities</span>
+                                                            <span>{artifact.relationshipsCreated ?? 0}/{artifact.relationshipsAttempted ?? 0} links</span>
+                                                            <span>{artifact.relationshipErrors ?? 0} link errors</span>
+                                                            <span>{artifact.agreementDetected ? "agreement: yes" : "agreement: no"}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                                        {(artifact.entities ?? []).length === 0 ? (
+                                                            <Badge variant="outline">0 entities</Badge>
+                                                        ) : artifact.entities.map((entity: string) => (
+                                                            <Badge key={entity} variant="secondary">{entity}</Badge>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             {job.type === "summarization" && r.objectId && (

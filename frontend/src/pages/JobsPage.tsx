@@ -575,6 +575,27 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.chunksProcessed != null && (
               <span>{result.chunksProcessed} chunks</span>
             )}
+            {result.segmentsFound != null
+              ? (
+                <>
+                  <span>{result.segmentsFound} segments</span>
+                  <span>{result.emojiCount ?? 0} emoji</span>
+                  <span>{result.entityCount ?? 0} entities</span>
+                  <span>
+                    {result.relationshipsCreated ?? 0}/
+                    {result.relationshipsAttempted ?? 0} links
+                  </span>
+                  <span>{result.agreementCount ?? 0} agreements</span>
+                  <span
+                    className={(result.relationshipErrors ?? 0) > 0
+                      ? "text-red-400"
+                      : undefined}
+                  >
+                    {result.relationshipErrors ?? 0} link errors
+                  </span>
+                </>
+              )
+              : <span>legacy result: extraction counts unavailable</span>}
             {result.errors?.length > 0 && (
               <span className="text-red-400">
                 {result.errors.length} errors
@@ -608,6 +629,18 @@ function JobProgressCell({ job }: { job: JobInfo }) {
               <span>
                 {progress.segment ?? 0}/{progress.totalSegments} segments
               </span>
+            )}
+            {progress.entityCount != null && (
+              <span>{progress.entityCount} entities</span>
+            )}
+            {progress.emojiCount != null && (
+              <span>{progress.emojiCount} emoji</span>
+            )}
+            {progress.relationshipsCreated != null && (
+              <span>{progress.relationshipsCreated} links</span>
+            )}
+            {progress.agreementCount != null && (
+              <span>{progress.agreementCount} agreements</span>
             )}
           </div>
         </div>
