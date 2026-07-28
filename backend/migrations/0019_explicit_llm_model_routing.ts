@@ -30,6 +30,7 @@ export const up = async (db: Db) => {
   await configs.updateOne(
     {
       _id: SERVER_CONFIG_ID,
+      inference: { $type: "object" },
       "inference.fallbackEnabled": { $exists: false },
     },
     {
