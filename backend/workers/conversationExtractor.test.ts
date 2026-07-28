@@ -6,6 +6,7 @@ import {
   normalizeEmoji,
   parseMetadataResponse,
   schema,
+  shouldReplaceChunkArtifacts,
   transcriptionToUtterances,
 } from "./conversationExtractor.ts";
 
@@ -35,6 +36,12 @@ Deno.test("STT segments become timestamped prompt utterances", () => {
   expect(formatChunkAsPrompt(utterances).prompt).toContain(
     "[time: 2026-07-10T10:00:10.000Z]\nSecond topic",
   );
+});
+
+Deno.test("stale chunk recovery replaces partial extraction artifacts", () => {
+  expect(shouldReplaceChunkArtifacts("ready", false)).toBe(false);
+  expect(shouldReplaceChunkArtifacts("processing", false)).toBe(true);
+  expect(shouldReplaceChunkArtifacts("completed", true)).toBe(true);
 });
 
 Deno.test("segment parser resolves phrase boundaries through prompt time markers", () => {

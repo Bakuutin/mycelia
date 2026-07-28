@@ -147,6 +147,13 @@ export type ConversationExtractorJobData = z.infer<typeof schema>;
 // Pure Functions
 // ============================================================================
 
+export function shouldReplaceChunkArtifacts(
+  chunkState: string,
+  force: boolean,
+): boolean {
+  return force || chunkState === "processing";
+}
+
 export function transcriptionToUtterances(
   transcription: TranscriptionInput,
 ): Utterance[] {
@@ -964,8 +971,10 @@ async function processChunk(params: {
       );
     }
 
-    // Delete existing if force
-    if (chunk.params.force) {
+    // A stale processing chunk may already have partial conversation objects
+    // from an interrupted worker. Replace only artifacts owned by this chunk
+    // before retrying so recovery cannot create duplicates.
+    if (shouldReplaceChunkArtifacts(chunk.state, chunk.params.force)) {
       await deleteConversationsForChunk(objects, chunk._id);
     }
 
