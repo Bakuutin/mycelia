@@ -191,6 +191,41 @@ async function getVadChunkStats(
 
   if (!vadChunkStatsInFlight) {
     vadChunkStatsInFlight = (async () => {
+      const processedVadPipeline = [
+        { $match: { "vad.ran_at": { $lte: new Date() } } },
+        { $count: "count" },
+      ];
+      const loadProcessedVadStats = async () => {
+        try {
+          return await mongo({
+            action: "aggregate",
+            collection: "audio_chunks",
+            pipeline: processedVadPipeline,
+            options: { hint: "audio_chunks_vad_processed" },
+          });
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          if (
+            !message.includes(
+              "hint provided does not correspond to an existing index",
+            )
+          ) {
+            throw error;
+          }
+
+          console.warn(
+            "[audio-pipeline] VAD statistics index is unavailable; retrying without a hint",
+          );
+          return await mongo({
+            action: "aggregate",
+            collection: "audio_chunks",
+            pipeline: processedVadPipeline,
+          });
+        }
+      };
+
       const [totalChunkStats, processedVadStats] = await Promise.all([
         mongo({
           action: "aggregate",
@@ -200,15 +235,7 @@ async function getVadChunkStats(
             { $project: { _id: 0, count: "$count" } },
           ],
         }),
-        mongo({
-          action: "aggregate",
-          collection: "audio_chunks",
-          pipeline: [
-            { $match: { "vad.ran_at": { $lte: new Date() } } },
-            { $count: "count" },
-          ],
-          options: { hint: "audio_chunks_vad_processed" },
-        }),
+        loadProcessedVadStats(),
       ]);
 
       const totalChunks = totalChunkStats[0]?.count ?? 0;

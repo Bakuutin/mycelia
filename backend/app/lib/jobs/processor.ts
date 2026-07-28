@@ -3,14 +3,33 @@ import type { JobData, JobResult } from "./types.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { signJWT } from "@/lib/auth/tokens.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
-import { EJSON } from "bson";
+import { EJSON, ObjectId } from "bson";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { assertJobServicesHealthy } from "./service-health.ts";
 
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const activeChildren = new Map<string, Deno.ChildProcess>();
+
+export function cancelRunningJob(jobId: string): boolean {
+  const child = activeChildren.get(jobId);
+  if (!child) return false;
+
+  try {
+    child.kill("SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const capability = jobRegistry.getOrThrow(jobType);
+
+  // Re-check at execution time because a provider may have gone down after the
+  // job entered the queue. This prevents expensive worker startup and a doomed
+  // external API call. The source sequence/chunk/object remains retryable.
+  await assertJobServicesHealthy(jobType);
 
   // Apply default overrides from workers collection (fallback for legacy jobs)
   // NOTE: Worker defaults are now primarily applied at enqueue time in queue.ts
@@ -96,7 +115,8 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   });
 
   const child = cmd.spawn();
-  let timeoutId: number | null = null;
+  if (job.id) activeChildren.set(job.id, child);
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const mongo = await getMongoResource(await getServerAuth());
   let logQueue = Promise.resolve();
@@ -221,7 +241,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   };
 
   try {
-    return await Promise.race([
+    const result = await Promise.race([
       runChild(),
       new Promise<never>((_resolve, reject) => {
         timeoutId = setTimeout(() => {
@@ -234,7 +254,58 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
         }, JOB_TIMEOUT_MS);
       }),
     ]);
+
+    // Persist completion here as well as in QueueEvents. An active BullMQ job
+    // cannot be force-removed safely: its worker may still finish and commit
+    // side effects after the queue record was cancelled/removed. In that case
+    // BullMQ may never emit the global completed event, so Mongo would
+    // otherwise remain incorrectly marked as cancelled.
+    const jobDocs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(job.id) },
+      options: { limit: 1 },
+    });
+    const previousState = jobDocs[0]?.state;
+    const finishedAt = new Date();
+
+    if (previousState === "cancelled") {
+      console.warn(
+        `[Processor] Job ${job.id} produced a result after cancellation; ` +
+          "reconciling Mongo state to completed",
+      );
+    }
+
+    await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: new ObjectId(job.id) },
+      update: {
+        $set: {
+          state: "completed",
+          finishedAt,
+          result,
+          updatedAt: finishedAt,
+          ...(previousState === "cancelled"
+            ? {
+              completionReconciliation: {
+                previousState,
+                reconciledAt: finishedAt,
+                reason: "worker_completed_after_cancellation",
+              },
+            }
+            : {}),
+        },
+        $unset: {
+          failedReason: "",
+          cancelReason: "",
+        },
+      },
+    });
+
+    return result;
   } finally {
+    if (job.id) activeChildren.delete(job.id);
     if (timeoutId !== null) {
       clearTimeout(timeoutId);
     }

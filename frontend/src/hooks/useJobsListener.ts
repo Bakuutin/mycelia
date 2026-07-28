@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import type { JobInfo } from "@/types/jobs";
 import { useNotificationStore } from "@/stores/notificationStore";
-import { buildSummarizationCompletionNotification } from "@/lib/jobNotifications";
+import { buildSummarizationCompletionNotifications } from "@/lib/jobNotifications";
 
 /** Format job type for display */
 function formatJobType(type: string): string {
@@ -93,6 +93,7 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
         timestamp?: number;
         processedOn?: number;
         finishedOn?: number;
+        restarted?: boolean;
       };
 
       if (!jobData?.jobId) return;
@@ -116,7 +117,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
             processedOn = Date.now();
           }
 
-          let finishedOn = jobData.finishedOn ?? existing.finishedOn;
+          const isRunning = newState === "active" ||
+            event.event === "job.active" || event.event === "job.started";
+          let finishedOn = isRunning
+            ? undefined
+            : jobData.finishedOn ?? existing.finishedOn;
           if (!finishedOn && (event.event === "job.completed" || event.event === "job.failed" || newState === "completed" || newState === "failed")) {
             finishedOn = Date.now();
           }
@@ -125,10 +130,13 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
             ...existing,
             state: newState,
             progress: jobData.progress ?? existing.progress,
-            result: jobData.result ?? existing.result,
-            failedReason: jobData.failedReason ?? existing.failedReason,
+            result: isRunning ? undefined : jobData.result ?? existing.result,
+            failedReason: isRunning
+              ? undefined
+              : jobData.failedReason ?? existing.failedReason,
             finishedOn,
             processedOn,
+            restarted: jobData.restarted ?? existing.restarted,
           };
           return updated;
         } else {
@@ -155,24 +163,38 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
 
       if (event.event === "job.completed" && event.data) {
         if (jobData.jobType === "summarization") {
-          const notification = buildSummarizationCompletionNotification(
+          const notifications = buildSummarizationCompletionNotifications(
             jobData.result,
+            jobData.jobId,
           );
 
-          if (!notification) return;
+          if (notifications.length === 0) return;
 
-          addNotification(notification);
+          notifications.forEach(addNotification);
 
           // Show popup toast if enabled
           if (showPopups) {
-            toast.success(notification.title, {
-              description: notification.description,
-              action: notification.action && {
-                label: notification.action.label,
-                onClick: () => navigate(notification.action!.path),
+            const notification = notifications[0];
+            const isBatch = notifications.length > 1;
+            toast.success(
+              isBatch
+                ? `${notifications.length} summaries completed`
+                : notification.title,
+              {
+                description: isBatch
+                  ? "Open notifications to view each summary."
+                  : notification.description,
+                action: {
+                  label: isBatch
+                    ? "View notifications"
+                    : notification.action?.label || "View summary",
+                  onClick: () => navigate(
+                    isBatch ? "/summaries" : notification.action?.path || "/summaries",
+                  ),
+                },
+                duration: 10000,
               },
-              duration: 10000,
-            });
+            );
           }
         } else {
           const job = jobs.find((j) => j.id === jobData.jobId);

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useParams, Link } from "react-router-dom";
+import type { ReactNode } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
 import { useJobsListener } from "@/hooks/useJobsListener";
@@ -12,7 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle, Volume2, Tag, BarChart3, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle, Volume2, Tag, BarChart3, Play, RefreshCw, type LucideIcon } from "lucide-react";
 import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
@@ -89,7 +90,7 @@ const formatValue = (value: any): string => {
     return String(value);
 };
 
-function MetricCell({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string | number | boolean | null | undefined }) {
+function MetricCell({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: ReactNode }) {
     return (
         <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 text-muted-foreground" />
@@ -124,12 +125,13 @@ function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
 
 export default function JobDetailPage() {
     const { id } = useParams<{ id: string }>();
+    const navigate = useNavigate();
     const { getJobById, isLoading: isListenerLoading } = useJobsListener();
     const queryClient = useQueryClient();
 
     const cachedJob = id ? getJobById(id) : null;
 
-    const { data: fetchedJob, isLoading: isFetching, refetch } = useQuery({
+    const { data: fetchedJob, isLoading: isFetching, isFetching: isRefreshing, refetch } = useQuery({
         queryKey: ["job", id],
         queryFn: async () => {
             if (!id) {
@@ -141,10 +143,18 @@ export default function JobDetailPage() {
             });
             return response as JobInfo;
         },
-        enabled: !!id && !cachedJob,
+        enabled: !!id,
+        refetchInterval: (query) => {
+            const state = (query.state.data as JobInfo | undefined)?.state;
+            return state && ["active", "waiting", "delayed"].includes(state)
+                ? 3_000
+                : false;
+        },
     });
 
-    const job = cachedJob || fetchedJob;
+    // Prefer the detail endpoint because it also checks BullMQ and refreshes
+    // when list websocket events are missed.
+    const job = fetchedJob || cachedJob;
     const isTranscriptionJob = job?.type === "transcription";
     const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
@@ -278,12 +288,36 @@ export default function JobDetailPage() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["job", id] });
             queryClient.invalidateQueries({ queryKey: ["jobs", "all"] });
+            refetch();
+        },
+    });
+
+    const rerunJobMutation = useMutation({
+        mutationFn: async () => {
+            if (!job) throw new Error("Job is not loaded");
+            return await api.callResource("jobs", {
+                action: "enqueue",
+                data: job.data,
+                trigger: {
+                    type: "manual",
+                    reason: `rerun:${job.id}`,
+                },
+            }) as { jobId: string };
+        },
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ["jobs"] });
+            navigate(`/jobs/${result.jobId}`);
         },
     });
 
     const handleCancel = async () => {
-        if (!confirm("Are you sure you want to cancel this job?")) return;
+        if (!confirm("Cancel this job? An active worker process will be stopped.")) return;
         cancelJobMutation.mutate();
+    };
+
+    const handleRerun = () => {
+        if (!confirm("Run a new job with the same input?")) return;
+        rerunJobMutation.mutate();
     };
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -305,6 +339,7 @@ export default function JobDetailPage() {
     const formatDuration = (start?: number, end?: number) => {
         if (!start || !end) return "-";
         const ms = end - start;
+        if (ms < 0) return "-";
         if (ms < 1000) return `${ms}ms`;
         if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
         return `${(ms / 60000).toFixed(1)}m`;
@@ -353,17 +388,39 @@ export default function JobDetailPage() {
                         </p>
                     </div>
                 </div>
-                {["active", "waiting", "delayed"].includes(job.state) && (
+                <div className="flex items-center gap-2">
                     <Button
-                        variant="destructive"
+                        variant="outline"
                         size="sm"
-                        onClick={handleCancel}
-                        disabled={cancelJobMutation.isPending}
+                        onClick={() => refetch()}
+                        disabled={isRefreshing}
                     >
-                        <Ban className="h-4 w-4 mr-2" />
-                        Cancel Job
+                        <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? "animate-spin" : ""}`} />
+                        Refresh state
                     </Button>
-                )}
+                    {!["active", "waiting", "delayed"].includes(job.state) && (
+                        <Button
+                            variant="default"
+                            size="sm"
+                            onClick={handleRerun}
+                            disabled={rerunJobMutation.isPending}
+                        >
+                            <Play className="h-4 w-4 mr-2" />
+                            Run again
+                        </Button>
+                    )}
+                    {["active", "waiting", "delayed"].includes(job.state) && (
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={handleCancel}
+                            disabled={cancelJobMutation.isPending}
+                        >
+                            <Ban className="h-4 w-4 mr-2" />
+                            Cancel Job
+                        </Button>
+                    )}
+                </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
@@ -377,6 +434,19 @@ export default function JobDetailPage() {
                             <Badge className={getStatusColor(job.state)}>
                                 {job.state}
                             </Badge>
+                        </div>
+                        <div>
+                            <div className="text-sm text-muted-foreground mb-1">Queue state</div>
+                            <div className="flex items-center gap-2">
+                                <Badge variant="outline">
+                                    {job.queuePresent ? (job.queueState || "unknown") : "not present"}
+                                </Badge>
+                                {job.state === "active" && job.queueState !== "active" && (
+                                    <span className="text-xs text-amber-500">
+                                        Database and queue states do not match
+                                    </span>
+                                )}
+                            </div>
                         </div>
                         <div>
                             <div className="text-sm text-muted-foreground mb-1">Type</div>
@@ -465,6 +535,16 @@ export default function JobDetailPage() {
                                 </div>
                                 <div className="text-sm">
                                     {format(new Date(job.finishedOn), "PPpp")}
+                                </div>
+                            </div>
+                        )}
+                        {job.updatedOn && (
+                            <div>
+                                <div className="text-sm text-muted-foreground mb-1">
+                                    Last state update
+                                </div>
+                                <div className="text-sm">
+                                    {format(new Date(job.updatedOn), "PPpp")}
                                 </div>
                             </div>
                         )}

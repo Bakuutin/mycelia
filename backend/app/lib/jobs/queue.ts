@@ -6,6 +6,7 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import type { JobData, JobResult, EnqueueJobOptions } from "./types.ts";
 export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
+import { assertJobServicesHealthy } from "./service-health.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
@@ -57,7 +58,7 @@ export async function enqueueJob(
   // Apply worker default overrides BEFORE schema validation
   // This ensures worker defaults take precedence over schema defaults
   // but explicit job data values still take precedence over worker defaults
-  let mergedData = { ...data };
+  const mergedData = { ...data };
   if (data.type) {
     const { workerDiscovery } = await import("./worker-discovery.ts");
     const defaultOverrides = await workerDiscovery.getDefaultOverrides(data.type);
@@ -75,6 +76,11 @@ export async function enqueueJob(
   if (!parsedData.type) {
     throw new Error(`Job data is missing 'type' field after validation for job ID: ${jobId}. Check if the schema for this job type includes the 'type' field.`);
   }
+
+  // Do not create a stream of doomed jobs while a required remote provider is
+  // down or still loading. Periodic/startup triggers will retry the underlying
+  // domain work after the provider becomes healthy.
+  await assertJobServicesHealthy(parsedData.type);
 
   const queue = getQueue(parsedData.type);
 

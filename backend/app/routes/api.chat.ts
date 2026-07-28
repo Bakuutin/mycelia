@@ -1,14 +1,17 @@
 import type { Request, Response } from "express";
-import { streamText, stepCountIs } from "ai";
+import { stepCountIs, streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
-import { authenticateOr401, type Auth } from "@/lib/auth/core.server.ts";
+import { type Auth, authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
 import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
-import { resolveConfiguredModel } from "@/lib/llm/model-routing.ts";
+import {
+  normalizeOpenAIBaseUrl,
+  resolveConfiguredModel,
+} from "@/lib/llm/model-routing.ts";
 import { ObjectId } from "bson";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
@@ -17,7 +20,7 @@ async function generateChatTitle(
   mongo: any,
   chatId: string,
   userMessage: string,
-  auth: Auth
+  auth: Auth,
 ): Promise<void> {
   try {
     const llm = await auth.getResource("llm");
@@ -26,7 +29,11 @@ async function generateChatTitle(
       action: "completions",
       model: "small",
       messages: [
-        { role: "system", content: "Generate a very short title (3-6 words) for a chat conversation based on the user's first message. Return ONLY the title, no quotes, no formatting, no explanation." },
+        {
+          role: "system",
+          content:
+            "Generate a very short title (3-6 words) for a chat conversation based on the user's first message. Return ONLY the title, no quotes, no formatting, no explanation.",
+        },
         { role: "user", content: userMessage },
       ],
     });
@@ -39,7 +46,9 @@ async function generateChatTitle(
         query: { _id: new ObjectId(chatId) },
         update: { $set: { name: title, title: title } },
       });
-      console.log(`[generateChatTitle] Generated title for chat ${chatId}: "${title}"`);
+      console.log(
+        `[generateChatTitle] Generated title for chat ${chatId}: "${title}"`,
+      );
     }
   } catch (error) {
     console.error("[generateChatTitle] Failed to generate chat title:", error);
@@ -49,9 +58,9 @@ async function generateChatTitle(
 // Tools that require user confirmation before execution
 // These can modify or delete user data
 const TOOLS_REQUIRING_APPROVAL = [
-  "objects_create",  // Can create arbitrary objects
-  "objects_update",  // Can modify existing data
-  "objects_delete",  // Can permanently delete data
+  "objects_create", // Can create arbitrary objects
+  "objects_update", // Can modify existing data
+  "objects_delete", // Can permanently delete data
 ];
 
 export async function apiChatHandler(req: Request, res: Response) {
@@ -66,17 +75,17 @@ export async function apiChatHandler(req: Request, res: Response) {
   // Claude requires that each tool_result has a matching tool_use in the previous message
   if (Array.isArray(messages)) {
     const normalizedMessages: any[] = [];
-    
+
     for (const msg of messages) {
       // Map 'parts' to 'content' if needed
       const content = msg.content ?? msg.parts;
-      
+
       if (msg.role === "assistant" && Array.isArray(content)) {
         // Extract tool-call and tool-result/tool-error parts
         const toolCalls: any[] = [];
         const toolResults: any[] = [];
         const otherContent: any[] = [];
-        
+
         for (const part of content) {
           if (part.type === "tool-result") {
             toolResults.push({
@@ -88,7 +97,8 @@ export async function apiChatHandler(req: Request, res: Response) {
           } else if (part.type === "tool-error") {
             // Handle tool errors the same as tool results - they are responses to tool calls
             // Use 'error-text' output type for AI SDK compatibility
-            const errorMessage = part.error?.errmsg || part.error?.message || JSON.stringify(part.error) || "Tool execution failed";
+            const errorMessage = part.error?.errmsg || part.error?.message ||
+              JSON.stringify(part.error) || "Tool execution failed";
             toolResults.push({
               type: "tool-result",
               toolCallId: part.toolCallId,
@@ -107,29 +117,35 @@ export async function apiChatHandler(req: Request, res: Response) {
           }
           // Skip internal SDK markers like "step-start" - they shouldn't be sent back
         }
-        
+
         // Build cleaned content: text + tool-calls only
         const cleanedContent = [...otherContent, ...toolCalls];
-        
+
         // Get the set of tool-call IDs in this message
-        const toolCallIds = new Set(toolCalls.map(tc => tc.toolCallId));
-        
+        const toolCallIds = new Set(toolCalls.map((tc) => tc.toolCallId));
+
         // Only include tool-results that have matching tool-calls in THIS message
-        const matchingToolResults = toolResults.filter(tr => toolCallIds.has(tr.toolCallId));
-        const orphanedToolResults = toolResults.filter(tr => !toolCallIds.has(tr.toolCallId));
-        
+        const matchingToolResults = toolResults.filter((tr) =>
+          toolCallIds.has(tr.toolCallId)
+        );
+        const orphanedToolResults = toolResults.filter((tr) =>
+          !toolCallIds.has(tr.toolCallId)
+        );
+
         if (orphanedToolResults.length > 0) {
-          console.warn(`[apiChatHandler] Dropping ${orphanedToolResults.length} orphaned tool-results without matching tool-calls:`, 
-            orphanedToolResults.map(tr => tr.toolCallId));
+          console.warn(
+            `[apiChatHandler] Dropping ${orphanedToolResults.length} orphaned tool-results without matching tool-calls:`,
+            orphanedToolResults.map((tr) => tr.toolCallId),
+          );
         }
-        
+
         // Add assistant message with cleaned content (only if it has content)
         if (cleanedContent.length > 0) {
           normalizedMessages.push({
             role: "assistant",
             content: cleanedContent,
           });
-          
+
           // Only add tool message if we have matching tool-results
           if (matchingToolResults.length > 0) {
             normalizedMessages.push({
@@ -141,7 +157,9 @@ export async function apiChatHandler(req: Request, res: Response) {
       } else if (msg.role === "tool" && Array.isArray(content)) {
         // Skip tool messages coming from the client - they should be reconstructed from assistant messages
         // This prevents orphaned tool-result messages
-        console.warn("[apiChatHandler] Skipping orphaned tool message from client");
+        console.warn(
+          "[apiChatHandler] Skipping orphaned tool message from client",
+        );
         continue;
       } else if (msg.role === "user" && Array.isArray(content)) {
         // Clean user message content parts
@@ -157,12 +175,15 @@ export async function apiChatHandler(req: Request, res: Response) {
         normalizedMessages.push({ role: msg.role, content });
       }
     }
-    
+
     messages = normalizedMessages;
   }
-  
+
   // Debug: Log normalized messages
-  console.log("[apiChatHandler] Normalized messages:", JSON.stringify(messages, null, 2));
+  console.log(
+    "[apiChatHandler] Normalized messages:",
+    JSON.stringify(messages, null, 2),
+  );
 
   let activeChatId: string | undefined = chatId;
   let chatModel = "medium";
@@ -177,8 +198,8 @@ export async function apiChatHandler(req: Request, res: Response) {
       doc: {
         _id: newChatId,
         userId: auth.principal, // Auth object uses principal as user identifier
-        title: 'New Chat', // This might be renamed later by AI or user
-        name: 'New Chat', // Align with new schema 'name'
+        title: "New Chat", // This might be renamed later by AI or user
+        name: "New Chat", // Align with new schema 'name'
         model: "medium",
         platform: "mycelia",
         externalId: newChatId.toString(),
@@ -195,22 +216,21 @@ export async function apiChatHandler(req: Request, res: Response) {
       collection: "chats",
       query: {
         _id: new ObjectId(activeChatId.toString()),
-        userId: auth.principal
+        userId: auth.principal,
       },
     });
 
     if (!chat) {
-       res.status(404).json({ error: "Chat not found or access denied" });
-       return;
+      res.status(404).json({ error: "Chat not found or access denied" });
+      return;
     }
     chatModel = chat.model || "medium";
   }
 
-
   // Save user message
   const lastMessage = messages[messages.length - 1];
   const userMessageId = new ObjectId();
-  
+
   // Get or create Person for the user
   // Use auth.principal as the external ID for mycelia platform
   const userPersonResult = await getOrCreatePersonByMessengerId({
@@ -220,7 +240,7 @@ export async function apiChatHandler(req: Request, res: Response) {
     auth,
   });
   const userPersonId = userPersonResult._id;
-  
+
   await mongo({
     action: "insertOne",
     collection: "messages",
@@ -228,64 +248,73 @@ export async function apiChatHandler(req: Request, res: Response) {
       _id: userMessageId,
       chatId: new ObjectId(activeChatId),
       senderId: userPersonId,
-      text: typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content),
+      text: typeof lastMessage.content === "string"
+        ? lastMessage.content
+        : JSON.stringify(lastMessage.content),
       platform: "mycelia",
       externalId: userMessageId.toString(),
       timestamp: new Date(),
       createdAt: new Date(),
-      raw: { role: "user", content: lastMessage.content }
+      raw: { role: "user", content: lastMessage.content },
     },
   });
 
   // Setup tools with approval requirements for destructive operations
-  const resources = defaultResourceManager.listResources().filter(resource => RESOURCES_FOR_AI.includes(resource.code));
+  const resources = defaultResourceManager.listResources().filter((resource) =>
+    RESOURCES_FOR_AI.includes(resource.code)
+  );
   const tools = createAiSdkToolsFromResources(resources, auth, {
     toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
   });
 
   // Fetch System Prompt
-  let systemPrompt = "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
+  let systemPrompt =
+    "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
 
   const config = await getServerConfig();
   try {
     if (config.prompts?.chat_system) {
-        const promptDoc = await mongo({
-          action: "findOne",
-          collection: "prompts",
-          query: { _id: config.prompts.chat_system },
-        });
-        if (promptDoc && promptDoc.text) {
-            systemPrompt = promptDoc.text;
-        }
+      const promptDoc = await mongo({
+        action: "findOne",
+        collection: "prompts",
+        query: { _id: config.prompts.chat_system },
+      });
+      if (promptDoc && promptDoc.text) {
+        systemPrompt = promptDoc.text;
+      }
     }
   } catch (e) {
-      console.warn("Failed to load system prompt from config, using default.", e);
+    console.warn("Failed to load system prompt from config, using default.", e);
   }
 
   // Get inference provider using stateless env vars first, MongoDB fallback
   const llmResource = new LLMResource();
   const inference = await llmResource.getInferenceProvider();
   if (!inference?.baseUrl || !inference?.apiKey) {
-    res.status(500).json({ error: "Inference provider not configured. Please configure it in server settings." });
+    res.status(500).json({
+      error:
+        "Inference provider not configured. Please configure it in server settings.",
+    });
     return;
   }
 
   // The configured provider model is the global default for chat. Legacy
   // small/medium/large aliases resolve to that same model.
-  const baseModel = Deno.env.get('BASE_MODEL');
-  const requestedModel = inference.model || chatModel || baseModel || "medium";
+  const baseModel = Deno.env.get("BASE_MODEL");
+  const requestedModel = chatModel || inference.defaultAlias ||
+    inference.model || baseModel || "medium";
   const actualModel = resolveConfiguredModel(requestedModel, {
     defaultModel: inference.model,
     baseModel,
-    smallModel: Deno.env.get("MODEL_SMALL"),
-    mediumModel: Deno.env.get("MODEL_MEDIUM"),
-    largeModel: Deno.env.get("MODEL_LARGE"),
+    smallModel: inference.smallModel || Deno.env.get("MODEL_SMALL"),
+    mediumModel: inference.mediumModel || Deno.env.get("MODEL_MEDIUM"),
+    largeModel: inference.largeModel || Deno.env.get("MODEL_LARGE"),
   });
 
   try {
     const stream = streamText({
       model: createOpenAI({
-        baseURL: inference.baseUrl,
+        baseURL: normalizeOpenAIBaseUrl(inference.baseUrl),
         apiKey: inference.apiKey,
       }).chat(actualModel),
       tools,
@@ -296,7 +325,10 @@ export async function apiChatHandler(req: Request, res: Response) {
       ] as any,
       onError: (errorEvent: any) => {
         const error = errorEvent?.error;
-        console.error("[apiChatHandler] Stream error:", error?.message || error);
+        console.error(
+          "[apiChatHandler] Stream error:",
+          error?.message || error,
+        );
       },
       async onStepFinish(result) {
         const { content, usage: totalUsage } = result as any;
@@ -319,7 +351,9 @@ export async function apiChatHandler(req: Request, res: Response) {
             _id: assistantMessageId,
             chatId: new ObjectId(activeChatId),
             senderId: assistantPersonId,
-            text: typeof content === 'string' ? content : JSON.stringify(content),
+            text: typeof content === "string"
+              ? content
+              : JSON.stringify(content),
             platform: "mycelia",
             externalId: assistantMessageId.toString(),
             timestamp: new Date(),
@@ -327,8 +361,8 @@ export async function apiChatHandler(req: Request, res: Response) {
             raw: {
               role: "assistant",
               usage: totalUsage,
-              content
-            }
+              content,
+            },
           },
         });
 
@@ -339,8 +373,8 @@ export async function apiChatHandler(req: Request, res: Response) {
           query: { _id: new ObjectId(activeChatId) },
           update: {
             $set: {
-              lastMessageDate: new Date()
-            }
+              lastMessageDate: new Date(),
+            },
           },
         });
 
@@ -352,11 +386,16 @@ export async function apiChatHandler(req: Request, res: Response) {
             const userContent = typeof firstUserMessage.content === "string"
               ? firstUserMessage.content
               : Array.isArray(firstUserMessage.content)
-                ? firstUserMessage.content.map((p: any) => p.text || "").join(" ")
-                : "";
+              ? firstUserMessage.content.map((p: any) => p.text || "").join(" ")
+              : "";
             if (userContent.trim()) {
               // Run title generation in background (don't await)
-              void generateChatTitle(mongo, activeChatId!, userContent.trim(), auth);
+              void generateChatTitle(
+                mongo,
+                activeChatId!,
+                userContent.trim(),
+                auth,
+              );
             }
           }
         }
@@ -370,8 +409,7 @@ export async function apiChatHandler(req: Request, res: Response) {
     console.error("[apiChatHandler] Chat error:", error);
     // If headers sent, we can't send json
     if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to process chat request" });
+      res.status(500).json({ error: "Failed to process chat request" });
     }
-    
   }
 }

@@ -2,25 +2,26 @@ import { z } from "zod";
 import { ObjectId } from "bson";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { callResource } from "@myceliasdk/resources.ts";
-import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
+import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import { createHash } from "node:crypto";
-
+import {
+  getInferenceProvenance,
+  type InferenceProvenance,
+} from "@/lib/llm/provenance.ts";
 
 /**
  * Conversation Extractor
- * 
- *  okay so what we have we have like a timeline of (overlapping) transcriptions 
+ *
+ *  okay so what we have we have like a timeline of (overlapping) transcriptions
  * and then then when one person said something, and the other person said something and I want you to use ASCII art to represent it on a timeline.
- * 
- * 
+ *
  *  10:00:00 - 10:00:09 - Person 1: "Hello"
  *  10:00:09 - 10:00:11 - Person 2: "Hello"
  *  10:00:20 - 10:00:30 - Person 1: "How are you?"
  *  10:00:30 - 10:00:40 - Person 2: "I'm good, thank you!"
  *  10:00:40 - 10:00:50 - Person 1: "What are you doing?"
  *  10:00:50 - 10:01:00 - Person 2: "I'm writing this docstring."
- * 
- * 
+ *
  * This worker is responsible for extracting conversations from transcriptions and creating conversation objects.
  * It uses a LLM to segment the transcriptions into conversations and then extracts metadata from each conversation.
  * It then creates a conversation object for each conversation.
@@ -55,6 +56,12 @@ interface ConversationError {
   entity?: string;
 }
 
+type StructuredLLMResult<T> = {
+  value: T;
+  provenance: InferenceProvenance;
+  attempts: InferenceProvenance[];
+};
+
 interface ConversationChunk {
   _id: ObjectId;
   chunkKey: string;
@@ -82,21 +89,27 @@ export const schema = z.object({
   extractorVersion: z.string().default("v1"),
   fallbackModel: z.string()
     .default(Deno.env.get("CONVERSATION_EXTRACTION_FALLBACK_MODEL") ?? "")
-    .describe("Optional model retried once after a primary LLM error; empty means stop with error"),
-  
+    .describe(
+      "Optional model retried once after a primary LLM error; empty means stop with error",
+    ),
+
   // Prompt overrides (migrated from config.prompts)
   segmentation_system_prompt: z.string()
-    .default("You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.")
+    .default(
+      "You are an assistant that segments transcripts into distinct conversations. Output JSON with 'segments' array containing objects with 'title', 'start' (ISO8601), and 'end' (ISO8601) fields.",
+    )
     .describe("System prompt for finding conversation topics in transcripts"),
-  
+
   segmentation_guidance_prompt: z.string()
     .default("")
-    .describe("Additional guidance for conversation topic segmentation response format"),
-  
+    .describe(
+      "Additional guidance for conversation topic segmentation response format",
+    ),
+
   extraction_system_prompt: z.string()
     .default("summarize this please")
     .describe("System prompt for extracting conversation metadata"),
-  
+
   extraction_guidance_prompt: z.string()
     .default("")
     .describe("Guidance for conversation metadata extraction response format"),
@@ -104,30 +117,31 @@ export const schema = z.object({
 
 export type ConversationExtractorJobData = z.infer<typeof schema>;
 
-
 // ============================================================================
 // Pure Functions
 // ============================================================================
 
-function formatChunkAsPrompt(utterances: Utterance[]): { prompt: string; start: Date; end: Date } {
+function formatChunkAsPrompt(
+  utterances: Utterance[],
+): { prompt: string; start: Date; end: Date } {
   if (utterances.length === 0) {
     throw new Error("Cannot format empty utterances array");
   }
 
-  const sorted = [...utterances].sort((a, b) => 
+  const sorted = [...utterances].sort((a, b) =>
     new Date(a.start).getTime() - new Date(b.start).getTime()
   );
 
   const strings: string[] = [];
   let latest = new Date(sorted[0].start);
-  
+
   strings.push(`[time: ${new Date(sorted[0].start).toISOString()}]`);
 
   for (const u of sorted) {
     const uStart = new Date(u.start);
     const gap = uStart.getTime() - latest.getTime();
-    
-    if (gap > 30 * 1000) {  // > 30 seconds
+
+    if (gap > 30 * 1000) { // > 30 seconds
       strings.push(`[time: ${latest.toISOString()}]`);
       const minutes = Math.floor(gap / 1000 / 60);
       const seconds = Math.floor((gap / 1000) % 60);
@@ -148,11 +162,19 @@ function formatChunkAsPrompt(utterances: Utterance[]): { prompt: string; start: 
   };
 }
 
-function clipSegmentTimes(segment: Segment, chunkStart: Date, chunkEnd: Date): Segment {
+function clipSegmentTimes(
+  segment: Segment,
+  chunkStart: Date,
+  chunkEnd: Date,
+): Segment {
   return {
     title: segment.title,
-    start: new Date(Math.max(new Date(segment.start).getTime(), chunkStart.getTime())),
-    end: new Date(Math.min(new Date(segment.end).getTime(), chunkEnd.getTime())),
+    start: new Date(
+      Math.max(new Date(segment.start).getTime(), chunkStart.getTime()),
+    ),
+    end: new Date(
+      Math.min(new Date(segment.end).getTime(), chunkEnd.getTime()),
+    ),
   };
 }
 
@@ -165,8 +187,8 @@ function filterSegmentsWithUtterances(
   for (const segment of segments) {
     const segStart = new Date(segment.start).getTime();
     const segEnd = new Date(segment.end).getTime();
-    
-    const overlapping = utterances.filter(u => {
+
+    const overlapping = utterances.filter((u) => {
       const uStart = new Date(u.start).getTime();
       const uEnd = new Date(u.end).getTime();
       return uStart < segEnd && uEnd > segStart;
@@ -199,17 +221,23 @@ async function callLLMStructured<T>(
   model: string,
   fallbackModel: string,
   messages: Array<{ role: string; content: string }>,
-  responseFormat: { type: "json_object" } | { type: "json_schema"; json_schema: any },
+  responseFormat: { type: "json_object" } | {
+    type: "json_schema";
+    json_schema: any;
+  },
   parseResponse: (content: string) => T,
   logContext?: string,
-): Promise<T> {
+): Promise<StructuredLLMResult<T>> {
   // OpenAI requires the word "json" in messages when using response_format: json_object
   // Ensure the first message (system prompt) includes it
   const adjustedMessages = [...messages];
-  if (adjustedMessages.length > 0 && !adjustedMessages[0].content.toLowerCase().includes('json')) {
+  if (
+    adjustedMessages.length > 0 &&
+    !adjustedMessages[0].content.toLowerCase().includes("json")
+  ) {
     adjustedMessages[0] = {
       ...adjustedMessages[0],
-      content: adjustedMessages[0].content + ' Respond in JSON format.',
+      content: adjustedMessages[0].content + " Respond in JSON format.",
     };
   }
 
@@ -223,18 +251,35 @@ async function callLLMStructured<T>(
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
-    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: EMPTY response from LLM`);
+    console.log(
+      `[ConvExtractor] ${logContext ?? "LLM"}: EMPTY response from LLM`,
+    );
     throw new Error("Empty response from LLM");
   }
 
   // Log raw LLM response (truncated for sanity)
-  const truncatedContent = content.length > 500 ? content.slice(0, 500) + '...[truncated]' : content;
-  console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: raw response (${content.length} chars): ${truncatedContent}`);
+  const truncatedContent = content.length > 500
+    ? content.slice(0, 500) + "...[truncated]"
+    : content;
+  console.log(
+    `[ConvExtractor] ${
+      logContext ?? "LLM"
+    }: raw response (${content.length} chars): ${truncatedContent}`,
+  );
 
   try {
-    return parseResponse(content);
+    const provenance = getInferenceProvenance(response, model, fallbackModel);
+    return {
+      value: parseResponse(content),
+      provenance,
+      attempts: [provenance],
+    };
   } catch (error) {
-    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: parse failed, retrying with fix prompt`);
+    console.log(
+      `[ConvExtractor] ${
+        logContext ?? "LLM"
+      }: parse failed, retrying with fix prompt`,
+    );
     // Retry once with a fix prompt
     const retryResponse = await llm({
       action: "completions",
@@ -251,30 +296,50 @@ async function callLLMStructured<T>(
       throw new Error("Empty retry response from LLM");
     }
 
-    console.log(`[ConvExtractor] ${logContext ?? 'LLM'}: retry response: ${retryContent.slice(0, 300)}`);
-    return parseResponse(retryContent);
+    console.log(
+      `[ConvExtractor] ${logContext ?? "LLM"}: retry response: ${
+        retryContent.slice(0, 300)
+      }`,
+    );
+    const firstAttempt = getInferenceProvenance(response, model, fallbackModel);
+    const retryProvenance = getInferenceProvenance(
+      retryResponse,
+      model,
+      fallbackModel,
+    );
+    return {
+      value: parseResponse(retryContent),
+      provenance: retryProvenance,
+      attempts: [firstAttempt, retryProvenance],
+    };
   }
 }
 
-function buildSegmentationMessages(input: ConversationExtractorJobData, prompt: string) {
+function buildSegmentationMessages(
+  input: ConversationExtractorJobData,
+  prompt: string,
+) {
+  const systemPrompt = input.segmentation_guidance_prompt
+    ? `${input.segmentation_system_prompt}\n\nOutput guidance:\n${input.segmentation_guidance_prompt}`
+    : input.segmentation_system_prompt;
   const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: input.segmentation_system_prompt },
+    { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
   ];
-  if (input.segmentation_guidance_prompt) {
-    messages.push({ role: "assistant", content: input.segmentation_guidance_prompt });
-  }
   return messages;
 }
 
-function buildMetadataMessages(input: ConversationExtractorJobData, prompt: string) {
+function buildMetadataMessages(
+  input: ConversationExtractorJobData,
+  prompt: string,
+) {
+  const systemPrompt = input.extraction_guidance_prompt
+    ? `${input.extraction_system_prompt}\n\nOutput guidance:\n${input.extraction_guidance_prompt}`
+    : input.extraction_system_prompt;
   const messages: Array<{ role: string; content: string }> = [
-    { role: "system", content: input.extraction_system_prompt },
+    { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
   ];
-  if (input.extraction_guidance_prompt) {
-    messages.push({ role: "assistant", content: input.extraction_guidance_prompt });
-  }
   return messages;
 }
 
@@ -299,52 +364,56 @@ function stripMarkdownCodeBlock(content: string): string {
  */
 function extractJsonFromText(content: string): any {
   const cleaned = stripMarkdownCodeBlock(content);
-  
+
   // First, try to parse as-is (for clean JSON responses)
   try {
     return JSON.parse(cleaned);
   } catch (e) {
     // Continue to more robust extraction
   }
-  
+
   // Try to find JSON object {} or array []
   // Look for the first { or [ and find its matching closing bracket
   const jsonStart = Math.min(
-    cleaned.indexOf('{') >= 0 ? cleaned.indexOf('{') : Infinity,
-    cleaned.indexOf('[') >= 0 ? cleaned.indexOf('[') : Infinity
+    cleaned.indexOf("{") >= 0 ? cleaned.indexOf("{") : Infinity,
+    cleaned.indexOf("[") >= 0 ? cleaned.indexOf("[") : Infinity,
   );
-  
+
   if (jsonStart === Infinity) {
-    const preview = cleaned.length > 200 ? cleaned.slice(0, 200) + '...' : cleaned;
-    throw new Error(`No JSON object or array found in response. Got: ${preview}`);
+    const preview = cleaned.length > 200
+      ? cleaned.slice(0, 200) + "..."
+      : cleaned;
+    throw new Error(
+      `No JSON object or array found in response. Got: ${preview}`,
+    );
   }
-  
+
   // Find the matching closing bracket
   const startChar = cleaned[jsonStart];
-  const endChar = startChar === '{' ? '}' : ']';
+  const endChar = startChar === "{" ? "}" : "]";
   let depth = 0;
   let jsonEnd = -1;
   let inString = false;
   let escapeNext = false;
-  
+
   for (let i = jsonStart; i < cleaned.length; i++) {
     const char = cleaned[i];
-    
+
     if (escapeNext) {
       escapeNext = false;
       continue;
     }
-    
-    if (char === '\\') {
+
+    if (char === "\\") {
       escapeNext = true;
       continue;
     }
-    
+
     if (char === '"' && !escapeNext) {
       inString = !inString;
       continue;
     }
-    
+
     if (!inString) {
       if (char === startChar) {
         depth++;
@@ -357,11 +426,11 @@ function extractJsonFromText(content: string): any {
       }
     }
   }
-  
+
   if (jsonEnd === -1) {
     throw new Error("Could not find complete JSON object/array in response");
   }
-  
+
   const jsonStr = cleaned.substring(jsonStart, jsonEnd);
   return JSON.parse(jsonStr);
 }
@@ -370,10 +439,12 @@ function extractJsonFromText(content: string): any {
  * Parses prompt lines to extract time markers with their line indices.
  * Time markers are in the format: [time: ISO8601]
  */
-function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: number; time: Date }> {
+function extractTimeMarkersFromPrompt(
+  promptLines: string[],
+): Array<{ lineIdx: number; time: Date }> {
   const markers: Array<{ lineIdx: number; time: Date }> = [];
   const timeRegex = /^\[time:\s*(.+)\]$/;
-  
+
   for (let i = 0; i < promptLines.length; i++) {
     const match = promptLines[i].match(timeRegex);
     if (match) {
@@ -383,7 +454,7 @@ function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: n
       }
     }
   }
-  
+
   return markers;
 }
 
@@ -391,7 +462,10 @@ function extractTimeMarkersFromPrompt(promptLines: string[]): Array<{ lineIdx: n
  * Finds the time at or before a given line index using time markers.
  * Returns undefined if no suitable marker is found.
  */
-function findTimeAtOrBeforeLine(markers: Array<{ lineIdx: number; time: Date }>, lineIdx: number): Date | undefined {
+function findTimeAtOrBeforeLine(
+  markers: Array<{ lineIdx: number; time: Date }>,
+  lineIdx: number,
+): Date | undefined {
   // Find the last marker at or before the given line
   let result: Date | undefined;
   for (const marker of markers) {
@@ -408,7 +482,10 @@ function findTimeAtOrBeforeLine(markers: Array<{ lineIdx: number; time: Date }>,
  * Finds the time at or after a given line index using time markers.
  * Returns undefined if no suitable marker is found.
  */
-function findTimeAtOrAfterLine(markers: Array<{ lineIdx: number; time: Date }>, lineIdx: number): Date | undefined {
+function findTimeAtOrAfterLine(
+  markers: Array<{ lineIdx: number; time: Date }>,
+  lineIdx: number,
+): Date | undefined {
   for (const marker of markers) {
     if (marker.lineIdx >= lineIdx) {
       return marker.time;
@@ -437,40 +514,44 @@ function findAttrStartingWith(obj: Record<string, any>, prefix: string): any {
  * - Dates (if both are valid date strings)
  * - Line indices (if both are numbers)
  */
-function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: Date) {
+function createSegmentParser(
+  promptLines: string[],
+  chunkStart: Date,
+  chunkEnd: Date,
+) {
   const timeMarkers = extractTimeMarkersFromPrompt(promptLines);
-  
+
   return function parseSegmentationResponse(content: string): Segment[] {
     const parsed = extractJsonFromText(content);
     const segments = parsed.segments || [];
     return segments.map((s: any, index: number) => {
       // Handle null, undefined, non-string, or empty string titles
       let title = `Segment ${index + 1}`;
-      if (s.title != null && typeof s.title === 'string') {
+      if (s.title != null && typeof s.title === "string") {
         const trimmed = s.title.trim();
         if (trimmed.length > 0) {
           title = trimmed;
         }
       }
-      
+
       // Find any key starting with "start" and "end" (case-insensitive)
-      const startVal = findAttrStartingWith(s, 'start');
-      const endVal = findAttrStartingWith(s, 'end');
-      
+      const startVal = findAttrStartingWith(s, "start");
+      const endVal = findAttrStartingWith(s, "end");
+
       if (startVal != null && endVal != null) {
         // Both numbers → line indices
-        if (typeof startVal === 'number' && typeof endVal === 'number') {
-          const start = findTimeAtOrBeforeLine(timeMarkers, startVal) 
-            ?? findTimeAtOrAfterLine(timeMarkers, startVal) 
-            ?? chunkStart;
-          const end = findTimeAtOrAfterLine(timeMarkers, endVal) 
-            ?? findTimeAtOrBeforeLine(timeMarkers, endVal) 
-            ?? chunkEnd;
+        if (typeof startVal === "number" && typeof endVal === "number") {
+          const start = findTimeAtOrBeforeLine(timeMarkers, startVal) ??
+            findTimeAtOrAfterLine(timeMarkers, startVal) ??
+            chunkStart;
+          const end = findTimeAtOrAfterLine(timeMarkers, endVal) ??
+            findTimeAtOrBeforeLine(timeMarkers, endVal) ??
+            chunkEnd;
           return { title, start, end };
         }
-        
+
         // Both strings → try as dates
-        if (typeof startVal === 'string' && typeof endVal === 'string') {
+        if (typeof startVal === "string" && typeof endVal === "string") {
           const start = new Date(startVal);
           const end = new Date(endVal);
           if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
@@ -478,9 +559,13 @@ function createSegmentParser(promptLines: string[], chunkStart: Date, chunkEnd: 
           }
         }
       }
-      
+
       // Fallback: use chunk boundaries
-      console.warn(`[ConvExtractor] Segment "${title}" has no valid time info (start=${JSON.stringify(startVal)}, end=${JSON.stringify(endVal)}), using chunk boundaries`);
+      console.warn(
+        `[ConvExtractor] Segment "${title}" has no valid time info (start=${
+          JSON.stringify(startVal)
+        }, end=${JSON.stringify(endVal)}), using chunk boundaries`,
+      );
       return { title, start: chunkStart, end: chunkEnd };
     });
   };
@@ -490,7 +575,7 @@ function parseMetadataResponse(content: string): ConversationMetadata {
   const parsed = extractJsonFromText(content);
   // Only set emoji if valid, otherwise leave undefined (no icon)
   let emoji: string | undefined = undefined;
-  if (parsed.emoji != null && typeof parsed.emoji === 'string') {
+  if (parsed.emoji != null && typeof parsed.emoji === "string") {
     const trimmed = parsed.emoji.trim();
     if (trimmed.length > 0) {
       emoji = trimmed;
@@ -518,6 +603,7 @@ const entityCache = new Map<string, ObjectId>();
 async function findOrCreateEntity(
   objects: (input: any) => Promise<any>,
   name: string,
+  generatedWith: Record<string, unknown>,
 ): Promise<ObjectId> {
   // Check cache first
   const cached = entityCache.get(name);
@@ -539,7 +625,10 @@ async function findOrCreateEntity(
   // Create new
   const result = await objects({
     action: "create",
-    object: { name },
+    object: {
+      name,
+      metadata: { generatedWith },
+    },
   });
 
   entityCache.set(name, result.insertedId);
@@ -551,10 +640,15 @@ async function createEntityRelationships(
   conversationId: ObjectId,
   entityNames: string[],
   errors: ConversationError[],
+  generatedWith: Record<string, unknown>,
 ): Promise<void> {
   for (const entityName of entityNames) {
     try {
-      const entityId = await findOrCreateEntity(objects, entityName);
+      const entityId = await findOrCreateEntity(
+        objects,
+        entityName,
+        generatedWith,
+      );
       await objects({
         action: "create",
         object: {
@@ -565,10 +659,14 @@ async function createEntityRelationships(
             object: entityId,
             symmetrical: false,
           },
+          metadata: { generatedWith },
         },
       });
     } catch (error) {
-      console.error(`Failed to create entity relationship for "${entityName}":`, error);
+      console.error(
+        `Failed to create entity relationship for "${entityName}":`,
+        error,
+      );
       errors.push({
         type: "entity_relationship",
         message: error instanceof Error ? error.message : String(error),
@@ -645,7 +743,9 @@ async function processChunk(params: {
   processingTimeoutMs: number;
   chunksProcessed: number;
   errors: ConversationError[];
-}): Promise<{ claimed: boolean; conversationsCreated: number; segmentsFound: number }> {
+}): Promise<
+  { claimed: boolean; conversationsCreated: number; segmentsFound: number }
+> {
   const {
     chunk,
     input,
@@ -670,7 +770,9 @@ async function processChunk(params: {
           { state: "ready" },
           {
             state: "processing",
-            processingStartedAt: { $lt: new Date(Date.now() - processingTimeoutMs) },
+            processingStartedAt: {
+              $lt: new Date(Date.now() - processingTimeoutMs),
+            },
           },
         ],
       },
@@ -715,7 +817,11 @@ async function processChunk(params: {
     }>;
 
     if (!transcriptions || transcriptions.length === 0) {
-      console.log(`[ConvExtractor] Chunk ${chunk._id}: NO transcriptions found for IDs: ${chunk.transcriptionIds.map(id => id.toString()).join(", ")}`);
+      console.log(
+        `[ConvExtractor] Chunk ${chunk._id}: NO transcriptions found for IDs: ${
+          chunk.transcriptionIds.map((id) => id.toString()).join(", ")
+        }`,
+      );
       await mongo({
         action: "updateOne",
         collection: "conversation_chunks",
@@ -732,11 +838,19 @@ async function processChunk(params: {
       text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
     }));
 
-    console.log(`[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`);
+    console.log(
+      `[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`,
+    );
     const totalTextLen = utterances.reduce((sum, u) => sum + u.text.length, 0);
-    console.log(`[ConvExtractor] Chunk ${chunk._id}: total text length = ${totalTextLen} chars`);
+    console.log(
+      `[ConvExtractor] Chunk ${chunk._id}: total text length = ${totalTextLen} chars`,
+    );
     if (utterances.length > 0) {
-      console.log(`[ConvExtractor] Chunk ${chunk._id}: time range ${utterances[0].start.toISOString()} to ${utterances[utterances.length - 1].end.toISOString()}`);
+      console.log(
+        `[ConvExtractor] Chunk ${chunk._id}: time range ${
+          utterances[0].start.toISOString()
+        } to ${utterances[utterances.length - 1].end.toISOString()}`,
+      );
     }
 
     // Delete existing if force
@@ -745,8 +859,12 @@ async function processChunk(params: {
     }
 
     // Format prompt
-    const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(utterances);
-    console.log(`[ConvExtractor] Chunk ${chunk._id}: prompt length = ${prompt.length} chars`);
+    const { prompt, start: chunkStart, end: chunkEnd } = formatChunkAsPrompt(
+      utterances,
+    );
+    console.log(
+      `[ConvExtractor] Chunk ${chunk._id}: prompt length = ${prompt.length} chars`,
+    );
 
     await job.updateProgress({
       stage: "segmenting",
@@ -754,10 +872,12 @@ async function processChunk(params: {
     });
 
     // LLM Call #1: Segmentation
-    console.log(`[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`);
+    console.log(
+      `[ConvExtractor] Chunk ${chunk._id}: calling LLM for segmentation (prompt ${prompt.length} chars)...`,
+    );
     const promptLines = prompt.split("\n");
     const segmentationMessages = buildSegmentationMessages(input, prompt);
-    const segments = await callLLMStructured(
+    const segmentationRun = await callLLMStructured(
       llm,
       chunk.params.model,
       input.fallbackModel,
@@ -775,18 +895,32 @@ async function processChunk(params: {
       createSegmentParser(promptLines, chunkStart, chunkEnd),
       `Chunk ${chunk._id} segmentation`,
     );
-    console.log(`[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`);
+    const segments = segmentationRun.value;
+    console.log(
+      `[ConvExtractor] Chunk ${chunk._id}: LLM returned ${segments.length} segments`,
+    );
     for (const seg of segments) {
-      console.log(`[ConvExtractor]   - "${seg.title}" ${seg.start.toISOString()} to ${seg.end.toISOString()}`);
+      console.log(
+        `[ConvExtractor]   - "${seg.title}" ${seg.start.toISOString()} to ${seg.end.toISOString()}`,
+      );
     }
 
     // Clip and filter segments
-    const clippedSegments = segments.map(s => clipSegmentTimes(s, chunkStart, chunkEnd));
-    const segmentsWithUtterances = filterSegmentsWithUtterances(clippedSegments, utterances);
-    console.log(`[ConvExtractor] Chunk ${chunk._id}: after filtering, ${segmentsWithUtterances.length} segments have utterances`);
+    const clippedSegments = segments.map((s) =>
+      clipSegmentTimes(s, chunkStart, chunkEnd)
+    );
+    const segmentsWithUtterances = filterSegmentsWithUtterances(
+      clippedSegments,
+      utterances,
+    );
+    console.log(
+      `[ConvExtractor] Chunk ${chunk._id}: after filtering, ${segmentsWithUtterances.length} segments have utterances`,
+    );
 
     if (segmentsWithUtterances.length === 0) {
-      console.log(`[ConvExtractor] Chunk ${chunk._id}: NO segments with utterances - marking as empty`);
+      console.log(
+        `[ConvExtractor] Chunk ${chunk._id}: NO segments with utterances - marking as empty`,
+      );
       await mongo({
         action: "updateOne",
         collection: "conversation_chunks",
@@ -797,6 +931,16 @@ async function processChunk(params: {
             segmentsFound: 0,
             conversationsCreated: 0,
             extractionKey,
+            inferenceProvenance: {
+              segmentation: {
+                task: "conversation_segmentation",
+                ...segmentationRun.provenance,
+                attempts: segmentationRun.attempts,
+                jobId: job.id,
+                generatedAt: new Date(),
+              },
+              metadata: [],
+            },
           },
         },
       });
@@ -805,6 +949,7 @@ async function processChunk(params: {
 
     // Process each segment
     let chunkConversations = 0;
+    const metadataRuns: Array<Record<string, unknown>> = [];
 
     for (let i = 0; i < segmentsWithUtterances.length; i++) {
       const { segment, utterances: segUtterances } = segmentsWithUtterances[i];
@@ -822,7 +967,7 @@ async function processChunk(params: {
       // LLM Call #2: Metadata extraction (entities, emoji, agreed_upon_something)
       const messages = buildMetadataMessages(input, segPrompt);
 
-      const metadata = await callLLMStructured(
+      const metadataRun = await callLLMStructured(
         llm,
         chunk.params.model,
         input.fallbackModel,
@@ -832,15 +977,55 @@ async function processChunk(params: {
           json_schema: metadataResponseSchema.toJSONSchema(),
         },
         parseMetadataResponse,
-        `Chunk ${chunk._id} segment ${i + 1}/${segmentsWithUtterances.length} metadata`,
+        `Chunk ${chunk._id} segment ${
+          i + 1
+        }/${segmentsWithUtterances.length} metadata`,
       );
-      console.log(`[ConvExtractor] Chunk ${chunk._id} segment ${i + 1}: metadata extracted - entities=${metadata.entities.length}, emoji=${metadata.emoji ?? "none"}, agreed=${metadata.agreed_upon_something}`);
+      const metadata = metadataRun.value;
+      console.log(
+        `[ConvExtractor] Chunk ${chunk._id} segment ${
+          i + 1
+        }: metadata extracted - entities=${metadata.entities.length}, emoji=${
+          metadata.emoji ?? "none"
+        }, agreed=${metadata.agreed_upon_something}`,
+      );
 
       // Create conversation object (without summary - will be generated separately)
       // Validate required fields before creating
-      if (segment.title == null || typeof segment.title !== "string" || segment.title.trim().length === 0) {
-        throw new Error(`Invalid segment title: ${JSON.stringify(segment.title)}`);
+      if (
+        segment.title == null || typeof segment.title !== "string" ||
+        segment.title.trim().length === 0
+      ) {
+        throw new Error(
+          `Invalid segment title: ${JSON.stringify(segment.title)}`,
+        );
       }
+
+      const generatedAt = new Date();
+      const extractionProvenance = {
+        task: "conversation_extraction",
+        requestedModel: metadataRun.provenance.requestedModel,
+        resolvedModel: metadataRun.provenance.resolvedModel,
+        responseModel: metadataRun.provenance.responseModel,
+        fallbackModel: metadataRun.provenance.fallbackModel,
+        fallbackUsed: metadataRun.provenance.fallbackUsed,
+        providerBaseUrl: metadataRun.provenance.providerBaseUrl,
+        providerProfileId: metadataRun.provenance.providerProfileId,
+        providerProfileName: metadataRun.provenance.providerProfileName,
+        segmentation: {
+          task: "conversation_segmentation",
+          ...segmentationRun.provenance,
+          attempts: segmentationRun.attempts,
+        },
+        metadata: {
+          task: "conversation_metadata",
+          ...metadataRun.provenance,
+          attempts: metadataRun.attempts,
+        },
+        jobId: job.id,
+        chunkId: chunk._id.toString(),
+        generatedAt,
+      };
 
       const conversationObject: Record<string, any> = {
         isConversation: true,
@@ -852,11 +1037,27 @@ async function processChunk(params: {
         }],
         metadata: {
           extractedWith: {
-            model: chunk.params.model,
+            // Keep the historical field, but make it the model that actually
+            // produced the persisted metadata. requestedModel preserves aliases.
+            model: metadataRun.provenance.resolvedModel,
+            requestedModel: metadataRun.provenance.requestedModel,
+            resolvedModel: metadataRun.provenance.resolvedModel,
+            responseModel: metadataRun.provenance.responseModel,
+            fallbackModel: metadataRun.provenance.fallbackModel,
+            fallbackUsed: metadataRun.provenance.fallbackUsed,
+            providerBaseUrl: metadataRun.provenance.providerBaseUrl,
+            providerProfileId: metadataRun.provenance.providerProfileId,
+            providerProfileName: metadataRun.provenance.providerProfileName,
             extractorVersion: input.extractorVersion,
             chunkId: chunk._id.toString(),
-            timestamp: new Date().toISOString(),
+            jobId: job.id,
+            timestamp: generatedAt,
+            operations: {
+              segmentation: extractionProvenance.segmentation,
+              metadata: extractionProvenance.metadata,
+            },
           },
+          aiProvenance: { extraction: extractionProvenance },
         },
       };
 
@@ -871,9 +1072,27 @@ async function processChunk(params: {
       }) as { insertedId: ObjectId };
 
       const conversationId = convResult.insertedId;
-      console.log(`[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`);
+      console.log(
+        `[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`,
+      );
 
-      await createEntityRelationships(objects, conversationId, metadata.entities, errors);
+      await createEntityRelationships(
+        objects,
+        conversationId,
+        metadata.entities,
+        errors,
+        {
+          ...extractionProvenance,
+          task: "entity_extraction",
+          subjectId: conversationId.toString(),
+        },
+      );
+
+      metadataRuns.push({
+        ...extractionProvenance.metadata,
+        conversationId: conversationId.toString(),
+        generatedAt,
+      });
 
       chunkConversations++;
     }
@@ -889,6 +1108,16 @@ async function processChunk(params: {
           segmentsFound: segmentsWithUtterances.length,
           conversationsCreated: chunkConversations,
           extractionKey,
+          inferenceProvenance: {
+            segmentation: {
+              task: "conversation_segmentation",
+              ...segmentationRun.provenance,
+              attempts: segmentationRun.attempts,
+              jobId: job.id,
+              generatedAt: new Date(),
+            },
+            metadata: metadataRuns,
+          },
         },
         $unset: { processingStartedAt: "" },
       },
@@ -955,9 +1184,11 @@ const capability: JobCapability = {
     const input = job.data as ConversationExtractorJobData;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
-    
-    const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
-    const objects = (input: any) => callResource("objects", input, { jwt, myceliaUrl });
+
+    const mongo = (input: any) =>
+      callResource("mongo", input, { jwt, myceliaUrl });
+    const objects = (input: any) =>
+      callResource("objects", input, { jwt, myceliaUrl });
     const llm = (input: any) => callResource("llm", input, { jwt, myceliaUrl });
 
     // Processing timeout (10 minutes)
@@ -965,7 +1196,7 @@ const capability: JobCapability = {
 
     // Find chunks to process
     let chunks: ConversationChunk[];
-    
+
     if (input.chunkId) {
       const chunk = await mongo({
         action: "findOne",
@@ -980,7 +1211,9 @@ const capability: JobCapability = {
           { state: "ready" },
           {
             state: { $in: ["processing", "error"] },
-            processingStartedAt: { $lt: new Date(Date.now() - processingTimeoutMs) },
+            processingStartedAt: {
+              $lt: new Date(Date.now() - processingTimeoutMs),
+            },
           },
         ],
       };
@@ -1001,7 +1234,7 @@ const capability: JobCapability = {
         query,
         options: {
           sort: { start: -1 },
-          limit: input.limit + 1,  // +1 to check if there's more
+          limit: input.limit + 1, // +1 to check if there's more
         },
       }) as ConversationChunk[];
     }
@@ -1009,9 +1242,15 @@ const capability: JobCapability = {
     const hasMore = chunks.length > input.limit;
     const chunksToProcess = chunks.slice(0, input.limit);
 
-    console.log(`[ConvExtractor] Job ${job.id}: found ${chunks.length} chunks, processing ${chunksToProcess.length}, hasMore=${hasMore}`);
+    console.log(
+      `[ConvExtractor] Job ${job.id}: found ${chunks.length} chunks, processing ${chunksToProcess.length}, hasMore=${hasMore}`,
+    );
     for (const c of chunksToProcess) {
-      console.log(`[ConvExtractor]   - Chunk ${c._id}: state=${c.state}, transcriptionIds=${c.transcriptionIds?.length ?? 0}, start=${c.start?.toISOString?.() ?? 'N/A'}`);
+      console.log(
+        `[ConvExtractor]   - Chunk ${c._id}: state=${c.state}, transcriptionIds=${
+          c.transcriptionIds?.length ?? 0
+        }, start=${c.start?.toISOString?.() ?? "N/A"}`,
+      );
     }
 
     let conversationsCreated = 0;
@@ -1020,7 +1259,10 @@ const capability: JobCapability = {
 
     // Compute prompt version for idempotency (based on prompts that affect output)
     const promptVersion = createHash("sha256")
-      .update(input.segmentation_system_prompt + input.segmentation_guidance_prompt + input.extraction_system_prompt + input.extraction_guidance_prompt)
+      .update(
+        input.segmentation_system_prompt + input.segmentation_guidance_prompt +
+          input.extraction_system_prompt + input.extraction_guidance_prompt,
+      )
       .digest("hex")
       .slice(0, 8);
 

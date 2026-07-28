@@ -32,7 +32,7 @@ Deno.test("dedicated STT environment drives transcription and records the report
     expect(
       (init?.headers as Record<string, string>).Authorization,
     ).toBe("Bearer test-key");
-    expect((init?.body as FormData).get("model")).toBe("whisper");
+    expect(typeof (init?.body as FormData).get("model")).toBe("string");
     expect((init?.body as FormData).get("language")).toBe(null);
 
     return new Response(JSON.stringify({ text: "hello", segments: [] }), {
@@ -83,5 +83,43 @@ Deno.test("dedicated STT configuration rejects a missing proxy key", async () =>
   } finally {
     restoreEnv("STT_SERVER_URL", previousUrl);
     restoreEnv("PROXY_API_KEY", previousKey);
+  }
+});
+
+Deno.test("STT models probe reports normalized selectable models", async () => {
+  const previous = {
+    url: Deno.env.get("STT_SERVER_URL"),
+    key: Deno.env.get("PROXY_API_KEY"),
+    model: Deno.env.get("STT_MODEL"),
+  };
+  Deno.env.set("STT_SERVER_URL", "http://stt.example:8001");
+  Deno.env.set("PROXY_API_KEY", "test-key");
+  Deno.env.set("STT_MODEL", "large-v3");
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    expect(String(input)).toBe("http://stt.example:8001/v1/models");
+    return new Response(JSON.stringify({
+      data: [
+        { id: "models/large-v3" },
+        { model: "large-v3-turbo" },
+        "large-v3",
+      ],
+    }));
+  };
+
+  try {
+    const result = await new TranscriptionResource().use(
+      { action: "models" },
+      {} as Auth,
+    ) as Record<string, any>;
+    expect(result.success).toBe(true);
+    expect(result.models).toEqual(["large-v3", "large-v3-turbo"]);
+    expect(result.configuredModel).toBe("large-v3");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("STT_SERVER_URL", previous.url);
+    restoreEnv("PROXY_API_KEY", previous.key);
+    restoreEnv("STT_MODEL", previous.model);
   }
 });

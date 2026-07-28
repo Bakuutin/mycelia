@@ -33,6 +33,7 @@ interface ModelSelectorProps {
   placeholder?: string;
   className?: string;
   prefetch?: boolean;
+  availableModels?: string[];
 }
 
 export function ModelSelector({
@@ -42,6 +43,7 @@ export function ModelSelector({
   placeholder = "Select model...",
   className,
   prefetch = false,
+  availableModels,
 }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<string[]>([]);
@@ -90,6 +92,11 @@ export function ModelSelector({
     if (category) return `${category.label} (${category.hint})`;
     return value;
   }, [value, placeholder]);
+
+  const visibleModels = useMemo(
+    () => [...new Set([...(availableModels || []), ...models])],
+    [availableModels, models],
+  );
 
   const handleSelect = (selectedValue: string) => {
     onChange(selectedValue === value ? "" : selectedValue);
@@ -150,11 +157,11 @@ export function ModelSelector({
             </CommandGroup>
 
             {/* Available Models from LiteLLM */}
-            {models.length > 0 && (
+            {visibleModels.length > 0 && (
               <>
                 <CommandSeparator />
                 <CommandGroup heading="Available Models">
-                  {models.map((model) => (
+                  {visibleModels.map((model) => (
                     <CommandItem
                       key={model}
                       value={model}
