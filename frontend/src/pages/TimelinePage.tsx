@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { MultiTrackTimeline } from "@/components/timeline/MultiTrackTimeline";
 import { TimelineHeader } from "@/components/timeline/TimelineHeader";
@@ -12,6 +12,9 @@ import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore";
 import { useTimeline } from "@/hooks/useTimeline";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { api } from "@/lib/api";
+import { useTimelineTimeZoneStore } from "@/stores/timelineTimeZoneStore";
+import { useTimelineTimeZone } from "@/hooks/useTimelineTimeZone";
+import { getTimelinePresetRange, type TimelinePreset } from "@/lib/timeZones";
 
 const TimelinePage = () => {
   const location = useLocation();
@@ -30,8 +33,20 @@ const TimelinePage = () => {
 
   const timeline = useTimeline();
   const { zoomTo } = timeline;
-  const setRange = useTimelineRange((s) => s.setRange);
+  const { start: timelineStart, end: timelineEnd, setRange } =
+    useTimelineRange();
+  const fetchTimeZones = useTimelineTimeZoneStore((state) =>
+    state.fetchForRange
+  );
+  const { resolveTimeZone } = useTimelineTimeZone();
   const hasTimeSelection = !!(timeSelection.start && timeSelection.end);
+
+  useEffect(() => {
+    const timeout = globalThis.setTimeout(() => {
+      fetchTimeZones(timelineStart, timelineEnd);
+    }, 150);
+    return () => globalThis.clearTimeout(timeout);
+  }, [fetchTimeZones, timelineEnd, timelineStart]);
 
   // Apply start/end from URL when navigating to timeline with ?start=&end= (e.g. "View on timeline" from object)
   useEffect(() => {
@@ -47,11 +62,12 @@ const TimelinePage = () => {
     setRange(start, end);
   }, [location.search, setRange]);
 
-  const isShortRange =
+  const isShortRange = Boolean(
     timeSelection.start &&
-    timeSelection.end &&
-    timeSelection.end.getTime() - timeSelection.start.getTime() <
-      24 * 60 * 60 * 1000;
+      timeSelection.end &&
+      timeSelection.end.getTime() - timeSelection.start.getTime() <
+        24 * 60 * 60 * 1000,
+  );
 
   // Clear selection when navigating away
   useEffect(() => {
@@ -101,8 +117,12 @@ const TimelinePage = () => {
       });
 
       if (result.start && result.end) {
-        const earliest = result.start instanceof Date ? result.start : new Date(result.start);
-        const latest = result.end instanceof Date ? result.end : new Date(result.end);
+        const earliest = result.start instanceof Date
+          ? result.start
+          : new Date(result.start);
+        const latest = result.end instanceof Date
+          ? result.end
+          : new Date(result.end);
 
         const duration = latest.getTime() - earliest.getTime();
         const padding = duration * 0.05;
@@ -117,46 +137,23 @@ const TimelinePage = () => {
 
   const handleTimeRangeSelect = (range: string) => {
     const now = new Date();
-    let start: Date;
-    let end: Date = now;
-
-    switch (range) {
-      case "last5min":
-        start = new Date(now.getTime() - 5 * 60 * 1000);
-        break;
-      case "lastHour":
-        start = new Date(now.getTime() - 60 * 60 * 1000);
-        break;
-      case "today":
-        start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        break;
-      case "yesterday":
-        start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        break;
-      case "thisWeek": {
-        const dayOfWeek = now.getDay();
-        const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-        start = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() + mondayOffset,
-        );
-        break;
-      }
-      case "currentMonth":
-        start = new Date(now.getFullYear(), now.getMonth(), 1);
-        break;
-      case "yearToDate":
-        start = new Date(now.getFullYear(), 0, 1);
-        break;
-      case "pastYear":
-        start = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-        break;
-      default:
-        return;
-    }
-
+    const supported = [
+      "last5min",
+      "lastHour",
+      "today",
+      "yesterday",
+      "thisWeek",
+      "currentMonth",
+      "yearToDate",
+      "pastYear",
+    ] as const;
+    if (!supported.includes(range as TimelinePreset)) return;
+    const timeZone = resolveTimeZone(now);
+    const { start, end } = getTimelinePresetRange(
+      range as TimelinePreset,
+      now,
+      timeZone,
+    );
     zoomTo(start, end);
   };
 
@@ -180,8 +177,8 @@ const TimelinePage = () => {
         <div className="flex-1 space-y-6 min-w-0">
           <TimelineHeader
             hasTimeSelection={hasTimeSelection}
-            timeSelectionStart={timeSelection.start}
-            timeSelectionEnd={timeSelection.end}
+            timeSelectionStart={timeSelection.start ?? undefined}
+            timeSelectionEnd={timeSelection.end ?? undefined}
             isShortRange={isShortRange}
             onZoomToFit={handleZoomToFit}
             onTimeRangeSelect={handleTimeRangeSelect}

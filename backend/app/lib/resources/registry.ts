@@ -13,6 +13,7 @@ import { MessengerResource } from "@/lib/messenger/resource.server.ts";
 import { SearchResource } from "@/lib/search/resource.server.ts";
 import { DocsResource } from "@/lib/docs/resource.server.ts";
 import { ConfigResource } from "@/lib/config/resource.server.ts";
+import { TimelineTimeZonesResource } from "@/lib/timezones/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -28,6 +29,7 @@ const resources = [
   SearchResource,
   DocsResource,
   ConfigResource,
+  TimelineTimeZonesResource,
 ];
 
 export async function setupResources(): Promise<void> {

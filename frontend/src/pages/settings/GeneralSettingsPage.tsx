@@ -5,14 +5,18 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { formatTime } from "@/lib/formatTime";
+import { TimeZoneSelect } from "@/components/TimeZoneSelect";
+import { getBrowserTimeZone, resolveDefaultTimeZone } from "@/lib/timeZones";
 
 const GeneralSettingsPage = () => {
   const {
     theme,
     timeFormat,
+    defaultTimeZone,
     transcriptThresholdHours,
     setTheme,
     setTimeFormat,
+    setDefaultTimeZone,
     setTranscriptThresholdHours,
   } = useSettingsStore();
   const now = useMemo(() => new Date(), []);
@@ -111,6 +115,22 @@ const GeneralSettingsPage = () => {
             </select>
             <p className="text-xs text-muted-foreground">
               Choose how dates and times are displayed across the application
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="defaultTimeZone">Default Time Zone</Label>
+            <TimeZoneSelect
+              id="defaultTimeZone"
+              value={defaultTimeZone}
+              onChange={setDefaultTimeZone}
+              includeBrowser
+            />
+            <p className="text-xs text-muted-foreground">
+              Used when a timeline instant has no saved time-zone period.
+              Current resolved zone:{" "}
+              {resolveDefaultTimeZone(defaultTimeZone)}. Device zone:{" "}
+              {getBrowserTimeZone()}.
             </p>
           </div>
 
