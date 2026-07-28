@@ -20,6 +20,18 @@ export type JobInfo = {
   updatedOn?: number;
   queueState?: string | null;
   queuePresent?: boolean;
+  modelProvenance?: Array<{
+    stage: string;
+    requestedModel?: string;
+    executedModel?: string;
+    responseModel?: string;
+    fallbackModel?: string;
+    fallbackUsed: boolean;
+    providerBaseUrl?: string;
+    providerProfileId?: string;
+    providerProfileName?: string;
+    provenanceQuality: "exact" | "requested_only";
+  }>;
 };
 
 export interface JobLogEntry {

@@ -73,6 +73,48 @@ const GetJobSchema = z.object({
   id: z.string(),
 });
 
+interface JobModelProvenanceEntry {
+  stage: string;
+  requestedModel?: string;
+  executedModel?: string;
+  responseModel?: string;
+  fallbackModel?: string;
+  fallbackUsed: boolean;
+  providerBaseUrl?: string;
+  providerProfileId?: string;
+  providerProfileName?: string;
+  provenanceQuality: "exact" | "requested_only";
+}
+
+function addModelProvenanceEntry(
+  entries: JobModelProvenanceEntry[],
+  value: Record<string, any> | null | undefined,
+  stage: string,
+) {
+  if (!value) return;
+
+  const requestedModel = value.requestedModel || value.model;
+  const executedModel = value.resolvedModel || value.responseModel;
+  if (!requestedModel && !executedModel) return;
+
+  const entry: JobModelProvenanceEntry = {
+    stage,
+    requestedModel,
+    executedModel,
+    responseModel: value.responseModel,
+    fallbackModel: value.fallbackModel,
+    fallbackUsed: value.fallbackUsed === true,
+    providerBaseUrl: value.providerBaseUrl,
+    providerProfileId: value.providerProfileId,
+    providerProfileName: value.providerProfileName,
+    provenanceQuality: executedModel ? "exact" : "requested_only",
+  };
+  const key = JSON.stringify(entry);
+  if (!entries.some((candidate) => JSON.stringify(candidate) === key)) {
+    entries.push(entry);
+  }
+}
+
 const EnqueueJobSchema = z.object({
   action: z.literal("enqueue"),
   data: z.object({ type: z.string() }).passthrough(),
@@ -292,6 +334,98 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       }
     }
 
+    let modelProvenance: JobModelProvenanceEntry[] | undefined;
+    if (job.type === "conversation_extractor") {
+      const entries: JobModelProvenanceEntry[] = [];
+      const conversations = await mongo({
+        action: "find",
+        collection: "objects",
+        query: { "metadata.extractedWith.jobId": input.id },
+        options: {
+          limit: 100,
+          projection: {
+            "metadata.extractedWith": 1,
+          },
+        },
+      });
+
+      for (const conversation of conversations) {
+        const extractedWith = conversation.metadata?.extractedWith;
+        if (extractedWith?.operations) {
+          addModelProvenanceEntry(
+            entries,
+            extractedWith.operations.segmentation,
+            "Segmentation",
+          );
+          addModelProvenanceEntry(
+            entries,
+            extractedWith.operations.metadata,
+            "Metadata extraction",
+          );
+        } else {
+          addModelProvenanceEntry(
+            entries,
+            extractedWith,
+            "Conversation extraction",
+          );
+        }
+      }
+
+      // Empty or failed jobs may not have created a conversation object. Use
+      // chunk provenance only when it belongs to this exact job; otherwise show
+      // the requested alias without pretending that an executed model was saved.
+      if (entries.length === 0) {
+        const failedChunkId = typeof job.failedReason === "string"
+          ? job.failedReason.match(/chunk\s+([a-f\d]{24})/i)?.[1]
+          : undefined;
+        const chunkId = job.data?.chunkId || job.progress?.chunkId ||
+          failedChunkId;
+        const chunks = await mongo({
+          action: "find",
+          collection: "conversation_chunks",
+          query: chunkId
+            ? { _id: new ObjectId(chunkId) }
+            : { processedByJobId: input.id },
+          options: {
+            limit: 100,
+            projection: {
+              params: 1,
+              inferenceProvenance: 1,
+            },
+          },
+        });
+
+        for (const chunk of chunks) {
+          const segmentation = chunk.inferenceProvenance?.segmentation;
+          if (segmentation?.jobId === input.id) {
+            addModelProvenanceEntry(entries, segmentation, "Segmentation");
+            for (const metadata of chunk.inferenceProvenance?.metadata ?? []) {
+              addModelProvenanceEntry(
+                entries,
+                metadata,
+                "Metadata extraction",
+              );
+            }
+          }
+        }
+
+        if (entries.length === 0) {
+          const requestedModel = job.data?.model || chunks[0]?.params?.model;
+          if (requestedModel) {
+            entries.push({
+              stage: "Conversation extraction",
+              requestedModel,
+              fallbackModel: job.data?.fallbackModel,
+              fallbackUsed: false,
+              provenanceQuality: "requested_only",
+            });
+          }
+        }
+      }
+
+      modelProvenance = entries;
+    }
+
     return {
       id: job._id.toString(),
       type: job.type,
@@ -308,6 +442,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       updatedOn: job.updatedAt?.getTime(),
       queueState,
       queuePresent: queueJob != null,
+      ...(modelProvenance && { modelProvenance }),
     };
   }
 

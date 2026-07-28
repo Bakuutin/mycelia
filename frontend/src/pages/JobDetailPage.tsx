@@ -103,6 +103,51 @@ function MetricCell({ icon: Icon, label, value }: { icon: LucideIcon; label: str
     );
 }
 
+function ModelProvenanceDetails({ entries }: { entries: NonNullable<JobInfo["modelProvenance"]> }) {
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5" />
+                    Inference Model
+                </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                {entries.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">
+                        Model provenance was not recorded for this job.
+                    </div>
+                ) : entries.map((entry, index) => (
+                    <div key={`${entry.stage}-${entry.requestedModel}-${entry.executedModel}-${index}`} className="rounded-lg border p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <div className="text-xs uppercase tracking-wide text-muted-foreground">{entry.stage}</div>
+                                <div className="font-mono text-sm font-medium">
+                                    {entry.executedModel || "Execution model not recorded"}
+                                </div>
+                            </div>
+                            <Badge variant={entry.provenanceQuality === "exact" ? "secondary" : "outline"}>
+                                {entry.provenanceQuality === "exact" ? "executed model" : "requested only"}
+                            </Badge>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            {entry.requestedModel && (
+                                <span>Requested: <span className="font-mono text-foreground">{entry.requestedModel}</span></span>
+                            )}
+                            {(entry.providerProfileName || entry.providerBaseUrl) && (
+                                <span>Provider: {entry.providerProfileName || entry.providerBaseUrl}</span>
+                            )}
+                            {entry.fallbackUsed && (
+                                <span className="text-amber-500">Fallback used: {entry.fallbackModel || "configured fallback"}</span>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </CardContent>
+        </Card>
+    );
+}
+
 function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
     if (fields.length === 0) {
         return <div className="text-sm text-muted-foreground">No data</div>;
@@ -630,6 +675,10 @@ export default function JobDetailPage() {
                     </Card>
                 )}
             </div>
+
+            {job.type === "conversation_extractor" && job.modelProvenance && (
+                <ModelProvenanceDetails entries={job.modelProvenance} />
+            )}
 
             {/* Transcription Details Section */}
             {isTranscriptionJob && (
