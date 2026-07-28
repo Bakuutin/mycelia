@@ -15,6 +15,43 @@ const PIPELINE_STAGES = [
   { type: "summarization", label: "Summarization" },
 ] as const;
 
+const PIPELINE_STATS_MAX_TIME_MS = 10_000;
+
+function isMissingIndexHint(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(
+    "hint provided does not correspond to an existing index",
+  );
+}
+
+async function aggregatePipelineStats(
+  mongo: ReturnType<typeof getMongoResource>,
+  collection: string,
+  pipeline: Record<string, unknown>[],
+  hint: string,
+): Promise<any[]> {
+  try {
+    return await mongo({
+      action: "aggregate",
+      collection,
+      pipeline,
+      options: { hint, maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
+    });
+  } catch (error) {
+    if (!isMissingIndexHint(error)) throw error;
+
+    console.warn(
+      `[audio-pipeline] Statistics index ${hint} is unavailable; retrying without a hint`,
+    );
+    return await mongo({
+      action: "aggregate",
+      collection,
+      pipeline,
+      options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
+    });
+  }
+}
+
 interface PipelineSession {
   _id: string;
   start?: Date;
@@ -399,10 +436,10 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       conversationChunkDocs,
     ] = sourceIds.length > 0
       ? await Promise.all([
-        mongo({
-          action: "aggregate",
-          collection: "audio_chunks",
-          pipeline: [
+        aggregatePipelineStats(
+          mongo,
+          "audio_chunks",
+          [
             { $match: { original_id: { $in: sourceIds } } },
             {
               $group: {
@@ -417,7 +454,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
               },
             },
           ],
-        }),
+          "audio_chunks_pipeline_source_stats",
+        ),
         mongo({
           action: "find",
           collection: "transcription_sequences",
@@ -584,7 +622,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       totalConversations,
       sourceStatsResult,
       sourceKinds,
-      pendingSequenceChunks,
+      pendingSequenceChunkStatsResult,
       unassignedTranscriptions,
       conversationsAwaitingSummary,
       jobStatsResult,
@@ -706,15 +744,21 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
           { $sort: { count: -1 } },
         ],
       }),
-      mongo({
-        action: "count",
-        collection: "audio_chunks",
-        query: {
-          "vad.has_speech": true,
-          transcribed_at: { $eq: null },
-          transcription_sequence_id: { $exists: false },
-        },
-      }),
+      aggregatePipelineStats(
+        mongo,
+        "audio_chunks",
+        [
+          {
+            $match: {
+              "vad.has_speech": true,
+              transcribed_at: null,
+              transcription_sequence_id: { $exists: false },
+            },
+          },
+          { $count: "count" },
+        ],
+        "audio_chunks_sequence_pending_stats",
+      ),
       mongo({
         action: "count",
         collection: "transcriptions",
@@ -788,6 +832,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       }),
     ]);
 
+    const pendingSequenceChunks = pendingSequenceChunkStatsResult[0]?.count ??
+      0;
     const sourceTotals = sourceStatsResult[0] ?? {};
     const sourceFilesStats = {
       total: sourceTotals.total ?? 0,
