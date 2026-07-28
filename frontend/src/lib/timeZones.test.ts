@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findTimeZonePeriod,
   getTimelinePresetRange,
+  getTimeZoneSearchOptions,
   getZonedDateParts,
   isValidTimeZone,
   type TimelineTimeZonePeriod,
@@ -28,6 +29,14 @@ describe("timeline time zones", () => {
     expect(isValidTimeZone("Europe/Paris")).toBe(true);
     expect(isValidTimeZone("Asia/Tbilisi")).toBe(true);
     expect(isValidTimeZone("Mars/Olympus_Mons")).toBe(false);
+  });
+
+  it("indexes city aliases for time-zone search", () => {
+    const paris = getTimeZoneSearchOptions().find((option) =>
+      option.timeZone === "Europe/Paris"
+    );
+    expect(paris?.searchValue).toContain("Metz");
+    expect(paris?.city).toBe("Paris");
   });
 
   it("uses the newest overlapping period", () => {

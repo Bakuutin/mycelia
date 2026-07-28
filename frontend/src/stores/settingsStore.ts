@@ -27,6 +27,7 @@ interface SettingsState {
   defaultTimeZone: DefaultTimeZone;
   timelineTimeZoneMode: TimelineTimeZoneMode;
   timelineTimeZoneOverride: string;
+  favoriteTimeZones: string[];
   transcriptThresholdHours: number;
   preferredAudioDeviceId: string | null;
   echoCancellation: boolean;
@@ -43,6 +44,7 @@ interface SettingsState {
   setDefaultTimeZone: (timeZone: DefaultTimeZone) => void;
   setTimelineTimeZoneMode: (mode: TimelineTimeZoneMode) => void;
   setTimelineTimeZoneOverride: (timeZone: string) => void;
+  toggleFavoriteTimeZone: (timeZone: string) => void;
   setTranscriptThresholdHours: (hours: number) => void;
   setPreferredAudioDeviceId: (deviceId: string | null) => void;
   setEchoCancellation: (enabled: boolean) => void;
@@ -75,6 +77,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultTimeZone: BROWSER_TIME_ZONE,
       timelineTimeZoneMode: "contextual",
       timelineTimeZoneOverride: "UTC",
+      favoriteTimeZones: [],
       transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
       preferredAudioDeviceId: null,
       echoCancellation: true,
@@ -92,6 +95,12 @@ export const useSettingsStore = create<SettingsState>()(
       setTimelineTimeZoneMode: (mode) => set({ timelineTimeZoneMode: mode }),
       setTimelineTimeZoneOverride: (timeZone) =>
         set({ timelineTimeZoneOverride: timeZone }),
+      toggleFavoriteTimeZone: (timeZone) =>
+        set((state) => ({
+          favoriteTimeZones: state.favoriteTimeZones.includes(timeZone)
+            ? state.favoriteTimeZones.filter((item) => item !== timeZone)
+            : [...state.favoriteTimeZones, timeZone],
+        })),
       setTranscriptThresholdHours: (hours) =>
         set({ transcriptThresholdHours: hours }),
       setPreferredAudioDeviceId: (deviceId) =>
@@ -112,6 +121,7 @@ export const useSettingsStore = create<SettingsState>()(
           defaultTimeZone: BROWSER_TIME_ZONE,
           timelineTimeZoneMode: "contextual",
           timelineTimeZoneOverride: "UTC",
+          favoriteTimeZones: [],
           transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
           preferredAudioDeviceId: null,
           echoCancellation: true,
