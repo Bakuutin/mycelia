@@ -1,20 +1,29 @@
 import * as d3 from "d3";
 import React from "react";
 import { Label, Tick } from "./types.ts";
+import { getShortTimeZoneName, getZonedDateParts } from "@/lib/timeZones";
 
 const day = 1000 * 60 * 60 * 24;
 
-const checkAllJanFirst = (ticks: Tick[]): boolean => {
+const checkAllJanFirst = (
+  ticks: Tick[],
+  resolveTimeZone: (date: Date) => string,
+): boolean => {
   return ticks.length > 0 &&
-    ticks.every(({ value }) => value.getMonth() === 0 && value.getDate() === 1);
+    ticks.every(({ value }) => {
+      const parts = getZonedDateParts(value, resolveTimeZone(value));
+      return parts.month === 1 && parts.day === 1;
+    });
 };
 
-const checkHasTime = (ticks: Tick[]): boolean => {
-  return ticks.some(({ value }) => (
-    value.getHours() !== 0 ||
-    value.getMinutes() !== 0 ||
-    value.getSeconds() !== 0
-  ));
+const checkHasTime = (
+  ticks: Tick[],
+  resolveTimeZone: (date: Date) => string,
+): boolean => {
+  return ticks.some(({ value }) => {
+    const parts = getZonedDateParts(value, resolveTimeZone(value));
+    return parts.hour !== 0 || parts.minute !== 0 || parts.second !== 0;
+  });
 };
 
 const checkHasWeekdays = (ticks: Tick[]): boolean => {
@@ -23,8 +32,13 @@ const checkHasWeekdays = (ticks: Tick[]): boolean => {
   return last.getTime() - first.getTime() < 30 * day;
 };
 
-const checkHasSeconds = (ticks: Tick[]): boolean => {
-  return ticks.some(({ value }) => value.getSeconds() !== 0);
+const checkHasSeconds = (
+  ticks: Tick[],
+  resolveTimeZone: (date: Date) => string,
+): boolean => {
+  return ticks.some(({ value }) =>
+    getZonedDateParts(value, resolveTimeZone(value)).second !== 0
+  );
 };
 
 const checkHasMilliseconds = (ticks: Tick[]): boolean => {
@@ -35,9 +49,11 @@ const formatTime = (
   date: Date,
   hasSeconds: boolean,
   hasMilliseconds: boolean,
+  timeZone: string,
 ): string => {
   if (hasMilliseconds) {
     return date.toLocaleTimeString([], {
+      timeZone,
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -47,12 +63,14 @@ const formatTime = (
 
   return hasSeconds
     ? date.toLocaleTimeString([], {
+      timeZone,
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
     })
     : date.toLocaleTimeString([], {
+      timeZone,
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
@@ -68,8 +86,10 @@ export const formatLabel = (
     hasSeconds?: boolean;
     hasMilliseconds?: boolean;
   },
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
 ): React.ReactNode[] => {
-  const year = date.getFullYear().toString();
+  const parts = getZonedDateParts(date, timeZone);
+  const year = parts.year.toString();
   const defaults = {
     allJanFirst: false,
     hasTime: true,
@@ -87,12 +107,13 @@ export const formatLabel = (
     return [year];
   }
 
-  const month = date.toLocaleDateString([], { month: "short" });
-  const day = date.getDate();
-  const weekday = date.toLocaleDateString([], { weekday: "short" });
+  const month = date.toLocaleDateString([], { month: "short", timeZone });
+  const day = parts.day;
+  const weekday = date.toLocaleDateString([], { weekday: "short", timeZone });
 
   return [
-    hasTime ? formatTime(date, hasSeconds, hasMilliseconds) : null,
+    hasTime ? formatTime(date, hasSeconds, hasMilliseconds, timeZone) : null,
+    hasTime ? getShortTimeZoneName(date, timeZone) : null,
     hasWeekdays ? weekday : null,
     `${month} ${day}`,
     year,
@@ -103,7 +124,11 @@ const generateGregorianLabels = (
   scale: d3.ScaleTime<number, number>,
   transform: d3.ZoomTransform,
   width: number,
+  context?: { resolveTimeZone?: (date: Date) => string },
 ): Label[] => {
+  const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ||
+    "UTC";
+  const resolveTimeZone = context?.resolveTimeZone ?? (() => browserTimeZone);
   const newScale = transform.rescaleX(scale);
   const tickValues = newScale.ticks(Math.ceil(width / 227));
   const ticks = tickValues.map((tick) => ({
@@ -111,17 +136,19 @@ const generateGregorianLabels = (
     xOffset: newScale(tick),
   }));
 
-  const allJanFirst = checkAllJanFirst(ticks);
-  const hasTime = checkHasTime(ticks);
+  const allJanFirst = checkAllJanFirst(ticks, resolveTimeZone);
+  const hasTime = checkHasTime(ticks, resolveTimeZone);
   const hasWeekdays = checkHasWeekdays(ticks);
-  const hasSeconds = checkHasSeconds(ticks);
+  const hasSeconds = checkHasSeconds(ticks, resolveTimeZone);
   const hasMilliseconds = checkHasMilliseconds(ticks);
 
   let prev: React.ReactNode[] | null = null;
   return ticks.map(({ value, xOffset }) => {
+    const timeZone = resolveTimeZone(value);
     const fullSegments = formatLabel(
       value,
       { allJanFirst, hasTime, hasWeekdays, hasSeconds, hasMilliseconds },
+      timeZone,
     );
     const result = {
       value,

@@ -1,4 +1,4 @@
-import React, { useMemo, memo } from "react";
+import React, { memo, useMemo } from "react";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useHistogramItems } from "@/modules/histogram/useHistogramItems";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
@@ -7,20 +7,21 @@ import { ObjectsLayer } from "@/modules/objects";
 import { ProcessingLayer } from "@/modules/histogram/ProcessingLayer";
 import { AudioLayer } from "@/modules/audio/index";
 import {
-  VoiceDetectionTrack,
-  DataPresenceTrack,
-  TranscriptionsTrack,
-  AudioChunksTrack,
-  DiarizationsTrack,
-  VOICE_DETECTION_CONFIG,
-  DATA_PRESENCE_CONFIG,
-  TRANSCRIPTIONS_CONFIG,
   AUDIO_CHUNKS_CONFIG,
+  AudioChunksTrack,
+  DATA_PRESENCE_CONFIG,
+  DataPresenceTrack,
   DIARIZATIONS_CONFIG,
+  DiarizationsTrack,
+  TRANSCRIPTIONS_CONFIG,
+  TranscriptionsTrack,
+  VOICE_DETECTION_CONFIG,
+  VoiceDetectionTrack,
 } from "./tracks";
 import { TrackHeader } from "./tracks/TrackHeader";
 import type { TrackId } from "@/types/tracks";
 import type { useTimeline } from "@/hooks/useTimeline";
+import { TimeZoneContextTrack } from "./TimeZoneContextTrack";
 
 // Pre-create layer instances (these are stable references)
 const TIME_LAYER = TimeLayer();
@@ -79,7 +80,7 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
 
   const visibleHistogramTracks = useMemo(
     () => HISTOGRAM_TRACK_IDS.filter((id) => visibleTracks.includes(id)),
-    [visibleTracks]
+    [visibleTracks],
   );
 
   const showObjects = visibleTracks.includes("objects");
@@ -101,6 +102,12 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           width={width}
         />
 
+        <TimeZoneContextTrack
+          scale={timeScale}
+          transform={transform}
+          width={width}
+        />
+
         {/* Data tracks */}
         {visibleHistogramTracks.map((trackId) => {
           const TrackComponent = TRACK_COMPONENTS[trackId];
@@ -110,8 +117,18 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           if (!TrackComponent) return null;
 
           return (
-            <div key={trackId} className="relative border-b border-border/30 last:border-b-0">
-              <TrackHeader config={{ ...config, id: trackId, defaultVisible: true, defaultHeight: height }} />
+            <div
+              key={trackId}
+              className="relative border-b border-border/30 last:border-b-0"
+            >
+              <TrackHeader
+                config={{
+                  ...config,
+                  id: trackId,
+                  defaultVisible: true,
+                  defaultHeight: height,
+                }}
+              />
               <TrackComponent
                 scale={timeScale}
                 transform={transform}
