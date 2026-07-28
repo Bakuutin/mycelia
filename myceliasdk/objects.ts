@@ -113,6 +113,19 @@ const zObjectBase = z.object({
       chunkId: z.string().optional(),
       jobId: z.string().optional(),
       timestamp: z.date(),
+      result: z.object({
+        schemaVersion: z.string(),
+        status: z.enum([
+          "metadata_extracted",
+          "completed",
+          "completed_with_relationship_errors",
+        ]),
+        emojiPresent: z.boolean(),
+        entityCount: z.number(),
+        relationshipsAttempted: z.number(),
+        relationshipsCreated: z.number(),
+        relationshipErrors: z.number(),
+      }).optional(),
     }).loose().optional(),
   }).loose().optional(),
 

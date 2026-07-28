@@ -9,13 +9,13 @@ import {
   CalendarClock,
   Clock,
   Handshake,
+  LineChart,
   MessageSquare,
   Package,
+  Pencil,
   Timer,
   User,
   Users,
-  LineChart,
-  Pencil,
 } from "lucide-react";
 
 interface MetadataDisplayProps {
@@ -32,26 +32,33 @@ interface MetadataDisplayProps {
   compact?: boolean;
 }
 
-function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
+function formatDuration(
+  startDate: Date | string,
+  endDate?: Date | string | null,
+): string {
   const start = typeof startDate === "string" ? new Date(startDate) : startDate;
-  const end = endDate 
+  const end = endDate
     ? (typeof endDate === "string" ? new Date(endDate) : endDate)
     : new Date();
-  
+
   const diffMs = end.getTime() - start.getTime();
   const diffMins = Math.floor(diffMs / (1000 * 60));
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  
+
   if (diffMins < 1) return "< 1 minute";
   if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? "s" : ""}`;
   if (diffHours < 24) {
     const mins = diffMins % 60;
-    return mins > 0 ? `${diffHours}h ${mins}m` : `${diffHours} hour${diffHours !== 1 ? "s" : ""}`;
+    return mins > 0
+      ? `${diffHours}h ${mins}m`
+      : `${diffHours} hour${diffHours !== 1 ? "s" : ""}`;
   }
   if (diffDays < 7) {
     const hours = diffHours % 24;
-    return hours > 0 ? `${diffDays}d ${hours}h` : `${diffDays} day${diffDays !== 1 ? "s" : ""}`;
+    return hours > 0
+      ? `${diffDays}d ${hours}h`
+      : `${diffDays} day${diffDays !== 1 ? "s" : ""}`;
   }
   return `${diffDays} days`;
 }
@@ -66,16 +73,71 @@ function getObjectType(object: Object): {
   icon: React.ComponentType<{ className?: string }>;
   color: string;
 } {
-  if (object.isPromise) return { type: "Promise", icon: Handshake, color: "bg-orange-100 text-orange-800 border-orange-200" };
-  if (object.isRelationship) return { type: "Relationship", icon: Users, color: "bg-purple-100 text-purple-800 border-purple-200" };
-  if (object.isConversation) return { type: "Conversation", icon: MessageSquare, color: "bg-cyan-100 text-cyan-800 border-cyan-200" };
-  if (object.isPerson) return { type: "Person", icon: User, color: "bg-blue-100 text-blue-800 border-blue-200" };
-  if (object.isEvent) return { type: "Event", icon: Calendar, color: "bg-green-100 text-green-800 border-green-200" };
-  return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border-gray-200" };
+  if (object.isPromise) {
+    return {
+      type: "Promise",
+      icon: Handshake,
+      color: "bg-orange-100 text-orange-800 border-orange-200",
+    };
+  }
+  if (object.isRelationship) {
+    return {
+      type: "Relationship",
+      icon: Users,
+      color: "bg-purple-100 text-purple-800 border-purple-200",
+    };
+  }
+  if (object.isConversation) {
+    return {
+      type: "Conversation",
+      icon: MessageSquare,
+      color: "bg-cyan-100 text-cyan-800 border-cyan-200",
+    };
+  }
+  if (object.isPerson) {
+    return {
+      type: "Person",
+      icon: User,
+      color: "bg-blue-100 text-blue-800 border-blue-200",
+    };
+  }
+  if (object.isEvent) {
+    return {
+      type: "Event",
+      icon: Calendar,
+      color: "bg-green-100 text-green-800 border-green-200",
+    };
+  }
+  return {
+    type: "Object",
+    icon: Package,
+    color: "bg-gray-100 text-gray-800 border-gray-200",
+  };
 }
 
-export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMetadata, onEditTimeRanges, compact = false }: MetadataDisplayProps) {
+export function MetadataDisplay(
+  {
+    object,
+    hideObjectType,
+    hideTimeInfo,
+    hideMetadata,
+    onEditTimeRanges,
+    compact = false,
+  }: MetadataDisplayProps,
+) {
   const extractedWith = object?.metadata?.extractedWith;
+  const extractionResult = extractedWith?.result as
+    | {
+      status?: string;
+      schemaVersion?: string;
+      emojiPresent?: boolean;
+      entityCount?: number;
+      relationshipsCreated?: number;
+      relationshipErrors?: number;
+    }
+    | undefined;
+  const hasV2Output = extractedWith?.extractorVersion === "v2" &&
+    Boolean(object.icon && "text" in object.icon && object.icon.text);
   const timeRanges = object?.timeRanges;
   const hasTimeRange = timeRanges && timeRanges.length > 0;
   const firstRange = hasTimeRange ? timeRanges[0] : null;
@@ -90,7 +152,9 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
           <h3 className="text-sm font-semibold text-muted-foreground mb-3">
             Object Type
           </h3>
-          <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border ${typeInfo.color}`}>
+          <div
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border ${typeInfo.color}`}
+          >
             <TypeIcon className="w-4 h-4" />
             <span className="font-medium">{typeInfo.type}</span>
           </div>
@@ -126,31 +190,36 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
                 </dd>
               </div>
             </div>
-            
-            {firstRange.end ? (
-              <div className="flex items-start gap-3">
-                <CalendarClock className="w-4 h-4 text-muted-foreground mt-0.5" />
-                <div className="flex-1">
-                  <dt className="text-muted-foreground text-xs">Ended</dt>
-                  <dd className="text-foreground font-medium">
-                    {formatDateTime(firstRange.end)}
-                  </dd>
+
+            {firstRange.end
+              ? (
+                <div className="flex items-start gap-3">
+                  <CalendarClock className="w-4 h-4 text-muted-foreground mt-0.5" />
+                  <div className="flex-1">
+                    <dt className="text-muted-foreground text-xs">Ended</dt>
+                    <dd className="text-foreground font-medium">
+                      {formatDateTime(firstRange.end)}
+                    </dd>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="flex items-start gap-3">
-                <Clock className="w-4 h-4 text-muted-foreground mt-0.5 animate-pulse" />
-                <div className="flex-1">
-                  <dt className="text-muted-foreground text-xs">Status</dt>
-                  <dd className="text-foreground font-medium">
-                    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                      Ongoing
-                    </Badge>
-                  </dd>
+              )
+              : (
+                <div className="flex items-start gap-3">
+                  <Clock className="w-4 h-4 text-muted-foreground mt-0.5 animate-pulse" />
+                  <div className="flex-1">
+                    <dt className="text-muted-foreground text-xs">Status</dt>
+                    <dd className="text-foreground font-medium">
+                      <Badge
+                        variant="outline"
+                        className="bg-green-50 text-green-700 border-green-200"
+                      >
+                        Ongoing
+                      </Badge>
+                    </dd>
+                  </div>
                 </div>
-              </div>
-            )}
-            
+              )}
+
             <div className="flex items-start gap-3">
               <Timer className="w-4 h-4 text-muted-foreground mt-0.5" />
               <div className="flex-1">
@@ -163,11 +232,11 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
 
             <div className="pt-2 border-t">
               <Link
-                to={
-                  firstRange.end
-                    ? `/timeline?start=${new Date(firstRange.start).getTime()}&end=${new Date(firstRange.end).getTime()}`
-                    : `/timeline?start=${new Date(firstRange.start).getTime()}`
-                }
+                to={firstRange.end
+                  ? `/timeline?start=${
+                    new Date(firstRange.start).getTime()
+                  }&end=${new Date(firstRange.end).getTime()}`
+                  : `/timeline?start=${new Date(firstRange.start).getTime()}`}
                 className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
               >
                 <LineChart className="w-4 h-4" />
@@ -178,7 +247,8 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
             {timeRanges.length > 1 && (
               <div className="pt-2 border-t">
                 <p className="text-xs text-muted-foreground">
-                  + {timeRanges.length - 1} more time range{timeRanges.length > 2 ? "s" : ""}
+                  + {timeRanges.length - 1}{" "}
+                  more time range{timeRanges.length > 2 ? "s" : ""}
                 </p>
               </div>
             )}
@@ -208,7 +278,7 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
             <div className="flex justify-between items-center">
               <dt className="text-muted-foreground">Version:</dt>
               <dd className="text-foreground">
-                {(object?.version || 0 ) as number}
+                {(object?.version || 0) as number}
               </dd>
             </div>
           </dl>
@@ -221,6 +291,64 @@ export function MetadataDisplay({ object, hideObjectType, hideTimeInfo, hideMeta
             Extraction Metadata
           </h3>
           <dl className="space-y-3 text-sm">
+            <div className="flex justify-between items-center gap-3">
+              <dt className="text-muted-foreground">Extraction result:</dt>
+              <dd className="text-right">
+                {extractionResult?.status === "completed"
+                  ? (
+                    <Badge className="bg-green-600 hover:bg-green-600">
+                      Verified
+                    </Badge>
+                  )
+                  : extractionResult
+                  ? (
+                    <Badge variant="destructive">
+                      {extractionResult.status || "Incomplete"}
+                    </Badge>
+                  )
+                  : hasV2Output
+                  ? (
+                    <Badge className="bg-green-600 hover:bg-green-600">
+                      v2 output present
+                    </Badge>
+                  )
+                  : (
+                    <Badge
+                      variant="outline"
+                      className="border-amber-500 text-amber-700"
+                    >
+                      Needs metadata backfill
+                    </Badge>
+                  )}
+              </dd>
+            </div>
+            {extractionResult && (
+              <>
+                <div className="flex justify-between items-center">
+                  <dt className="text-muted-foreground">Emoji:</dt>
+                  <dd>
+                    {extractionResult.emojiPresent ? "Present" : "Missing"}
+                  </dd>
+                </div>
+                <div className="flex justify-between items-center">
+                  <dt className="text-muted-foreground">Entities extracted:</dt>
+                  <dd>{extractionResult.entityCount ?? 0}</dd>
+                </div>
+                <div className="flex justify-between items-center">
+                  <dt className="text-muted-foreground">
+                    Entity links created:
+                  </dt>
+                  <dd>
+                    {extractionResult.relationshipsCreated ?? 0}
+                    {(extractionResult.relationshipErrors ?? 0) > 0 && (
+                      <span className="ml-1 text-red-600">
+                        ({extractionResult.relationshipErrors} failed)
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              </>
+            )}
             <div className="flex justify-between items-center">
               <dt className="text-muted-foreground">Executed model:</dt>
               <dd className="max-w-[65%] break-all text-right font-mono text-foreground">

@@ -37,6 +37,17 @@ interface Utterance {
   text: string;
 }
 
+interface TranscriptionInput {
+  start: Date | string;
+  end: Date | string;
+  text?: string;
+  segments?: Array<{
+    start?: number;
+    end?: number;
+    text?: string;
+  }>;
+}
+
 interface Segment {
   title: string;
   start: Date;
@@ -47,6 +58,12 @@ interface ConversationMetadata {
   agreed_upon_something: boolean;
   entities: string[];
   emoji: string | undefined;
+}
+
+interface EntityRelationshipResult {
+  attempted: number;
+  created: number;
+  failed: number;
 }
 
 interface ConversationError {
@@ -86,7 +103,7 @@ export const schema = z.object({
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
   limit: z.number().default(1),
-  extractorVersion: z.string().default("v1"),
+  extractorVersion: z.string().default("v2"),
   fallbackModel: z.string()
     .default(Deno.env.get("CONVERSATION_EXTRACTION_FALLBACK_MODEL") ?? "")
     .describe(
@@ -107,7 +124,16 @@ export const schema = z.object({
     ),
 
   extraction_system_prompt: z.string()
-    .default("summarize this please")
+    .default(
+      `You extract structured metadata from one conversation transcript.
+
+Return all fields required by the response schema:
+- agreed_upon_something: true only when the speakers made a concrete agreement, commitment, or decision; otherwise false.
+- entities: deduplicated names of people, organizations, places, projects, products, or other stable named things explicitly mentioned in the transcript. Use concise canonical names. Do not include pronouns, unnamed people, generic common nouns, or conversation topics. Return [] when there are no qualifying entities.
+- emoji: exactly one emoji that best represents the main subject of the conversation. Always return one emoji, even when the subject is broad.
+
+Do not summarize the transcript and do not add fields outside the schema.`,
+    )
     .describe("System prompt for extracting conversation metadata"),
 
   extraction_guidance_prompt: z.string()
@@ -121,7 +147,41 @@ export type ConversationExtractorJobData = z.infer<typeof schema>;
 // Pure Functions
 // ============================================================================
 
-function formatChunkAsPrompt(
+export function transcriptionToUtterances(
+  transcription: TranscriptionInput,
+): Utterance[] {
+  const transcriptionStart = new Date(transcription.start);
+  const transcriptionEnd = new Date(transcription.end);
+  const segments = transcription.segments ?? [];
+
+  const utterances = segments.flatMap((segment) => {
+    const text = segment.text?.trim();
+    if (!text) return [];
+
+    const start = typeof segment.start === "number"
+      ? new Date(transcriptionStart.getTime() + segment.start * 1000)
+      : transcriptionStart;
+    const end = typeof segment.end === "number"
+      ? new Date(transcriptionStart.getTime() + segment.end * 1000)
+      : transcriptionEnd;
+
+    return [{
+      start,
+      end: new Date(Math.min(end.getTime(), transcriptionEnd.getTime())),
+      text,
+    }];
+  });
+
+  if (utterances.length > 0) return utterances;
+
+  const fallbackText = transcription.text?.trim() ||
+    segments.map((segment) => segment.text ?? "").join("").trim();
+  return fallbackText
+    ? [{ start: transcriptionStart, end: transcriptionEnd, text: fallbackText }]
+    : [];
+}
+
+export function formatChunkAsPrompt(
   utterances: Utterance[],
 ): { prompt: string; start: Date; end: Date } {
   if (utterances.length === 0) {
@@ -137,15 +197,18 @@ function formatChunkAsPrompt(
 
   strings.push(`[time: ${new Date(sorted[0].start).toISOString()}]`);
 
-  for (const u of sorted) {
+  for (let index = 0; index < sorted.length; index++) {
+    const u = sorted[index];
     const uStart = new Date(u.start);
     const gap = uStart.getTime() - latest.getTime();
 
-    if (gap > 30 * 1000) { // > 30 seconds
-      strings.push(`[time: ${latest.toISOString()}]`);
-      const minutes = Math.floor(gap / 1000 / 60);
-      const seconds = Math.floor((gap / 1000) % 60);
-      strings.push(`[silence ${minutes}m ${seconds}s]`);
+    if (index > 0) {
+      if (gap > 30 * 1000) { // > 30 seconds
+        strings.push(`[time: ${latest.toISOString()}]`);
+        const minutes = Math.floor(gap / 1000 / 60);
+        const seconds = Math.floor((gap / 1000) % 60);
+        strings.push(`[silence ${minutes}m ${seconds}s]`);
+      }
       strings.push(`[time: ${uStart.toISOString()}]`);
     }
 
@@ -514,7 +577,15 @@ function findAttrStartingWith(obj: Record<string, any>, prefix: string): any {
  * - Dates (if both are valid date strings)
  * - Line indices (if both are numbers)
  */
-function createSegmentParser(
+function findPhraseLine(promptLines: string[], phrase: string): number {
+  const needle = phrase.trim().toLocaleLowerCase();
+  if (!needle) return -1;
+  return promptLines.findIndex((line) =>
+    line.toLocaleLowerCase().includes(needle)
+  );
+}
+
+export function createSegmentParser(
   promptLines: string[],
   chunkStart: Date,
   chunkEnd: Date,
@@ -557,6 +628,25 @@ function createSegmentParser(
           if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
             return { title, start, end };
           }
+
+          // Some providers return phrase boundaries despite the JSON schema.
+          // Resolve them against the timestamped STT lines rather than
+          // expanding every topic to the full conversation chunk.
+          const startLine = findPhraseLine(promptLines, startVal);
+          const endLine = findPhraseLine(promptLines, endVal);
+          if (startLine >= 0 && endLine >= startLine) {
+            const phraseStart = findTimeAtOrBeforeLine(
+              timeMarkers,
+              startLine,
+            ) ??
+              chunkStart;
+            const phraseEnd = findTimeAtOrAfterLine(
+              timeMarkers,
+              endLine + 1,
+            ) ??
+              chunkEnd;
+            return { title, start: phraseStart, end: phraseEnd };
+          }
         }
       }
 
@@ -571,27 +661,52 @@ function createSegmentParser(
   };
 }
 
-function parseMetadataResponse(content: string): ConversationMetadata {
+export function parseMetadataResponse(content: string): ConversationMetadata {
   const parsed = extractJsonFromText(content);
-  // Only set emoji if valid, otherwise leave undefined (no icon)
-  let emoji: string | undefined = undefined;
-  if (parsed.emoji != null && typeof parsed.emoji === "string") {
-    const trimmed = parsed.emoji.trim();
-    if (trimmed.length > 0) {
-      emoji = trimmed;
+
+  const emoji = normalizeEmoji(parsed.emoji);
+  if (!emoji) {
+    throw new Error("Metadata response did not contain a valid emoji");
+  }
+
+  const entities: string[] = [];
+  const seenEntities = new Set<string>();
+  if (Array.isArray(parsed.entities)) {
+    for (const value of parsed.entities) {
+      if (typeof value !== "string") continue;
+      const name = value.trim();
+      const key = name.toLocaleLowerCase();
+      if (!name || seenEntities.has(key)) continue;
+      seenEntities.add(key);
+      entities.push(name);
     }
   }
+
   return {
     agreed_upon_something: Boolean(parsed.agreed_upon_something),
-    entities: Array.isArray(parsed.entities) ? parsed.entities : [],
+    entities,
     emoji,
   };
 }
 
-const metadataResponseSchema = z.object({
-  agreed_upon_something: z.boolean().optional(),
-  entities: z.array(z.string()).optional(),
-  emoji: z.string().optional(),
+export function normalizeEmoji(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const emojiPattern = /\p{Extended_Pictographic}/u;
+  const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    .segment(trimmed);
+  for (const { segment } of graphemes) {
+    if (emojiPattern.test(segment)) return segment;
+  }
+  return undefined;
+}
+
+export const metadataResponseSchema = z.object({
+  agreed_upon_something: z.boolean(),
+  entities: z.array(z.string()),
+  emoji: z.string(),
 });
 
 // ============================================================================
@@ -641,7 +756,13 @@ async function createEntityRelationships(
   entityNames: string[],
   errors: ConversationError[],
   generatedWith: Record<string, unknown>,
-): Promise<void> {
+): Promise<EntityRelationshipResult> {
+  const result: EntityRelationshipResult = {
+    attempted: entityNames.length,
+    created: 0,
+    failed: 0,
+  };
+
   for (const entityName of entityNames) {
     try {
       const entityId = await findOrCreateEntity(
@@ -662,7 +783,9 @@ async function createEntityRelationships(
           metadata: { generatedWith },
         },
       });
+      result.created++;
     } catch (error) {
+      result.failed++;
       console.error(
         `Failed to create entity relationship for "${entityName}":`,
         error,
@@ -675,29 +798,25 @@ async function createEntityRelationships(
       });
     }
   }
+
+  return result;
 }
 
 // ============================================================================
 // Idempotency Operations
 // ============================================================================
 
-async function deleteConversationsInRange(
+async function deleteConversationsForChunk(
   objects: (input: any) => Promise<any>,
-  mongo: (input: any) => Promise<any>,
-  start: Date,
-  end: Date,
+  chunkId: ObjectId,
 ): Promise<number> {
-  // Find conversations in range
+  // Delete only artifacts created from this chunk. Range-based deletion can
+  // remove valid conversations from overlapping chunks or manual imports.
   const conversations = await objects({
     action: "list",
     filters: {
       isConversation: true,
-      timeRanges: {
-        $elemMatch: {
-          start: { $lt: end },
-          end: { $gt: start },
-        },
-      },
+      "metadata.extractedWith.chunkId": chunkId.toString(),
     },
   });
 
@@ -810,11 +929,7 @@ async function processChunk(params: {
       collection: "transcriptions",
       query: { _id: { $in: chunk.transcriptionIds } },
       options: { sort: { start: 1 } },
-    }) as Array<{
-      start: Date;
-      end: Date;
-      segments?: Array<{ text: string }>;
-    }>;
+    }) as TranscriptionInput[];
 
     if (!transcriptions || transcriptions.length === 0) {
       console.log(
@@ -832,11 +947,7 @@ async function processChunk(params: {
     }
 
     // Convert to utterances
-    const utterances: Utterance[] = transcriptions.map((t: any) => ({
-      start: new Date(t.start),
-      end: new Date(t.end),
-      text: t.segments?.map((s: any) => s.text).join("").trim() ?? "",
-    }));
+    const utterances = transcriptions.flatMap(transcriptionToUtterances);
 
     console.log(
       `[ConvExtractor] Chunk ${chunk._id}: ${transcriptions.length} transcriptions, ${utterances.length} utterances`,
@@ -855,7 +966,7 @@ async function processChunk(params: {
 
     // Delete existing if force
     if (chunk.params.force) {
-      await deleteConversationsInRange(objects, mongo, chunk.start, chunk.end);
+      await deleteConversationsForChunk(objects, chunk._id);
     }
 
     // Format prompt
@@ -1056,6 +1167,15 @@ async function processChunk(params: {
               segmentation: extractionProvenance.segmentation,
               metadata: extractionProvenance.metadata,
             },
+            result: {
+              schemaVersion: "v2",
+              status: "metadata_extracted",
+              emojiPresent: true,
+              entityCount: metadata.entities.length,
+              relationshipsAttempted: metadata.entities.length,
+              relationshipsCreated: 0,
+              relationshipErrors: 0,
+            },
           },
           aiProvenance: { extraction: extractionProvenance },
         },
@@ -1076,7 +1196,7 @@ async function processChunk(params: {
         `[ConvExtractor] Chunk ${chunk._id}: CREATED conversation ${conversationId} - "${segment.title}" (${segment.start.toISOString()} to ${segment.end.toISOString()})`,
       );
 
-      await createEntityRelationships(
+      const relationshipResult = await createEntityRelationships(
         objects,
         conversationId,
         metadata.entities,
@@ -1087,6 +1207,40 @@ async function processChunk(params: {
           subjectId: conversationId.toString(),
         },
       );
+
+      try {
+        const latestConversation = await objects({
+          action: "get",
+          id: conversationId.toString(),
+        });
+        await objects({
+          action: "update",
+          id: conversationId.toString(),
+          version: latestConversation.version ?? 0,
+          field: "metadata.extractedWith.result",
+          value: {
+            schemaVersion: "v2",
+            status: relationshipResult.failed === 0
+              ? "completed"
+              : "completed_with_relationship_errors",
+            emojiPresent: true,
+            entityCount: metadata.entities.length,
+            relationshipsAttempted: relationshipResult.attempted,
+            relationshipsCreated: relationshipResult.created,
+            relationshipErrors: relationshipResult.failed,
+          },
+        });
+      } catch (error) {
+        console.error(
+          `Failed to persist extraction result for conversation ${conversationId}:`,
+          error,
+        );
+        errors.push({
+          type: "extraction_result",
+          message: error instanceof Error ? error.message : String(error),
+          conversationId: conversationId.toString(),
+        });
+      }
 
       metadataRuns.push({
         ...extractionProvenance.metadata,
