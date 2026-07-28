@@ -52,6 +52,25 @@ export function parseJobError(
         "The selected conversation time range has no matching transcription records",
     };
   }
+  if (
+    r.includes("LLM_INVALID_RESPONSE") ||
+    r.includes(
+      "Cannot read properties of undefined (reading 'content')",
+    )
+  ) {
+    return {
+      label: "Invalid LLM response",
+      detail:
+        "The LLM call returned data, but the first completion choice had no message content. Verify that the summary model and endpoint support OpenAI-compatible chat completions before retrying.",
+    };
+  }
+  if (r.includes("LLM_EMPTY_RESPONSE")) {
+    return {
+      label: "Empty LLM response",
+      detail:
+        "The model returned no usable summary text. Check model safety/output settings and the configured output-token budget before retrying.",
+    };
+  }
   if (r.includes("Job blocked by") && r.includes("health check: loading")) {
     return {
       label: "Provider model loading",
@@ -142,4 +161,24 @@ export function parseJobError(
     };
   }
   return { label: "Error", detail: r };
+}
+
+export function getJobErrorCode(failedReason?: string): string | null {
+  if (!failedReason) return null;
+
+  const explicitCode = failedReason.match(
+    /\b(LLM_[A-Z0-9_]+|STT_[A-Z0-9_]+|JOB_[A-Z0-9_]+)\b/,
+  );
+  if (explicitCode) return explicitCode[1];
+
+  const llmStatus = failedReason.match(/LLM API error \((\d{3})\)/);
+  if (llmStatus) return `HTTP ${llmStatus[1]}`;
+
+  const httpStatus = failedReason.match(/\bHTTP\s+(\d{3})\b/i);
+  if (httpStatus) return `HTTP ${httpStatus[1]}`;
+
+  const workerExit = failedReason.match(/Worker exited with code\s+(-?\d+)/i);
+  if (workerExit) return `Worker exit ${workerExit[1]}`;
+
+  return null;
 }

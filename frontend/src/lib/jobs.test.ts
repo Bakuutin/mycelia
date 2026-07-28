@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { formatJobDuration } from "./jobDuration";
-import { parseJobError } from "./jobErrors";
+import { getJobErrorCode, parseJobError } from "./jobErrors";
 
 describe("parseJobError", () => {
   it("explains an unavailable configured inference server", () => {
@@ -43,6 +43,16 @@ describe("parseJobError", () => {
     });
   });
 
+  it("explains the historical missing completion message failure", () => {
+    expect(parseJobError(
+      "Worker exited with code 1: TypeError: Cannot read properties of undefined (reading 'content')",
+    )).toEqual({
+      label: "Invalid LLM response",
+      detail:
+        "The LLM call returned data, but the first completion choice had no message content. Verify that the summary model and endpoint support OpenAI-compatible chat completions before retrying.",
+    });
+  });
+
   it("distinguishes a loading provider health gate", () => {
     expect(parseJobError(
       "Job blocked by LLM inference health check: loading. Loading model",
@@ -68,6 +78,26 @@ describe("parseJobError", () => {
       label: "Rate limited",
       detail: "API rate limit exceeded",
     });
+  });
+});
+
+describe("getJobErrorCode", () => {
+  it("prefers an explicit application error code", () => {
+    expect(getJobErrorCode(
+      "Worker exited with code 1: LLM_INVALID_RESPONSE: missing message",
+    )).toBe("LLM_INVALID_RESPONSE");
+  });
+
+  it("surfaces an LLM HTTP status", () => {
+    expect(getJobErrorCode("LLM API error (429): quota reached")).toBe(
+      "HTTP 429",
+    );
+  });
+
+  it("surfaces a worker exit code when no more specific code exists", () => {
+    expect(getJobErrorCode("Worker exited with code 1: failed")).toBe(
+      "Worker exit 1",
+    );
   });
 });
 

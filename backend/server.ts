@@ -1,15 +1,13 @@
 import { load as loadEnv } from "@std/dotenv";
 import { existsSync } from "@std/fs/exists";
 
-
 if (existsSync(".env")) {
-  await loadEnv({ envPath:  ".env", export: true });
+  await loadEnv({ envPath: ".env", export: true });
 }
 
 if (existsSync("../.env")) {
-  await loadEnv({ envPath:  "../.env", export: true });
+  await loadEnv({ envPath: "../.env", export: true });
 }
-
 
 import "@/lib/telemetry.ts";
 import yargs, { type ArgumentsCamelCase, type Argv } from "yargs";
@@ -39,11 +37,16 @@ import { errorHandler } from "@/middleware/errorHandler.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { startWorkers, stopWorkers } from "@/lib/jobs/workers.ts";
 import { maintenanceManager } from "@/lib/jobs/maintenance-manager.ts";
-import { startChangeStreamWorker, stopChangeStreamWorker } from "@/lib/mongo/changeStream.worker.ts";
-import { startAccessLogWorker, stopAccessLogWorker } from "@/lib/auth/accessLog.worker.ts";
+import {
+  startChangeStreamWorker,
+  stopChangeStreamWorker,
+} from "@/lib/mongo/changeStream.worker.ts";
+import {
+  startAccessLogWorker,
+  stopAccessLogWorker,
+} from "@/lib/auth/accessLog.worker.ts";
 import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
-import { up, down, to, status } from "@/lib/mongo/migrator.ts";
-
+import { down, status, to, up } from "@/lib/mongo/migrator.ts";
 
 let logFile: Deno.FsFile | null = null;
 
@@ -117,7 +120,9 @@ function setupLogging() {
     console.log = (...args: any[]) => writeToLog(args, false);
     console.error = (...args: any[]) => writeToLog(args, true);
 
-    console.log(`Logging initialized - logs will be written to ${LOG_FILE_PATH}`);
+    console.log(
+      `Logging initialized - logs will be written to ${LOG_FILE_PATH}`,
+    );
   } catch (error) {
     console.error("Failed to setup logging:", error);
   }
@@ -154,7 +159,11 @@ async function startServer(
   ].filter(Boolean) as string[];
   app.use(cors({
     origin: corsOrigins,
-    exposedHeaders: ["X-Mycelia-Chat-Id"],
+    exposedHeaders: [
+      "X-Mycelia-Chat-Id",
+      "X-Mycelia-Model",
+      "X-Mycelia-Request-Id",
+    ],
   }));
   // HTTP request logging - disable with LOG_HTTP=false
   if (Deno.env.get("LOG_HTTP") !== "false") {
@@ -188,7 +197,10 @@ async function startServer(
       if (token && await verifyToken(token)) return true;
     }
     // URL token param — kept for IoT/hardware devices that cannot set headers
-    const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+    const url = new URL(
+      request.url || "/",
+      `http://${request.headers.host || "localhost"}`,
+    );
     const tokenParam = url.searchParams.get("token");
     if (tokenParam && await verifyToken(tokenParam)) return true;
     return false;
@@ -211,17 +223,20 @@ async function startServer(
           }
         });
       });
-    // Legacy endpoints (backward compatibility)
+      // Legacy endpoints (backward compatibility)
     } else if (url.pathname === "/ws_pcm") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
         // Add error handler immediately to catch any errors including broken pipe
         ws.on("error", (error: Error) => {
           // Only log non-trivial errors (broken pipe is expected on disconnect)
-          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+          if (
+            !error.message.includes("Broken pipe") &&
+            !error.message.includes("EPIPE")
+          ) {
             console.error("WebSocket /ws_pcm error:", error);
           }
         });
-        
+
         handlePcmWebSocket(ws, request).catch((error) => {
           console.error("WebSocket /ws_pcm handler error:", error);
           // Try to close, but catch any errors (e.g., if already closed)
@@ -248,11 +263,14 @@ async function startServer(
         // Add error handler immediately to catch any errors including broken pipe
         ws.on("error", (error: Error) => {
           // Only log non-trivial errors (broken pipe is expected on disconnect)
-          if (!error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
+          if (
+            !error.message.includes("Broken pipe") &&
+            !error.message.includes("EPIPE")
+          ) {
             console.error("WebSocket /ws error:", error);
           }
         });
-        
+
         handleUpdatesWebSocket(ws, request).catch((error) => {
           console.error("WebSocket /ws handler error:", error);
           // Try to close, but catch any errors (e.g., if already closed)
@@ -304,7 +322,7 @@ async function startServer(
   }
 
   ["SIGTERM", "SIGINT"].forEach((signal) => {
-      process.once(signal, async () => {
+    process.once(signal, async () => {
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
       await stopWorkers();
@@ -404,7 +422,9 @@ async function configureCli() {
         console.log(`MYCELIA_CLIENT_ID=${clientId}`);
         console.log(`MYCELIA_TOKEN=${apiKey}`);
         console.log("");
-        console.log("Copy these values to your .env file or enter them in the setup page.");
+        console.log(
+          "Copy these values to your .env file or enter them in the setup page.",
+        );
       },
     )
     .command(
@@ -517,7 +537,9 @@ async function configureCli() {
           if (migrated.length === 0) {
             console.log(`Already at migration ${migrationFile}`);
           } else {
-            console.log(`Migrated ${migrated.length} migration(s) to ${migrationFile}`);
+            console.log(
+              `Migrated ${migrated.length} migration(s) to ${migrationFile}`,
+            );
           }
         } catch (err) {
           console.error("Migration failed:", err);
@@ -537,14 +559,14 @@ async function configureCli() {
           console.log(`Total migrations: ${migrationStatus.all.length}`);
           console.log(`Applied: ${migrationStatus.applied.length}`);
           console.log(`Pending: ${migrationStatus.pending.length}`);
-          
+
           if (migrationStatus.applied.length > 0) {
             console.log("\nApplied migrations:");
             migrationStatus.applied.forEach((file) => {
               console.log(`  ✓ ${file}`);
             });
           }
-          
+
           if (migrationStatus.pending.length > 0) {
             console.log("\nPending migrations:");
             migrationStatus.pending.forEach((file) => {

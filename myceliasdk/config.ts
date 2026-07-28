@@ -6,6 +6,7 @@ export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
   model: z.string().optional(),
+  chatModel: z.string().optional(),
   fallbackEnabled: z.boolean().optional().default(false),
   fallbackModel: z.string().optional(),
 });
@@ -23,6 +24,7 @@ export const zLlmProviderProfile = z.object({
   apiKey: z.string(),
   aliases: zModelAliasMap,
   defaultAlias: z.enum(["small", "medium", "large"]).default("medium"),
+  chatModel: z.string().min(1).optional(),
 });
 
 export const zLlmProfilesConfig = z.object({

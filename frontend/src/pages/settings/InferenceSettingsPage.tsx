@@ -38,6 +38,7 @@ const inferenceConfigSchema = z.object({
   mediumModel: z.string().min(1, "Choose the medium alias model"),
   largeModel: z.string().min(1, "Choose the large alias model"),
   defaultAlias: z.enum(["small", "medium", "large"]),
+  chatModel: z.string().min(1, "Choose the default chat model"),
   transcriptionBaseUrl: z.union([
     z.literal(""),
     z.string().url("Must be a valid STT URL"),
@@ -73,6 +74,7 @@ type LlmProfile = {
   apiKey: string;
   aliases: Record<ModelAlias, string>;
   defaultAlias: ModelAlias;
+  chatModel: string;
 };
 
 const MODEL_ROUTES = [
@@ -149,6 +151,7 @@ const InferenceSettingsPage = () => {
       mediumModel: "",
       largeModel: "",
       defaultAlias: "medium",
+      chatModel: "",
       transcriptionBaseUrl: "",
       transcriptionApiKey: "",
       transcriptionModel: "whisper",
@@ -199,11 +202,15 @@ const InferenceSettingsPage = () => {
             storedTranscriptionKey.trim(),
           );
           const savedProfiles = configResult.llmProfiles?.profiles as
-            | LlmProfile[]
+            | Array<Omit<LlmProfile, "chatModel"> & { chatModel?: string }>
             | undefined;
           const legacyModel = llmConfig.model || "";
           const nextProfiles: LlmProfile[] = savedProfiles?.length
-            ? savedProfiles
+            ? savedProfiles.map((profile) => ({
+              ...profile,
+              chatModel: profile.chatModel ||
+                profile.aliases[profile.defaultAlias],
+            }))
             : [{
               id: "primary",
               name: "Primary",
@@ -215,6 +222,7 @@ const InferenceSettingsPage = () => {
                 large: legacyModel,
               },
               defaultAlias: "medium",
+              chatModel: legacyModel,
             }];
           const nextActiveId = configResult.llmProfiles?.activeProfileId &&
               nextProfiles.some((profile) =>
@@ -235,6 +243,7 @@ const InferenceSettingsPage = () => {
             mediumModel: activeProfile.aliases.medium,
             largeModel: activeProfile.aliases.large,
             defaultAlias: activeProfile.defaultAlias,
+            chatModel: activeProfile.chatModel,
             transcriptionBaseUrl: transcriptionConfig.baseUrl || "",
             transcriptionApiKey: malformedTranscriptionKey
               ? ""
@@ -278,6 +287,7 @@ const InferenceSettingsPage = () => {
           large: data.largeModel.trim(),
         },
         defaultAlias: data.defaultAlias,
+        chatModel: data.chatModel.trim(),
       };
       const nextProfiles = profiles.map((profile) =>
         profile.id === activeProfileId ? currentProfile : profile
@@ -331,6 +341,7 @@ const InferenceSettingsPage = () => {
             baseUrl: currentProfile.baseUrl,
             apiKey: currentProfile.apiKey,
             model: globalModel,
+            chatModel: currentProfile.chatModel,
             fallbackEnabled: false,
             fallbackModel: "",
           },
@@ -338,6 +349,7 @@ const InferenceSettingsPage = () => {
             baseUrl: currentProfile.baseUrl,
             apiKey: currentProfile.apiKey,
             model: globalModel,
+            chatModel: currentProfile.chatModel,
             fallbackEnabled: false,
             fallbackModel: "",
           },
@@ -373,6 +385,7 @@ const InferenceSettingsPage = () => {
     form.setValue("mediumModel", profile.aliases.medium);
     form.setValue("largeModel", profile.aliases.large);
     form.setValue("defaultAlias", profile.defaultAlias);
+    form.setValue("chatModel", profile.chatModel);
     setTestResult(null);
   };
 
@@ -392,6 +405,7 @@ const InferenceSettingsPage = () => {
       apiKey: "",
       aliases: { small: "", medium: "", large: "" },
       defaultAlias: "medium",
+      chatModel: "",
     };
     setProfiles((current) => [...current, profile]);
     setActiveProfileId(id);
@@ -557,6 +571,11 @@ const InferenceSettingsPage = () => {
     large: form.watch("largeModel"),
   };
   const globalModel = aliasModels[defaultAlias];
+  const chatModel = form.watch("chatModel");
+  const resolvedChatModel = (["small", "medium", "large"] as string[])
+      .includes(chatModel)
+    ? aliasModels[chatModel as ModelAlias]
+    : chatModel;
 
   if (loading) {
     return (
@@ -727,7 +746,7 @@ const InferenceSettingsPage = () => {
                       })}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Chat default alias" />
+                      <SelectValue placeholder="Preset default alias" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="small">Default: small</SelectItem>
@@ -761,7 +780,39 @@ const InferenceSettingsPage = () => {
                 </div>
               ))}
               <p className="break-all font-mono text-xs text-muted-foreground">
-                Chat default: {defaultAlias} → {globalModel || "Not configured"}
+                Preset default: {defaultAlias} →{" "}
+                {globalModel || "Not configured"}
+              </p>
+            </div>
+
+            <div className="space-y-3 rounded-md border bg-muted/20 p-4">
+              <div>
+                <Label className="font-medium">Chat default model</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  New memory chats start with this model. Changing it does not
+                  alter existing chats; each chat can override its model from
+                  the chat header.
+                </p>
+              </div>
+              <ModelSelector
+                value={chatModel}
+                onChange={(model) => form.setValue("chatModel", model, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })}
+                placeholder="Choose chat default model"
+                availableModels={testResult?.models}
+                prefetch
+              />
+              {form.formState.errors.chatModel && (
+                <p className="text-sm text-red-500">
+                  {form.formState.errors.chatModel.message}
+                </p>
+              )}
+              <p className="break-all font-mono text-xs text-muted-foreground">
+                New chats: {chatModel && resolvedChatModel !== chatModel
+                  ? `${chatModel} → ${resolvedChatModel}`
+                  : chatModel || "Not configured"}
               </p>
             </div>
 
@@ -938,7 +989,8 @@ const InferenceSettingsPage = () => {
                 <div>
                   <p className="font-medium">Active preset default</p>
                   <p className="text-xs text-muted-foreground">
-                    Assistant chat and chat titles use this route.
+                    Background tasks without an explicit override use this
+                    route.
                   </p>
                 </div>
                 <div className="text-right text-xs">
@@ -964,16 +1016,17 @@ const InferenceSettingsPage = () => {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="font-medium">
-                      Assistant chat and chat titles
+                      Memory chat
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Uses the preset default alias. Streaming errors stop the
-                      response; chat never switches models silently.
+                      New chats inherit the chat default below. Every chat can
+                      then override it independently; errors never switch models
+                      silently.
                     </p>
                   </div>
                   <div className="text-right text-xs">
                     <p className="max-w-md break-all font-mono">
-                      {globalModel || "Not configured"}
+                      {resolvedChatModel || "Not configured"}
                     </p>
                     <p className="mt-1 text-muted-foreground">
                       On error: Stop with error

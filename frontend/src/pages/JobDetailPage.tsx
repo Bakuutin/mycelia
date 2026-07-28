@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
@@ -13,11 +13,12 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle, Volume2, Tag, BarChart3, Play, RefreshCw, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Ban, FileText, Clock, Hash, MessageSquare, ExternalLink, Users, Layers, AlertTriangle, Volume2, Tag, BarChart3, Play, RefreshCw, Copy, Check, type LucideIcon } from "lucide-react";
 import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
 import { parseJobError } from "@/lib/jobs";
+import { getJobErrorCode } from "@/lib/jobErrors";
 
 interface TranscriptionDoc {
     _id: string;
@@ -120,6 +121,64 @@ function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
                 );
             })}
         </>
+    );
+}
+
+function JobErrorPanel({ failedReason }: { failedReason: string }) {
+    const [copied, setCopied] = useState(false);
+    const parsed = parseJobError(failedReason);
+    const errorCode = getJobErrorCode(failedReason);
+
+    const copyError = async () => {
+        await navigator.clipboard.writeText(failedReason);
+        setCopied(true);
+        globalThis.setTimeout(() => setCopied(false), 2000);
+    };
+
+    return (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3 min-w-0">
+                    <AlertTriangle className="h-5 w-5 shrink-0 text-red-500 mt-0.5" />
+                    <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-red-400">Error</span>
+                            {errorCode && (
+                                <Badge variant="outline" className="font-mono text-red-400 border-red-500/40 select-all">
+                                    {errorCode}
+                                </Badge>
+                            )}
+                            {parsed && (
+                                <Badge className="bg-red-500/10 text-red-400">
+                                    {parsed.label}
+                                </Badge>
+                            )}
+                        </div>
+                        {parsed && (
+                            <p className="text-sm text-red-300/90">
+                                {parsed.detail}
+                            </p>
+                        )}
+                    </div>
+                </div>
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyError}
+                    className="shrink-0"
+                    aria-label="Copy full error"
+                >
+                    {copied
+                        ? <Check className="h-4 w-4 mr-2" />
+                        : <Copy className="h-4 w-4 mr-2" />}
+                    {copied ? "Copied" : "Copy error"}
+                </Button>
+            </div>
+            <pre className="max-h-64 overflow-auto rounded-md bg-background/70 p-3 text-xs text-red-300 whitespace-pre-wrap break-words select-text">
+                {failedReason}
+            </pre>
+        </div>
     );
 }
 
@@ -486,29 +545,9 @@ export default function JobDetailPage() {
                                 </>
                             )}
 
-                        {job.failedReason && (() => {
-                            const parsed = parseJobError(job.failedReason);
-                            return (
-                                <div className="space-y-2">
-                                    {parsed && (
-                                        <div className="flex items-center gap-2">
-                                            <Badge className="bg-red-500/10 text-red-500">
-                                                {parsed.label}
-                                            </Badge>
-                                            <span className="text-sm text-red-400">{parsed.detail}</span>
-                                        </div>
-                                    )}
-                                    <details className="group">
-                                        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                                            Full error message
-                                        </summary>
-                                        <div className="mt-2 bg-red-500/5 rounded-lg p-3 max-h-48 overflow-y-auto">
-                                            <pre className="text-xs text-red-400 whitespace-pre-wrap break-words">{job.failedReason}</pre>
-                                        </div>
-                                    </details>
-                                </div>
-                            );
-                        })()}
+                        {job.failedReason && (
+                            <JobErrorPanel failedReason={job.failedReason} />
+                        )}
 
 <div>
                             <div className="text-sm text-muted-foreground mb-1">Created</div>

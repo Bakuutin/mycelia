@@ -12,6 +12,7 @@ import type {
 } from "@/lib/objects/resource.server.ts";
 import { getSummaryCompletionOptions } from "@/lib/llm/completion-options.ts";
 import { getInferenceProvenance } from "@/lib/llm/provenance.ts";
+import { getChatCompletionText } from "@/lib/llm/completion-response.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -31,7 +32,7 @@ export const schema = z.object({
   promptName: z.string().optional()
     .describe("Name of the prompt template used (for display in UI)"),
   model: z.string()
-    .default("small")
+    .default("medium")
     .describe(
       "LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')",
     ),
@@ -184,12 +185,12 @@ function createLLMSummaryEntry(
 ) {
   const provenance = getInferenceProvenance(
     completion,
-    jobData.model || "small",
+    jobData.model || "medium",
     jobData.fallbackModel,
   );
   return {
     text: summary,
-    model: jobData.model || "small",
+    model: jobData.model || "medium",
     modelName: completion.model,
     requestedModel: provenance.requestedModel,
     resolvedModel: provenance.resolvedModel,
@@ -310,7 +311,12 @@ async function generateTitle(
   }, { jwt, myceliaUrl });
 
   return {
-    title: titleResponse.choices[0].message.content,
+    title: getChatCompletionText(titleResponse, {
+      requestedModel: modelAlias,
+      resolvedModel: titleResponse?.mycelia_routing?.resolvedModel ??
+        titleResponse?.model,
+      purpose: "summary title",
+    }),
     provenance: getInferenceProvenance(
       titleResponse,
       modelAlias,
@@ -435,7 +441,7 @@ async function summarizeConversationRange(
   );
   const promptText = buildPromptFromTranscripts(transcripts);
 
-  const modelAlias = jobData.model || "small";
+  const modelAlias = jobData.model || "medium";
   const minDurationForLlm = jobData.minDurationForLlm ?? 10;
   const durationSeconds = (end.getTime() - start.getTime()) / 1000;
 
@@ -525,7 +531,12 @@ async function summarizeConversationRange(
     ],
   }, { jwt, myceliaUrl });
 
-  const summary: string = completion.choices[0].message.content;
+  const summary = getChatCompletionText(completion, {
+    requestedModel: modelAlias,
+    resolvedModel: completion?.mycelia_routing?.resolvedModel ??
+      completion?.model,
+    purpose: "conversation summary",
+  });
   const truncatedSummary = summary.length > 200
     ? summary.slice(0, 200) + "..."
     : summary;
@@ -846,8 +857,19 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       if (target.objectId) {
         await releaseClaim(target.objectId, jwt, myceliaUrl);
       }
+      const errorMessage = error instanceof Error
+        ? error.message
+        : String(error);
+      if (
+        errorMessage.includes("LLM_INVALID_RESPONSE") ||
+        errorMessage.includes("LLM_EMPTY_RESPONSE") ||
+        errorMessage.includes("Failed to call resource llm") ||
+        errorMessage.includes("LLM API error")
+      ) {
+        throw error;
+      }
       skipped++;
-      errors.push(error instanceof Error ? error.message : String(error));
+      errors.push(errorMessage);
     }
   }
 

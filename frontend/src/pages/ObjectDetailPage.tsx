@@ -709,6 +709,13 @@ const ObjectDetailPage = () => {
                 </div>
               )}
 
+              {selectedSummary.promptName && (
+                <div>
+                  <Label className="text-sm font-medium">Prompt</Label>
+                  <div className="mt-1 text-sm">{selectedSummary.promptName}</div>
+                </div>
+              )}
+
               {selectedSummary.prompt && (
                 <div>
                   <Label className="text-sm font-medium">System Prompt</Label>

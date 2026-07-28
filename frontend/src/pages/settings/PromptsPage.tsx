@@ -195,7 +195,9 @@ const PromptsPage = () => {
         <div>
           <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
           <p className="text-muted-foreground">
-            Manage prompt templates for summarization and other AI features.
+            Automatic summaries use the prompt and model marked as default.
+            Without a prompt-specific model, they use the Summaries route from
+            Inference settings.
           </p>
         </div>
         <div className="border rounded-lg p-8 text-center">
@@ -212,7 +214,9 @@ const PromptsPage = () => {
         <div>
           <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
           <p className="text-muted-foreground">
-            Manage prompt templates for summarization and other AI features.
+            Automatic summaries use the prompt and model marked as default.
+            Without a prompt-specific model, they use the Summaries route from
+            Inference settings.
           </p>
         </div>
         <div className="border rounded-lg p-8 text-center">
@@ -231,7 +235,9 @@ const PromptsPage = () => {
         <div>
           <h2 className="text-2xl font-semibold mb-2">Prompts</h2>
           <p className="text-muted-foreground">
-            Manage prompt templates for summarization and other AI features.
+            Automatic summaries use the prompt and model marked as default.
+            Without a prompt-specific model, they use the Summaries route from
+            Inference settings.
           </p>
         </div>
         <Button onClick={openCreateDialog}>
@@ -261,12 +267,17 @@ const PromptsPage = () => {
                       {isDefault && (
                         <Badge variant="secondary" className="text-xs">
                           <Star className="w-3 h-3 mr-1 fill-current" />
-                          Default
+                          Default prompt
                         </Badge>
                       )}
                       {prompt.model && (
                         <Badge variant="outline" className="text-xs font-mono">
-                          {prompt.model}
+                          {isDefault ? "Default model" : "Model"}: {prompt.model}
+                        </Badge>
+                      )}
+                      {isDefault && !prompt.model && (
+                        <Badge variant="outline" className="text-xs">
+                          Default model: Inference route
                         </Badge>
                       )}
                     </div>

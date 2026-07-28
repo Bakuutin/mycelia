@@ -1,13 +1,13 @@
 {
   "version": "5",
   "specifiers": {
-    "npm:bson@7": "7.0.0",
+    "npm:bson@^6.10.4": "6.10.4",
     "npm:ms@^2.1.3": "2.1.3",
     "npm:zod@^4.1.12": "4.1.12"
   },
   "npm": {
-    "bson@7.0.0": {
-      "integrity": "sha512-Kwc6Wh4lQ5OmkqqKhYGKIuELXl+EPYSCObVE6bWsp1T/cGkOCBN0I8wF/T44BiuhHyNi1mmKVPXk60d41xZ7kw=="
+    "bson@6.10.4": {
+      "integrity": "sha512-WIsKqkSC0ABoBJuT1LEX+2HEvNmNKKgnTAyd0fL8qzK4SH2i9NXg+t08YtdZp/V9IZ33cxe3iV4yM0qg8lMQng=="
     },
     "ms@2.1.3": {
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
@@ -18,7 +18,7 @@
   },
   "workspace": {
     "dependencies": [
-      "npm:bson@7",
+      "npm:bson@^6.10.4",
       "npm:ms@^2.1.3",
       "npm:zod@^4.1.12"
     ]

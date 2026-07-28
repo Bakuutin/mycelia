@@ -1,18 +1,22 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DefaultChatTransport,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+  type UIMessage,
+} from "ai";
 import { useChat } from "@ai-sdk/react";
-import { useSearchParams, useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   PromptInput,
-  PromptInputTextarea,
-  PromptInputSubmit,
-  PromptInputFooter,
-  PromptInputTools,
   PromptInputActionMenu,
-  PromptInputActionMenuTrigger,
   PromptInputActionMenuContent,
   PromptInputActionMenuItem,
+  PromptInputActionMenuTrigger,
+  PromptInputFooter,
   PromptInputSpeechButton,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { Loader } from "@/components/ai-elements/loader";
 import { Button } from "@/components/ui/button";
@@ -23,7 +27,17 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { Paperclip, Check, X, AlertTriangle, Plus, MessageSquare, Pencil, AlertCircle, RefreshCw } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Check,
+  MessageSquare,
+  Paperclip,
+  Pencil,
+  Plus,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
@@ -32,6 +46,44 @@ import type { Message as MessengerMessage } from "@myceliasdk/messengers";
 import type { Chat } from "@myceliasdk/messengers.ts";
 import { cn } from "@/lib/utils";
 import { useFormattedTime } from "@/lib/formatTime";
+import { ModelSelector } from "@/components/ModelSelector";
+
+interface ChatMessageMetadata {
+  requestedModel?: string;
+  model?: string;
+  requestId?: string;
+  finishReason?: string;
+  error?: {
+    type?: string;
+    message?: string;
+  };
+}
+
+type MemoryChatMessage = UIMessage<ChatMessageMetadata> & {
+  content?: unknown;
+  createdAt?: Date;
+};
+
+type MemoryChat = Chat & {
+  title?: string;
+  model?: string;
+};
+
+interface ChatErrorState {
+  message: string;
+  model?: string;
+  requestId?: string;
+}
+
+function hasRenderableAssistantOutput(message: MemoryChatMessage): boolean {
+  if (typeof message.content === "string" && message.content.trim()) {
+    return true;
+  }
+  return message.parts?.some((part: any) => {
+    if (part?.type === "text") return Boolean(part.text?.trim());
+    return part?.type?.startsWith("tool-") || part?.type === "dynamic-tool";
+  }) ?? false;
+}
 
 async function fetchMessages(chatId: string) {
   const messages = await callResource("mongo", {
@@ -49,10 +101,22 @@ async function fetchMessages(chatId: string) {
     id: msg._id.toString(),
     role: msg.raw?.role || msg.role,
     content: msg.raw?.content || msg.content,
+    parts: Array.isArray(msg.raw?.content)
+      ? msg.raw.content
+      : typeof msg.raw?.content === "string"
+      ? [{ type: "text", text: msg.raw.content }]
+      : [],
+    metadata: {
+      requestedModel: msg.raw?.requestedModel,
+      model: msg.raw?.model,
+      requestId: msg.raw?.requestId,
+      finishReason: msg.raw?.finishReason,
+      error: msg.raw?.error,
+    },
     createdAt: new Date(msg.createdAt),
     toolInvocations: msg.toolCalls?.map((call: any) => {
       const result = msg.toolResults?.find(
-        (r: any) => r.toolCallId === call.toolCallId
+        (r: any) => r.toolCallId === call.toolCallId,
       );
       if (result) {
         return {
@@ -80,23 +144,27 @@ function isValidObjectId(id: string): boolean {
 function toMessengerMessage(message: any): MessengerMessage {
   const content = message.content;
   const parts = message.parts;
-  
+
   let normalizedContent: string | Array<{ type: string; text: string }>;
-  
-  if (typeof content === 'string') {
+
+  if (typeof content === "string") {
     normalizedContent = content;
   } else if (Array.isArray(content)) {
     normalizedContent = content;
   } else if (Array.isArray(parts)) {
     normalizedContent = parts
-      .filter((p: any) => typeof p === 'string' || (p?.type === 'text' && p?.text))
-      .map((p: any) => typeof p === 'string' ? { type: 'text', text: p } : p);
+      .filter((p: any) =>
+        typeof p === "string" || (p?.type === "text" && p?.text)
+      )
+      .map((p: any) => typeof p === "string" ? { type: "text", text: p } : p);
   } else {
-    normalizedContent = '';
+    normalizedContent = "";
   }
-  
-  const messageId = isValidObjectId(message.id) ? new ObjectId(message.id) : new ObjectId();
-  
+
+  const messageId = isValidObjectId(message.id)
+    ? new ObjectId(message.id)
+    : new ObjectId();
+
   return {
     _id: messageId,
     chatId: new ObjectId(),
@@ -109,6 +177,11 @@ function toMessengerMessage(message: any): MessengerMessage {
     raw: {
       role: message.role,
       content: normalizedContent,
+      requestedModel: message.metadata?.requestedModel,
+      model: message.metadata?.model,
+      requestId: message.metadata?.requestId,
+      finishReason: message.metadata?.finishReason,
+      error: message.metadata?.error,
     },
   };
 }
@@ -116,8 +189,8 @@ function toMessengerMessage(message: any): MessengerMessage {
 // Format tool name for display (e.g., "objects_create" -> "Create Object")
 function formatToolName(toolName: string): string {
   return toolName
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase());
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // Update chat name in database
@@ -135,9 +208,9 @@ function ChatListItemComponent({
   chat,
   isSelected,
   onClick,
-  onRename
+  onRename,
 }: {
-  chat: Chat;
+  chat: MemoryChat;
   isSelected: boolean;
   onClick: () => void;
   onRename: (chatId: string, newName: string) => void;
@@ -145,7 +218,9 @@ function ChatListItemComponent({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const lastMessageDate = chat.lastMessageDate ? new Date(chat.lastMessageDate) : new Date(chat.createdAt);
+  const lastMessageDate = chat.lastMessageDate
+    ? new Date(chat.lastMessageDate)
+    : new Date(chat.createdAt);
   const formattedTime = useFormattedTime(lastMessageDate);
 
   const chatName = chat.name || chat.title || "New Chat";
@@ -186,7 +261,7 @@ function ChatListItemComponent({
       onClick={onClick}
       className={cn(
         "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors cursor-pointer group",
-        isSelected && "bg-muted"
+        isSelected && "bg-muted",
       )}
     >
       <div className="flex items-start gap-3">
@@ -195,30 +270,33 @@ function ChatListItemComponent({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            {isEditing ? (
-              <Input
-                ref={inputRef}
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                onBlur={handleSave}
-                onKeyDown={handleKeyDown}
-                onClick={(e) => e.stopPropagation()}
-                className="h-6 text-sm py-0 px-1"
-              />
-            ) : (
-              <>
-                <span className="font-medium text-sm truncate flex-1">
-                  {chatName}
-                </span>
-                <button
-                  onClick={handleStartEdit}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-opacity"
-                  title="Rename"
-                >
-                  <Pencil className="w-3 h-3 text-muted-foreground" />
-                </button>
-              </>
-            )}
+            {isEditing
+              ? (
+                <Input
+                  ref={inputRef}
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onBlur={handleSave}
+                  onKeyDown={handleKeyDown}
+                  onClick={(e) => e.stopPropagation()}
+                  className="h-6 text-sm py-0 px-1"
+                />
+              )
+              : (
+                <>
+                  <span className="font-medium text-sm truncate flex-1">
+                    {chatName}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleStartEdit}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-opacity"
+                    title="Rename"
+                  >
+                    <Pencil className="w-3 h-3 text-muted-foreground" />
+                  </button>
+                </>
+              )}
             {!isEditing && (
               <span className="text-xs text-muted-foreground shrink-0">
                 {formattedTime}
@@ -232,18 +310,18 @@ function ChatListItemComponent({
 }
 
 // Component for tool approval requests
-function ToolApprovalRequest({ 
-  part, 
-  onApprove, 
-  onDeny 
-}: { 
-  part: any; 
-  onApprove: () => void; 
+function ToolApprovalRequest({
+  part,
+  onApprove,
+  onDeny,
+}: {
+  part: any;
+  onApprove: () => void;
   onDeny: () => void;
 }) {
-  const toolName = part.toolName || 'Unknown Tool';
+  const toolName = part.toolName || "Unknown Tool";
   const input = part.input || {};
-  
+
   return (
     <div className="flex w-full py-2">
       <div className="flex gap-3 w-full">
@@ -286,23 +364,27 @@ function ToolApprovalRequest({
   );
 }
 
-function ChatMessage({ 
-  message, 
-  addToolApprovalResponse 
-}: { 
+function ChatMessage({
+  message,
+  addToolApprovalResponse,
+}: {
   message: any;
-  addToolApprovalResponse?: (response: { id: string; approved: boolean }) => void;
+  addToolApprovalResponse?: (
+    response: { id: string; approved: boolean },
+  ) => void;
 }) {
-  const messengerMessage = useMemo(() => toMessengerMessage(message), [message]);
+  const messengerMessage = useMemo(() => toMessengerMessage(message), [
+    message,
+  ]);
   const MessageComponent = myceliaPlatform.MessageComponent;
-  
-  const isStreaming = message.parts?.some((p: any) => p?.type === 'start-step');
-  
+
+  const isStreaming = message.parts?.some((p: any) => p?.type === "start-step");
+
   // Check for tool approval requests in parts
   const approvalRequests = message.parts?.filter(
-    (p: any) => p?.state === 'approval-requested' && p?.approval?.id
+    (p: any) => p?.state === "approval-requested" && p?.approval?.id,
   ) || [];
-  
+
   if (approvalRequests.length > 0 && addToolApprovalResponse) {
     return (
       <>
@@ -310,20 +392,27 @@ function ChatMessage({
           <ToolApprovalRequest
             key={part.toolCallId || part.approval.id}
             part={part}
-            onApprove={() => addToolApprovalResponse({ id: part.approval.id, approved: true })}
-            onDeny={() => addToolApprovalResponse({ id: part.approval.id, approved: false })}
+            onApprove={() =>
+              addToolApprovalResponse({ id: part.approval.id, approved: true })}
+            onDeny={() =>
+              addToolApprovalResponse({
+                id: part.approval.id,
+                approved: false,
+              })}
           />
         ))}
       </>
     );
   }
-  
+
   if (isStreaming) {
     return (
       <div className="flex w-full py-2">
         <div className="flex gap-3">
           <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
-            <span className="text-base" role="img" aria-label="Mycelia">🍄</span>
+            <span className="text-base" role="img" aria-label="Mycelia">
+              🍄
+            </span>
           </div>
           <div className="flex items-center">
             <Loader />
@@ -332,7 +421,7 @@ function ChatMessage({
       </div>
     );
   }
-  
+
   return <MessageComponent message={messengerMessage} />;
 }
 
@@ -344,10 +433,24 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const newChatIdRef = useRef<string | null>(null);
+  const latestRequestRef = useRef<{
+    model?: string;
+    requestId?: string;
+  }>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [chats, setChats] = useState<Chat[]>([]);
+  const [chats, setChats] = useState<MemoryChat[]>([]);
   const [loadingChats, setLoadingChats] = useState(true);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [defaultChatModel, setDefaultChatModel] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
+  const [resolvedAliases, setResolvedAliases] = useState<
+    Record<string, string>
+  >({});
+  const selectedModelRef = useRef("");
+
+  useEffect(() => {
+    selectedModelRef.current = selectedModel;
+  }, [selectedModel]);
 
   // Fetch chats list
   useEffect(() => {
@@ -362,7 +465,7 @@ export default function ChatPage() {
             sort: { lastMessageDate: -1 },
           },
         });
-        setChats(result);
+        setChats(result as MemoryChat[]);
       } catch (err) {
         console.error("Failed to fetch chats", err);
       } finally {
@@ -373,19 +476,71 @@ export default function ChatPage() {
     fetchChats();
   }, []);
 
-  const [chatError, setChatError] = useState<string | null>(null);
+  useEffect(() => {
+    callResource("llm", { action: "list" }).then((response: any) => {
+      const configuredModel = typeof response?.chatDefaultModel === "string"
+        ? response.chatDefaultModel.trim()
+        : "";
+      if (configuredModel) setDefaultChatModel(configuredModel);
+      if (
+        response?.resolvedAliases &&
+        typeof response.resolvedAliases === "object"
+      ) {
+        setResolvedAliases(response.resolvedAliases);
+      }
+    }).catch((error) => {
+      console.warn("[ChatPage] Could not load the default chat model", error);
+    });
+  }, []);
 
-  const chat = useChat({
+  useEffect(() => {
+    if (!chatId) {
+      setSelectedModel(defaultChatModel);
+      return;
+    }
+
+    const selectedChat = chats.find((item) => item._id.toString() === chatId);
+    if (selectedChat) {
+      setSelectedModel(selectedChat.model || defaultChatModel);
+    }
+  }, [chatId, chats, defaultChatModel]);
+
+  const [chatError, setChatError] = useState<ChatErrorState | null>(null);
+  const resolvedSelectedModel = resolvedAliases[selectedModel] ||
+    selectedModel || "Configured chat default";
+
+  const chat = useChat<MemoryChatMessage>({
     id: chatId,
     // Auto-submit after tool approval responses
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
     onError: (error) => {
       console.error("[ChatPage] Chat error:", error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setChatError(errorMessage || "Failed to send message. Please try again.");
+      const errorMessage = error instanceof Error
+        ? error.message
+        : String(error);
+      setChatError({
+        message: errorMessage || "Failed to send message. Please try again.",
+        model: latestRequestRef.current.model || selectedModelRef.current,
+        requestId: latestRequestRef.current.requestId,
+      });
       setPendingMessage(null);
     },
-    onFinish: () => {
+    onFinish: ({ message, isError }) => {
+      const metadata = message.metadata || latestRequestRef.current;
+      if (
+        !isError && message.role === "assistant" &&
+        !hasRenderableAssistantOutput(message)
+      ) {
+        const model = metadata.model || selectedModelRef.current;
+        setChatError({
+          message:
+            `Model "${model}" completed the request but returned no text or tool result. ` +
+            "Try another model; if it repeats, inspect the backend log entry for this request.",
+          model,
+          requestId: metadata.requestId,
+        });
+      }
+
       if (!chatId && newChatIdRef.current) {
         const newId = newChatIdRef.current;
         newChatIdRef.current = null;
@@ -396,7 +551,7 @@ export default function ChatPage() {
           collection: "chats",
           query: { platform: "mycelia" },
           options: { sort: { lastMessageDate: -1 } },
-        }).then(setChats);
+        }).then((result) => setChats(result as MemoryChat[]));
       }
     },
     transport: new DefaultChatTransport<any>({
@@ -408,8 +563,31 @@ export default function ChatPage() {
         const response = await apiClient.fetch(path, init);
 
         const serverChatId = response.headers.get("X-Mycelia-Chat-Id");
+        const responseModel = response.headers.get("X-Mycelia-Model") ||
+          selectedModelRef.current;
+        const requestId = response.headers.get("X-Mycelia-Request-Id") ||
+          undefined;
+        latestRequestRef.current = { model: responseModel, requestId };
         if (serverChatId) {
           newChatIdRef.current = serverChatId;
+        }
+
+        if (!response.ok) {
+          let message = `Chat request failed with HTTP ${response.status}`;
+          try {
+            const payload = await response.clone().json();
+            if (typeof payload?.error === "string" && payload.error.trim()) {
+              message = payload.error;
+            }
+            latestRequestRef.current = {
+              model: payload?.model || responseModel,
+              requestId: payload?.requestId || requestId,
+            };
+          } catch {
+            const body = await response.clone().text();
+            if (body.trim()) message = body.slice(0, 800);
+          }
+          throw new Error(message);
         }
         return response;
       },
@@ -421,9 +599,9 @@ export default function ChatPage() {
     setPendingMessage(null);
     setChatError(null); // Clear error when switching chats
     if (chatId) {
-       fetchMessages(chatId).then(msgs => chat.setMessages(msgs));
+      fetchMessages(chatId).then((msgs) => chat.setMessages(msgs));
     } else {
-       chat.setMessages([]);
+      chat.setMessages([]);
     }
   }, [chatId]);
 
@@ -432,11 +610,22 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat.messages, chat.status, pendingMessage]);
 
-  const handleInputSubmit = (value: { text?: string; files?: any[] }, _event: React.FormEvent<HTMLFormElement>) => {
+  const handleInputSubmit = (
+    value: { text?: string; files?: any[] },
+    _event: React.FormEvent<HTMLFormElement>,
+  ) => {
     if (value.text) {
       setChatError(null); // Clear any previous error
       setPendingMessage(value.text);
-      chat.sendMessage({ text: value.text });
+      void chat.sendMessage(
+        { text: value.text },
+        {
+          body: {
+            chatId,
+            ...(selectedModel ? { model: selectedModel } : {}),
+          },
+        },
+      );
       setInput("");
     }
   };
@@ -447,7 +636,7 @@ export default function ChatPage() {
 
   // Clear pending message when chat messages update with a user message
   useEffect(() => {
-    if (pendingMessage && chat.messages.some(m => m.role === 'user')) {
+    if (pendingMessage && chat.messages.some((m) => m.role === "user")) {
       setPendingMessage(null);
     }
   }, [chat.messages, pendingMessage]);
@@ -457,18 +646,54 @@ export default function ChatPage() {
   };
 
   const handleNewChat = () => {
-    navigate('/chat');
+    navigate("/chat");
     chat.setMessages([]);
+    setSelectedModel(defaultChatModel);
     setPendingMessage(null);
     setChatError(null);
   };
 
+  const handleModelChange = async (model: string) => {
+    const nextModel = model.trim();
+    if (!nextModel || nextModel === selectedModel) return;
+
+    const previousModel = selectedModel;
+    setSelectedModel(nextModel);
+    setChatError(null);
+
+    if (!chatId) return;
+
+    try {
+      await callResource("mongo", {
+        action: "updateOne",
+        collection: "chats",
+        query: { _id: new ObjectId(chatId) },
+        update: { $set: { model: nextModel } },
+      });
+      setChats((current) =>
+        current.map((item) =>
+          item._id.toString() === chatId ? { ...item, model: nextModel } : item
+        )
+      );
+    } catch (error) {
+      setSelectedModel(previousModel);
+      setChatError({
+        message: error instanceof Error
+          ? `Could not save the selected model: ${error.message}`
+          : "Could not save the selected model.",
+        model: previousModel,
+      });
+    }
+  };
+
   const handleRenameChat = (chatId: string, newName: string) => {
-    setChats(prev => prev.map(c =>
-      c._id.toString() === chatId
-        ? { ...c, name: newName, title: newName }
-        : c
-    ));
+    setChats((prev) =>
+      prev.map((c) =>
+        c._id.toString() === chatId
+          ? { ...c, name: newName, title: newName }
+          : c
+      )
+    );
   };
 
   return (
@@ -489,28 +714,32 @@ export default function ChatPage() {
               </Button>
             </div>
             <ScrollArea className="flex-1">
-              {loadingChats ? (
-                <div className="p-3 space-y-3">
-                  {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
-                </div>
-              ) : (
-                <div className="flex flex-col">
-                  {chats.map((c) => (
-                    <ChatListItemComponent
-                      key={c._id.toString()}
-                      chat={c}
-                      isSelected={chatId === c._id.toString()}
-                      onClick={() => navigate(`/chat/${c._id.toString()}`)}
-                      onRename={handleRenameChat}
-                    />
-                  ))}
-                  {chats.length === 0 && (
-                    <div className="p-6 text-center text-muted-foreground text-sm">
-                      No conversations yet
-                    </div>
-                  )}
-                </div>
-              )}
+              {loadingChats
+                ? (
+                  <div className="p-3 space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                )
+                : (
+                  <div className="flex flex-col">
+                    {chats.map((c) => (
+                      <ChatListItemComponent
+                        key={c._id.toString()}
+                        chat={c}
+                        isSelected={chatId === c._id.toString()}
+                        onClick={() => navigate(`/chat/${c._id.toString()}`)}
+                        onRename={handleRenameChat}
+                      />
+                    ))}
+                    {chats.length === 0 && (
+                      <div className="p-6 text-center text-muted-foreground text-sm">
+                        No conversations yet
+                      </div>
+                    )}
+                  </div>
+                )}
             </ScrollArea>
           </div>
         </ResizablePanel>
@@ -520,78 +749,146 @@ export default function ChatPage() {
         {/* Chat Area */}
         <ResizablePanel defaultSize={75}>
           <div className="flex flex-col h-full">
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {chat.messages.length === 0 && !pendingMessage && chat.status === 'ready' ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground">
-                  <div className="text-center">
-                    <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>Start a new conversation</p>
-                  </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Model for this chat</div>
+                <div className="text-xs text-muted-foreground">
+                  The selection is used for the next answer. Each answer shows
+                  the model that actually ran.
                 </div>
-              ) : (
-                <>
-                  {chat.messages.map((message) => (
-                    <ChatMessage
-                      key={message.id}
-                      message={message}
-                      addToolApprovalResponse={chat.addToolApprovalResponse}
-                    />
-                  ))}
-                  {/* Show pending message immediately (optimistic UI) */}
-                  {pendingMessage && !chat.messages.some(m => m.role === 'user' &&
-                    (typeof m.content === 'string' ? m.content : '') === pendingMessage) && (
-                    <div className="flex w-full py-2 justify-end">
-                      <div className="flex gap-3 max-w-[80%]">
-                        <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2">
-                          <p className="text-sm whitespace-pre-wrap">{pendingMessage}</p>
-                        </div>
-                      </div>
+              </div>
+              <div className="w-full sm:w-[320px]">
+                <ModelSelector
+                  value={selectedModel}
+                  onChange={(model) => void handleModelChange(model)}
+                  disabled={chat.status === "streaming" ||
+                    chat.status === "submitted"}
+                  placeholder="Use configured chat default"
+                  prefetch
+                />
+                <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                  {resolvedSelectedModel === selectedModel
+                    ? selectedModel
+                    : `${selectedModel} → ${resolvedSelectedModel}`}
+                </div>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {chat.messages.length === 0 && !pendingMessage &&
+                  chat.status === "ready"
+                ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p>Start a new conversation</p>
                     </div>
-                  )}
-                  {/* Loading indicator while waiting for response */}
-                  {(chat.status === 'submitted' || chat.status === 'streaming') && (
-                    <div className="flex w-full py-2">
-                      <div className="flex gap-3">
-                        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
-                          <span className="text-base" role="img" aria-label="Mycelia">🍄</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Loader />
-                          <span className="text-sm text-muted-foreground">Thinking...</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {/* Error message */}
-                  {chatError && (
-                    <div className="flex w-full py-2">
-                      <div className="flex gap-3 w-full">
-                        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-red-500/20">
-                          <AlertCircle className="w-4 h-4 text-red-500" />
-                        </div>
-                        <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-                          <div className="font-medium text-red-700 dark:text-red-400 mb-1">
-                            Message failed to send
+                  </div>
+                )
+                : (
+                  <>
+                    {chat.messages.map((message) => (
+                      <ChatMessage
+                        key={message.id}
+                        message={message}
+                        addToolApprovalResponse={chat.addToolApprovalResponse}
+                      />
+                    ))}
+                    {/* Show pending message immediately (optimistic UI) */}
+                    {pendingMessage && !chat.messages.some((m) =>
+                      m.role === "user" &&
+                      (typeof m.content === "string" ? m.content : "") ===
+                        pendingMessage
+                    ) && (
+                      <div className="flex w-full py-2 justify-end">
+                        <div className="flex gap-3 max-w-[80%]">
+                          <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2">
+                            <p className="text-sm whitespace-pre-wrap">
+                              {pendingMessage}
+                            </p>
                           </div>
-                          <div className="text-sm text-muted-foreground mb-3">
-                            {chatError}
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={handleRetry}
-                            className="border-red-500/50 text-red-600 hover:bg-red-500/10"
-                          >
-                            <RefreshCw className="w-4 h-4 mr-1" />
-                            Dismiss
-                          </Button>
                         </div>
                       </div>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </>
-              )}
+                    )}
+                    {/* Loading indicator while waiting for response */}
+                    {(chat.status === "submitted" ||
+                      chat.status === "streaming") && (
+                      <div className="flex w-full py-2">
+                        <div className="flex gap-3">
+                          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
+                            <span
+                              className="text-base"
+                              role="img"
+                              aria-label="Mycelia"
+                            >
+                              🍄
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Loader />
+                            <span className="text-sm text-muted-foreground">
+                              Thinking...
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {/* Error message */}
+                    {chatError && (
+                      <div className="flex w-full py-2">
+                        <div className="flex gap-3 w-full">
+                          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-red-500/20">
+                            <AlertCircle className="w-4 h-4 text-red-500" />
+                          </div>
+                          <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+                            <div className="font-medium text-red-700 dark:text-red-400 mb-1">
+                              Message failed to send
+                            </div>
+                            <div className="text-sm text-muted-foreground mb-3">
+                              {chatError.message}
+                            </div>
+                            <div className="mb-3 space-y-1 rounded bg-background/60 p-2 text-xs text-muted-foreground">
+                              {chatError.model && (
+                                <div>
+                                  Model:{" "}
+                                  <code className="text-foreground">
+                                    {chatError.model}
+                                  </code>
+                                </div>
+                              )}
+                              {chatError.requestId && (
+                                <div>
+                                  Request ID:{" "}
+                                  <code className="break-all text-foreground">
+                                    {chatError.requestId}
+                                  </code>
+                                </div>
+                              )}
+                              <div>
+                                Logs:{" "}
+                                <code className="text-foreground">
+                                  docker compose logs --tail=200 backend
+                                </code>
+                                {chatError.requestId
+                                  ? " — search for the request ID above."
+                                  : ""}
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={handleRetry}
+                              className="border-red-500/50 text-red-600 hover:bg-red-500/10"
+                            >
+                              <RefreshCw className="w-4 h-4 mr-1" />
+                              Dismiss
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={messagesEndRef} />
+                  </>
+                )}
             </div>
 
             <div className="p-4 border-t">
@@ -604,7 +901,8 @@ export default function ChatPage() {
                   placeholder="Type a message..."
                   value={input}
                   onChange={handleTextareaChange}
-                  disabled={chat.status === 'streaming' || chat.status === 'submitted'}
+                  disabled={chat.status === "streaming" ||
+                    chat.status === "submitted"}
                 />
                 <PromptInputFooter>
                   <PromptInputTools>
@@ -613,12 +911,17 @@ export default function ChatPage() {
                         <Paperclip className="size-4" />
                       </PromptInputActionMenuTrigger>
                       <PromptInputActionMenuContent>
-                        <PromptInputActionMenuItem>Upload File</PromptInputActionMenuItem>
+                        <PromptInputActionMenuItem>
+                          Upload File
+                        </PromptInputActionMenuItem>
                       </PromptInputActionMenuContent>
                     </PromptInputActionMenu>
                     <PromptInputSpeechButton textareaRef={textareaRef} />
                   </PromptInputTools>
-                  <PromptInputSubmit disabled={!input?.trim() || chat.status === 'streaming' || chat.status === 'submitted'} />
+                  <PromptInputSubmit
+                    disabled={!input?.trim() || chat.status === "streaming" ||
+                      chat.status === "submitted"}
+                  />
                 </PromptInputFooter>
               </PromptInput>
             </div>
