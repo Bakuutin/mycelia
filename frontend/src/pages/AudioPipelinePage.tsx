@@ -223,21 +223,55 @@ export default function AudioPipelinePage() {
   );
   const [sessionLimit, setSessionLimit] = useState(DEFAULT_SESSION_LIMIT);
 
-  const { data: sessionsData, isLoading, refetch } = useQuery({
+  const {
+    data: sessionsData,
+    error: pipelineError,
+    isError,
+    isFetching,
+    isLoading,
+    refetch,
+  } = useQuery({
     queryKey: ["audio-pipeline-sessions", sessionLimit],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       // Use the new aggregated pipeline endpoint
-      const response = await fetch(
-        `${api.baseURL}/api/audio/pipeline?limit=${sessionLimit}`,
-        {
-          headers: {
-            "Authorization": `Bearer ${await api.getJWT()}`,
-          },
-        },
+      const requestController = new AbortController();
+      const cancelRequest = () => requestController.abort(signal.reason);
+      signal.addEventListener("abort", cancelRequest, { once: true });
+      const timeoutId = setTimeout(
+        () => requestController.abort(),
+        20_000,
       );
 
+      let response: Response;
+      try {
+        response = await fetch(
+          `${api.baseURL}/api/audio/pipeline?limit=${sessionLimit}`,
+          {
+            headers: {
+              "Authorization": `Bearer ${await api.getJWT()}`,
+            },
+            signal: requestController.signal,
+          },
+        );
+      } catch (error) {
+        if (requestController.signal.aborted && !signal.aborted) {
+          throw new Error(
+            "Pipeline statistics took longer than 20 seconds. Retry after the database finishes its current work.",
+          );
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+        signal.removeEventListener("abort", cancelRequest);
+      }
+
       if (!response.ok) {
-        throw new Error("Failed to fetch pipeline data");
+        const detail = await response.text();
+        throw new Error(
+          `Failed to fetch pipeline data (${response.status})${
+            detail ? `: ${detail}` : ""
+          }`,
+        );
       }
 
       const data = await response.json();
@@ -343,7 +377,8 @@ export default function AudioPipelinePage() {
         stats,
       };
     },
-    refetchInterval: autoRefresh ? 5000 : false,
+    retry: 1,
+    refetchInterval: autoRefresh ? 30_000 : false,
   });
 
   const sessions = sessionsData?.sessions;
@@ -369,7 +404,9 @@ export default function AudioPipelinePage() {
   ) ?? [];
   const stagesWithErrors = stats?.stages?.filter((stage) => stage.errors > 0) ??
     [];
-  const pipelineHealth = !stats
+  const pipelineHealth = isError && !stats
+    ? "error"
+    : !stats
     ? "loading"
     : blockedStages.length > 0
     ? "blocked"
@@ -520,9 +557,12 @@ export default function AudioPipelinePage() {
             variant="outline"
             size="sm"
             onClick={() => refetch()}
+            disabled={isFetching}
             data-testid="refresh-btn"
           >
-            <RefreshCw className="h-4 w-4 mr-2" />
+            <RefreshCw
+              className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`}
+            />
             Refresh
           </Button>
         </div>
@@ -531,6 +571,8 @@ export default function AudioPipelinePage() {
       <Card
         className={pipelineHealth === "loading"
           ? "border-muted bg-muted/10"
+          : pipelineHealth === "error"
+          ? "border-red-500/50 bg-red-500/5"
           : pipelineHealth === "blocked"
           ? "border-red-500/50 bg-red-500/5"
           : pipelineHealth === "processing"
@@ -544,6 +586,8 @@ export default function AudioPipelinePage() {
           <div className="flex items-start gap-3">
             {pipelineHealth === "loading"
               ? <RefreshCw className="mt-0.5 h-5 w-5 animate-spin" />
+              : pipelineHealth === "error"
+              ? <AlertCircle className="mt-0.5 h-5 w-5 text-red-600" />
               : pipelineHealth === "blocked"
               ? <PauseCircle className="mt-0.5 h-5 w-5 text-red-600" />
               : pipelineHealth === "processing"
@@ -560,6 +604,10 @@ export default function AudioPipelinePage() {
               <p className="text-sm text-muted-foreground">
                 {pipelineHealth === "loading"
                   ? "Loading source, backlog, worker, and job state."
+                  : pipelineHealth === "error"
+                  ? pipelineError instanceof Error
+                    ? pipelineError.message
+                    : "Pipeline statistics could not be loaded."
                   : blockedStages.length > 0
                   ? `${blockedStages.map((stage) => stage.label).join(", ")} ${
                     blockedStages.length === 1 ? "is" : "are"
