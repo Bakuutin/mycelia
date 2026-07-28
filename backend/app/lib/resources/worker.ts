@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ObjectId } from "bson";
-import { getServerAuth, type Auth } from "@/lib/auth/core.server.ts";
+import { type Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import type { Resource, ResourcePath } from "@/lib/auth/resources.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { jobRegistry } from "@/lib/jobs/job-registry.ts";
@@ -139,6 +139,30 @@ const RetryFailedJobsSchema = z.object({
   limit: z.number().int().min(1).max(100).default(25),
 });
 
+const ModelArtifactTypeSchema = z.enum([
+  "summary",
+  "conversation_extraction",
+  "tagging",
+]);
+
+const ModelArtifactsSchema = z.object({
+  action: z.literal("model_artifacts"),
+  artifactTypes: z.array(ModelArtifactTypeSchema).optional(),
+  model: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
+const ReprocessModelArtifactsSchema = z.object({
+  action: z.literal("reprocess_model_artifacts"),
+  artifactType: z.literal("summary"),
+  sourceModel: z.string().min(1),
+  targetModel: z.string().min(1),
+  artifactIds: z.array(z.string()).max(100).optional(),
+  limit: z.number().int().min(1).max(100).default(25),
+});
+
 const RequestSchema = z.union([
   UpdateProgressSchema,
   ListJobsSchema,
@@ -162,6 +186,8 @@ const RequestSchema = z.union([
   StatsSchema,
   PipelineHealthSchema,
   RetryFailedJobsSchema,
+  ModelArtifactsSchema,
+  ReprocessModelArtifactsSchema,
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
@@ -173,8 +199,7 @@ export function getFailedJobsQuery(workerType: string) {
   } as const;
 }
 
-export class JobsResource
-  implements Resource<WorkerProgressRequest, any> {
+export class JobsResource implements Resource<WorkerProgressRequest, any> {
   code = "jobs";
   description = "Update job progress, list jobs, or enqueue a new job";
 
@@ -229,6 +254,10 @@ export class JobsResource
         return this.pipelineHealth(input, auth);
       case "retry_failed":
         return this.retryFailed(input, auth);
+      case "model_artifacts":
+        return this.modelArtifacts(input, auth);
+      case "reprocess_model_artifacts":
+        return this.reprocessModelArtifacts(input, auth);
       default:
         throw new Error(`Unknown action: ${(input as any).action}`);
     }
@@ -373,7 +402,10 @@ export class JobsResource
     return { success: true, cancelled: true, processTerminated };
   }
 
-  private async cancelAll(_input: z.infer<typeof CancelAllJobsSchema>, auth: Auth) {
+  private async cancelAll(
+    _input: z.infer<typeof CancelAllJobsSchema>,
+    auth: Auth,
+  ) {
     const mongo = await getMongoResource(auth);
 
     // Never force-remove active BullMQ jobs: their processors keep running
@@ -406,7 +438,10 @@ export class JobsResource
     };
   }
 
-  private async clearCompleted(_input: z.infer<typeof ClearCompletedJobsSchema>, auth: Auth) {
+  private async clearCompleted(
+    _input: z.infer<typeof ClearCompletedJobsSchema>,
+    auth: Auth,
+  ) {
     const mongo = await getMongoResource(auth);
 
     // Delete all completed, failed, and cancelled jobs from MongoDB
@@ -556,6 +591,448 @@ export class JobsResource
       retriedCount: retried.length,
       retried,
       errors,
+    };
+  }
+
+  private async modelArtifacts(
+    input: z.infer<typeof ModelArtifactsSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const requestedTypes = new Set(
+      input.artifactTypes?.length
+        ? input.artifactTypes
+        : ModelArtifactTypeSchema.options,
+    );
+    const modelMatch = input.model && input.model !== "all"
+      ? { executedModel: input.model }
+      : null;
+    const generatedAtMatch: Record<string, Date> = {};
+    if (input.from) generatedAtMatch.$gte = new Date(`${input.from}T00:00:00`);
+    if (input.to) generatedAtMatch.$lte = new Date(`${input.to}T23:59:59.999`);
+
+    const facetFor = (
+      base: Record<string, unknown>[],
+      project: Record<string, unknown>,
+    ) => [
+      ...base,
+      { $project: project },
+      ...(modelMatch ? [{ $match: modelMatch }] : []),
+      ...(Object.keys(generatedAtMatch).length
+        ? [{ $match: { generatedAt: generatedAtMatch } }]
+        : []),
+      {
+        $facet: {
+          entries: [
+            { $sort: { generatedAt: -1 } },
+            { $limit: input.limit },
+          ],
+          models: [
+            { $match: { executedModel: { $type: "string", $ne: "" } } },
+            {
+              $group: {
+                _id: "$executedModel",
+                count: { $sum: 1 },
+                latestAt: { $max: "$generatedAt" },
+              },
+            },
+          ],
+          total: [{ $count: "value" }],
+        },
+      },
+    ];
+
+    const queries: Array<Promise<any>> = [];
+
+    if (requestedTypes.has("summary")) {
+      queries.push(mongo({
+        action: "aggregate",
+        collection: "objects",
+        pipeline: facetFor(
+          [
+            { $match: { "summaries.0": { $exists: true } } },
+            {
+              $unwind: {
+                path: "$summaries",
+                includeArrayIndex: "artifactIndex",
+              },
+            },
+          ],
+          {
+            _id: 0,
+            id: {
+              $concat: [
+                { $toString: "$_id" },
+                ":summary:",
+                { $toString: "$artifactIndex" },
+              ],
+            },
+            artifactType: { $literal: "summary" },
+            objectId: { $toString: "$_id" },
+            objectName: { $ifNull: ["$name", "Untitled conversation"] },
+            generatedAt: "$summaries.date",
+            requestedModel: {
+              $ifNull: ["$summaries.requestedModel", "$summaries.model"],
+            },
+            executedModel: {
+              $ifNull: [
+                "$summaries.resolvedModel",
+                { $ifNull: ["$summaries.modelName", "$summaries.model"] },
+              ],
+            },
+            fallbackModel: "$summaries.fallbackModel",
+            fallbackUsed: { $ifNull: ["$summaries.fallbackUsed", false] },
+            providerBaseUrl: {
+              $ifNull: [
+                "$summaries.provenance.providerBaseUrl",
+                "$summaries.providerBaseUrl",
+              ],
+            },
+            providerProfileId: "$summaries.provenance.providerProfileId",
+            providerProfileName: "$summaries.provenance.providerProfileName",
+            jobId: "$summaries.jobId",
+            provenanceQuality: {
+              $cond: [
+                {
+                  $ne: [{ $ifNull: ["$summaries.resolvedModel", null] }, null],
+                },
+                "exact",
+                "legacy_response_model",
+              ],
+            },
+          },
+        ),
+      }));
+    }
+
+    if (requestedTypes.has("conversation_extraction")) {
+      queries.push(mongo({
+        action: "aggregate",
+        collection: "objects",
+        pipeline: facetFor(
+          [{
+            $match: {
+              isConversation: true,
+              "metadata.extractedWith": { $exists: true },
+            },
+          }],
+          {
+            _id: 0,
+            id: {
+              $concat: [{ $toString: "$_id" }, ":conversation_extraction"],
+            },
+            artifactType: { $literal: "conversation_extraction" },
+            objectId: { $toString: "$_id" },
+            objectName: { $ifNull: ["$name", "Untitled conversation"] },
+            generatedAt: {
+              $convert: {
+                input: "$metadata.extractedWith.timestamp",
+                to: "date",
+                onError: null,
+                onNull: null,
+              },
+            },
+            requestedModel: {
+              $ifNull: [
+                "$metadata.extractedWith.requestedModel",
+                "$metadata.extractedWith.model",
+              ],
+            },
+            executedModel: {
+              $ifNull: [
+                "$metadata.extractedWith.resolvedModel",
+                "$metadata.extractedWith.model",
+              ],
+            },
+            fallbackModel: "$metadata.extractedWith.fallbackModel",
+            fallbackUsed: {
+              $ifNull: ["$metadata.extractedWith.fallbackUsed", false],
+            },
+            providerBaseUrl: "$metadata.extractedWith.providerBaseUrl",
+            providerProfileId: "$metadata.extractedWith.providerProfileId",
+            providerProfileName: "$metadata.extractedWith.providerProfileName",
+            jobId: "$metadata.extractedWith.jobId",
+            chunkId: "$metadata.extractedWith.chunkId",
+            provenanceQuality: {
+              $cond: [
+                {
+                  $ne: [
+                    {
+                      $ifNull: ["$metadata.extractedWith.resolvedModel", null],
+                    },
+                    null,
+                  ],
+                },
+                "exact",
+                "legacy_requested_only",
+              ],
+            },
+          },
+        ),
+      }));
+    }
+
+    if (requestedTypes.has("tagging")) {
+      queries.push(mongo({
+        action: "aggregate",
+        collection: "objects",
+        pipeline: facetFor(
+          [
+            {
+              $match: {
+                isConversation: true,
+                "metadata.aiProvenance.taggingRuns.0": { $exists: true },
+              },
+            },
+            {
+              $unwind: {
+                path: "$metadata.aiProvenance.taggingRuns",
+                includeArrayIndex: "artifactIndex",
+              },
+            },
+          ],
+          {
+            _id: 0,
+            id: {
+              $concat: [
+                { $toString: "$_id" },
+                ":tagging:",
+                { $toString: "$artifactIndex" },
+              ],
+            },
+            artifactType: { $literal: "tagging" },
+            objectId: { $toString: "$_id" },
+            objectName: { $ifNull: ["$name", "Untitled conversation"] },
+            generatedAt: "$metadata.aiProvenance.taggingRuns.generatedAt",
+            requestedModel: "$metadata.aiProvenance.taggingRuns.requestedModel",
+            executedModel: "$metadata.aiProvenance.taggingRuns.resolvedModel",
+            fallbackModel: "$metadata.aiProvenance.taggingRuns.fallbackModel",
+            fallbackUsed: {
+              $ifNull: [
+                "$metadata.aiProvenance.taggingRuns.fallbackUsed",
+                false,
+              ],
+            },
+            providerBaseUrl:
+              "$metadata.aiProvenance.taggingRuns.providerBaseUrl",
+            providerProfileId:
+              "$metadata.aiProvenance.taggingRuns.providerProfileId",
+            providerProfileName:
+              "$metadata.aiProvenance.taggingRuns.providerProfileName",
+            jobId: "$metadata.aiProvenance.taggingRuns.jobId",
+            parseStatus: "$metadata.aiProvenance.taggingRuns.parseStatus",
+            selectedTagCount:
+              "$metadata.aiProvenance.taggingRuns.selectedTagCount",
+            provenanceQuality: { $literal: "exact" },
+          },
+        ),
+      }));
+    }
+
+    const [results, incompleteSummaries, legacyExtractions, legacyTags] =
+      await Promise.all([
+        Promise.all(queries),
+        mongo({
+          action: "count",
+          collection: "objects",
+          query: {
+            summaries: {
+              $elemMatch: {
+                resolvedModel: { $exists: false },
+              },
+            },
+          },
+        }),
+        mongo({
+          action: "count",
+          collection: "objects",
+          query: {
+            isConversation: true,
+            "metadata.extractedWith.model": { $exists: true },
+            "metadata.extractedWith.resolvedModel": { $exists: false },
+          },
+        }),
+        mongo({
+          action: "count",
+          collection: "objects",
+          query: {
+            isRelationship: true,
+            name: "tagged",
+            "metadata.generatedWith": { $exists: false },
+          },
+        }),
+      ]);
+
+    const entries: any[] = [];
+    const models = new Map<string, { count: number; latestAt?: Date }>();
+    let total = 0;
+    results.forEach((result: any) => {
+      const facet = Array.isArray(result) ? result[0] : null;
+      for (const entry of facet?.entries ?? []) entries.push(entry);
+      total += facet?.total?.[0]?.value ?? 0;
+      for (const item of facet?.models ?? []) {
+        const current = models.get(item._id) ?? { count: 0 };
+        current.count += item.count ?? 0;
+        if (!current.latestAt || item.latestAt > current.latestAt) {
+          current.latestAt = item.latestAt;
+        }
+        models.set(item._id, current);
+      }
+    });
+
+    entries.sort((left, right) =>
+      new Date(right.generatedAt ?? 0).getTime() -
+      new Date(left.generatedAt ?? 0).getTime()
+    );
+
+    return {
+      entries: entries.slice(0, input.limit),
+      total,
+      models: [...models.entries()]
+        .map(([model, value]) => ({ model, ...value }))
+        .sort((left, right) =>
+          new Date(right.latestAt ?? 0).getTime() -
+          new Date(left.latestAt ?? 0).getTime()
+        ),
+      gaps: {
+        legacySummariesWithoutExactRouting: incompleteSummaries,
+        legacyExtractionsWithRequestedAliasOnly: legacyExtractions,
+        legacyTagRelationshipsWithoutProvenance: legacyTags,
+      },
+    };
+  }
+
+  private async reprocessModelArtifacts(
+    input: z.infer<typeof ReprocessModelArtifactsSchema>,
+    auth: Auth,
+  ) {
+    if (input.sourceModel === input.targetModel) {
+      throw new Error("Choose a target model different from the source model");
+    }
+    await assertJobServicesHealthy("summarization", true);
+
+    const mongo = await getMongoResource(auth);
+    const selectedObjectIds = (input.artifactIds ?? [])
+      .map((id) => id.split(":", 1)[0])
+      .filter((id) => ObjectId.isValid(id));
+    const objects = await mongo({
+      action: "aggregate",
+      collection: "objects",
+      pipeline: [
+        {
+          $match: {
+            isConversation: true,
+            ...(selectedObjectIds.length
+              ? {
+                _id: { $in: selectedObjectIds.map((id) => new ObjectId(id)) },
+              }
+              : {}),
+            $expr: {
+              $anyElementTrue: {
+                $map: {
+                  input: { $ifNull: ["$summaries", []] },
+                  as: "summary",
+                  in: {
+                    $eq: [
+                      {
+                        $ifNull: [
+                          "$$summary.resolvedModel",
+                          {
+                            $ifNull: [
+                              "$$summary.modelName",
+                              "$$summary.model",
+                            ],
+                          },
+                        ],
+                      },
+                      input.sourceModel,
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          $match: {
+            $expr: {
+              $not: [{
+                $anyElementTrue: {
+                  $map: {
+                    input: { $ifNull: ["$summaries", []] },
+                    as: "summary",
+                    in: {
+                      $eq: [
+                        {
+                          $ifNull: [
+                            "$$summary.resolvedModel",
+                            {
+                              $ifNull: [
+                                "$$summary.modelName",
+                                "$$summary.model",
+                              ],
+                            },
+                          ],
+                        },
+                        input.targetModel,
+                      ],
+                    },
+                  },
+                },
+              }],
+            },
+          },
+        },
+        { $limit: input.limit },
+        { $project: { _id: 1 } },
+      ],
+    }) as Array<{ _id: ObjectId }>;
+
+    const objectIds = objects.map((object) => object._id.toString());
+    const unfinishedJobs = objectIds.length
+      ? await mongo({
+        action: "find",
+        collection: "jobs",
+        query: {
+          type: "summarization",
+          state: { $in: ["waiting", "active", "delayed", "paused"] },
+          "data.objectId": { $in: objectIds },
+          "data.model": input.targetModel,
+        },
+        options: { projection: { "data.objectId": 1 } },
+      }) as any[]
+      : [];
+    const alreadyQueued = new Set(
+      unfinishedJobs.map((job) => job.data?.objectId?.toString()),
+    );
+
+    const serverAuth = await getServerAuth();
+    const queued: Array<{ objectId: string; jobId: string }> = [];
+    for (const objectId of objectIds) {
+      if (alreadyQueued.has(objectId)) continue;
+      const job = await enqueueJob({
+        type: "summarization",
+        objectId,
+        model: input.targetModel,
+        allowExisting: true,
+      }, {
+        trigger: {
+          type: "manual",
+          reason: `model_quality_rerun:${input.sourceModel}`,
+        },
+      }, serverAuth);
+      queued.push({ objectId, jobId: job.id! });
+    }
+
+    return {
+      success: true,
+      artifactType: input.artifactType,
+      sourceModel: input.sourceModel,
+      targetModel: input.targetModel,
+      matched: objectIds.length,
+      queued,
+      skippedAlreadyQueued: objectIds.length - queued.length,
+      mode: "append_summary_version",
     };
   }
 
@@ -767,7 +1244,7 @@ export class JobsResource
 
   private async list(input: z.infer<typeof ListJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
-    
+
     const types = input.types || jobRegistry.getJobTypes();
     const queryStatuses = input.statuses ||
       ["active", "waiting", "delayed", "failed", "completed"];
@@ -781,7 +1258,7 @@ export class JobsResource
         type: { $in: types },
         state: { $in: queryStatuses },
       },
-      options: { 
+      options: {
         sort: { createdAt: -1 },
         limit: totalLimit,
       },
@@ -803,7 +1280,10 @@ export class JobsResource
     }));
   }
 
-  private async progressUpdate(input: z.infer<typeof UpdateProgressSchema>, auth: Auth) {
+  private async progressUpdate(
+    input: z.infer<typeof UpdateProgressSchema>,
+    auth: Auth,
+  ) {
     const mongoRoot = await getMongoResource(await getServerAuth());
     const { jobId, progress } = input;
 
@@ -813,7 +1293,7 @@ export class JobsResource
       query: { _id: new ObjectId(jobId) },
       options: { limit: 1 },
     });
-    
+
     const jobDoc = jobDocs[0];
     if (!jobDoc) {
       console.log(
@@ -880,9 +1360,12 @@ export class JobsResource
     return { success: true };
   }
 
-  private async pauseWorker(input: z.infer<typeof PauseWorkerSchema>, auth: Auth) {
+  private async pauseWorker(
+    input: z.infer<typeof PauseWorkerSchema>,
+    auth: Auth,
+  ) {
     const { workerType } = input;
-    
+
     // Verify worker type exists
     const types = jobRegistry.getJobTypes();
     if (!types.includes(workerType)) {
@@ -895,9 +1378,12 @@ export class JobsResource
     return { success: true, workerType, paused: true };
   }
 
-  private async resumeWorker(input: z.infer<typeof ResumeWorkerSchema>, auth: Auth) {
+  private async resumeWorker(
+    input: z.infer<typeof ResumeWorkerSchema>,
+    auth: Auth,
+  ) {
     const { workerType } = input;
-    
+
     // Verify worker type exists
     const types = jobRegistry.getJobTypes();
     if (!types.includes(workerType)) {
@@ -912,7 +1398,7 @@ export class JobsResource
 
   private async pauseAll(auth: Auth) {
     const types = jobRegistry.getJobTypes();
-    
+
     for (const workerType of types) {
       await workerPauseManager.pauseWorker(workerType);
       await this.persistWorkerConfig(workerType, { paused: true }, auth);
@@ -923,7 +1409,7 @@ export class JobsResource
 
   private async resumeAll(auth: Auth) {
     const types = jobRegistry.getJobTypes();
-    
+
     for (const workerType of types) {
       await workerPauseManager.resumeWorker(workerType);
       await this.persistWorkerConfig(workerType, { paused: false }, auth);
@@ -955,9 +1441,9 @@ export class JobsResource
       {
         $group: {
           _id: "$state",
-          count: { $sum: 1 }
-        }
-      }
+          count: { $sum: 1 },
+        },
+      },
     ];
 
     const statusCounts = await mongo({
@@ -990,29 +1476,33 @@ export class JobsResource
           _id: "$type",
           totalRuns: { $sum: 1 },
           active: {
-            $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] },
           },
           staleActive: {
             $sum: {
-              $cond: [{
-                $and: [
-                  { $eq: ["$state", "active"] },
-                  { $lte: ["$startedAt", staleCutoff] },
-                ],
-              }, 1, 0],
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$state", "active"] },
+                    { $lte: ["$startedAt", staleCutoff] },
+                  ],
+                },
+                1,
+                0,
+              ],
             },
           },
           waiting: {
-            $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] },
           },
           delayed: {
-            $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] },
           },
           completed: {
-            $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] },
           },
           failed: {
-            $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] },
           },
           // Calculate empty jobs based on result fields
           emptyRuns: {
@@ -1027,9 +1517,21 @@ export class JobsResource
                         {
                           $and: [
                             { $eq: ["$type", "vad"] },
-                            { $eq: [{ $ifNull: ["$result.hasSpeech", { $ifNull: ["$progress.hasSpeech", -1] }] }, 0] },
-                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] }
-                          ]
+                            {
+                              $eq: [{
+                                $ifNull: ["$result.hasSpeech", {
+                                  $ifNull: ["$progress.hasSpeech", -1],
+                                }],
+                              }, 0],
+                            },
+                            {
+                              $eq: [{
+                                $ifNull: ["$result.processed", {
+                                  $ifNull: ["$progress.processed", -1],
+                                }],
+                              }, 0],
+                            },
+                          ],
                         },
                         // conversation_chunk_creator: finalized=0 and streamed=0 and chunksCreated=0
                         {
@@ -1037,47 +1539,92 @@ export class JobsResource
                             { $eq: ["$type", "conversation_chunk_creator"] },
                             { $eq: [{ $ifNull: ["$result.finalized", 0] }, 0] },
                             { $eq: [{ $ifNull: ["$result.streamed", 0] }, 0] },
-                            { $eq: [{ $ifNull: ["$result.chunksCreated", 0] }, 0] }
-                          ]
+                            {
+                              $eq: [
+                                { $ifNull: ["$result.chunksCreated", 0] },
+                                0,
+                              ],
+                            },
+                          ],
                         },
                         // conversation_extractor: conversationsCreated=0 and chunksProcessed=0
                         {
                           $and: [
                             { $eq: ["$type", "conversation_extractor"] },
-                            { $eq: [{ $ifNull: ["$result.conversationsCreated", 0] }, 0] },
-                            { $eq: [{ $ifNull: ["$result.chunksProcessed", 0] }, 0] }
-                          ]
+                            {
+                              $eq: [{
+                                $ifNull: ["$result.conversationsCreated", 0],
+                              }, 0],
+                            },
+                            {
+                              $eq: [
+                                { $ifNull: ["$result.chunksProcessed", 0] },
+                                0,
+                              ],
+                            },
+                          ],
                         },
                         // transcription_sequence_creator: processed=0
                         {
                           $and: [
-                            { $eq: ["$type", "transcription_sequence_creator"] },
-                            { $eq: [{ $ifNull: ["$result.processed", 0] }, 0] }
-                          ]
+                            {
+                              $eq: ["$type", "transcription_sequence_creator"],
+                            },
+                            { $eq: [{ $ifNull: ["$result.processed", 0] }, 0] },
+                          ],
                         },
                         // transcription: processed=0
                         {
                           $and: [
                             { $eq: ["$type", "transcription"] },
-                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] }
-                          ]
+                            {
+                              $eq: [{
+                                $ifNull: ["$result.processed", {
+                                  $ifNull: ["$progress.processed", -1],
+                                }],
+                              }, 0],
+                            },
+                          ],
                         },
                         // Generic: processed=0 and total=0 for other types
                         {
                           $and: [
-                            { $not: { $in: ["$type", ["vad", "conversation_chunk_creator", "conversation_extractor", "transcription_sequence_creator", "transcription", "summarization"]] } },
-                            { $eq: [{ $ifNull: ["$result.processed", { $ifNull: ["$progress.processed", -1] }] }, 0] },
-                            { $eq: [{ $ifNull: ["$result.total", { $ifNull: ["$progress.total", -1] }] }, 0] }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
+                            {
+                              $not: {
+                                $in: ["$type", [
+                                  "vad",
+                                  "conversation_chunk_creator",
+                                  "conversation_extractor",
+                                  "transcription_sequence_creator",
+                                  "transcription",
+                                  "summarization",
+                                ]],
+                              },
+                            },
+                            {
+                              $eq: [{
+                                $ifNull: ["$result.processed", {
+                                  $ifNull: ["$progress.processed", -1],
+                                }],
+                              }, 0],
+                            },
+                            {
+                              $eq: [{
+                                $ifNull: ["$result.total", {
+                                  $ifNull: ["$progress.total", -1],
+                                }],
+                              }, 0],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
                 },
                 1,
-                0
-              ]
-            }
+                0,
+              ],
+            },
           },
           // Get timestamps for frequency calculation (last 20)
           recentTimestamps: {
@@ -1085,11 +1632,11 @@ export class JobsResource
               $cond: [
                 { $eq: ["$state", "completed"] },
                 { $toLong: "$createdAt" },
-                null
-              ]
-            }
-          }
-        }
+                null,
+              ],
+            },
+          },
+        },
       },
       {
         $project: {
@@ -1106,18 +1653,24 @@ export class JobsResource
             $cond: [
               { $eq: ["$totalRuns", 0] },
               0,
-              { $multiply: [{ $divide: ["$completed", "$totalRuns"] }, 100] }
-            ]
+              { $multiply: [{ $divide: ["$completed", "$totalRuns"] }, 100] },
+            ],
           },
           // Filter out nulls and get last 20 timestamps
           recentTimestamps: {
             $slice: [
-              { $filter: { input: "$recentTimestamps", as: "ts", cond: { $ne: ["$$ts", null] } } },
-              -20
-            ]
-          }
-        }
-      }
+              {
+                $filter: {
+                  input: "$recentTimestamps",
+                  as: "ts",
+                  cond: { $ne: ["$$ts", null] },
+                },
+              },
+              -20,
+            ],
+          },
+        },
+      },
     ];
 
     const stats = await mongo({
@@ -1150,8 +1703,9 @@ export class JobsResource
         const avgMs = totalGap / (sorted.length - 1);
 
         if (avgMs < 60000) avgFrequency = `~${Math.round(avgMs / 1000)}s`;
-        else if (avgMs < 3600000) avgFrequency = `~${Math.round(avgMs / 60000)}m`;
-        else avgFrequency = `~${(avgMs / 3600000).toFixed(1)}h`;
+        else if (avgMs < 3600000) {
+          avgFrequency = `~${Math.round(avgMs / 60000)}m`;
+        } else avgFrequency = `~${(avgMs / 3600000).toFixed(1)}h`;
       }
 
       return {
@@ -1182,10 +1736,10 @@ export class JobsResource
   private async persistWorkerConfig(
     workerType: string,
     config: { paused: boolean },
-    auth: Auth
+    auth: Auth,
   ) {
     const configResource = await getConfigResource(auth);
-    
+
     await configResource({
       action: "patch",
       path: `workers.${workerType}`,
@@ -1196,35 +1750,46 @@ export class JobsResource
   private async listWorkers(_auth: Auth) {
     const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
     const workers = await workerDiscovery.getAllWorkers();
-    
+
     return { workers };
   }
 
-  private async getWorkerDefaults(input: z.infer<typeof GetWorkerDefaultsSchema>, _auth: Auth) {
+  private async getWorkerDefaults(
+    input: z.infer<typeof GetWorkerDefaultsSchema>,
+    _auth: Auth,
+  ) {
     const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
-    const defaults = await workerDiscovery.getDefaultOverrides(input.workerType);
-    
-    return { 
+    const defaults = await workerDiscovery.getDefaultOverrides(
+      input.workerType,
+    );
+
+    return {
       workerType: input.workerType,
-      defaults: defaults || {} 
+      defaults: defaults || {},
     };
   }
 
-  private async updateWorkerDefaults(input: z.infer<typeof UpdateWorkerDefaultsSchema>, _auth: Auth) {
+  private async updateWorkerDefaults(
+    input: z.infer<typeof UpdateWorkerDefaultsSchema>,
+    _auth: Auth,
+  ) {
     const { workerDiscovery } = await import("@/lib/jobs/worker-discovery.ts");
-    
+
     // Verify worker type exists
     const types = jobRegistry.getJobTypes();
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
-    
-    await workerDiscovery.updateDefaultOverrides(input.workerType, input.defaults);
-    
-    return { 
+
+    await workerDiscovery.updateDefaultOverrides(
+      input.workerType,
+      input.defaults,
+    );
+
+    return {
       success: true,
       workerType: input.workerType,
-      defaults: input.defaults
+      defaults: input.defaults,
     };
   }
 

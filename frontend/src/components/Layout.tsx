@@ -89,7 +89,7 @@ const Layout = () => {
                       }`}
                   >
                     <FileText className="w-4 h-4" />
-                    Summaries
+                    AI History
                   </Link>
                   <Link
                     to="/audio/pipeline"
