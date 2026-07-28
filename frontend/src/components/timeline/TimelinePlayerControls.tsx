@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useAudioPlayer } from "@/modules/audio/player";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useEffect } from "react";
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -40,29 +39,8 @@ function formatDate(date: Date | null): string {
 
 export function TimelinePlayerControls() {
   const { isPlaying, toggleIsPlaying, currentDate } = useAudioPlayer();
-  const { volume, setVolume, playbackRate, setPlaybackRate } = useSettingsStore();
-
-  // Keyboard shortcut for play/pause (Space)
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-      if (event.code === "Space") {
-        event.preventDefault();
-        toggleIsPlaying();
-      }
-    };
-
-    globalThis.addEventListener("keydown", handleKeyDown);
-    return () => {
-      globalThis.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [toggleIsPlaying]);
+  const { volume, setVolume, playbackRate, setPlaybackRate } =
+    useSettingsStore();
 
   const isMuted = volume === 0;
 
@@ -77,11 +55,9 @@ export function TimelinePlayerControls() {
             className="h-8 w-8"
             onClick={() => toggleIsPlaying()}
           >
-            {isPlaying ? (
-              <Pause className="h-4 w-4" />
-            ) : (
-              <Play className="h-4 w-4" />
-            )}
+            {isPlaying
+              ? <Pause className="h-4 w-4" />
+              : <Play className="h-4 w-4" />}
           </Button>
         </TooltipTrigger>
         <TooltipContent>
@@ -112,11 +88,9 @@ export function TimelinePlayerControls() {
               className="h-8 w-8"
               onClick={() => setVolume(isMuted ? 1 : 0)}
             >
-              {isMuted ? (
-                <VolumeX className="h-4 w-4" />
-              ) : (
-                <Volume2 className="h-4 w-4" />
-              )}
+              {isMuted
+                ? <VolumeX className="h-4 w-4" />
+                : <Volume2 className="h-4 w-4" />}
             </Button>
           </TooltipTrigger>
           <TooltipContent>
