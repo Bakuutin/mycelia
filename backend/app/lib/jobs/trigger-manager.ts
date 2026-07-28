@@ -1,6 +1,11 @@
 import { redis } from "@/lib/redis.ts";
 import { debounce } from "@std/async/debounce";
-import { jobRegistry, JobCapability, JobTriggerSource, JobRegistryEntry } from "./job-registry.ts";
+import {
+  JobCapability,
+  jobRegistry,
+  JobRegistryEntry,
+  JobTriggerSource,
+} from "./job-registry.ts";
 import { TriggerSource } from "@/utils/registries.ts";
 import { enqueueJob } from "./queue.ts";
 import { EnqueueJobOptions } from "./types.ts";
@@ -18,7 +23,7 @@ export class TriggerManager {
   private isRunning = false;
   private subscribers = new Map<string, any>();
   private debouncers = new Map<string, any>();
-  private intervals = new Map<string, number>();
+  private intervals = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(private registry: typeof jobRegistry) {}
 
@@ -29,11 +34,13 @@ export class TriggerManager {
     log("INFO", `Starting trigger manager`);
 
     const capabilities = this.registry.list();
-    const triggeredCapabilities = capabilities.filter(cap => cap.manifest.triggers);
+    const triggeredCapabilities = capabilities.filter((cap) =>
+      cap.manifest.triggers
+    );
     log("INFO", `Found capabilities with triggers`, {
       total: capabilities.length,
       withTriggers: triggeredCapabilities.length,
-      names: triggeredCapabilities.map(c => c.manifest.name)
+      names: triggeredCapabilities.map((c) => c.manifest.name),
     });
 
     for (const cap of triggeredCapabilities) {
@@ -54,7 +61,7 @@ export class TriggerManager {
       sourceCount: triggers.sources?.length || 0,
       debounceMs,
       intervalSeconds: triggers.interval,
-      sources: triggers.sources?.map(s => s.name)
+      sources: triggers.sources?.map((s) => s.name),
     });
 
     const handleTrigger = debounce(async (reason: string) => {
@@ -65,8 +72,11 @@ export class TriggerManager {
     this.debouncers.set(name, handleTrigger);
 
     for (const source of triggers.sources) {
-      await this.setupRedisTrigger(cap, source, (_payload) =>
-        handleTrigger(source.name));
+      await this.setupRedisTrigger(
+        cap,
+        source,
+        (_payload) => handleTrigger(source.name),
+      );
     }
 
     if (!isTest && triggers.interval && triggers.interval > 0) {
@@ -74,10 +84,13 @@ export class TriggerManager {
         const intervalMs = triggers.interval * 1000;
         log("INFO", `Setting up interval trigger`, {
           jobName: name,
-          intervalSeconds: triggers.interval
+          intervalSeconds: triggers.interval,
         });
         const intervalId = setInterval(() => {
-          log("DEBUG", `Interval trigger fired`, { jobName: name, intervalSeconds: triggers.interval });
+          log("DEBUG", `Interval trigger fired`, {
+            jobName: name,
+            intervalSeconds: triggers.interval,
+          });
           this.checkAndTrigger(
             cap,
             `interval:${triggers.interval}s`,
@@ -95,10 +108,16 @@ export class TriggerManager {
     }
   }
 
-  private async setupRedisTrigger(cap: JobRegistryEntry, source: TriggerSource, onTrigger: (payload: any) => void) {
+  private async setupRedisTrigger(
+    cap: JobRegistryEntry,
+    source: TriggerSource,
+    onTrigger: (payload: any) => void,
+  ) {
     const channel = source.channel;
     if (!channel) {
-      log("WARN", `Missing channel for trigger`, { jobName: cap.manifest.name });
+      log("WARN", `Missing channel for trigger`, {
+        jobName: cap.manifest.name,
+      });
       return;
     }
 
@@ -108,7 +127,10 @@ export class TriggerManager {
       await subscriber.connect();
       this.subscribers.set(channel, subscriber);
 
-      log("INFO", `Subscribing to Redis channel`, { channel, jobName: cap.manifest.name });
+      log("INFO", `Subscribing to Redis channel`, {
+        channel,
+        jobName: cap.manifest.name,
+      });
       await subscriber.subscribe(channel);
     }
 
@@ -124,7 +146,7 @@ export class TriggerManager {
             jobName: cap.manifest.name,
             triggerName: source.name,
             eventType: payload?.event,
-            documentState: payload?.data?.document?.state
+            documentState: payload?.data?.document?.state,
           });
           onTrigger(payload);
         } else {
@@ -132,7 +154,7 @@ export class TriggerManager {
             channel,
             jobName: cap.manifest.name,
             triggerName: source.name,
-            eventType: payload?.event
+            eventType: payload?.event,
           });
         }
       } catch (error) {
@@ -140,7 +162,7 @@ export class TriggerManager {
         log("ERROR", `Error in Redis trigger`, {
           jobName: cap.manifest.name,
           channel,
-          error: errorMsg
+          error: errorMsg,
         });
       }
     });
@@ -170,7 +192,7 @@ export class TriggerManager {
           log("DEBUG", `Skipping trigger - job already running`, {
             jobName,
             reason,
-            activeJobs
+            activeJobs,
           });
           return;
         }
@@ -192,7 +214,7 @@ export class TriggerManager {
             jobName,
             reason,
             activeJobs,
-            maxConcurrency: cap.manifest.maxConcurrency
+            maxConcurrency: cap.manifest.maxConcurrency,
           });
           return;
         }
@@ -204,7 +226,7 @@ export class TriggerManager {
         trigger: {
           type: "auto",
           reason,
-        }
+        },
       };
       await enqueueJob({
         type: jobName,
@@ -215,7 +237,7 @@ export class TriggerManager {
       log("ERROR", `Error triggering job`, {
         jobName,
         reason,
-        error: errorMsg
+        error: errorMsg,
       });
     }
   }
@@ -224,7 +246,7 @@ export class TriggerManager {
     log("INFO", `Stopping trigger manager`, {
       debouncers: this.debouncers.size,
       intervals: this.intervals.size,
-      subscribers: this.subscribers.size
+      subscribers: this.subscribers.size,
     });
     this.isRunning = false;
 
@@ -245,7 +267,10 @@ export class TriggerManager {
         log("DEBUG", `Closed Redis subscriber`, { channel });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        log("ERROR", `Error closing Redis subscriber`, { channel, error: errorMsg });
+        log("ERROR", `Error closing Redis subscriber`, {
+          channel,
+          error: errorMsg,
+        });
       }
     }
     this.subscribers.clear();
@@ -254,4 +279,3 @@ export class TriggerManager {
 }
 
 export const triggerManager = new TriggerManager(jobRegistry);
-
