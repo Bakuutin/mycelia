@@ -1,20 +1,32 @@
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
-import { Clock, FileText, Home, Package, Settings, MessageSquare, Activity, Mic } from "lucide-react";
+import {
+  Activity,
+  Clock,
+  FileText,
+  Home,
+  MessageSquare,
+  Mic,
+  Package,
+  Settings,
+} from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { AudioPlayer, useAudioPlayer } from "@/modules/audio/player.tsx";
-import { AudioWaveform } from "@/components/AudioWaveform";
-import { Button } from "@/components/ui/button.tsx";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { AudioPlayer } from "@/modules/audio/player.tsx";
 import { useJobsListener } from "@/hooks/useJobsListener";
 import { Badge } from "@/components/ui/badge";
 import { NotificationCenter } from "@/components/NotificationCenter";
+import { GlobalAudioPlayerPopover } from "@/components/GlobalAudioPlayerPopover";
 
 const Layout = () => {
   useTheme();
   const location = useLocation();
   const { clientId, clientSecret } = useSettingsStore();
-  const { isPlaying, setIsPlaying } = useAudioPlayer();
   const { runningCount } = useJobsListener();
 
   // Redirect to setup if no credentials
@@ -35,40 +47,44 @@ const Layout = () => {
                 <div className="flex gap-4">
                   <Link
                     to="/timeline"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/timeline"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/timeline"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                   >
                     <Clock className="w-4 h-4" />
                     Timeline
                   </Link>
                   <Link
                     to="/chat"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/chat"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/chat"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                   >
                     <MessageSquare className="w-4 h-4" />
                     Chat
                   </Link>
                   <Link
                     to="/objects"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/objects"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/objects"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                   >
                     <Package className="w-4 h-4" />
                     Objects
                   </Link>
                   <Link
                     to="/jobs"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/jobs"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/jobs"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                   >
                     <Activity className="w-4 h-4" />
                     Jobs
@@ -83,20 +99,22 @@ const Layout = () => {
                   </Link>
                   <Link
                     to="/summaries"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname.startsWith("/summaries")
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname.startsWith("/summaries")
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                   >
                     <FileText className="w-4 h-4" />
                     AI History
                   </Link>
                   <Link
                     to="/audio/pipeline"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/audio/pipeline"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/audio/pipeline"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                     data-testid="nav-pipeline"
                   >
                     <Mic className="w-4 h-4" />
@@ -104,10 +122,11 @@ const Layout = () => {
                   </Link>
                   <Link
                     to="/settings"
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${location.pathname === "/settings"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/settings"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      }`}
+                    }`}
                   >
                     <Settings className="w-4 h-4" />
                     Settings
@@ -116,16 +135,7 @@ const Layout = () => {
               </div>
               <div className="flex items-center gap-2">
                 <NotificationCenter />
-                {isPlaying && (
-                  <Link to="/audio">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                    >
-                      <AudioWaveform size={20} />
-                    </Button>
-                  </Link>
-                )}
+                <GlobalAudioPlayerPopover />
               </div>
             </div>
           </div>
