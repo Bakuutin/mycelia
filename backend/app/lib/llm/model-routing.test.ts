@@ -38,7 +38,16 @@ Deno.test("provider provenance never stores URL credentials", () => {
 Deno.test("explicit task model is not replaced by global default", () => {
   expect(resolveConfiguredModel("task-specific-model", {
     defaultModel: "Qwen3.gguf",
+    baseModel: "global-model.gguf",
   })).toBe("task-specific-model");
+});
+
+Deno.test("BASE_MODEL remains the default for legacy aliases", () => {
+  expect(resolveConfiguredModel("medium", {
+    baseModel: "global-model.gguf",
+    mediumModel: "medium-model.gguf",
+    defaultModel: "default-model.gguf",
+  })).toBe("global-model.gguf");
 });
 
 Deno.test("fallback is opt-in and cannot retry the primary model", () => {

@@ -40,7 +40,6 @@ export function resolveConfiguredModel(
 ): string {
   const requested = requestedModel.trim();
 
-  if (options.baseModel) return options.baseModel;
   if (!MODEL_ALIASES.has(requested)) return requested;
 
   const aliasModel = requested === "small"
@@ -49,7 +48,7 @@ export function resolveConfiguredModel(
     ? options.mediumModel
     : options.largeModel;
 
-  return aliasModel || options.defaultModel || requested;
+  return options.baseModel || aliasModel || options.defaultModel || requested;
 }
 
 export function getConfiguredFallback(

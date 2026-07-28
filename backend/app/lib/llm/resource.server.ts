@@ -9,6 +9,7 @@ import {
   resolveConfiguredModel,
   sanitizeProviderBaseUrl,
 } from "./model-routing.ts";
+import { normalizeChatCompletionResponse } from "./completion-response.ts";
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
   description: "Total number of LLM requests",
@@ -98,6 +99,7 @@ export interface InferenceProviderConfig {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  chatModel?: string;
   defaultAlias?: "small" | "medium" | "large";
   smallModel?: string;
   mediumModel?: string;
@@ -129,6 +131,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     const envApiKey = Deno.env.get("OPENAI_API_KEY");
     // Model resolution: OPENAI_MODEL (for override) > BASE_MODEL (primary config)
     const envModel = Deno.env.get("OPENAI_MODEL") || Deno.env.get("BASE_MODEL");
+    const envChatModel = Deno.env.get("OPENAI_CHAT_MODEL") ||
+      Deno.env.get("CHAT_MODEL");
     const envFallbackModel = Deno.env.get("OPENAI_FALLBACK_MODEL");
     const envFallbackEnabledValue = Deno.env.get("OPENAI_FALLBACK_ENABLED");
     const envFallbackEnabled = envFallbackEnabledValue === "true";
@@ -138,6 +142,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         baseUrl: envBaseUrl,
         apiKey: envApiKey,
         model: envModel,
+        chatModel: envChatModel || envModel,
         defaultAlias: "medium",
         smallModel: Deno.env.get("MODEL_SMALL"),
         mediumModel: Deno.env.get("MODEL_MEDIUM"),
@@ -160,6 +165,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         baseUrl: activeProfile.baseUrl,
         apiKey: activeProfile.apiKey,
         model: activeProfile.aliases[defaultAlias],
+        chatModel: activeProfile.chatModel ||
+          activeProfile.aliases[defaultAlias],
         defaultAlias,
         smallModel: activeProfile.aliases.small,
         mediumModel: activeProfile.aliases.medium,
@@ -177,6 +184,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       model: envModel || provider.model,
+      chatModel: envChatModel || provider.chatModel || envModel ||
+        provider.model,
       defaultAlias: "medium",
       smallModel: Deno.env.get("MODEL_SMALL"),
       mediumModel: Deno.env.get("MODEL_MEDIUM"),
@@ -192,7 +201,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
   /**
    * Resolve model aliases (small/medium/large) to actual model names.
-   * Priority: BASE_MODEL env var > explicit task model > MODEL_* alias > configured global model
+   * Explicit model IDs stay explicit. Legacy aliases resolve through
+   * BASE_MODEL, then MODEL_* mappings, then the configured global model.
    */
   resolveModelAlias(
     modelName: string,
@@ -363,6 +373,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           try {
             const jsonResponse = JSON.parse(responseText);
 
+            normalizeChatCompletionResponse(jsonResponse, {
+              requestedModel: input.model,
+              resolvedModel,
+            });
+
             // Persistable routing provenance for workers. This makes it
             // possible to distinguish requested aliases, the model that
             // actually ran, and an explicit fallback retry.
@@ -391,6 +406,15 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             span.setStatus({ code: 1 }); // Success
             return jsonResponse;
           } catch (parseError) {
+            if (
+              parseError instanceof Error &&
+              (
+                parseError.message.startsWith("LLM_INVALID_RESPONSE:") ||
+                parseError.message.startsWith("LLM_EMPTY_RESPONSE:")
+              )
+            ) {
+              throw parseError;
+            }
             llmErrorsCounter.add(1, {
               error_type: "json_parse_error",
               model: resolvedModel,
@@ -468,6 +492,22 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           return {
             models: modelsData.data || [],
             categories,
+            defaultAlias: provider.defaultAlias || "medium",
+            defaultModel: this.resolveModelAlias(
+              provider.defaultAlias || "medium",
+              provider,
+            ),
+            chatDefaultModel: this.resolveModelAlias(
+              provider.chatModel || provider.defaultAlias ||
+                provider.model || "medium",
+              provider,
+            ),
+            resolvedAliases: {
+              small: this.resolveModelAlias("small", provider),
+              medium: this.resolveModelAlias("medium", provider),
+              large: this.resolveModelAlias("large", provider),
+            },
+            providerProfileName: provider.profileName,
           };
         }
         default:

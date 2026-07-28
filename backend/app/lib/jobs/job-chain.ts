@@ -13,3 +13,17 @@ export function shouldContinueJobChain(
     Number.isFinite(value.processed) &&
     value.processed > 0;
 }
+
+/**
+ * Automatic summarization batches must resolve prompt/model defaults again for
+ * every continuation. Copying the previous validated payload would pin a stale
+ * prompt snapshot for the entire historical backlog.
+ */
+export function getContinuationJobData(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  if (data.type === "summarization") {
+    return { type: "summarization" };
+  }
+  return data;
+}

@@ -196,12 +196,13 @@ The automatic transcription resource prefers the dedicated `STT_SERVER_URL`,
 variables are absent, it keeps the previous behavior and uses the inference
 provider configured in Mycelia Settings.
 
-LLM routing is configured separately in **Settings -> Inference**. Choose one
-global default model there, optionally override it for summaries, conversation
-extraction, or tagging, and choose the failure policy for each feature:
+LLM routing is configured separately in **Settings -> Inference**. Choose a
+default model for new memory chats independently from the preset's background
+task default, optionally override summaries, conversation extraction, or
+tagging, and choose the failure policy for each feature:
 **Stop with error** or retry once with a specific fallback model. The same
-provider settings can be supplied with `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and
-`OPENAI_MODEL` in `.env`. Per-feature fallback defaults are
+provider settings can be supplied with `OPENAI_BASE_URL`, `OPENAI_API_KEY`,
+`OPENAI_MODEL`, and `OPENAI_CHAT_MODEL` in `.env`. Per-feature fallback defaults are
 `SUMMARIZATION_FALLBACK_MODEL`, `CONVERSATION_EXTRACTION_FALLBACK_MODEL`, and
 `TAGGER_FALLBACK_MODEL`; leave them unset to stop on error. Streaming chat never
 switches models silently.
@@ -286,7 +287,8 @@ When you first open the frontend, you'll be guided through a setup wizard:
 1. **Server Connection** (`/setup`) - Connects to the backend and automatically creates your first API key.
 
 2. **Inference Provider** (`/setup/inference`) - Configure an OpenAI-compatible
-   endpoint, global default model, and explicit fallback policy. Local GPU stacks
+   endpoint and initial model. Settings → Inference then lets you separate the
+   default for new memory chats from background-task routing. Local GPU stacks
    are supported; see [GPU README](gpu/README.md).
 
 You can reconfigure these settings anytime in Settings.

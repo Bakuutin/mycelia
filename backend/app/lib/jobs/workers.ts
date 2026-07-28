@@ -9,7 +9,7 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
-import { shouldContinueJobChain } from "./job-chain.ts";
+import { getContinuationJobData, shouldContinueJobChain } from "./job-chain.ts";
 
 const workers: Worker[] = [];
 
@@ -201,7 +201,7 @@ export async function startWorkers() {
       if (shouldContinueJobChain(job.returnvalue)) {
         console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);
         try {
-          await enqueueJob(job.data, {
+          await enqueueJob(getContinuationJobData(job.data) as typeof job.data, {
             trigger: { type: "auto", reason: "hasMore" },
           });
         } catch (error) {

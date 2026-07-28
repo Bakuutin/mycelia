@@ -7,6 +7,10 @@ import type { JobData, JobResult, EnqueueJobOptions } from "./types.ts";
 export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
 import { assertJobServicesHealthy } from "./service-health.ts";
+import {
+  applySummarizationDefaults,
+  type SummarizationDefaults,
+} from "./summarization-defaults.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
@@ -54,15 +58,59 @@ export async function enqueueJob(
   authOverride?: Auth,
 ): Promise<Job<JobData>> {
   const jobId = options?.jobId || new ObjectId().toString();
+  const auth = authOverride || await getServerAuth();
+  const mongo = await getMongoResource(auth);
 
-  // Apply worker default overrides BEFORE schema validation
-  // This ensures worker defaults take precedence over schema defaults
-  // but explicit job data values still take precedence over worker defaults
-  const mergedData = { ...data };
+  // Resolve the selected prompt document at enqueue time. Each job keeps a
+  // reproducible snapshot while config remains the source of truth for new jobs.
+  const summarizationDefaults: SummarizationDefaults = {};
+  if (data.type === "summarization") {
+    const config = await mongo({
+      action: "findOne",
+      collection: "configs",
+      query: { _id: new ObjectId("000000000000000000000000") },
+      options: {
+        projection: { prompts: 1, llm: 1, inference: 1, llmProfiles: 1 },
+      },
+    });
+    const activeProfile = config?.llmProfiles?.profiles?.find((profile: any) =>
+      profile.id === config?.llmProfiles?.activeProfileId
+    );
+    summarizationDefaults.defaultModel = activeProfile?.defaultAlias ||
+      config?.llm?.model || config?.inference?.model || "medium";
+
+    const promptId = config?.prompts?.summarization_system;
+    if (promptId) {
+      const prompt = await mongo({
+        action: "findOne",
+        collection: "prompts",
+        query: { _id: promptId },
+        options: { projection: { name: 1, text: 1, model: 1 } },
+      });
+      if (prompt?.name && prompt?.text) {
+        summarizationDefaults.prompt = {
+          id: prompt._id?.toString(),
+          name: prompt.name,
+          text: prompt.text,
+          model: prompt.model,
+        };
+      }
+    }
+  }
+
+  // Explicit input wins. The configured prompt supersedes the legacy copied
+  // prompt text in worker defaults, then remaining worker defaults are applied.
+  let mergedData = { ...data };
   if (data.type) {
     const { workerDiscovery } = await import("./worker-discovery.ts");
     const defaultOverrides = await workerDiscovery.getDefaultOverrides(data.type);
-    if (defaultOverrides) {
+    if (data.type === "summarization") {
+      mergedData = applySummarizationDefaults(
+        data,
+        defaultOverrides,
+        summarizationDefaults,
+      );
+    } else if (defaultOverrides) {
       for (const [key, value] of Object.entries(defaultOverrides)) {
         if (!(key in mergedData) || mergedData[key] === undefined) {
           mergedData[key] = value;
@@ -85,9 +133,6 @@ export async function enqueueJob(
   const queue = getQueue(parsedData.type);
 
   // Store in MongoDB
-  const auth = authOverride || await getServerAuth();
-  const mongo = await getMongoResource(auth);
-  
   const trigger = options?.trigger || { type: "manual" };
   const triggerWithPrincipal = {
     ...trigger,

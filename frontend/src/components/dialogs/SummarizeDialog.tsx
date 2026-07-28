@@ -52,19 +52,24 @@ export function SummarizeDialog({
   const [summarizePrompt, setSummarizePrompt] = useState("");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(defaultModel);
+  const [configuredDefaultModel, setConfiguredDefaultModel] = useState(defaultModel);
+  const [configuredModelSource, setConfiguredModelSource] = useState("Inference default");
+  const [modelSource, setModelSource] = useState("Inference default");
   const [selectedPromptId, setSelectedPromptId] = useState<string>("custom");
   const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [loadingDefaults, setLoadingDefaults] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       const fetchData = async () => {
+        setLoadingDefaults(true);
         // Reset model to defaultModel at the start, before async operations
         // This ensures deterministic order: reset first, then override with prompt's model if found
         setSelectedModel(defaultModel);
 
         try {
-          const [configData, promptsData] = await Promise.all([
+          const [configData, promptsData, workerDefaultsData] = await Promise.all([
             callResource("mongo", {
               action: "findOne",
               collection: "configs",
@@ -76,11 +81,29 @@ export function SummarizeDialog({
               query: {},
               options: { sort: { name: 1 } },
             }),
+            callResource("jobs", {
+              action: "get_worker_defaults",
+              workerType: "summarization",
+            }),
           ]);
 
           const config = configData ? zServerConfig.parse(configData) : null;
           const parsedPrompts = z.array(zPrompt).parse(promptsData);
           setPrompts(parsedPrompts);
+
+          const workerModel = typeof workerDefaultsData?.defaults?.model === "string"
+            ? workerDefaultsData.defaults.model.trim()
+            : "";
+          const activeProfile = config?.llmProfiles?.profiles.find((profile) =>
+            profile.id === config.llmProfiles?.activeProfileId
+          );
+          const inferenceDefault = workerModel || activeProfile?.defaultAlias ||
+            config?.llm?.model || config?.inference?.model || defaultModel;
+          const inferenceSource = workerModel ? "Summaries route" : "Inference default";
+          setConfiguredDefaultModel(inferenceDefault);
+          setConfiguredModelSource(inferenceSource);
+          setSelectedModel(inferenceDefault);
+          setModelSource(inferenceSource);
 
           const defaultId = config?.prompts?.summarization_system?.toString();
           if (defaultId) {
@@ -91,12 +114,15 @@ export function SummarizeDialog({
               // If the default prompt has a model configured, use it
               if (defaultPrompt.model) {
                 setSelectedModel(defaultPrompt.model);
+                setModelSource(`Default prompt: ${defaultPrompt.name}`);
               }
             }
           }
         } catch (e) {
           console.error("Failed to fetch prompts or config", e);
           setError("Failed to load prompts");
+        } finally {
+          setLoadingDefaults(false);
         }
       };
       fetchData();
@@ -117,7 +143,8 @@ export function SummarizeDialog({
     if (promptId === "custom") {
       setSummarizePrompt("");
       // Reset model to default when switching to custom prompt
-      setSelectedModel(defaultModel);
+      setSelectedModel(configuredDefaultModel);
+      setModelSource(configuredModelSource);
     } else {
       const prompt = prompts.find((p) => p._id.toString() === promptId);
       if (prompt) {
@@ -125,15 +152,18 @@ export function SummarizeDialog({
         // If the prompt has a model configured, use it
         if (prompt.model) {
           setSelectedModel(prompt.model);
+          setModelSource(`Prompt: ${prompt.name}`);
         } else {
           // Reset to default if prompt doesn't have a model configured
-          setSelectedModel(defaultModel);
+          setSelectedModel(configuredDefaultModel);
+          setModelSource(configuredModelSource);
         }
       }
     }
   };
 
   const handleSubmit = async () => {
+    if (loadingDefaults) return;
     setJobStatus("starting");
     setError(null);
 
@@ -178,6 +208,7 @@ export function SummarizeDialog({
   };
 
   const getButtonText = () => {
+    if (loadingDefaults) return "Loading defaults...";
     switch (jobStatus) {
       case "starting":
         return "Starting...";
@@ -199,7 +230,7 @@ export function SummarizeDialog({
   const isJobInProgress = jobStatus && ["starting", "waiting", "active", "delayed"].includes(jobStatus);
   const isJobComplete = jobStatus === "completed";
   const isJobFailed = jobStatus === "failed";
-  const isButtonDisabled = isJobInProgress || isJobComplete;
+  const isButtonDisabled = loadingDefaults || isJobInProgress || isJobComplete;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -220,11 +251,17 @@ export function SummarizeDialog({
             <Label>Model</Label>
             <ModelSelector
               value={selectedModel}
-              onChange={setSelectedModel}
-              disabled={isJobInProgress || isJobComplete}
+              onChange={(model) => {
+                setSelectedModel(model);
+                setModelSource("Selected for this job");
+              }}
+              disabled={loadingDefaults || isJobInProgress || isJobComplete}
               placeholder="Select model..."
               prefetch={open}
             />
+            <p className="text-xs text-muted-foreground">
+              {modelSource}: <span className="font-mono">{selectedModel}</span>
+            </p>
           </div>
 
           <div className="grid gap-2">
@@ -241,7 +278,7 @@ export function SummarizeDialog({
             <Select
               value={selectedPromptId}
               onValueChange={handlePromptChange}
-              disabled={isJobInProgress || isJobComplete}
+              disabled={loadingDefaults || isJobInProgress || isJobComplete}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select prompt" />
@@ -276,7 +313,7 @@ export function SummarizeDialog({
                 if (selectedPromptId !== "custom") setSelectedPromptId("custom");
               }}
               className="min-h-[100px]"
-              disabled={isJobInProgress || isJobComplete}
+              disabled={loadingDefaults || isJobInProgress || isJobComplete}
             />
           </div>
         </div>
@@ -298,4 +335,3 @@ export function SummarizeDialog({
     </Dialog>
   );
 }
-
