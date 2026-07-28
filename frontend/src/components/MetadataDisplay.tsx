@@ -138,6 +138,15 @@ export function MetadataDisplay(
     | undefined;
   const hasV2Output = extractedWith?.extractorVersion === "v2" &&
     Boolean(object.icon && "text" in object.icon && object.icon.text);
+  const summarizationFailure = (object as Object & {
+    _summarizationFailure?: {
+      status?: string;
+      code?: string;
+      requestedModel?: string;
+      jobId?: string;
+      failedAt?: string;
+    };
+  })._summarizationFailure;
   const timeRanges = object?.timeRanges;
   const hasTimeRange = timeRanges && timeRanges.length > 0;
   const firstRange = hasTimeRange ? timeRanges[0] : null;
@@ -158,6 +167,48 @@ export function MetadataDisplay(
             <TypeIcon className="w-4 h-4" />
             <span className="font-medium">{typeInfo.type}</span>
           </div>
+        </Card>
+      )}
+
+      {summarizationFailure?.status === "failed" && (
+        <Card className="p-4 border-red-300 bg-red-50/60 dark:bg-red-950/20">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">Summarization</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Automatic summarization failed. This conversation is excluded
+                from automatic retries until it is retried manually.
+              </p>
+            </div>
+            <Badge variant="destructive">Failed</Badge>
+          </div>
+          <dl className="mt-3 space-y-1 text-xs">
+            {summarizationFailure.code && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Reason:</dt>
+                <dd>{summarizationFailure.code}</dd>
+              </div>
+            )}
+            {summarizationFailure.requestedModel && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Model:</dt>
+                <dd>{summarizationFailure.requestedModel}</dd>
+              </div>
+            )}
+            {summarizationFailure.jobId && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Job:</dt>
+                <dd>
+                  <Link
+                    className="underline underline-offset-2"
+                    to={`/jobs/${summarizationFailure.jobId}`}
+                  >
+                    {summarizationFailure.jobId}
+                  </Link>
+                </dd>
+              </div>
+            )}
+          </dl>
         </Card>
       )}
 

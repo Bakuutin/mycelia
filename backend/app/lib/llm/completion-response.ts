@@ -21,8 +21,20 @@ function describeResponseShape(response: unknown): string {
       ", ",
     )
     : "none";
+  const finishReason = firstChoice && typeof firstChoice === "object"
+    ? (firstChoice as Record<string, unknown>).finish_reason
+    : undefined;
+  const finishReasonDescription = finishReason === undefined
+    ? ""
+    : `; finish_reason: ${JSON.stringify(finishReason)}`;
+  const usage = record.usage && typeof record.usage === "object"
+    ? record.usage as Record<string, unknown>
+    : undefined;
+  const usageDescription = usage
+    ? `; prompt_tokens: ${JSON.stringify(usage.prompt_tokens)}; completion_tokens: ${JSON.stringify(usage.completion_tokens)}`
+    : "";
 
-  return `response keys: ${responseKeys}; first choice keys: ${choiceKeys}`;
+  return `response keys: ${responseKeys}; first choice keys: ${choiceKeys}${finishReasonDescription}${usageDescription}`;
 }
 
 function getContextDescription(context: CompletionResponseContext): string {

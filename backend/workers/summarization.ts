@@ -340,6 +340,38 @@ function deriveTitleFromPrompt(promptText: string): string {
 // Matches JOB_TIMEOUT_MS in processor.ts / maintenance-manager.ts
 const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 
+export function isTerminalSummarizationResponseError(message: string): boolean {
+  return message.includes("LLM_INVALID_RESPONSE") ||
+    message.includes("LLM_EMPTY_RESPONSE");
+}
+
+async function setSummarizationFailure(
+  objectId: string,
+  failure: Record<string, unknown> | null,
+  jwt: string,
+  myceliaUrl: string,
+): Promise<void> {
+  try {
+    const obj = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+      action: "get",
+      id: objectId,
+    }, { jwt, myceliaUrl }) as any;
+    if (!obj) return;
+    await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+      action: "update",
+      id: objectId,
+      version: obj.version ?? 0,
+      field: "_summarizationFailure",
+      value: failure,
+    }, { jwt, myceliaUrl });
+  } catch (error) {
+    console.warn(
+      `[summarization] Failed to update failure status for ${objectId}:`,
+      error,
+    );
+  }
+}
+
 async function claimConversation(
   objectId: string,
   jobId: string,
@@ -702,6 +734,7 @@ async function resolveTargets(
       filters: {
         isConversation: true,
         "summaries.0": { $exists: false },
+        "_summarizationFailure.status": { $ne: "failed" },
       },
       options: {
         limit: BATCH_LIMIT + 1,
@@ -762,16 +795,45 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     if (targets.length === 0) {
       throw new Error("Summarization has no valid targets");
     }
-    const result = await processConversation(
-      job,
-      jobData,
-      targets[0],
-      jwt,
-      myceliaUrl,
-    );
+    let result: JobResult;
+    try {
+      result = await processConversation(
+        job,
+        jobData,
+        targets[0],
+        jwt,
+        myceliaUrl,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        targets[0].objectId &&
+        isTerminalSummarizationResponseError(message)
+      ) {
+        await setSummarizationFailure(targets[0].objectId, {
+          status: "failed",
+          code: message.includes("LLM_EMPTY_RESPONSE")
+            ? "LLM_EMPTY_RESPONSE"
+            : "LLM_INVALID_RESPONSE",
+          message: message.slice(0, 1000),
+          requestedModel: jobData.model || "medium",
+          jobId: job.id ?? "unknown",
+          failedAt: new Date().toISOString(),
+        }, jwt, myceliaUrl);
+      }
+      throw error;
+    }
     if (!result.success) {
       throw new Error(
         String(result.message ?? "Summarization did not produce a result"),
+      );
+    }
+    if (targets[0].objectId) {
+      await setSummarizationFailure(
+        targets[0].objectId,
+        null,
+        jwt,
+        myceliaUrl,
       );
     }
     return result;
@@ -827,6 +889,14 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       );
       if (result.success) {
         processed++;
+        if (target.objectId) {
+          await setSummarizationFailure(
+            target.objectId,
+            null,
+            jwt,
+            myceliaUrl,
+          );
+        }
         if (
           typeof result.objectId === "string" &&
           typeof result.title === "string"
@@ -860,9 +930,24 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       const errorMessage = error instanceof Error
         ? error.message
         : String(error);
+      if (isTerminalSummarizationResponseError(errorMessage)) {
+        if (target.objectId) {
+          await setSummarizationFailure(target.objectId, {
+            status: "failed",
+            code: errorMessage.includes("LLM_EMPTY_RESPONSE")
+              ? "LLM_EMPTY_RESPONSE"
+              : "LLM_INVALID_RESPONSE",
+            message: errorMessage.slice(0, 1000),
+            requestedModel: jobData.model || "medium",
+            jobId,
+            failedAt: new Date().toISOString(),
+          }, jwt, myceliaUrl);
+        }
+        skipped++;
+        errors.push(errorMessage);
+        continue;
+      }
       if (
-        errorMessage.includes("LLM_INVALID_RESPONSE") ||
-        errorMessage.includes("LLM_EMPTY_RESPONSE") ||
         errorMessage.includes("Failed to call resource llm") ||
         errorMessage.includes("LLM API error")
       ) {
