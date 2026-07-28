@@ -65,6 +65,74 @@ export const schema = z.object({
 
 export type SummarizationJobData = z.infer<typeof schema>;
 
+export const summarySourceRefsSchema = z.object({
+  schemaVersion: z.literal("v1"),
+  selection: z.literal("time_range_overlap"),
+  conversationId: z.string().optional(),
+  conversationChunkIds: z.array(z.string()),
+  transcriptionIds: z.array(z.string()),
+  coverageStart: z.string(),
+  coverageEnd: z.string(),
+  extractorJobId: z.string().optional(),
+});
+
+export type SummarySourceRefs = z.infer<typeof summarySourceRefsSchema>;
+
+type SummarySourceContext = {
+  conversationId?: string;
+  conversationChunkIds?: string[];
+  extractorJobId?: string;
+};
+
+function stringId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value;
+  if (
+    value && typeof (value as { toString?: unknown }).toString === "function"
+  ) {
+    const result = (value as { toString(): string }).toString();
+    return result && result !== "[object Object]" ? result : null;
+  }
+  return null;
+}
+
+export function buildSummarySourceRefs(
+  transcripts: Array<{ _id?: unknown }>,
+  start: Date,
+  end: Date,
+  context: SummarySourceContext = {},
+): SummarySourceRefs {
+  return {
+    schemaVersion: "v1",
+    selection: "time_range_overlap",
+    conversationId: context.conversationId,
+    conversationChunkIds: Array.from(
+      new Set((context.conversationChunkIds ?? []).filter(Boolean)),
+    ),
+    transcriptionIds: Array.from(
+      new Set(
+        transcripts.map((item) => stringId(item._id)).filter(
+          (id): id is string => Boolean(id),
+        ),
+      ),
+    ),
+    coverageStart: start.toISOString(),
+    coverageEnd: end.toISOString(),
+    extractorJobId: context.extractorJobId,
+  };
+}
+
+function getConversationSourceContext(obj: any): SummarySourceContext {
+  const conversationId = stringId(obj?._id) ?? undefined;
+  const chunkId = stringId(obj?.metadata?.extractedWith?.chunkId);
+  const extractorJobId = stringId(obj?.metadata?.extractedWith?.jobId) ??
+    undefined;
+  return {
+    conversationId,
+    conversationChunkIds: chunkId ? [chunkId] : [],
+    extractorJobId,
+  };
+}
+
 function getTimestampMessage(date: Date): string {
   return `[${date.toISOString()}]`;
 }
@@ -158,6 +226,7 @@ function createTranscriptSummaryEntry(
   promptText: string,
   jobData: SummarizationJobData,
   jobId: string,
+  sourceRefs: SummarySourceRefs,
 ) {
   return {
     text: promptText.trim(),
@@ -167,6 +236,7 @@ function createTranscriptSummaryEntry(
     prompt: "Short duration - transcript used directly",
     promptName: jobData.promptName,
     jobId,
+    sourceRefs,
     provenance: {
       task: "summarization",
       requestedModel: "passthrough",
@@ -182,6 +252,7 @@ function createLLMSummaryEntry(
   systemPrompt: string,
   jobData: SummarizationJobData,
   jobId: string,
+  sourceRefs: SummarySourceRefs,
 ) {
   const provenance = getInferenceProvenance(
     completion,
@@ -214,6 +285,7 @@ function createLLMSummaryEntry(
       }
       : undefined,
     jobId,
+    sourceRefs,
   };
 }
 
@@ -457,6 +529,7 @@ async function summarizeConversationRange(
   start: Date,
   end: Date,
   existingObjectId: string | null | undefined,
+  sourceContext: SummarySourceContext,
   jwt: string,
   myceliaUrl: string,
 ): Promise<JobResult> {
@@ -480,6 +553,16 @@ async function summarizeConversationRange(
   console.log(
     `[summarization] Job ${job.id}: found ${transcripts.length} transcripts`,
   );
+  const sourceRefs = buildSummarySourceRefs(
+    transcripts,
+    start,
+    end,
+    {
+      ...sourceContext,
+      conversationId: existingObjectId?.toString() ??
+        sourceContext.conversationId,
+    },
+  );
   const promptText = buildPromptFromTranscripts(transcripts);
 
   const modelAlias = jobData.model || "small";
@@ -495,6 +578,7 @@ async function summarizeConversationRange(
       promptText,
       jobData,
       jobId,
+      sourceRefs,
     );
 
     if (existingObjectId) {
@@ -520,6 +604,7 @@ async function summarizeConversationRange(
         start: start.toISOString(),
         end: end.toISOString(),
         description: promptText.trim(),
+        sourceRefs,
       };
     }
 
@@ -545,6 +630,7 @@ async function summarizeConversationRange(
       start: start.toISOString(),
       end: end.toISOString(),
       description: promptText.trim(),
+      sourceRefs,
     };
   }
 
@@ -591,6 +677,7 @@ async function summarizeConversationRange(
     systemPrompt,
     jobData,
     jobId,
+    sourceRefs,
   );
 
   if (existingObjectId) {
@@ -616,6 +703,7 @@ async function summarizeConversationRange(
       start: start.toISOString(),
       end: end.toISOString(),
       description: summary,
+      sourceRefs,
     };
   }
 
@@ -656,6 +744,7 @@ async function summarizeConversationRange(
     start: start.toISOString(),
     end: end.toISOString(),
     description: summary,
+    sourceRefs,
   };
 }
 
@@ -663,6 +752,7 @@ type SummaryTarget = {
   start: Date;
   end: Date;
   objectId?: string;
+  sourceContext: SummarySourceContext;
 };
 
 async function resolveTargets(
@@ -680,11 +770,32 @@ async function resolveTargets(
   const { start: startStr, end: endStr, objectId: existingObjectId } = jobData;
 
   if (startStr && endStr) {
+    let sourceContext: SummarySourceContext = {};
+    if (existingObjectId) {
+      const currentObject = await callResource<ObjectsRequest, ObjectsResponse>(
+        "objects",
+        { action: "get", id: existingObjectId.toString() },
+        { jwt, myceliaUrl },
+      );
+      if (!currentObject) {
+        return {
+          targets: [],
+          failure: {
+            success: false,
+            objectId: existingObjectId.toString(),
+            message: "Object not found",
+          },
+          mode: "manual",
+        };
+      }
+      sourceContext = getConversationSourceContext(currentObject);
+    }
     return {
       targets: [{
         start: new Date(startStr),
         end: new Date(endStr),
         objectId: existingObjectId?.toString(),
+        sourceContext,
       }],
       mode: "manual",
     };
@@ -730,6 +841,7 @@ async function resolveTargets(
         start: range.start,
         end: range.end,
         objectId: existingObjectId.toString(),
+        sourceContext: getConversationSourceContext(currentObject),
       }],
       mode: "manual",
     };
@@ -762,6 +874,7 @@ async function resolveTargets(
         start: range.start,
         end: range.end,
         objectId: conversation._id?.toString(),
+        sourceContext: getConversationSourceContext(conversation),
       };
     })
     .filter(Boolean) as SummaryTarget[];
@@ -782,6 +895,7 @@ async function processConversation(
     target.start,
     target.end,
     target.objectId,
+    target.sourceContext,
     jwt,
     myceliaUrl,
   );
@@ -867,7 +981,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   let processed = 0;
   let skipped = 0;
   const errors: string[] = [];
-  const summaries: Array<{ objectId: string; title?: string }> = [];
+  const summaries: Array<{
+    objectId: string;
+    title?: string;
+    sourceRefs?: SummarySourceRefs;
+  }> = [];
   const jobId = job.id ?? "unknown";
 
   for (const target of targets) {
@@ -913,7 +1031,11 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
           typeof result.objectId === "string" &&
           typeof result.title === "string"
         ) {
-          summaries.push({ objectId: result.objectId, title: result.title });
+          summaries.push({
+            objectId: result.objectId,
+            title: result.title,
+            sourceRefs: result.sourceRefs as SummarySourceRefs | undefined,
+          });
         }
       } else {
         if (target.objectId) {
@@ -998,11 +1120,13 @@ const capability: JobCapability = {
     start: z.string().optional(),
     end: z.string().optional(),
     description: z.string().optional(),
+    sourceRefs: summarySourceRefsSchema.optional(),
     processed: z.number().optional(),
     skipped: z.number().optional(),
     summaries: z.array(z.object({
       objectId: z.string(),
       title: z.string().optional(),
+      sourceRefs: summarySourceRefsSchema.optional(),
     })).optional(),
     hasMore: z.boolean().optional(),
     message: z.string().optional(),

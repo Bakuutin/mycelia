@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   buildSummaryHistoryPipeline,
@@ -28,6 +29,16 @@ describe("summary history aggregation", () => {
 
     expect(facet.models[0].$project.model).toBeDefined();
     expect(facet.models.some((stage: any) => stage.$match?.$expr)).toBe(false);
+  });
+
+  it("projects conversation emoji and exact summary source references", () => {
+    const pipeline = buildSummaryHistoryPipeline({ limit: 10 });
+    const facet = pipeline[2].$facet as any;
+    const projection = facet.entries.find((stage: any) => stage.$project)
+      .$project;
+
+    expect(projection.objectEmoji).toBe("$icon.text");
+    expect(projection.sourceRefs).toBe("$summaries.sourceRefs");
   });
 
   it("normalizes an empty aggregation response", () => {

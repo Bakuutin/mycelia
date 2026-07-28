@@ -120,6 +120,15 @@ export function SummarySection({ object, summaryJobId, onSummaryClick, onStarSum
                     <span>{(currentSummary as any).promptName}</span>
                   </span>
                 )}
+                {currentSummary.sourceRefs && (
+                  <span className="flex items-center gap-1">
+                    <span className="font-medium">Source:</span>
+                    <span>
+                      {currentSummary.sourceRefs.conversationChunkIds.length} chunk(s),{" "}
+                      {currentSummary.sourceRefs.transcriptionIds.length} transcription(s)
+                    </span>
+                  </span>
+                )}
                 {currentSummary.date && (
                   <span className="flex items-center gap-1">
                     <span className="font-medium">Generated:</span>

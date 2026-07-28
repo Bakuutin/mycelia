@@ -81,6 +81,17 @@ function SummaryHistoryCard({ entry }: { entry: SummaryHistoryEntry }) {
   const generatedAt = new Date(entry.generatedAt);
   const requestedDiffers = entry.requestedModel &&
     entry.requestedModel !== entry.executedModel;
+  const sourceRefs = entry.sourceRefs;
+  const sourceStart = sourceRefs
+    ? new Date(sourceRefs.coverageStart).getTime()
+    : NaN;
+  const sourceEnd = sourceRefs
+    ? new Date(sourceRefs.coverageEnd).getTime()
+    : NaN;
+  const transcriptHref =
+    Number.isFinite(sourceStart) && Number.isFinite(sourceEnd)
+      ? `/transcript?start=${sourceStart}&end=${sourceEnd}`
+      : undefined;
 
   return (
     <Card className="overflow-hidden">
@@ -92,6 +103,9 @@ function SummaryHistoryCard({ entry }: { entry: SummaryHistoryEntry }) {
                 to={`/objects/${entry.objectId}`}
                 className="text-lg font-semibold hover:text-primary hover:underline"
               >
+                {entry.objectEmoji && (
+                  <span className="mr-1">{entry.objectEmoji}</span>
+                )}
                 {entry.objectName}
               </Link>
               <Badge variant="outline" className="gap-1">
@@ -199,6 +213,60 @@ function SummaryHistoryCard({ entry }: { entry: SummaryHistoryEntry }) {
           {typeof entry.usage?.cost === "number" && (
             <span>Cost: ${entry.usage.cost.toFixed(6)}</span>
           )}
+        </div>
+
+        <div className="rounded-lg border p-3 text-xs">
+          {sourceRefs
+            ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge variant="secondary">Exact summary source</Badge>
+                  <span>
+                    {sourceRefs.conversationChunkIds.length}{" "}
+                    conversation chunk(s)
+                  </span>
+                  <span>
+                    {sourceRefs.transcriptionIds.length} transcription(s)
+                  </span>
+                  {transcriptHref && (
+                    <Link
+                      className="font-medium hover:underline"
+                      to={transcriptHref}
+                    >
+                      Open source transcript
+                    </Link>
+                  )}
+                  {sourceRefs.extractorJobId && (
+                    <Link
+                      className="font-medium hover:underline"
+                      to={`/jobs/${sourceRefs.extractorJobId}`}
+                    >
+                      Open extraction job
+                    </Link>
+                  )}
+                </div>
+                {sourceRefs.conversationChunkIds.length > 0 && (
+                  <div className="break-all font-mono text-muted-foreground">
+                    Chunk: {sourceRefs.conversationChunkIds.join(", ")}
+                  </div>
+                )}
+                <details>
+                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                    Show transcription IDs
+                  </summary>
+                  <div className="mt-2 break-all font-mono text-muted-foreground">
+                    {sourceRefs.transcriptionIds.join(", ") ||
+                      "No transcription IDs recorded"}
+                  </div>
+                </details>
+              </div>
+            )
+            : (
+              <div className="text-muted-foreground">
+                Legacy summary: exact source chunk and transcription IDs were
+                not recorded when this version was generated.
+              </div>
+            )}
         </div>
 
         <details className="group rounded-lg border">

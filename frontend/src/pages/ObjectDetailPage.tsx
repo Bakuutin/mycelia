@@ -164,6 +164,17 @@ const ObjectDetailPage = () => {
   
   // State for summary details dialog
   const [selectedSummary, setSelectedSummary] = useState<any | null>(null);
+  const selectedSummarySource = selectedSummary?.sourceRefs;
+  const selectedSummaryStart = selectedSummarySource
+    ? new Date(selectedSummarySource.coverageStart).getTime()
+    : NaN;
+  const selectedSummaryEnd = selectedSummarySource
+    ? new Date(selectedSummarySource.coverageEnd).getTime()
+    : NaN;
+  const selectedSummaryTranscriptHref = Number.isFinite(selectedSummaryStart) &&
+      Number.isFinite(selectedSummaryEnd)
+    ? `/transcript?start=${selectedSummaryStart}&end=${selectedSummaryEnd}`
+    : undefined;
   
   // State for editing details
   const [isEditingDetails, setIsEditingDetails] = useState(false);
@@ -681,6 +692,70 @@ const ObjectDetailPage = () => {
                     })}
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Conversation Emoji</Label>
+                <div className="mt-1 text-sm">
+                  {object?.icon && "text" in object.icon && object.icon.text
+                    ? object.icon.text
+                    : "Missing on conversation (usually legacy extraction)"}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Emoji belongs to the conversation object, not to an individual
+                  summary version.
+                </p>
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Summary Source</Label>
+                {selectedSummarySource
+                  ? (
+                    <div className="mt-2 space-y-2 rounded-md bg-muted p-3 text-sm">
+                      <div>
+                        {selectedSummarySource.conversationChunkIds.length} conversation
+                        chunk(s), {selectedSummarySource.transcriptionIds.length} transcription(s)
+                      </div>
+                      {selectedSummarySource.conversationChunkIds.length > 0 && (
+                        <div className="break-all font-mono text-xs text-muted-foreground">
+                          Chunk: {selectedSummarySource.conversationChunkIds.join(", ")}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-3">
+                        {selectedSummaryTranscriptHref && (
+                          <Link
+                            className="font-medium text-primary hover:underline"
+                            to={selectedSummaryTranscriptHref}
+                          >
+                            Open source transcript
+                          </Link>
+                        )}
+                        {selectedSummarySource.extractorJobId && (
+                          <Link
+                            className="font-medium text-primary hover:underline"
+                            to={`/jobs/${selectedSummarySource.extractorJobId}`}
+                          >
+                            Open extraction job
+                          </Link>
+                        )}
+                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-xs text-muted-foreground">
+                          Show transcription IDs
+                        </summary>
+                        <div className="mt-2 break-all font-mono text-xs text-muted-foreground">
+                          {selectedSummarySource.transcriptionIds.join(", ") ||
+                            "No transcription IDs recorded"}
+                        </div>
+                      </details>
+                    </div>
+                  )
+                  : (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Legacy summary: exact source chunk and transcription IDs were
+                      not recorded when this version was generated.
+                    </p>
+                  )}
               </div>
 
               {selectedSummary.usage && (

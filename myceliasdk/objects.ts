@@ -95,6 +95,16 @@ const zObjectBase = z.object({
       cost: z.number().optional(),
     }).optional(),
     jobId: z.string().optional(),
+    sourceRefs: z.object({
+      schemaVersion: z.literal("v1"),
+      selection: z.literal("time_range_overlap"),
+      conversationId: z.string().optional(),
+      conversationChunkIds: z.array(z.string()),
+      transcriptionIds: z.array(z.string()),
+      coverageStart: z.string(),
+      coverageEnd: z.string(),
+      extractorJobId: z.string().optional(),
+    }).optional(),
     starred: z.boolean().optional(),
   })).optional(),
 

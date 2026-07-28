@@ -201,3 +201,25 @@ worker is resumed. Check Jobs > Pipeline Health:
 
 Do not force extraction again merely because summarization was filtered; use
 the summarization failure status and job error instead.
+
+### Summary source references and emoji
+
+New summary versions store an exact `sourceRefs` receipt containing:
+
+- the parent conversation ID;
+- the conversation chunk ID recorded by extraction, when present;
+- every transcription ID actually selected by the summarizer;
+- the exact time range used for overlap selection;
+- the extraction job ID, when present.
+
+Object Detail > Summary > More details and AI History expose this receipt and
+link to the source transcript and extraction job. Older summary versions are
+shown as legacy when this exact receipt was not stored. Do not reconstruct an
+"exact" historical receipt from current time ranges because the underlying
+records may have changed since generation.
+
+Emoji belongs to the conversation object (`icon.text`), not to an individual
+summary version. The summarizer neither generates nor replaces it. Missing
+emoji on old summarized conversations indicates legacy extraction or a
+conversation created directly by an older/manual summarization path. New v2
+conversation extraction requires one emoji before the summary job begins.

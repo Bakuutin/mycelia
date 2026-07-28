@@ -9,6 +9,7 @@ export type SummaryHistoryEntry = {
   id: string;
   objectId: string;
   objectName: string;
+  objectEmoji?: string;
   generatedAt: string | Date;
   coverageStart?: string | Date;
   coverageEnd?: string | Date;
@@ -27,6 +28,16 @@ export type SummaryHistoryEntry = {
   jobId?: string;
   jobState?: string;
   jobFinishedAt?: string | Date;
+  sourceRefs?: {
+    schemaVersion: "v1";
+    selection: "time_range_overlap";
+    conversationId?: string;
+    conversationChunkIds: string[];
+    transcriptionIds: string[];
+    coverageStart: string;
+    coverageEnd: string;
+    extractorJobId?: string;
+  };
 };
 
 export type SummaryHistoryModel = {
@@ -162,6 +173,7 @@ export function buildSummaryHistoryPipeline(
         },
         objectId: { $toString: "$_id" },
         objectName: { $ifNull: ["$name", "Untitled conversation"] },
+        objectEmoji: "$icon.text",
         generatedAt: "$summaries.date",
         coverageStart: { $min: "$timeRanges.start" },
         coverageEnd: { $max: "$timeRanges.end" },
@@ -182,6 +194,7 @@ export function buildSummaryHistoryPipeline(
         jobId: "$summaries.jobId",
         jobState: { $arrayElemAt: ["$summaryJob.state", 0] },
         jobFinishedAt: { $arrayElemAt: ["$summaryJob.finishedAt", 0] },
+        sourceRefs: "$summaries.sourceRefs",
       },
     },
   );
