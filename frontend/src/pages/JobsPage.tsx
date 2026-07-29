@@ -402,18 +402,6 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             )}
             {result.hasMore && <span className="text-amber-400">has more</span>}
           </div>
-          {Array.isArray(result.batchSequences) &&
-            result.batchSequences.length > 0 && (
-            <div className="text-xs text-muted-foreground">
-              sequences: {result.batchSequences.map((sequence: any) =>
-                `${sequence.prefetched ? "prefetched" : "direct"} ${
-                  sequence.inferenceMs != null
-                    ? `${sequence.inferenceMs}ms ASR`
-                    : ""
-                }`
-              ).join(" · ")}
-            </div>
-          )}
           {result.textPreview && (
             <div
               className="text-xs text-muted-foreground/70 truncate max-w-[250px]"
