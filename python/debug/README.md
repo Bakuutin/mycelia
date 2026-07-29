@@ -59,36 +59,6 @@ uv run debug/cleanup_claims.py --clean --force
 
 ---
 
-### `repair_duplicate_audio_chunks.py`
-
-Audits and repairs audio chunks duplicated by a retried ingestion. The duplicate
-records contain the same OPUS bytes for the same source and chunk index; they
-are not duplicate transcript rows. Without repair, STT concatenates both copies
-and produces doubled audio and repeated text.
-
-Always start with a dry run:
-
-```bash
-cd python
-uv run debug/repair_duplicate_audio_chunks.py --source-id 6a35ca21bfd772083e70e603
-```
-
-The repair requires explicit `--apply`, refuses groups that are not exactly two
-byte-identical chunks, removes the redundant audio copy, clears all derived STT
-state for that source, and lets the normal pipeline recreate it:
-
-```bash
-uv run debug/repair_duplicate_audio_chunks.py --source-id 6a35ca21bfd772083e70e603 --apply
-```
-
-To audit every source, use `--all` first; only use `--all --apply` after
-reviewing its report. After an apply, use Jobs → Pipeline health & recovery to
-run sequence creation and transcription. The script preserves VAD results but
-removes transcriptions, transcription sequences, conversation chunks, and
-conversation objects derived from the bad duplicated audio.
-
----
-
 ### `hist_plot.py`
 
 Jupyter-style notebook script for plotting timeline histogram data. Shows audio chunks, diarizations, and transcriptions over the past 30 days.

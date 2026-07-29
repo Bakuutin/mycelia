@@ -121,7 +121,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const mongo = await getMongoResource(await getServerAuth());
   let logQueue = Promise.resolve();
 
-  const enqueueLog = (stream: "stdout" | "stderr" | "progress", text: string) => {
+  const enqueueLog = (stream: "stdout" | "stderr", text: string) => {
     if (!text) return;
     logQueue = logQueue.then(() =>
       mongo({
@@ -171,18 +171,6 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
       const { lines, rest } = splitLines(stdoutBuffer, chunk);
       stdoutBuffer = rest;
       for (const line of lines) {
-        if (line.startsWith("__PROGRESS__:")) {
-          try {
-            const progress = JSON.parse(line.slice("__PROGRESS__:".length));
-            job.updateProgress(progress).catch((err) =>
-              console.error(`[Processor] Failed to update progress for job ${job.id}:`, err)
-            );
-          } catch {
-            // Ignore malformed progress frames without treating them as worker errors.
-          }
-          enqueueLog("progress", line);
-          continue;
-        }
         // Print worker logs to server stdout (skip the final JSON result line)
         if (!line.startsWith("{") || !line.endsWith("}")) {
           console.log(`[${jobType}:${job.id}] ${line}`);
@@ -214,14 +202,11 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
           } catch {
             // Ignore parse errors for progress
           }
-          // Historical workers sent progress through stderr. Preserve the frame
-          // but classify it correctly in stored job logs.
-          enqueueLog("progress", line);
         } else {
           // Print worker stderr to server stderr (except progress updates)
           console.error(`[${jobType}:${job.id}] ${line}`);
-          enqueueLog("stderr", line);
         }
+        enqueueLog("stderr", line);
       }
     }
     if (stderrBuffer.trim().length > 0) {

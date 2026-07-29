@@ -53,10 +53,8 @@ async function main() {
       id: jobData.id,
       data: jobData,
       updateProgress: async (progress: any) => {
-        // The processor recognizes this framed line and the final result remains
-        // the last stdout line. Keep diagnostics off stderr: stderr means a
-        // worker warning or failure in the job UI.
-        console.log(`__PROGRESS__:${JSON.stringify(progress)}`);
+        // Report progress back to the host via stderr to avoid mixing with JSON result in stdout
+        console.error(`__PROGRESS__:${JSON.stringify(progress)}`);
       },
     } as any);
     

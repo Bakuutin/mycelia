@@ -295,31 +295,20 @@ def ingest_source(original: dict):
         for i, [offset, file] in tqdm(enumerate(chunk_files)):
             with open(file, "rb") as f:
                 call_resource('mongo', {
-                    # Ingestion can be retried after a crash between writing a
-                    # chunk and marking its source as ingested. Keep the
-                    # source/index identity stable so a retry cannot create a
-                    # second copy that would later be concatenated into STT.
-                    "action": "updateOne",
+                    "action": "insertOne",
                     "collection": "audio_chunks",
-                    "query": {
+                    "doc": {
+                        "format": "opus",
                         "original_id": original["_id"],
                         "index": i,
-                    },
-                    "update": {
-                        "$setOnInsert": {
-                            "format": "opus",
-                            "original_id": original["_id"],
-                            "index": i,
-                            "ingested_at": {
-                                "$date": datetime.now(tz=UTC).isoformat()
-                            },
-                            "start": start + offset,
-                            "data": {
-                                "$binary": { "base64": base64.b64encode(f.read()).decode(), "subType": "00"}
-                            },
+                        "ingested_at": {
+                            "$date": datetime.now(tz=UTC).isoformat()
                         },
-                    },
-                    "options": { "upsert": True },
+                        "start": start + offset,
+                        "data": {
+                            "$binary": { "base64": base64.b64encode(f.read()).decode(), "subType": "00"}
+                        },
+                    }
                 })
     finally:
         shutil.rmtree(tmp_dir)
