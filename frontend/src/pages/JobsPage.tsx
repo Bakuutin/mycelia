@@ -3350,7 +3350,7 @@ export default function JobsPage() {
                         {job.type === "summarization" &&
                             Array.isArray(job.result?.summaries) &&
                             job.result.summaries.length > 0
-                          ? "Batch summarization"
+                          ? `Batch summarization · ${job.result.summaries.length}`
                           : job.type}
                       </TableCell>
                       <TableCell className="text-sm">
