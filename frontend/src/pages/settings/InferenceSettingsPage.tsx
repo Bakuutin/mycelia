@@ -49,6 +49,7 @@ const inferenceConfigSchema = z.object({
   ]),
   transcriptionApiKey: z.string(),
   transcriptionModel: z.string(),
+  transcriptionBatchSize: z.coerce.number().int().min(1).max(8),
 }).superRefine((value, ctx) => {
   const hasUrl = value.transcriptionBaseUrl.trim().length > 0;
   const hasKey = value.transcriptionApiKey.trim().length > 0;
@@ -165,6 +166,7 @@ const InferenceSettingsPage = () => {
       transcriptionBaseUrl: "",
       transcriptionApiKey: "",
       transcriptionModel: "whisper",
+      transcriptionBatchSize: 1,
     },
   });
 
@@ -264,6 +266,7 @@ const InferenceSettingsPage = () => {
               ? ""
               : storedTranscriptionKey,
             transcriptionModel: transcriptionConfig.model || "whisper",
+            transcriptionBatchSize: transcriptionConfig.batchSize || 1,
           });
           if (malformedTranscriptionKey) {
             setConfigWarning(
@@ -363,6 +366,7 @@ const InferenceSettingsPage = () => {
             chatModel: currentProfile.chatModel,
             fallbackEnabled: false,
             fallbackModel: "",
+            batchSize: data.transcriptionBatchSize,
             promptCaching: currentProfile.promptCaching,
           },
           inference: {
@@ -995,6 +999,30 @@ const InferenceSettingsPage = () => {
                       placeholder="large-v3"
                     />
                   )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="transcriptionBatchSize">
+                  Sequences per transcription job
+                </Label>
+                <Input
+                  id="transcriptionBatchSize"
+                  type="number"
+                  min={1}
+                  max={8}
+                  {...form.register("transcriptionBatchSize", {
+                    valueAsNumber: true,
+                  })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Recommended: 3. Whisper still processes one sequence at a
+                  time; the next sequence is prepared while it runs. The job
+                  timeout scales to 15 minutes per selected sequence.
+                </p>
+                {form.formState.errors.transcriptionBatchSize && (
+                  <p className="text-sm text-red-500">
+                    {form.formState.errors.transcriptionBatchSize.message}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">

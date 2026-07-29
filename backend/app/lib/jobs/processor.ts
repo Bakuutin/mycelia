@@ -6,8 +6,8 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { EJSON, ObjectId } from "bson";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { assertJobServicesHealthy } from "./service-health.ts";
+import { getJobTimeoutMinutes, getJobTimeoutMs } from "./job-timeouts.ts";
 
-const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const activeChildren = new Map<string, Deno.ChildProcess>();
 
 export function cancelRunningJob(jobId: string): boolean {
@@ -24,6 +24,7 @@ export function cancelRunningJob(jobId: string): boolean {
 
 export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
+  const jobTimeoutMs = getJobTimeoutMs(jobType, job.data);
   const capability = jobRegistry.getOrThrow(jobType);
 
   // Re-check at execution time because a provider may have gone down after the
@@ -50,12 +51,12 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const policies = [
     ...(capability.manifest.policies || []),
     { resource: `jobs/${job.id}`, action: "progressUpdate", effect: "allow" },
-  ]
+  ];
 
   const token = await signJWT(
     jobType,
     `job:${job.id}`,
-      policies,
+    policies,
     "15m",
   );
 
@@ -66,22 +67,26 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   });
 
   // Get URLs from env vars
-  const backendUrl = Deno.env.get("MYCELIA_BACKEND_INTERNAL_URL") || "http://backend:5173";
-  const pythonWorkerUrl = Deno.env.get("PYTHON_WORKER_URL") || "http://python-worker:8000";
+  const backendUrl = Deno.env.get("MYCELIA_BACKEND_INTERNAL_URL") ||
+    "http://backend:5173";
+  const pythonWorkerUrl = Deno.env.get("PYTHON_WORKER_URL") ||
+    "http://python-worker:8000";
 
   const jobEnv: Record<string, string> = {
-      MYCELIA_JWT: token,
-      MYCELIA_URL: backendUrl,
-      MYCELIA_WORKER_PATH: capability.path.href,
-      MYCELIA_JOB_ID: job.id || "",
-      TMPDIR: tmpDir,
+    MYCELIA_JWT: token,
+    MYCELIA_URL: backendUrl,
+    MYCELIA_WORKER_PATH: capability.path.href,
+    MYCELIA_JOB_ID: job.id || "",
+    TMPDIR: tmpDir,
   };
 
   // Extract hostnames from URLs for network permissions
   const extractHostname = (url: string) => {
     try {
       const parsed = new URL(url);
-      return `${parsed.hostname}:${parsed.port || (parsed.protocol === "https:" ? "443" : "80")}`;
+      return `${parsed.hostname}:${
+        parsed.port || (parsed.protocol === "https:" ? "443" : "80")
+      }`;
     } catch {
       return url; // Fallback if parsing fails
     }
@@ -93,7 +98,6 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   ].join(",");
 
   const launcherPath = `${sdkPath}/app/lib/jobs/workerLauncher.ts`;
-
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
@@ -121,7 +125,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const mongo = await getMongoResource(await getServerAuth());
   let logQueue = Promise.resolve();
 
-  const enqueueLog = (stream: "stdout" | "stderr" | "progress", text: string) => {
+  const enqueueLog = (
+    stream: "stdout" | "stderr" | "progress",
+    text: string,
+  ) => {
     if (!text) return;
     logQueue = logQueue.then(() =>
       mongo({
@@ -139,7 +146,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     });
   };
 
-  const splitLines = (buffer: string, chunk: string): { lines: string[]; rest: string } => {
+  const splitLines = (
+    buffer: string,
+    chunk: string,
+  ): { lines: string[]; rest: string } => {
     const combined = buffer + chunk;
     const parts = combined.split(/\r?\n/);
     const rest = parts.pop() ?? "";
@@ -175,7 +185,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
           try {
             const progress = JSON.parse(line.slice("__PROGRESS__:".length));
             job.updateProgress(progress).catch((err) =>
-              console.error(`[Processor] Failed to update progress for job ${job.id}:`, err)
+              console.error(
+                `[Processor] Failed to update progress for job ${job.id}:`,
+                err,
+              )
             );
           } catch {
             // Ignore malformed progress frames without treating them as worker errors.
@@ -209,7 +222,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
           try {
             const progress = JSON.parse(line.slice("__PROGRESS__:".length));
             job.updateProgress(progress).catch((err) =>
-              console.error(`[Processor] Failed to update progress for job ${job.id}:`, err)
+              console.error(
+                `[Processor] Failed to update progress for job ${job.id}:`,
+                err,
+              )
             );
           } catch {
             // Ignore parse errors for progress
@@ -236,7 +252,10 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     await logQueue;
 
     if (code !== 0) {
-      console.error(`[Worker Error] Job ${job.id} failed with code ${code}:`, stderrContent);
+      console.error(
+        `[Worker Error] Job ${job.id} failed with code ${code}:`,
+        stderrContent,
+      );
       throw new Error(`Worker exited with code ${code}: ${stderrContent}`);
     }
 
@@ -263,8 +282,14 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
           } catch {
             // Ignore kill errors; we still fail the job on timeout.
           }
-          reject(new Error("Job timed out after 15 minutes"));
-        }, JOB_TIMEOUT_MS);
+          reject(
+            new Error(
+              `Job timed out after ${
+                getJobTimeoutMinutes(jobType, job.data)
+              } minutes`,
+            ),
+          );
+        }, jobTimeoutMs);
       }),
     ]);
 

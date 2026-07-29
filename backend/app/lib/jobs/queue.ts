@@ -3,6 +3,8 @@ import { ObjectId } from "bson";
 import { redis } from "@/lib/redis.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { getConfigResource } from "@/lib/config/resource.server.ts";
+import { env } from "#/env.ts";
 import type { EnqueueJobOptions, JobData, JobResult } from "./types.ts";
 export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
@@ -100,6 +102,29 @@ export async function enqueueJob(
   // Explicit input wins. The configured prompt supersedes the legacy copied
   // prompt text in worker defaults, then remaining worker defaults are applied.
   let mergedData = { ...data };
+  if (data.type === "transcription" && mergedData.batchSize === undefined) {
+    let batchSize = env.TRANSCRIPTION_BATCH_SIZE;
+    try {
+      const configResource = await getConfigResource(auth);
+      const transcriptionConfig = await configResource({
+        action: "get",
+        path: "transcription",
+      }) as { batchSize?: unknown } | undefined;
+      const configuredBatchSize = Number(transcriptionConfig?.batchSize);
+      if (
+        Number.isInteger(configuredBatchSize) && configuredBatchSize >= 1 &&
+        configuredBatchSize <= 8
+      ) {
+        batchSize = configuredBatchSize;
+      }
+    } catch (error) {
+      console.warn(
+        "[queue] Could not read the configured transcription batch size; using environment fallback:",
+        error,
+      );
+    }
+    mergedData.batchSize = batchSize;
+  }
   if (data.type) {
     const { workerDiscovery } = await import("./worker-discovery.ts");
     const defaultOverrides = await workerDiscovery.getDefaultOverrides(

@@ -59,6 +59,9 @@ export const zTranscriptionProviderConfig = zProviderConfig.extend({
   // This is the desired policy for the dedicated STT stack. The remote stack
   // reports its effective policy through /v1/stt/status after it is redeployed.
   cachePolicy: zTranscriptionCachePolicy.optional(),
+  // Number of transcription sequences processed serially by one job. The next
+  // sequence's audio is prepared while Whisper handles the current sequence.
+  batchSize: z.number().int().min(1).max(8).optional(),
 });
 
 // Deprecated: use llm and transcription instead

@@ -32,6 +32,7 @@ type BatchSequence = {
 export const schema = z.object({
   type: z.literal("transcription"),
   sequenceId: z.string().optional(),
+  batchSize: z.number().int().min(1).max(8).optional(),
 });
 
 const capability: JobCapability = {
@@ -68,14 +69,16 @@ const capability: JobCapability = {
   ],
   maxConcurrency: 1, // Only one transcription at a time to avoid overloading provider
   use: async (job) => {
-    const { sequenceId } = job.data as z.infer<typeof schema>;
+    const { sequenceId, batchSize: requestedBatchSize } = job.data as z.infer<
+      typeof schema
+    >;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = env.MYCELIA_URL as string;
     const mongo = (input: any) =>
       callResource("mongo", input, { jwt, myceliaUrl });
     const transcriptionResource = (input: any) =>
       callResource("transcription", input, { jwt, myceliaUrl });
-    const batchSize = env.TRANSCRIPTION_BATCH_SIZE;
+    const batchSize = requestedBatchSize ?? env.TRANSCRIPTION_BATCH_SIZE;
     let progressState: Record<string, unknown> = {};
     const updateProgress = async (updates: Record<string, unknown>) => {
       progressState = { ...progressState, ...updates };

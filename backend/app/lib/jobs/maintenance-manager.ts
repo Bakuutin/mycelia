@@ -4,8 +4,8 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { getQueue } from "./queue.ts";
+import { DEFAULT_JOB_TIMEOUT_MS, getJobTimeoutMs } from "./job-timeouts.ts";
 
-const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
 const ACTIVE_MISSING_GRACE_MS = 30 * 1000;
@@ -157,7 +157,7 @@ export class MaintenanceManager {
   private async cancelLongRunningJobs() {
     const auth = await getServerAuth();
     const mongo = await getMongoResource(auth);
-    const cutoff = new Date(Date.now() - JOB_TIMEOUT_MS);
+    const cutoff = new Date(Date.now() - DEFAULT_JOB_TIMEOUT_MS);
 
     const staleJobs = await mongo({
       action: "find",
@@ -177,6 +177,14 @@ export class MaintenanceManager {
       const jobId = job._id?.toString();
       const jobType = job.type as string | undefined;
       if (!jobId || !jobType || !jobRegistry.get(jobType)) {
+        continue;
+      }
+      const startedAt = job.startedAt instanceof Date
+        ? job.startedAt
+        : new Date(job.startedAt);
+      if (
+        Date.now() - startedAt.getTime() < getJobTimeoutMs(jobType, job.data)
+      ) {
         continue;
       }
 
