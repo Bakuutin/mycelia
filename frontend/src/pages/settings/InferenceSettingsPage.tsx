@@ -229,7 +229,10 @@ const InferenceSettingsPage = () => {
               ...profile,
               chatModel: profile.chatModel ||
                 profile.aliases[profile.defaultAlias],
-              promptCaching: profile.promptCaching,
+              promptCaching: profile.promptCaching ?? {
+                enabled: true,
+                sessionPrefix: "mycelia",
+              },
             }))
             : [{
               id: "primary",
@@ -410,6 +413,47 @@ const InferenceSettingsPage = () => {
         err instanceof Error
           ? err.message
           : "Failed to save provider configuration",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveTranscription = async () => {
+    const transcriptionFields = [
+      "transcriptionBaseUrl",
+      "transcriptionApiKey",
+      "transcriptionModel",
+      "transcriptionBatchSize",
+      "transcriptionBatchTimeoutBaseSeconds",
+      "transcriptionBatchTimeoutPerSequenceSeconds",
+    ] as const;
+    if (!await form.trigger(transcriptionFields)) return;
+
+    const data = form.getValues();
+    try {
+      setSaving(true);
+      setError(null);
+      setSaveSuccess(false);
+      await callResource("config", {
+        action: "patch",
+        path: "transcription",
+        updates: {
+          baseUrl: data.transcriptionBaseUrl.trim(),
+          apiKey: data.transcriptionApiKey.trim(),
+          model: data.transcriptionModel.trim() || "whisper",
+          batchSize: data.transcriptionBatchSize,
+          batchTimeoutBaseSeconds: data.transcriptionBatchTimeoutBaseSeconds,
+          batchTimeoutPerSequenceSeconds:
+            data.transcriptionBatchTimeoutPerSequenceSeconds,
+          fallbackEnabled: false,
+          fallbackModel: "",
+        },
+      });
+      setSaveSuccess(true);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to save STT configuration",
       );
     } finally {
       setSaving(false);
@@ -955,8 +999,8 @@ const InferenceSettingsPage = () => {
                 precedence; the effective source is shown on Jobs.
               </p>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2 md:col-span-2">
+            <div className="grid gap-4 md:grid-cols-6">
+              <div className="space-y-2 md:col-span-6">
                 <Label htmlFor="transcriptionBaseUrl">STT Base URL</Label>
                 <Input
                   id="transcriptionBaseUrl"
@@ -969,7 +1013,7 @@ const InferenceSettingsPage = () => {
                   </p>
                 )}
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-3">
                 <Label htmlFor="transcriptionApiKey">STT API Key</Label>
                 <Input
                   id="transcriptionApiKey"
@@ -983,7 +1027,7 @@ const InferenceSettingsPage = () => {
                   </p>
                 )}
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-3">
                 <Label htmlFor="transcriptionModel">STT model</Label>
                 {sttModels.length > 0
                   ? (
@@ -1014,9 +1058,9 @@ const InferenceSettingsPage = () => {
                     />
                   )}
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <Label htmlFor="transcriptionBatchSize">
-                  Sequences per transcription job
+                  Sequences per job
                 </Label>
                 <Input
                   id="transcriptionBatchSize"
@@ -1027,20 +1071,15 @@ const InferenceSettingsPage = () => {
                     valueAsNumber: true,
                   })}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Recommended for this server: 16. Whisper still processes one
-                  sequence at a time; the next sequence is prepared while it
-                  runs.
-                </p>
                 {form.formState.errors.transcriptionBatchSize && (
                   <p className="text-sm text-red-500">
                     {form.formState.errors.transcriptionBatchSize.message}
                   </p>
                 )}
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <Label htmlFor="transcriptionBatchTimeoutBaseSeconds">
-                  Base timeout per transcription job (seconds)
+                  Base timeout (sec)
                 </Label>
                 <Input
                   id="transcriptionBatchTimeoutBaseSeconds"
@@ -1051,14 +1090,10 @@ const InferenceSettingsPage = () => {
                     valueAsNumber: true,
                   })}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Default: 120 seconds. Covers startup and scheduling for one
-                  batch on this server.
-                </p>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <Label htmlFor="transcriptionBatchTimeoutPerSequenceSeconds">
-                  Timeout allowance per sequence (seconds)
+                  Per sequence (sec)
                 </Label>
                 <Input
                   id="transcriptionBatchTimeoutPerSequenceSeconds"
@@ -1070,14 +1105,19 @@ const InferenceSettingsPage = () => {
                     { valueAsNumber: true },
                   )}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Default: 60 seconds. Total timeout = base + this value × batch
-                  size; batch 16 defaults to 18 minutes.
-                </p>
               </div>
+              <p className="md:col-span-6 text-xs text-muted-foreground">
+                Recommended: 16 sequences. Timeout = base + per-sequence × batch
+                size (16 defaults to 18 min). Whisper runs one sequence at a
+                time while preparing the next one.
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={saving || testingStt}>
+              <Button
+                type="button"
+                onClick={() => void handleSaveTranscription()}
+                disabled={saving || testingStt}
+              >
                 {saving
                   ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   : <Save className="mr-2 h-4 w-4" />}
