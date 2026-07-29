@@ -59,6 +59,29 @@ uv run debug/cleanup_claims.py --clean --force
 
 ---
 
+### `repair_duplicate_audio_chunks.py`
+
+Audits duplicate OPUS payloads for the same `original_id` and chunk `index`.
+These are duplicate raw audio records, not merely duplicate transcript rows.
+The script is a dry run by default and performs an exact byte comparison inside
+Mongo before it permits any deletion. It exchanges the configured local
+`MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN` for a short-lived operator JWT; it never
+prints either credential.
+
+```bash
+cd python
+uv run python debug/repair_duplicate_audio_chunks.py --source-id 6a35ca21bfd772083e70e603
+uv run python debug/repair_duplicate_audio_chunks.py --source-id 6a35ca21bfd772083e70e603 --apply
+```
+
+`--apply` refuses active STT work, non-pair duplicates, missing audio, and
+different bytes. It removes redundant audio and derived sequences,
+transcriptions, conversation chunks, and conversation objects, while retaining
+VAD results for the unchanged audio. Then run sequence creation and
+transcription from Jobs → Pipeline health & recovery.
+
+---
+
 ### `hist_plot.py`
 
 Jupyter-style notebook script for plotting timeline histogram data. Shows audio chunks, diarizations, and transcriptions over the past 30 days.

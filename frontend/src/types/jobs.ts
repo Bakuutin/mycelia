@@ -37,7 +37,7 @@ export type JobInfo = {
 export interface JobLogEntry {
   _id?: string;
   jobId: string;
-  stream: "stdout" | "stderr";
+  stream: "stdout" | "stderr" | "progress";
   text: string;
   timestamp: string;
 }
