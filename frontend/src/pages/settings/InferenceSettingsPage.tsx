@@ -49,7 +49,12 @@ const inferenceConfigSchema = z.object({
   ]),
   transcriptionApiKey: z.string(),
   transcriptionModel: z.string(),
-  transcriptionBatchSize: z.coerce.number().int().min(1).max(8),
+  transcriptionBatchSize: z.coerce.number().int().min(1).max(32),
+  transcriptionBatchTimeoutBaseSeconds: z.coerce.number().int().min(60).max(
+    1800,
+  ),
+  transcriptionBatchTimeoutPerSequenceSeconds: z.coerce.number().int().min(15)
+    .max(300),
 }).superRefine((value, ctx) => {
   const hasUrl = value.transcriptionBaseUrl.trim().length > 0;
   const hasKey = value.transcriptionApiKey.trim().length > 0;
@@ -166,7 +171,9 @@ const InferenceSettingsPage = () => {
       transcriptionBaseUrl: "",
       transcriptionApiKey: "",
       transcriptionModel: "whisper",
-      transcriptionBatchSize: 1,
+      transcriptionBatchSize: 16,
+      transcriptionBatchTimeoutBaseSeconds: 120,
+      transcriptionBatchTimeoutPerSequenceSeconds: 60,
     },
   });
 
@@ -266,7 +273,11 @@ const InferenceSettingsPage = () => {
               ? ""
               : storedTranscriptionKey,
             transcriptionModel: transcriptionConfig.model || "whisper",
-            transcriptionBatchSize: transcriptionConfig.batchSize || 1,
+            transcriptionBatchSize: transcriptionConfig.batchSize || 16,
+            transcriptionBatchTimeoutBaseSeconds:
+              transcriptionConfig.batchTimeoutBaseSeconds || 120,
+            transcriptionBatchTimeoutPerSequenceSeconds:
+              transcriptionConfig.batchTimeoutPerSequenceSeconds || 60,
           });
           if (malformedTranscriptionKey) {
             setConfigWarning(
@@ -366,7 +377,6 @@ const InferenceSettingsPage = () => {
             chatModel: currentProfile.chatModel,
             fallbackEnabled: false,
             fallbackModel: "",
-            batchSize: data.transcriptionBatchSize,
             promptCaching: currentProfile.promptCaching,
           },
           inference: {
@@ -382,6 +392,10 @@ const InferenceSettingsPage = () => {
             baseUrl: data.transcriptionBaseUrl.trim(),
             apiKey: data.transcriptionApiKey.trim(),
             model: data.transcriptionModel.trim() || "whisper",
+            batchSize: data.transcriptionBatchSize,
+            batchTimeoutBaseSeconds: data.transcriptionBatchTimeoutBaseSeconds,
+            batchTimeoutPerSequenceSeconds:
+              data.transcriptionBatchTimeoutPerSequenceSeconds,
             fallbackEnabled: false,
             fallbackModel: "",
           },
@@ -1008,21 +1022,58 @@ const InferenceSettingsPage = () => {
                   id="transcriptionBatchSize"
                   type="number"
                   min={1}
-                  max={8}
+                  max={32}
                   {...form.register("transcriptionBatchSize", {
                     valueAsNumber: true,
                   })}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Recommended: 3. Whisper still processes one sequence at a
-                  time; the next sequence is prepared while it runs. The job
-                  timeout scales to 15 minutes per selected sequence.
+                  Recommended for this server: 16. Whisper still processes one
+                  sequence at a time; the next sequence is prepared while it
+                  runs.
                 </p>
                 {form.formState.errors.transcriptionBatchSize && (
                   <p className="text-sm text-red-500">
                     {form.formState.errors.transcriptionBatchSize.message}
                   </p>
                 )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="transcriptionBatchTimeoutBaseSeconds">
+                  Base timeout per transcription job (seconds)
+                </Label>
+                <Input
+                  id="transcriptionBatchTimeoutBaseSeconds"
+                  type="number"
+                  min={60}
+                  max={1800}
+                  {...form.register("transcriptionBatchTimeoutBaseSeconds", {
+                    valueAsNumber: true,
+                  })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Default: 120 seconds. Covers startup and scheduling for one
+                  batch on this server.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="transcriptionBatchTimeoutPerSequenceSeconds">
+                  Timeout allowance per sequence (seconds)
+                </Label>
+                <Input
+                  id="transcriptionBatchTimeoutPerSequenceSeconds"
+                  type="number"
+                  min={15}
+                  max={300}
+                  {...form.register(
+                    "transcriptionBatchTimeoutPerSequenceSeconds",
+                    { valueAsNumber: true },
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Default: 60 seconds. Total timeout = base + this value × batch
+                  size; batch 16 defaults to 18 minutes.
+                </p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">

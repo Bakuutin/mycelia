@@ -102,28 +102,59 @@ export async function enqueueJob(
   // Explicit input wins. The configured prompt supersedes the legacy copied
   // prompt text in worker defaults, then remaining worker defaults are applied.
   let mergedData = { ...data };
-  if (data.type === "transcription" && mergedData.batchSize === undefined) {
+  if (data.type === "transcription") {
     let batchSize = env.TRANSCRIPTION_BATCH_SIZE;
+    let batchTimeoutBaseSeconds = 120;
+    let batchTimeoutPerSequenceSeconds = 60;
     try {
       const configResource = await getConfigResource(auth);
       const transcriptionConfig = await configResource({
         action: "get",
         path: "transcription",
-      }) as { batchSize?: unknown } | undefined;
+      }) as {
+        batchSize?: unknown;
+        batchTimeoutBaseSeconds?: unknown;
+        batchTimeoutPerSequenceSeconds?: unknown;
+      } | undefined;
       const configuredBatchSize = Number(transcriptionConfig?.batchSize);
       if (
         Number.isInteger(configuredBatchSize) && configuredBatchSize >= 1 &&
-        configuredBatchSize <= 8
+        configuredBatchSize <= 32
       ) {
         batchSize = configuredBatchSize;
       }
+      const configuredBase = Number(
+        transcriptionConfig?.batchTimeoutBaseSeconds,
+      );
+      if (
+        Number.isInteger(configuredBase) && configuredBase >= 60 &&
+        configuredBase <= 1800
+      ) {
+        batchTimeoutBaseSeconds = configuredBase;
+      }
+      const configuredPerSequence = Number(
+        transcriptionConfig?.batchTimeoutPerSequenceSeconds,
+      );
+      if (
+        Number.isInteger(configuredPerSequence) &&
+        configuredPerSequence >= 15 && configuredPerSequence <= 300
+      ) {
+        batchTimeoutPerSequenceSeconds = configuredPerSequence;
+      }
     } catch (error) {
       console.warn(
-        "[queue] Could not read the configured transcription batch size; using environment fallback:",
+        "[queue] Could not read transcription batch settings; using defaults:",
         error,
       );
     }
-    mergedData.batchSize = batchSize;
+    if (mergedData.batchSize === undefined) mergedData.batchSize = batchSize;
+    if (mergedData.batchTimeoutBaseSeconds === undefined) {
+      mergedData.batchTimeoutBaseSeconds = batchTimeoutBaseSeconds;
+    }
+    if (mergedData.batchTimeoutPerSequenceSeconds === undefined) {
+      mergedData.batchTimeoutPerSequenceSeconds =
+        batchTimeoutPerSequenceSeconds;
+    }
   }
   if (data.type) {
     const { workerDiscovery } = await import("./worker-discovery.ts");

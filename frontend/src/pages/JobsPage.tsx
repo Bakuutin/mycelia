@@ -113,6 +113,7 @@ type PipelineHealth = {
   };
   transcriptionRuntime: {
     configuredBatchSize: number;
+    configuredTimeoutMinutes: number;
     activeBatch: {
       jobId?: string;
       updatedAt?: string;
@@ -2589,6 +2590,9 @@ export default function JobsPage() {
                   <div className="mt-1 text-2xl font-semibold">
                     {runtime.configuredBatchSize}{" "}
                     sequence{runtime.configuredBatchSize === 1 ? "" : "s"}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Timeout: {runtime.configuredTimeoutMinutes} min
                   </div>
                 </div>
                 <div className="rounded-md border p-3">

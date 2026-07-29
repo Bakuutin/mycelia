@@ -60,7 +60,7 @@ export const env = {
   // Number of ready sequences kept in one worker job. The worker pre-assembles
   // the next sequence while Whisper is transcribing the current one.
   TRANSCRIPTION_BATCH_SIZE: (() => {
-    const raw = Number(Deno.env.get("TRANSCRIPTION_BATCH_SIZE") || "1");
-    return Number.isInteger(raw) && raw > 0 ? Math.min(raw, 8) : 1;
+    const raw = Number(Deno.env.get("TRANSCRIPTION_BATCH_SIZE") || "16");
+    return Number.isInteger(raw) && raw > 0 ? Math.min(raw, 32) : 16;
   })(),
 };

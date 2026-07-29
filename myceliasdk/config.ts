@@ -61,7 +61,11 @@ export const zTranscriptionProviderConfig = zProviderConfig.extend({
   cachePolicy: zTranscriptionCachePolicy.optional(),
   // Number of transcription sequences processed serially by one job. The next
   // sequence's audio is prepared while Whisper handles the current sequence.
-  batchSize: z.number().int().min(1).max(8).optional(),
+  batchSize: z.number().int().min(1).max(32).optional(),
+  // A job timeout is base time plus this allowance for every sequence in its
+  // batch. These values are snapshotted when the job is queued.
+  batchTimeoutBaseSeconds: z.number().int().min(60).max(1800).optional(),
+  batchTimeoutPerSequenceSeconds: z.number().int().min(15).max(300).optional(),
 });
 
 // Deprecated: use llm and transcription instead

@@ -32,7 +32,7 @@ type BatchSequence = {
 export const schema = z.object({
   type: z.literal("transcription"),
   sequenceId: z.string().optional(),
-  batchSize: z.number().int().min(1).max(8).optional(),
+  batchSize: z.number().int().min(1).max(32).optional(),
 });
 
 const capability: JobCapability = {

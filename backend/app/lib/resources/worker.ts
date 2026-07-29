@@ -8,6 +8,7 @@ import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
+import { getJobTimeoutMinutes } from "@/lib/jobs/job-timeouts.ts";
 import { env } from "#/env.ts";
 import {
   assertJobServicesHealthy,
@@ -1425,6 +1426,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       failedByWorker,
       activeTranscriptionJobs,
       recentTranscriptionBatches,
+      transcriptionConfig,
     ] = await Promise.all([
       getExternalServicesHealth(input.force ?? false),
       mongo({
@@ -1510,10 +1512,29 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           projection: { _id: 1, result: 1, finishedAt: 1 },
         },
       }),
+      getConfigResource(auth).then((configResource) =>
+        configResource({ action: "get", path: "transcription" })
+      ),
     ]);
 
     const failedCounts = Object.fromEntries(
       (failedByWorker as any[]).map((entry) => [entry._id, entry.count]),
+    );
+    const transcriptionSettings = transcriptionConfig as {
+      batchSize?: unknown;
+      batchTimeoutBaseSeconds?: unknown;
+      batchTimeoutPerSequenceSeconds?: unknown;
+    } | undefined;
+    const configuredBatchSize = Number(transcriptionSettings?.batchSize);
+    const batchSize = Number.isInteger(configuredBatchSize) &&
+        configuredBatchSize >= 1 && configuredBatchSize <= 32
+      ? configuredBatchSize
+      : env.TRANSCRIPTION_BATCH_SIZE;
+    const timeoutBaseSeconds = Number(
+      transcriptionSettings?.batchTimeoutBaseSeconds,
+    );
+    const timeoutPerSequenceSeconds = Number(
+      transcriptionSettings?.batchTimeoutPerSequenceSeconds,
     );
 
     return {
@@ -1550,7 +1571,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           "Failed job history is retained. Retryable source records are checked on startup and every 5 minutes after dependencies recover.",
       },
       transcriptionRuntime: {
-        configuredBatchSize: env.TRANSCRIPTION_BATCH_SIZE,
+        configuredBatchSize: batchSize,
+        configuredTimeoutMinutes: getJobTimeoutMinutes("transcription", {
+          batchSize,
+          batchTimeoutBaseSeconds: timeoutBaseSeconds,
+          batchTimeoutPerSequenceSeconds: timeoutPerSequenceSeconds,
+        }),
         activeBatch: (activeTranscriptionJobs as any[]).map((job) => ({
           jobId: job._id?.toString(),
           updatedAt: job.updatedAt,
