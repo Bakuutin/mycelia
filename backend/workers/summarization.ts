@@ -13,6 +13,7 @@ import type {
 import { getSummaryCompletionOptions } from "@/lib/llm/completion-options.ts";
 import { getInferenceProvenance } from "@/lib/llm/provenance.ts";
 import { getChatCompletionText } from "@/lib/llm/completion-response.ts";
+import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
 /** Job type name */
 export const name = "summarization";
@@ -376,7 +377,10 @@ async function generateTitle(
     action: "completions",
     model: modelAlias,
     fallbackModel,
-    session_id: "summarization:title",
+    session_id: createPromptCacheSessionId("summarization-title", {
+      system: "Generate a short title for this conversation, no formatting",
+      responseFormat: getSummaryCompletionOptions(modelAlias),
+    }),
     ...getSummaryCompletionOptions(modelAlias),
     messages: [
       {
@@ -680,7 +684,10 @@ async function summarizeConversationRange(
     action: "completions",
     model: modelAlias,
     fallbackModel: jobData.fallbackModel,
-    session_id: "summarization:body",
+    session_id: createPromptCacheSessionId("summarization-body", {
+      system: systemPrompt,
+      responseFormat: getSummaryCompletionOptions(modelAlias),
+    }),
     ...getSummaryCompletionOptions(modelAlias),
     messages: [
       { role: "system", content: systemPrompt },

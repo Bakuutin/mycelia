@@ -58,6 +58,46 @@ Deno.test("OpenRouter cache routing sends a namespaced sticky session", async ()
   }
 });
 
+Deno.test("OpenRouter cache routing exposes provider cache token usage", async () => {
+  const previousEnv = new Map(
+    ENV_NAMES.map((name) => [name, Deno.env.get(name)]),
+  );
+  const originalFetch = globalThis.fetch;
+
+  Deno.env.set("OPENAI_BASE_URL", "https://openrouter.ai/api/v1");
+  Deno.env.set("OPENAI_API_KEY", "test-key");
+  Deno.env.set("OPENAI_MODEL", "deepseek/deepseek-v3.2");
+  Deno.env.set("OPENROUTER_PROMPT_CACHING", "true");
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({
+      ...COMPLETION,
+      usage: {
+        ...COMPLETION.usage,
+        cached_tokens: 1200,
+        cache_write_tokens: 300,
+      },
+    }));
+
+  try {
+    const response = await new LLMResource().use({
+      action: "completions",
+      model: "small",
+      session_id: "tagger:v1:aaaaaaaaaaaaaaaa",
+      messages: [{ role: "user", content: "hello" }],
+    }, {} as never) as Record<string, any>;
+
+    expect(response.mycelia_routing.promptCaching).toEqual({
+      enabled: true,
+      sessionId: "mycelia:tagger:v1:aaaaaaaaaaaaaaaa",
+      cacheReadTokens: 1200,
+      cacheWriteTokens: 300,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(previousEnv);
+  }
+});
+
 Deno.test("OpenRouter cache routing can be disabled without changing the request", async () => {
   const previousEnv = new Map(
     ENV_NAMES.map((name) => [name, Deno.env.get(name)]),

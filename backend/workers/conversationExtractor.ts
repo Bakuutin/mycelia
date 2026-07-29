@@ -8,6 +8,7 @@ import {
   getInferenceProvenance,
   type InferenceProvenance,
 } from "@/lib/llm/provenance.ts";
+import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
 /**
  * Conversation Extractor
@@ -409,7 +410,7 @@ async function callLLMStructured<T>(
   llm: (input: any) => Promise<any>,
   model: string,
   fallbackModel: string,
-  sessionId: string,
+  cacheTask: string,
   messages: Array<{ role: string; content: string }>,
   responseFormat: { type: "json_object" } | {
     type: "json_schema";
@@ -430,6 +431,11 @@ async function callLLMStructured<T>(
       content: adjustedMessages[0].content + " Respond in JSON format.",
     };
   }
+
+  const sessionId = createPromptCacheSessionId(cacheTask, {
+    messages: adjustedMessages.slice(0, -1),
+    responseFormat,
+  });
 
   const response = await llm({
     action: "completions",
@@ -1146,7 +1152,7 @@ async function processChunk(params: {
       llm,
       model,
       input.fallbackModel,
-      "conversation-extractor:segmentation",
+      "conversation-extractor-segmentation",
       segmentationMessages,
       {
         type: "json_schema",
@@ -1244,7 +1250,7 @@ async function processChunk(params: {
         llm,
         model,
         input.fallbackModel,
-        "conversation-extractor:metadata",
+        "conversation-extractor-metadata",
         messages,
         {
           type: "json_schema",

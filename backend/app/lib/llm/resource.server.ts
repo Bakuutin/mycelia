@@ -10,6 +10,7 @@ import {
   sanitizeProviderBaseUrl,
 } from "./model-routing.ts";
 import { normalizeChatCompletionResponse } from "./completion-response.ts";
+import { getPromptCacheUsage } from "./prompt-cache-usage.ts";
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
   description: "Total number of LLM requests",
@@ -438,6 +439,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             // Persistable routing provenance for workers. This makes it
             // possible to distinguish requested aliases, the model that
             // actually ran, and an explicit fallback retry.
+            const promptCacheUsage = getPromptCacheUsage(jsonResponse.usage);
             jsonResponse.mycelia_routing = {
               requestedModel: input.model,
               resolvedModel,
@@ -448,7 +450,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               providerProfileId: provider.profileId,
               providerProfileName: provider.profileName,
               promptCaching: sessionId
-                ? { enabled: true, sessionId }
+                ? { enabled: true, sessionId, ...promptCacheUsage }
                 : { enabled: false },
             };
 

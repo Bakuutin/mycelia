@@ -7,6 +7,7 @@ import {
   getInferenceProvenance,
   type InferenceProvenance,
 } from "@/lib/llm/provenance.ts";
+import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
 /**
  * Tagger Worker
@@ -301,21 +302,28 @@ async function callLLMForTags(
   validTagNames: Set<string>,
   logContext: string,
 ): Promise<TaggingLLMResult> {
+  const responseFormat = {
+    type: "json_schema" as const,
+    json_schema: z.object({ tags: z.array(z.string()) }).toJSONSchema(),
+  };
   const response = await llm({
     action: "completions",
     model,
     fallbackModel,
+    session_id: createPromptCacheSessionId("tagger", {
+      system: systemPrompt,
+      tags: tagsPrompt,
+      responseFormat,
+    }),
     messages: [
       { role: "system", content: systemPrompt },
+      { role: "user", content: tagsPrompt },
       {
         role: "user",
-        content: `${tagsPrompt}\n\nConversation:\n${conversationPrompt}`,
+        content: `Conversation:\n${conversationPrompt}`,
       },
     ],
-    response_format: {
-      type: "json_schema",
-      json_schema: z.object({ tags: z.array(z.string()) }).toJSONSchema(),
-    },
+    response_format: responseFormat,
   }) as any;
 
   const content = response.choices[0]?.message?.content;
