@@ -199,6 +199,29 @@ The automatic transcription resource prefers the dedicated `STT_SERVER_URL`,
 variables are absent, it keeps the previous behavior and uses the inference
 provider configured in Mycelia Settings.
 
+#### Debugging conversation re-extraction
+
+The scripts in `scripts/debug/` find and optionally enqueue historical
+conversation chunks that need the v2 extractor. Finding records only prints a
+tab-separated preview and never creates a JSONL file automatically:
+
+```bash
+./scripts/debug/find-conversations.sh
+```
+
+Create a JSONL input only when explicitly requested, then review it and pass
+that exact file to the enqueue script. Start with `--dry-run` before enqueueing
+jobs:
+
+```bash
+./scripts/debug/find-conversations.sh --write-json /tmp/conversations.jsonl
+./scripts/debug/enqueue-conversations.sh --input /tmp/conversations.jsonl --dry-run
+./scripts/debug/enqueue-conversations.sh --input /tmp/conversations.jsonl
+```
+
+Both scripts use `.env` OAuth credentials for enqueueing; do not commit an
+exported JSONL file or credentials.
+
 LLM routing is configured separately in **Settings -> Inference**. Choose a
 default model for new memory chats independently from the preset's background
 task default, optionally override summaries, conversation extraction, or
