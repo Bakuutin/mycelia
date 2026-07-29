@@ -376,6 +376,7 @@ async function generateTitle(
     action: "completions",
     model: modelAlias,
     fallbackModel,
+    session_id: "summarization:title",
     ...getSummaryCompletionOptions(modelAlias),
     messages: [
       {
@@ -679,6 +680,7 @@ async function summarizeConversationRange(
     action: "completions",
     model: modelAlias,
     fallbackModel: jobData.fallbackModel,
+    session_id: "summarization:body",
     ...getSummaryCompletionOptions(modelAlias),
     messages: [
       { role: "system", content: systemPrompt },

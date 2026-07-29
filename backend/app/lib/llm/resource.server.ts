@@ -71,6 +71,9 @@ const chatCompletionRequestSchema = z.object({
   tools: z.array(toolSchema).optional(),
   tool_choice: toolChoiceSchema.optional(),
   parallel_tool_calls: z.boolean().optional(),
+  // Sent only to OpenRouter. A stable value makes its provider routing sticky,
+  // which keeps a provider-side prompt cache warm across related requests.
+  session_id: z.string().trim().min(1).max(128).optional(),
   fallbackModel: z.string().optional(),
   reasoning_budget: z.number().int().min(-1).optional(),
   chat_template_kwargs: z.record(z.string(), z.unknown()).optional(),
@@ -108,6 +111,34 @@ export interface InferenceProviderConfig {
   profileName?: string;
   fallbackEnabled: boolean;
   fallbackModel?: string;
+  promptCachingEnabled: boolean;
+  promptCacheSessionPrefix?: string;
+}
+
+function getOpenRouterSessionId(
+  baseUrl: string,
+  provider: InferenceProviderConfig,
+  requestedSessionId: string | undefined,
+): string | undefined {
+  if (
+    !requestedSessionId || !provider.promptCachingEnabled ||
+    !isOpenRouterPromptCachingBaseUrl(baseUrl)
+  ) {
+    return undefined;
+  }
+
+  const prefix = provider.promptCacheSessionPrefix?.trim() || "mycelia";
+  // The request schema limits the suffix to 128 characters, so this stays
+  // comfortably below OpenRouter's 256-character session_id limit.
+  return `${prefix}:${requestedSessionId}`;
+}
+
+function isOpenRouterPromptCachingBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === "openrouter.ai";
+  } catch {
+    return false;
+  }
 }
 
 export class LLMResource implements Resource<LLMRequest, LLMResponse> {
@@ -136,6 +167,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     const envFallbackModel = Deno.env.get("OPENAI_FALLBACK_MODEL");
     const envFallbackEnabledValue = Deno.env.get("OPENAI_FALLBACK_ENABLED");
     const envFallbackEnabled = envFallbackEnabledValue === "true";
+    const envPromptCachingEnabled =
+      Deno.env.get("OPENROUTER_PROMPT_CACHING") !==
+        "false";
+    const envPromptCacheSessionPrefix = Deno.env.get(
+      "OPENROUTER_SESSION_PREFIX",
+    );
 
     if (envBaseUrl && envApiKey) {
       return {
@@ -151,6 +188,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         profileName: "Environment overrides",
         fallbackEnabled: envFallbackEnabled,
         fallbackModel: envFallbackModel,
+        promptCachingEnabled: envPromptCachingEnabled,
+        promptCacheSessionPrefix: envPromptCacheSessionPrefix,
       };
     }
 
@@ -174,6 +213,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         profileId: activeProfile.id,
         profileName: activeProfile.name,
         fallbackEnabled: false,
+        promptCachingEnabled: activeProfile.promptCaching?.enabled ?? true,
+        promptCacheSessionPrefix: activeProfile.promptCaching?.sessionPrefix,
       };
     }
     const provider = config.llm || config.inference;
@@ -196,6 +237,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         ? provider.fallbackEnabled ?? false
         : envFallbackEnabled,
       fallbackModel: envFallbackModel || provider.fallbackModel,
+      promptCachingEnabled: provider.promptCaching?.enabled ?? true,
+      promptCacheSessionPrefix: provider.promptCaching?.sessionPrefix,
     };
   }
 
@@ -234,7 +277,12 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     try {
       switch (input.action) {
         case "completions": {
-          const { action, fallbackModel: _fallbackModel, ...body } = input;
+          const {
+            action,
+            fallbackModel: _fallbackModel,
+            session_id: requestedSessionId,
+            ...body
+          } = input;
 
           const provider = await this.getInferenceProvider();
           if (!provider) {
@@ -252,6 +300,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           }
 
           const baseUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
+          const sessionId = getOpenRouterSessionId(
+            baseUrl,
+            provider,
+            requestedSessionId,
+          );
 
           // Legacy aliases resolve to the configured global default. Explicit
           // task models remain explicit and are never silently replaced.
@@ -293,7 +346,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${provider.apiKey}`,
               },
-              body: JSON.stringify({ ...body, model }),
+              body: JSON.stringify({
+                ...body,
+                model,
+                ...(sessionId ? { session_id: sessionId } : {}),
+              }),
             });
 
           let proxyResponse: Response;
@@ -390,6 +447,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               providerBaseUrl: sanitizeProviderBaseUrl(baseUrl),
               providerProfileId: provider.profileId,
               providerProfileName: provider.profileName,
+              promptCaching: sessionId
+                ? { enabled: true, sessionId }
+                : { enabled: false },
             };
 
             // Extract cost from litellm response header (x-litellm-response-cost)

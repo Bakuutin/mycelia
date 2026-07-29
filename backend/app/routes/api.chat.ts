@@ -77,6 +77,7 @@ async function generateChatTitle(
     const completion = await llm({
       action: "completions",
       model: "small",
+      session_id: "chat:title",
       messages: [
         {
           role: "system",

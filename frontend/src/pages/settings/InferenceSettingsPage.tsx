@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 // Using new ConfigResource instead of direct mongo access
 
@@ -39,6 +40,9 @@ const inferenceConfigSchema = z.object({
   largeModel: z.string().min(1, "Choose the large alias model"),
   defaultAlias: z.enum(["small", "medium", "large"]),
   chatModel: z.string().min(1, "Choose the default chat model"),
+  promptCachingEnabled: z.boolean(),
+  promptCacheSessionPrefix: z.string().trim().min(1)
+    .max(120, "Keep the cache prefix below 120 characters"),
   transcriptionBaseUrl: z.union([
     z.literal(""),
     z.string().url("Must be a valid STT URL"),
@@ -75,6 +79,10 @@ type LlmProfile = {
   aliases: Record<ModelAlias, string>;
   defaultAlias: ModelAlias;
   chatModel: string;
+  promptCaching?: {
+    enabled?: boolean;
+    sessionPrefix?: string;
+  };
 };
 
 const MODEL_ROUTES = [
@@ -152,6 +160,8 @@ const InferenceSettingsPage = () => {
       largeModel: "",
       defaultAlias: "medium",
       chatModel: "",
+      promptCachingEnabled: true,
+      promptCacheSessionPrefix: "mycelia",
       transcriptionBaseUrl: "",
       transcriptionApiKey: "",
       transcriptionModel: "whisper",
@@ -210,6 +220,7 @@ const InferenceSettingsPage = () => {
               ...profile,
               chatModel: profile.chatModel ||
                 profile.aliases[profile.defaultAlias],
+              promptCaching: profile.promptCaching,
             }))
             : [{
               id: "primary",
@@ -223,6 +234,7 @@ const InferenceSettingsPage = () => {
               },
               defaultAlias: "medium",
               chatModel: legacyModel,
+              promptCaching: { enabled: true, sessionPrefix: "mycelia" },
             }];
           const nextActiveId = configResult.llmProfiles?.activeProfileId &&
               nextProfiles.some((profile) =>
@@ -244,6 +256,9 @@ const InferenceSettingsPage = () => {
             largeModel: activeProfile.aliases.large,
             defaultAlias: activeProfile.defaultAlias,
             chatModel: activeProfile.chatModel,
+            promptCachingEnabled: activeProfile.promptCaching?.enabled ?? true,
+            promptCacheSessionPrefix:
+              activeProfile.promptCaching?.sessionPrefix || "mycelia",
             transcriptionBaseUrl: transcriptionConfig.baseUrl || "",
             transcriptionApiKey: malformedTranscriptionKey
               ? ""
@@ -288,6 +303,10 @@ const InferenceSettingsPage = () => {
         },
         defaultAlias: data.defaultAlias,
         chatModel: data.chatModel.trim(),
+        promptCaching: {
+          enabled: data.promptCachingEnabled,
+          sessionPrefix: data.promptCacheSessionPrefix.trim(),
+        },
       };
       const nextProfiles = profiles.map((profile) =>
         profile.id === activeProfileId ? currentProfile : profile
@@ -344,6 +363,7 @@ const InferenceSettingsPage = () => {
             chatModel: currentProfile.chatModel,
             fallbackEnabled: false,
             fallbackModel: "",
+            promptCaching: currentProfile.promptCaching,
           },
           inference: {
             baseUrl: currentProfile.baseUrl,
@@ -352,6 +372,7 @@ const InferenceSettingsPage = () => {
             chatModel: currentProfile.chatModel,
             fallbackEnabled: false,
             fallbackModel: "",
+            promptCaching: currentProfile.promptCaching,
           },
           transcription: {
             baseUrl: data.transcriptionBaseUrl.trim(),
@@ -386,6 +407,14 @@ const InferenceSettingsPage = () => {
     form.setValue("largeModel", profile.aliases.large);
     form.setValue("defaultAlias", profile.defaultAlias);
     form.setValue("chatModel", profile.chatModel);
+    form.setValue(
+      "promptCachingEnabled",
+      profile.promptCaching?.enabled ?? true,
+    );
+    form.setValue(
+      "promptCacheSessionPrefix",
+      profile.promptCaching?.sessionPrefix || "mycelia",
+    );
     setTestResult(null);
   };
 
@@ -406,6 +435,7 @@ const InferenceSettingsPage = () => {
       aliases: { small: "", medium: "", large: "" },
       defaultAlias: "medium",
       chatModel: "",
+      promptCaching: { enabled: true, sessionPrefix: "mycelia" },
     };
     setProfiles((current) => [...current, profile]);
     setActiveProfileId(id);
@@ -814,6 +844,48 @@ const InferenceSettingsPage = () => {
                   ? `${chatModel} → ${resolvedChatModel}`
                   : chatModel || "Not configured"}
               </p>
+            </div>
+
+            <div className="space-y-3 rounded-md border bg-muted/20 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <Label className="font-medium">OpenRouter prompt cache</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Keep extraction and summarization requests on the same
+                    OpenRouter provider so repeated system prompts can be read
+                    from that provider&apos;s prompt cache. This has no effect
+                    on non-OpenRouter presets and does not cache model answers.
+                  </p>
+                </div>
+                <Switch
+                  checked={form.watch("promptCachingEnabled")}
+                  onCheckedChange={(enabled) =>
+                    form.setValue("promptCachingEnabled", enabled, {
+                      shouldDirty: true,
+                    })}
+                  aria-label="Enable OpenRouter prompt cache routing"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="promptCacheSessionPrefix">
+                  Sticky session prefix
+                </Label>
+                <Input
+                  id="promptCacheSessionPrefix"
+                  {...form.register("promptCacheSessionPrefix")}
+                  disabled={!form.watch("promptCachingEnabled")}
+                  placeholder="mycelia"
+                />
+                {form.formState.errors.promptCacheSessionPrefix && (
+                  <p className="text-sm text-red-500">
+                    {form.formState.errors.promptCacheSessionPrefix.message}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Change this only to intentionally start a separate warm-cache
+                  namespace. The default <code>mycelia</code> is recommended.
+                </p>
+              </div>
             </div>
 
             <div className="flex flex-wrap justify-start gap-3">

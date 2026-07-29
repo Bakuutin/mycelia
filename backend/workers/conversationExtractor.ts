@@ -409,6 +409,7 @@ async function callLLMStructured<T>(
   llm: (input: any) => Promise<any>,
   model: string,
   fallbackModel: string,
+  sessionId: string,
   messages: Array<{ role: string; content: string }>,
   responseFormat: { type: "json_object" } | {
     type: "json_schema";
@@ -434,6 +435,7 @@ async function callLLMStructured<T>(
     action: "completions",
     model,
     fallbackModel,
+    session_id: sessionId,
     messages: adjustedMessages,
     response_format: { type: "json_object" },
   });
@@ -474,6 +476,7 @@ async function callLLMStructured<T>(
       action: "completions",
       model,
       fallbackModel,
+      session_id: sessionId,
       messages: [
         { role: "user", content: `Fix this JSON to be valid:\n${content}` },
       ],
@@ -1143,6 +1146,7 @@ async function processChunk(params: {
       llm,
       model,
       input.fallbackModel,
+      "conversation-extractor:segmentation",
       segmentationMessages,
       {
         type: "json_schema",
@@ -1240,6 +1244,7 @@ async function processChunk(params: {
         llm,
         model,
         input.fallbackModel,
+        "conversation-extractor:metadata",
         messages,
         {
           type: "json_schema",

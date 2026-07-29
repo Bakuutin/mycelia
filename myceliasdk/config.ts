@@ -9,6 +9,10 @@ export const zProviderConfig = z.object({
   chatModel: z.string().optional(),
   fallbackEnabled: z.boolean().optional().default(false),
   fallbackModel: z.string().optional(),
+  promptCaching: z.object({
+    enabled: z.boolean().default(true),
+    sessionPrefix: z.string().trim().min(1).max(120).optional(),
+  }).optional(),
 });
 
 export const zModelAliasMap = z.object({
@@ -25,6 +29,12 @@ export const zLlmProviderProfile = z.object({
   aliases: zModelAliasMap,
   defaultAlias: z.enum(["small", "medium", "large"]).default("medium"),
   chatModel: z.string().min(1).optional(),
+  // OpenRouter uses session IDs only as a routing key. The provider still
+  // decides whether a particular prompt prefix is cacheable.
+  promptCaching: z.object({
+    enabled: z.boolean().default(true),
+    sessionPrefix: z.string().trim().min(1).max(120).optional(),
+  }).optional(),
 });
 
 export const zLlmProfilesConfig = z.object({
