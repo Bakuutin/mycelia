@@ -8,6 +8,9 @@ import { enqueueJob, EnqueueJobOptions, getQueue } from "@/lib/jobs/queue.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
+import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
+import { normalizeOpenAIBaseUrl } from "@/lib/llm/model-routing.ts";
+import { env } from "#/env.ts";
 import {
   assertJobServicesHealthy,
   getExternalServicesHealth,
@@ -233,6 +236,84 @@ const RequestSchema = z.union([
 ]);
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
+
+type SttCacheStatus = {
+  status: "reported" | "not_supported" | "not_configured" | "unavailable";
+  message: string;
+  model?: string;
+  modelCache?: string;
+  modelCacheLocation?: string;
+  policy?: "keep_warm" | "unload_after_idle";
+  idleTimeoutSeconds?: number | null;
+  lastTranscriptionAt?: string | null;
+  idleSeconds?: number | null;
+  modelState?: string;
+};
+
+async function getSttCacheStatus(): Promise<SttCacheStatus> {
+  try {
+    const provider = await new TranscriptionResource().getInferenceProvider();
+    if (!provider) {
+      return {
+        status: "not_configured",
+        message: "No STT provider is configured",
+      };
+    }
+
+    const providerUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
+    const statusUrl = `${providerUrl.replace(/\/v1$/, "")}/v1/stt/status`;
+    const response = await fetch(statusUrl, {
+      headers: { Authorization: `Bearer ${provider.apiKey}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (response.status === 404) {
+      return {
+        status: "not_supported",
+        message:
+          "The STT proxy does not expose cache status yet. Rebuild and redeploy the current gpu/proxy image.",
+      };
+    }
+    if (!response.ok) {
+      return {
+        status: "unavailable",
+        message: `STT cache status returned HTTP ${response.status}`,
+      };
+    }
+
+    const body = await response.json() as Record<string, unknown>;
+    return {
+      status: "reported",
+      message: "Reported by the dedicated STT proxy",
+      model: typeof body.model === "string" ? body.model : undefined,
+      modelCache: typeof body.modelCache === "string"
+        ? body.modelCache
+        : undefined,
+      modelCacheLocation: typeof body.modelCacheLocation === "string"
+        ? body.modelCacheLocation
+        : undefined,
+      policy: body.policy === "keep_warm" || body.policy === "unload_after_idle"
+        ? body.policy
+        : undefined,
+      idleTimeoutSeconds: typeof body.idleTimeoutSeconds === "number"
+        ? body.idleTimeoutSeconds
+        : null,
+      lastTranscriptionAt: typeof body.lastTranscriptionAt === "string"
+        ? body.lastTranscriptionAt
+        : null,
+      idleSeconds: typeof body.idleSeconds === "number"
+        ? body.idleSeconds
+        : null,
+      modelState: typeof body.modelState === "string"
+        ? body.modelState
+        : undefined,
+    };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 export function getFailedJobsQuery(workerType: string) {
   return {
@@ -1187,6 +1268,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       extractionProcessing,
       summariesMissing,
       failedByWorker,
+      activeTranscriptionJobs,
+      recentTranscriptionBatches,
+      sttCacheStatus,
+      transcriptionConfig,
     ] = await Promise.all([
       getExternalServicesHealth(input.force ?? false),
       mongo({
@@ -1247,6 +1332,34 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           { $group: { _id: "$type", count: { $sum: 1 } } },
         ],
       }),
+      mongo({
+        action: "find",
+        collection: "jobs",
+        query: { type: "transcription", state: "active" },
+        options: {
+          sort: { updatedAt: -1 },
+          limit: 1,
+          projection: { _id: 1, progress: 1, updatedAt: 1, processedOn: 1 },
+        },
+      }),
+      mongo({
+        action: "find",
+        collection: "jobs",
+        query: {
+          type: "transcription",
+          state: "completed",
+          "result.batchSize": { $exists: true },
+        },
+        options: {
+          sort: { finishedAt: -1 },
+          limit: 5,
+          projection: { _id: 1, result: 1, finishedAt: 1 },
+        },
+      }),
+      getSttCacheStatus(),
+      getConfigResource(auth).then((configResource) =>
+        configResource({ action: "get", path: "transcription" })
+      ),
     ]);
 
     const failedCounts = Object.fromEntries(
@@ -1285,6 +1398,26 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         periodicRetrySeconds: 300,
         note:
           "Failed job history is retained. Retryable source records are checked on startup and every 5 minutes after dependencies recover.",
+      },
+      transcriptionRuntime: {
+        configuredBatchSize: env.TRANSCRIPTION_BATCH_SIZE,
+        activeBatch: (activeTranscriptionJobs as any[]).map((job) => ({
+          jobId: job._id?.toString(),
+          updatedAt: job.updatedAt,
+          processedOn: job.processedOn,
+          progress: job.progress || {},
+        }))[0] ?? null,
+        recentBatches: (recentTranscriptionBatches as any[]).map((job) => ({
+          jobId: job._id?.toString(),
+          finishedAt: job.finishedAt,
+          batchSize: job.result?.batchSize,
+          processed: job.result?.processed,
+          sequences: job.result?.batchSequences || [],
+        })),
+        cache: {
+          desiredPolicy: (transcriptionConfig as any)?.cachePolicy || null,
+          observed: sttCacheStatus,
+        },
       },
     };
   }

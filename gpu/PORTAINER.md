@@ -88,6 +88,12 @@ This unloads the Whisper model from GPU memory after 300 seconds without an ASR 
 
 The five-minute value is the stack default. Set `MODEL_IDLE_TIMEOUT=0` only when the model should remain loaded indefinitely. Continuous backlog processing is activity, so the idle timer begins after the final request completes.
 
+Mycelia's Jobs → Transcription panel can save a desired cache policy and compare
+it with the proxy's reported policy. Saving in Mycelia does not change the
+remote stack by itself: set the matching `MODEL_IDLE_TIMEOUT` value here and
+update the Portainer stack. The proxy reports the effective stack setting at
+the authenticated endpoint below after it has been rebuilt from this checkout.
+
 ## Verify the service
 
 From the Docker host or a machine that can reach its Tailscale IP:
@@ -124,6 +130,18 @@ catch-all route is trying to send the request to the obsolete default
 transcription endpoint can keep working throughout this failure, which is why
 the same STT configuration may have appeared healthy before model discovery
 was added to the UI.
+
+Check cache policy/status:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
+  http://100.119.163.116:8001/v1/stt/status
+```
+
+This reports the persistent model-cache policy, idle timeout, and proxy-observed
+time since the last transcription. `idle_unload_expected` means the configured
+timeout has elapsed; it is not a direct GPU-memory measurement.
 
 Run a real transcription test:
 

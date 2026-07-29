@@ -1,6 +1,7 @@
 import os
 import httpx
 import logging
+import time
 from urllib.parse import urljoin
 from fastapi import FastAPI, Request, HTTPException, Depends, Header, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, JSONResponse, Response
@@ -19,6 +20,8 @@ API_KEY = os.getenv("API_KEY")
 WHISPER_SERVICE_URL = os.getenv("WHISPER_SERVICE_URL", "http://whisper:9000")
 OLLAMA_SERVICE_URL = os.getenv("OLLAMA_SERVICE_URL", "http://ollama:11434")
 ASR_MODEL = os.getenv("ASR_MODEL", "unknown")
+MODEL_IDLE_TIMEOUT = max(0, int(os.getenv("MODEL_IDLE_TIMEOUT", "300")))
+last_transcription_at: Optional[float] = None
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -81,6 +84,8 @@ async def transcribe_audio(
     """
     OpenAI-compatible transcription endpoint that forwards to whisper service
     """
+    global last_transcription_at
+    last_transcription_at = time.time()
     logger.info(f"Received transcription request for file: {file.filename}")
 
     if model and model != "whisper" and model != ASR_MODEL:
@@ -193,6 +198,33 @@ async def list_models(_: bool = Depends(verify_api_key)):
                 "capabilities": ["audio.transcriptions"],
             }
         ],
+    }
+
+
+@app.get("/v1/stt/status")
+async def stt_status(_: bool = Depends(verify_api_key)):
+    """Report the STT stack's configured cache policy without exposing secrets."""
+    now = time.time()
+    idle_seconds = None if last_transcription_at is None else max(
+        0, int(now - last_transcription_at)
+    )
+    unloads_after_idle = MODEL_IDLE_TIMEOUT > 0
+    return {
+        "model": ASR_MODEL,
+        "modelCache": "persistent",
+        "modelCacheLocation": "whisper_cache volume",
+        "policy": "unload_after_idle" if unloads_after_idle else "keep_warm",
+        "idleTimeoutSeconds": MODEL_IDLE_TIMEOUT if unloads_after_idle else None,
+        "lastTranscriptionAt": (
+            None if last_transcription_at is None
+            else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_transcription_at))
+        ),
+        "idleSeconds": idle_seconds,
+        "modelState": (
+            "unknown_before_first_request" if last_transcription_at is None
+            else "active_or_warm" if not unloads_after_idle or idle_seconds < MODEL_IDLE_TIMEOUT
+            else "idle_unload_expected"
+        ),
     }
 
 

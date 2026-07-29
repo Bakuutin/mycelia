@@ -23,10 +23,21 @@ export class MaintenanceManager {
 
   async start() {
     if (this.interval !== null) return;
-    await this.runMaintenance();
     this.interval = setInterval(() => {
-      this.runMaintenance();
+      void this.runMaintenance().catch((error) => {
+        console.error(
+          "[MaintenanceManager] Periodic maintenance failed:",
+          error,
+        );
+      });
     }, MAINTENANCE_INTERVAL_MS);
+
+    // Reconciliation can visit a large amount of retained job history. It is
+    // important work, but must not hold the application's readiness signal
+    // after workers and triggers have already started accepting work.
+    void this.runMaintenance().catch((error) => {
+      console.error("[MaintenanceManager] Startup maintenance failed:", error);
+    });
   }
 
   async stop() {

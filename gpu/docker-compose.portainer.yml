@@ -32,6 +32,7 @@ services:
       API_KEY: ${PROXY_API_KEY:?Set PROXY_API_KEY in Portainer}
       WHISPER_SERVICE_URL: http://whisper:9000
       ASR_MODEL: ${ASR_MODEL:-large-v3}
+      MODEL_IDLE_TIMEOUT: ${MODEL_IDLE_TIMEOUT:-300}
     restart: unless-stopped
 
 volumes:

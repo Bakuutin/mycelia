@@ -42,6 +42,25 @@ export const zLlmProfilesConfig = z.object({
   profiles: z.array(zLlmProviderProfile).min(1),
 });
 
+export const zTranscriptionCachePolicy = z.object({
+  mode: z.enum(["keep_warm", "unload_after_idle"]),
+  idleTimeoutSeconds: z.number().int().min(30).max(86_400).optional(),
+}).superRefine((value, context) => {
+  if (value.mode === "unload_after_idle" && !value.idleTimeoutSeconds) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["idleTimeoutSeconds"],
+      message: "An idle timeout is required when model unloading is enabled",
+    });
+  }
+});
+
+export const zTranscriptionProviderConfig = zProviderConfig.extend({
+  // This is the desired policy for the dedicated STT stack. The remote stack
+  // reports its effective policy through /v1/stt/status after it is redeployed.
+  cachePolicy: zTranscriptionCachePolicy.optional(),
+});
+
 // Deprecated: use llm and transcription instead
 export const zInferenceProviderConfig = zProviderConfig;
 
@@ -62,7 +81,7 @@ export const zServerConfig = z.object({
   prompts: zServerConfigPrompts,
   llm: zProviderConfig.optional().nullable(),
   llmProfiles: zLlmProfilesConfig.optional().nullable(),
-  transcription: zProviderConfig.optional().nullable(),
+  transcription: zTranscriptionProviderConfig.optional().nullable(),
   // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({

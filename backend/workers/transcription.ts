@@ -15,6 +15,20 @@ const log = (level: string, msg: string, data?: Record<string, unknown>) => {
   console.log(`[TRANSCRIPTION] ${timestamp} ${level}: ${msg}${dataStr}`);
 };
 
+type PreparedAudio = {
+  audio: Uint8Array;
+  preparationMs: number;
+};
+
+type BatchSequence = {
+  sequenceId: string;
+  sequenceStart?: string;
+  audioPreparationMs: number;
+  prefetchWaitMs: number;
+  inferenceMs: number;
+  prefetched: boolean;
+};
+
 export const schema = z.object({
   type: z.literal("transcription"),
   sequenceId: z.string().optional(),
@@ -37,6 +51,8 @@ const capability: JobCapability = {
     segmentCount: z.number().optional(),
     textPreview: z.string().optional(),
     sequenceStart: z.string().optional(),
+    batchSize: z.number().optional(),
+    batchSequences: z.array(z.any()).optional(),
   })),
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
@@ -60,13 +76,21 @@ const capability: JobCapability = {
     const transcriptionResource = (input: any) =>
       callResource("transcription", input, { jwt, myceliaUrl });
     const batchSize = env.TRANSCRIPTION_BATCH_SIZE;
+    let progressState: Record<string, unknown> = {};
+    const updateProgress = async (updates: Record<string, unknown>) => {
+      progressState = { ...progressState, ...updates };
+      await job.updateProgress(progressState);
+    };
 
     /**
      * Fetch and normalize audio without touching the GPU. When a batch has a
      * following sequence, this runs while Whisper is transcribing the current
      * one so the next ASR request can begin immediately.
      */
-    const prepareSequenceAudio = async (sequence: any): Promise<Uint8Array> => {
+    const prepareSequenceAudio = async (
+      sequence: any,
+    ): Promise<PreparedAudio> => {
+      const preparationStartedAt = Date.now();
       const seqId = sequence?._id?.toString() || "unknown";
       log("INFO", `Preparing sequence audio`, {
         sequenceId: seqId,
@@ -102,7 +126,10 @@ const capability: JobCapability = {
         sequenceId: seqId,
         audioBytes: combinedAudio.length,
       });
-      return combinedAudio;
+      return {
+        audio: combinedAudio,
+        preparationMs: Date.now() - preparationStartedAt,
+      };
     };
 
     // Core processing logic (assumes state is already "processing")
@@ -112,7 +139,7 @@ const capability: JobCapability = {
       job: any,
       sequence: any,
       skipStateUpdate = false,
-      preparedAudio?: Promise<Uint8Array>,
+      preparedAudio?: Promise<PreparedAudio>,
       onInferenceStarted?: () => void,
     ) => {
       const seqId = sequence?._id?.toString() || "unknown";
@@ -124,7 +151,7 @@ const capability: JobCapability = {
         toIndex: sequence?.toIndex,
       });
 
-      await job.updateProgress({
+      await updateProgress({
         stage: "processing",
         sequenceId: sequence._id.toString(),
         sequenceStart: sequence.start?.toISOString?.() || sequence.start,
@@ -142,26 +169,33 @@ const capability: JobCapability = {
       }
 
       try {
-        await job.updateProgress({
+        await updateProgress({
           stage: "fetching_chunks",
           sequenceId: sequence._id.toString(),
           sequenceStart: sequence.start?.toISOString?.() || sequence.start,
           chunkCount: sequence.chunk_count,
         });
-        await job.updateProgress({
+        await updateProgress({
           stage: "combining_audio",
           chunkCount: sequence.chunk_count,
           sequenceStart: sequence.start?.toISOString?.() || sequence.start,
         });
         // 3-4. Fetch and normalize audio. For the second and later sequence in
         // a batch this work started while the preceding ASR request was active.
-        const combinedAudio = preparedAudio
+        const awaitingPrefetchAt = Date.now();
+        const prepared = preparedAudio
           ? await preparedAudio
           : await prepareSequenceAudio(sequence);
+        const prefetchWaitMs = preparedAudio
+          ? Date.now() - awaitingPrefetchAt
+          : 0;
+        const combinedAudio = prepared.audio;
 
-        await job.updateProgress({
+        await updateProgress({
           stage: "transcribing",
           audioSize: combinedAudio.length,
+          audioPreparationMs: prepared.preparationMs,
+          prefetchWaitMs,
           sequenceStart: sequence.start?.toISOString?.() || sequence.start,
         });
         // 5. Call transcription API
@@ -231,7 +265,7 @@ const capability: JobCapability = {
             sequenceId: seqId,
             rawSegmentCount: segments.length,
           });
-          await job.updateProgress({
+          await updateProgress({
             stage: "empty_result",
             sequenceStart: sequence.start?.toISOString?.() || sequence.start,
           });
@@ -256,7 +290,7 @@ const capability: JobCapability = {
         }
 
         const duration = filteredSegments[filteredSegments.length - 1].end;
-        await job.updateProgress({
+        await updateProgress({
           stage: "saving_result",
           duration,
           sequenceStart: sequence.start?.toISOString?.() || sequence.start,
@@ -354,7 +388,7 @@ const capability: JobCapability = {
           textPreview: transcriptionText.slice(0, 50),
         });
 
-        await job.updateProgress({ stage: "completed" });
+        await updateProgress({ stage: "completed" });
         return {
           status: "success",
           result: "transcribed",
@@ -367,6 +401,10 @@ const capability: JobCapability = {
           segmentCount: filteredSegments.length,
           textPreview: transcriptionText.slice(0, 200),
           sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+          audioPreparationMs: prepared.preparationMs,
+          prefetchWaitMs,
+          inferenceMs: transcriptDuration,
+          prefetched: Boolean(preparedAudio),
         };
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -449,24 +487,71 @@ const capability: JobCapability = {
 
       log("INFO", `Looking for ready sequences`, { batchSize });
       let sequence = await claimSequence();
-      let preparedAudio: Promise<Uint8Array> | undefined;
+      let preparedAudio: Promise<PreparedAudio> | undefined;
       let processed = 0;
       let lastResult: any;
+      const batchSequences: BatchSequence[] = [];
+
+      await updateProgress({
+        stage: sequence ? "batch_starting" : "idle",
+        batchSize,
+        processedInBatch: 0,
+        batchSequences,
+        prefetch: { state: "not_started" },
+      });
 
       while (sequence && processed < batchSize) {
         let prefetchedSequence: any;
-        let prefetchedAudio: Promise<Uint8Array> | undefined;
+        let prefetchedAudio: Promise<PreparedAudio> | undefined;
         let prefetchPromise: Promise<void> | undefined;
 
         const prefetchNext = () => {
           if (prefetchPromise || processed + 1 >= batchSize) return;
           prefetchPromise = (async () => {
+            const prefetchStartedAt = Date.now();
+            await updateProgress({
+              prefetch: {
+                state: "claiming",
+                startedAt: new Date().toISOString(),
+              },
+            });
             prefetchedSequence = await claimSequence();
             if (prefetchedSequence) {
               prefetchedAudio = prepareSequenceAudio(prefetchedSequence);
               log("INFO", `Prefetching next sequence while Whisper is busy`, {
                 sequenceId: prefetchedSequence._id?.toString(),
               });
+              await updateProgress({
+                prefetch: {
+                  state: "preparing_audio",
+                  sequenceId: prefetchedSequence._id?.toString(),
+                  startedAt: new Date().toISOString(),
+                },
+              });
+              void prefetchedAudio.then((prepared) =>
+                updateProgress({
+                  prefetch: {
+                    state: "ready",
+                    sequenceId: prefetchedSequence._id?.toString(),
+                    preparationMs: prepared.preparationMs,
+                    elapsedMs: Date.now() - prefetchStartedAt,
+                    readyAt: new Date().toISOString(),
+                  },
+                })
+              ).catch((error) =>
+                updateProgress({
+                  prefetch: {
+                    state: "failed",
+                    sequenceId: prefetchedSequence._id?.toString(),
+                    elapsedMs: Date.now() - prefetchStartedAt,
+                    error: error instanceof Error
+                      ? error.message
+                      : String(error),
+                  },
+                })
+              );
+            } else {
+              await updateProgress({ prefetch: { state: "no_more_work" } });
             }
           })();
         };
@@ -482,6 +567,18 @@ const capability: JobCapability = {
             prefetchNext,
           );
           processed += lastResult.processed || 0;
+          batchSequences.push({
+            sequenceId: sequence._id.toString(),
+            sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+            audioPreparationMs: lastResult.audioPreparationMs ?? 0,
+            prefetchWaitMs: lastResult.prefetchWaitMs ?? 0,
+            inferenceMs: lastResult.inferenceMs ?? 0,
+            prefetched: lastResult.prefetched === true,
+          });
+          await updateProgress({
+            processedInBatch: processed,
+            batchSequences: [...batchSequences],
+          });
           await prefetchPromise;
         } catch (error) {
           // A sequence claimed solely for prefetch must remain available if
@@ -526,6 +623,7 @@ const capability: JobCapability = {
         ...(lastResult || { status: "success" }),
         processed,
         batchSize,
+        batchSequences,
         hasMore,
       };
     }

@@ -99,6 +99,57 @@ const llmRequestSchema = z.discriminatedUnion("action", [
 type LLMRequest = z.infer<typeof llmRequestSchema>;
 type LLMResponse = any | Response;
 
+function isOpenRouterBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === "openrouter.ai";
+  } catch {
+    return false;
+  }
+}
+
+function readFiniteCost(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+/**
+ * OpenRouter exposes the final billed amount through its generation metadata
+ * endpoint. The chat-completions response intentionally contains token usage,
+ * but not necessarily cost, so this is the authoritative fallback when a
+ * LiteLLM-compatible response-cost header is unavailable.
+ */
+async function getOpenRouterGenerationCost(
+  baseUrl: string,
+  apiKey: string,
+  generationId: string | null,
+): Promise<number | undefined> {
+  if (!generationId || !isOpenRouterBaseUrl(baseUrl)) return undefined;
+
+  try {
+    const generationResponse = await fetch(
+      `${baseUrl}/generation?id=${encodeURIComponent(generationId)}`,
+      { headers: { "Authorization": `Bearer ${apiKey}` } },
+    );
+    if (!generationResponse.ok) {
+      console.warn(
+        `[llm] OpenRouter generation metadata unavailable for ${generationId}: HTTP ${generationResponse.status}`,
+      );
+      return undefined;
+    }
+    const generation = await generationResponse.json() as {
+      data?: { total_cost?: unknown };
+    };
+    return readFiniteCost(generation.data?.total_cost);
+  } catch (error) {
+    console.warn(
+      `[llm] Failed to fetch OpenRouter generation metadata for ${generationId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return undefined;
+  }
+}
+
 export interface InferenceProviderConfig {
   baseUrl: string;
   apiKey: string;
@@ -454,15 +505,27 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                 : { enabled: false },
             };
 
-            // Extract cost from litellm response header (x-litellm-response-cost)
+            // Prefer a cost supplied inline or by LiteLLM. OpenRouter chat
+            // completions normally provide neither, but include a generation
+            // id whose metadata has the authoritative final billed amount.
             const responseCostHeader = proxyResponse.headers.get(
               "x-litellm-response-cost",
             );
-            if (responseCostHeader) {
-              const cost = parseFloat(responseCostHeader);
-              if (!isNaN(cost)) {
-                jsonResponse.response_cost = cost;
-              }
+            const inlineCost = readFiniteCost(jsonResponse.usage?.cost);
+            const headerCost = responseCostHeader === null
+              ? undefined
+              : readFiniteCost(Number(responseCostHeader));
+            const generationCost = inlineCost === undefined &&
+                headerCost === undefined
+              ? await getOpenRouterGenerationCost(
+                baseUrl,
+                provider.apiKey,
+                proxyResponse.headers.get("x-generation-id"),
+              )
+              : undefined;
+            const responseCost = inlineCost ?? headerCost ?? generationCost;
+            if (responseCost !== undefined) {
+              jsonResponse.response_cost = responseCost;
             }
 
             span.setStatus({ code: 1 }); // Success

@@ -76,3 +76,4 @@ services:
       - WHISPER_SERVICE_URL=http://whisper:9000
       - OLLAMA_SERVICE_URL=http://ollama:11434
       - ASR_MODEL=${ASR_MODEL:-large-v3-turbo}
+      - MODEL_IDLE_TIMEOUT=${MODEL_IDLE_TIMEOUT:-300}

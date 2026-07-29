@@ -771,6 +771,9 @@ export default function JobDetailPage() {
             {/* Job-type-specific details sections (non-transcription) */}
             {job.state === "completed" && job.result && job.type !== "transcription" && (() => {
                 const r = job.result;
+                const batchSummaries = job.type === "summarization" && Array.isArray(r.summaries)
+                    ? r.summaries.filter((summary: any) => summary?.objectId)
+                    : [];
                 const processingTime = formatDuration(job.processedOn, job.finishedOn);
                 const dateRange = job.data?.start && job.data?.end
                     ? `${format(new Date(job.data.start), "PPp")} — ${format(new Date(job.data.end), "PPp")}`
@@ -833,9 +836,10 @@ export default function JobDetailPage() {
                         errors: r.errors,
                     },
                     summarization: {
-                        icon: FileText, title: "Summarization Details",
+                        icon: FileText, title: batchSummaries.length > 0 ? "Batch Summarization" : "Summarization Details",
                         metrics: [
                             { icon: Clock, label: "Processing Time", value: processingTime },
+                            ...(batchSummaries.length > 0 ? [{ icon: FileText as LucideIcon, label: "Summaries Created", value: batchSummaries.length }] : []),
                             ...(r.title ? [{ icon: FileText as LucideIcon, label: "Title", value: r.title }] : []),
                             ...(r.start && r.end ? [{ icon: Clock as LucideIcon, label: "Time Range", value: `${format(new Date(r.start), "PPp")} — ${format(new Date(r.end), "PPp")}` }] : []),
                         ],
@@ -956,6 +960,35 @@ export default function JobDetailPage() {
                                             ))}
                                         </div>
                                     )}
+                                </div>
+                            )}
+                            {job.type === "summarization" && batchSummaries.length > 0 && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-2">
+                                        Created summaries ({batchSummaries.length})
+                                    </div>
+                                    <div className="space-y-2 max-h-[32rem] overflow-y-auto pr-1">
+                                        {batchSummaries.map((summary: any) => (
+                                            <div key={summary.objectId} className="rounded-lg border p-3 text-sm">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <Link className="font-medium hover:underline" to={`/objects/${summary.objectId}`}>
+                                                        {summary.title || summary.objectId}
+                                                    </Link>
+                                                    <Link to={`/objects/${summary.objectId}`}>
+                                                        <Button size="sm" variant="outline">
+                                                            <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                                                            View Conversation
+                                                        </Button>
+                                                    </Link>
+                                                </div>
+                                                {summary.sourceRefs?.coverageStart && summary.sourceRefs?.coverageEnd && (
+                                                    <div className="mt-1 text-xs text-muted-foreground">
+                                                        {format(new Date(summary.sourceRefs.coverageStart), "PPp")} — {format(new Date(summary.sourceRefs.coverageEnd), "p")}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
                             {job.type === "summarization" && r.objectId && (
