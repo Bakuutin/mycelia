@@ -392,7 +392,7 @@ export default function JobDetailPage() {
                 const nextLog: JobLogEntry = {
                     _id: logId,
                     jobId: data.jobId ?? (id ?? "unknown"),
-                    stream: (data.stream as "stdout" | "stderr") ?? "stdout",
+                    stream: (data.stream as "stdout" | "stderr" | "progress") ?? "stdout",
                     text: data.text ?? "",
                     timestamp: data.timestamp ?? new Date().toISOString(),
                 };
@@ -995,8 +995,12 @@ export default function JobDetailPage() {
                                 const timestamp = timestampDate && !isNaN(timestampDate.getTime())
                                     ? format(timestampDate, "PPpp")
                                     : "-";
-                                const streamStyle = log.stream === "stderr"
+                                const isLegacyProgress = log.text.startsWith("__PROGRESS__:");
+                                const displayStream = isLegacyProgress ? "progress" : log.stream;
+                                const streamStyle = displayStream === "stderr"
                                     ? "text-red-500"
+                                    : displayStream === "progress"
+                                    ? "text-blue-500"
                                     : "text-muted-foreground";
                                 return (
                                     <div
@@ -1004,7 +1008,7 @@ export default function JobDetailPage() {
                                         className="flex flex-col gap-1 border-b border-border/50 pb-2 last:border-b-0"
                                     >
                                         <div className="flex items-center gap-2">
-                                            <Badge variant="outline">{log.stream}</Badge>
+                                            <Badge variant="outline">{displayStream}</Badge>
                                             <span className="text-xs text-muted-foreground">{timestamp}</span>
                                         </div>
                                         <div className={`whitespace-pre-wrap break-words ${streamStyle}`}>

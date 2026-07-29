@@ -7,6 +7,12 @@ export type InferenceProvenance = {
   providerBaseUrl?: string;
   providerProfileId?: string;
   providerProfileName?: string;
+  promptCaching?: {
+    enabled: boolean;
+    sessionId?: string;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
 };
 
 type CompletionLike = {
@@ -19,6 +25,12 @@ type CompletionLike = {
     providerBaseUrl?: unknown;
     providerProfileId?: unknown;
     providerProfileName?: unknown;
+    promptCaching?: {
+      enabled?: unknown;
+      sessionId?: unknown;
+      cacheReadTokens?: unknown;
+      cacheWriteTokens?: unknown;
+    };
   };
 };
 
@@ -47,5 +59,19 @@ export function getInferenceProvenance(
     providerBaseUrl: optionalString(routing?.providerBaseUrl),
     providerProfileId: optionalString(routing?.providerProfileId),
     providerProfileName: optionalString(routing?.providerProfileName),
+    ...(routing?.promptCaching?.enabled === true
+      ? {
+        promptCaching: {
+          enabled: true,
+          sessionId: optionalString(routing.promptCaching.sessionId),
+          ...(typeof routing.promptCaching.cacheReadTokens === "number"
+            ? { cacheReadTokens: routing.promptCaching.cacheReadTokens }
+            : {}),
+          ...(typeof routing.promptCaching.cacheWriteTokens === "number"
+            ? { cacheWriteTokens: routing.promptCaching.cacheWriteTokens }
+            : {}),
+        },
+      }
+      : {}),
   };
 }
