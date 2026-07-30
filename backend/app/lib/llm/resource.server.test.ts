@@ -114,3 +114,59 @@ Deno.test("OpenRouter generation metadata supplies the final completion cost", a
     restoreEnv(previousEnv);
   }
 });
+
+Deno.test({
+  name: "OpenRouter Batch API submits, polls, and cancels through its beta endpoint",
+  // The shared server-config fixture starts a process watcher. The existing
+  // resource tests exercise the same fixture; this test is scoped to HTTP
+  // request construction and restores every process-global mock itself.
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+  const previousEnv = new Map(
+    ENV_NAMES.map((name) => [name, Deno.env.get(name)]),
+  );
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method: string; body?: string }> = [];
+  Deno.env.set("OPENAI_BASE_URL", "https://openrouter.ai/api/v1");
+  Deno.env.set("OPENAI_API_KEY", "test-key");
+  Deno.env.set("OPENAI_MODEL", "deepseek/deepseek-v4-flash");
+
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, method: init?.method ?? "GET", body: init?.body?.toString() });
+    if (url === "https://openrouter.ai/api/beta/batches") {
+      return new Response(JSON.stringify({ id: "batch-1", status: "validating" }), { status: 202 });
+    }
+    if (url === "https://openrouter.ai/api/beta/batches/batch-1") {
+      return new Response(JSON.stringify({ id: "batch-1", status: "in_progress" }));
+    }
+    if (url === "https://openrouter.ai/api/beta/batches/batch-1/cancel") {
+      return new Response(JSON.stringify({ id: "batch-1", status: "cancelling" }));
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+
+  try {
+    const resource = new LLMResource();
+    await resource.use({
+      action: "batch_submit",
+      endpoint: "/v1/chat/completions",
+      model: "deepseek/deepseek-v4-flash",
+      requests: [{ custom_id: "summary:1", body: { messages: [] } }],
+    }, {} as never);
+    await resource.use({ action: "batch_get", batchId: "batch-1" }, {} as never);
+    await resource.use({ action: "batch_cancel", batchId: "batch-1" }, {} as never);
+
+    expect(calls.map((call) => [call.method, call.url])).toEqual([
+      ["POST", "https://openrouter.ai/api/beta/batches"],
+      ["GET", "https://openrouter.ai/api/beta/batches/batch-1"],
+      ["POST", "https://openrouter.ai/api/beta/batches/batch-1/cancel"],
+    ]);
+    expect(calls[0].body?.startsWith('{"endpoint":"/v1/chat/completions","model"')).toBe(true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(previousEnv);
+  }
+  },
+});
