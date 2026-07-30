@@ -73,7 +73,7 @@ export async function enqueueJob(
   // Resolve the selected prompt document at enqueue time. Each job keeps a
   // reproducible snapshot while config remains the source of truth for new jobs.
   const summarizationDefaults: SummarizationDefaults = {};
-  if (data.type === "summarization") {
+  if (data.type === "summarization" || data.type === "openrouter_batch") {
     const config = await mongo({
       action: "findOne",
       collection: "configs",
@@ -174,6 +174,14 @@ export async function enqueueJob(
         defaultOverrides,
         summarizationDefaults,
       );
+    } else if (data.type === "openrouter_batch") {
+      // The batch pilot uses the exact configured summary prompt, but has a
+      // fixed model. Snapshot this here so its eventual result remains
+      // reproducible even if settings change during OpenRouter's 24h window.
+      if (mergedData.prompt === undefined && summarizationDefaults.prompt) {
+        mergedData.prompt = summarizationDefaults.prompt.text;
+        mergedData.promptName = summarizationDefaults.prompt.name;
+      }
     } else if (defaultOverrides) {
       for (const [key, value] of Object.entries(defaultOverrides)) {
         if (!(key in mergedData) || mergedData[key] === undefined) {
