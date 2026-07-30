@@ -126,7 +126,7 @@ export function buildSummarySourceRefs(
   };
 }
 
-function getConversationSourceContext(obj: any): SummarySourceContext {
+export function getConversationSourceContext(obj: any): SummarySourceContext {
   const conversationId = stringId(obj?._id) ?? undefined;
   const chunkId = stringId(obj?.metadata?.extractedWith?.chunkId);
   const extractorJobId = stringId(obj?.metadata?.extractedWith?.jobId) ??
@@ -147,11 +147,11 @@ function getSilenceMessage(gapMs: number): string {
   return `[Silence ${duration}m]`;
 }
 
-function hasNoSummaries(obj: any): boolean {
+export function hasNoSummaries(obj: any): boolean {
   return !Array.isArray(obj?.summaries) || obj.summaries.length === 0;
 }
 
-function getConversationRange(obj: any): { start: Date; end: Date } | null {
+export function getConversationRange(obj: any): { start: Date; end: Date } | null {
   const ranges = Array.isArray(obj?.timeRanges) ? obj.timeRanges : [];
   const parsed = ranges
     .map((range: any) => ({
@@ -201,7 +201,7 @@ async function loadTranscripts(
   }, { jwt, myceliaUrl });
 }
 
-function buildPromptFromTranscripts(transcripts: any[]): string {
+export function buildPromptFromTranscripts(transcripts: any[]): string {
   let promptText = "";
   let lastEnd = new Date(transcripts[0].start).getTime();
   promptText += getTimestampMessage(new Date(transcripts[0].start)) + "\n";
@@ -251,7 +251,7 @@ function createTranscriptSummaryEntry(
   };
 }
 
-function createLLMSummaryEntry(
+export function createLLMSummaryEntry(
   summary: string,
   completion: any,
   systemPrompt: string,
@@ -294,7 +294,7 @@ function createLLMSummaryEntry(
   };
 }
 
-async function updateObjectSummaries(
+export async function updateObjectSummaries(
   existingObjectId: string,
   summaryEntry: any,
   allowExisting: boolean,
@@ -423,6 +423,25 @@ const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const SUMMARIZATION_RETRY_BASE_MS = 15 * 60 * 1000;
 const SUMMARIZATION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 
+type ConversationClaimOptions = {
+  // A Batch request is allowed to wait up to 24 hours. Its claim must outlive
+  // the normal worker timeout or a synchronous summary worker can duplicate
+  // the same LLM work while OpenRouter still owns the request.
+  holdUntil?: Date;
+  kind?: "openrouter_batch";
+};
+
+export function isConversationClaimActive(
+  claim: { startedAt?: string; holdUntil?: string } | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (!claim?.startedAt) return false;
+  const heldUntil = claim.holdUntil ? new Date(claim.holdUntil).getTime() : 0;
+  if (Number.isFinite(heldUntil) && heldUntil > now) return true;
+  const claimAge = now - new Date(claim.startedAt).getTime();
+  return Number.isFinite(claimAge) && claimAge < JOB_TIMEOUT_MS;
+}
+
 export function getSummarizationRetryDelayMs(attempt: number): number {
   const safeAttempt = Math.max(1, Math.floor(attempt));
   return Math.min(
@@ -486,11 +505,12 @@ async function setSummarizationFailure(
   }
 }
 
-async function claimConversation(
+export async function claimConversation(
   objectId: string,
   jobId: string,
   jwt: string,
   myceliaUrl: string,
+  options: ConversationClaimOptions = {},
 ): Promise<boolean> {
   const obj = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
     action: "get",
@@ -503,8 +523,7 @@ async function claimConversation(
   // Check if already claimed by another (non-timed-out) job
   const claim = obj._summarizationClaim;
   if (claim?.startedAt) {
-    const claimAge = Date.now() - new Date(claim.startedAt).getTime();
-    if (claimAge < JOB_TIMEOUT_MS) {
+    if (isConversationClaimActive(claim)) {
       console.log(
         `[summarization] Object ${objectId} already claimed by job ${claim.jobId}, skipping`,
       );
@@ -521,7 +540,14 @@ async function claimConversation(
       id: objectId,
       version: obj.version ?? 0,
       field: "_summarizationClaim",
-      value: { jobId, startedAt: new Date().toISOString() },
+      value: {
+        jobId,
+        startedAt: new Date().toISOString(),
+        ...(options.holdUntil ? {
+          holdUntil: options.holdUntil.toISOString(),
+          kind: options.kind,
+        } : {}),
+      },
     }, { jwt, myceliaUrl });
     return true;
   } catch {
@@ -532,7 +558,7 @@ async function claimConversation(
   }
 }
 
-async function releaseClaim(
+export async function releaseClaim(
   objectId: string,
   jwt: string,
   myceliaUrl: string,

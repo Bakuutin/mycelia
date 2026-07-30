@@ -31,6 +31,8 @@ export const JOB_SERVICE_DEPENDENCIES: Record<string, ExternalServiceId[]> = {
   conversation_extractor: ["llm"],
   summarization: ["llm"],
   tagger: ["llm"],
+  openrouter_batch: ["llm"],
+  openrouter_batch_poll: ["llm"],
 };
 
 export function getJobServiceDependencies(
