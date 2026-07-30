@@ -2,7 +2,7 @@ services:
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu
     environment:
-      ASR_MODEL: ${ASR_MODEL:-large-v3}
+      ASR_MODEL: ${ASR_MODEL:-large-v3-turbo}
       ASR_ENGINE: faster_whisper
       ASR_DEVICE: cuda
       NVIDIA_VISIBLE_DEVICES: all
@@ -31,7 +31,8 @@ services:
     environment:
       API_KEY: ${PROXY_API_KEY:?Set PROXY_API_KEY in Portainer}
       WHISPER_SERVICE_URL: http://whisper:9000
-      ASR_MODEL: ${ASR_MODEL:-large-v3}
+      ASR_MODEL: ${ASR_MODEL:-large-v3-turbo}
+      WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-true}
       MODEL_IDLE_TIMEOUT: ${MODEL_IDLE_TIMEOUT:-300}
     restart: unless-stopped
 

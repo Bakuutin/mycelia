@@ -21,6 +21,23 @@ WHISPER_SERVICE_URL = os.getenv("WHISPER_SERVICE_URL", "http://whisper:9000")
 OLLAMA_SERVICE_URL = os.getenv("OLLAMA_SERVICE_URL", "http://ollama:11434")
 ASR_MODEL = os.getenv("ASR_MODEL", "unknown")
 MODEL_IDLE_TIMEOUT = max(0, int(os.getenv("MODEL_IDLE_TIMEOUT", "300")))
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value, got {value!r}")
+
+
+# The GPU stack enables this explicitly in compose; keep the proxy default off
+# so an independently deployed proxy remains backward-compatible.
+WHISPER_VAD_FILTER = _env_bool("WHISPER_VAD_FILTER", False)
 last_transcription_at: Optional[float] = None
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -111,7 +128,8 @@ async def transcribe_audio(
         params = {
             "task": "transcribe",
             "output": "json",
-            "encode": "true"
+            "encode": "true",
+            "vad_filter": "true" if WHISPER_VAD_FILTER else "false",
         }
         
         if language:
@@ -149,6 +167,7 @@ async def transcribe_audio(
                         if k.lower() not in ["content-length", "transfer-encoding", "host", "connection"]
                     },
                     "X-Whisper-Model": ASR_MODEL,
+                    "X-Whisper-VAD-Filter": str(WHISPER_VAD_FILTER).lower(),
                 },
             )
             
@@ -211,6 +230,7 @@ async def stt_status(_: bool = Depends(verify_api_key)):
     unloads_after_idle = MODEL_IDLE_TIMEOUT > 0
     return {
         "model": ASR_MODEL,
+        "whisperVadFilter": WHISPER_VAD_FILTER,
         "modelCache": "persistent",
         "modelCacheLocation": "whisper_cache volume",
         "policy": "unload_after_idle" if unloads_after_idle else "keep_warm",

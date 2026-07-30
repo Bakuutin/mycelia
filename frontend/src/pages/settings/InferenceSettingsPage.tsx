@@ -349,10 +349,24 @@ const InferenceSettingsPage = () => {
       MODEL_ROUTES.forEach((route) => {
         const defaults = updatedDefaults[route.workerType];
         const taskModel = taskModels[route.workerType]?.trim();
-        if (taskModel) defaults.model = taskModel;
-        else delete defaults.model;
-
         const fallbackDefaults = updatedDefaults[route.fallbackWorkerType];
+
+        // A conversation chunk snapshots its model when it is created, then
+        // the extractor uses that snapshot later.  Persist the effective
+        // configured model on both workers so a newly queued extractor also
+        // overrides any stale model snapshot on an older, still-ready chunk.
+        // Without this, an empty task override silently fell back to BASE_MODEL
+        // in the chunk creator instead of the active preset's global model.
+        if (route.workerType === "conversation_chunk_creator") {
+          const effectiveModel = taskModel || globalModel;
+          defaults.model = effectiveModel;
+          fallbackDefaults.model = effectiveModel;
+        } else if (taskModel) {
+          defaults.model = taskModel;
+        } else {
+          delete defaults.model;
+        }
+
         fallbackDefaults.fallbackModel =
           taskFallbackModels[route.workerType]?.trim() || "";
       });

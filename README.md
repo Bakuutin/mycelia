@@ -245,6 +245,77 @@ Use the `whisper` alias when the Portainer stack should use whichever
 `ASR_MODEL` it has loaded. The service reports the actual model, and Mycelia
 stores it in `transcriptions.metadata.model`.
 
+### Change the Whisper model in Portainer
+
+The model shown in **Settings -> Inference -> STT model** is the model name
+Mycelia sends for request validation. It does not load a model into the GPU.
+The model that is actually loaded is controlled by `ASR_MODEL` in the
+Portainer stack and is loaded when the Whisper container starts.
+
+Whisper's internal VAD filter is controlled by the single stack variable
+`WHISPER_VAD_FILTER` (default `true` in the GPU compose files). When enabled,
+the proxy passes `vad_filter=true` to Whisper and records the effective value
+in `transcriptions.metadata.whisperVadFilter`. Set it to `false` and redeploy
+the proxy if this filtering should be disabled. The status endpoint exposes
+the current value as `whisperVadFilter`.
+
+To change it, for example to `large-v3-turbo`:
+
+1. Open Portainer -> **Stacks -> mycelia-stt -> Editor**.
+2. Set `ASR_MODEL` to `large-v3-turbo` in the stack environment variables.
+   Make sure the Whisper and proxy services use the same value. If the compose
+   file contains a literal `ASR_MODEL`, remove or update any old Portainer
+   stack variable that could override it.
+
+   In the repository's `gpu/docker-compose.portainer.yml`, the two service
+   entries use `${ASR_MODEL:-large-v3-turbo}`. They are references to one
+   Portainer variable, not three independent settings, so normally you change
+   only the `ASR_MODEL` value under **Environment variables**.
+3. Choose **Update the stack** and confirm the redeploy. Both
+   `mycelia-stt-whisper-1` and `mycelia-stt-proxy-1` must be recreated.
+4. In Portainer, inspect both containers and confirm their environment has
+   `ASR_MODEL=large-v3-turbo`. `running` alone is not enough.
+5. From a machine that can reach the STT host, verify the proxy advertises the
+   loaded model:
+
+   ```bash
+   curl --fail-with-body \
+     -H "Authorization: Bearer $PROXY_API_KEY" \
+     http://100.119.163.116:8001/v1/models
+   ```
+
+   The response must contain `large-v3-turbo` in `data[].id`.
+6. Back in Mycelia, press **Load STT models**, select `large-v3-turbo`, and
+   press **Save STT route**. This keeps request validation and provenance
+   aligned with the model actually loaded remotely.
+
+If Mycelia shows `large-v3` while `/v1/models` returns `large-v3-turbo`, the
+GPU is using Turbo and only Mycelia's saved request setting is stale. If
+`/v1/models` returns `502 Bad gateway`, update the proxy image first; an old
+proxy image sends that endpoint to its obsolete Ollama catch-all route.
+
+To audit or correct old transcription provenance, use the safe dry-run script
+from `python/`:
+
+```bash
+uv run debug/repair_transcription_model_provenance.py
+```
+
+It only matches `metadata.model=large-v3` records produced by the remote STT
+provider and prints a sample. Apply the correction only after confirming that
+those historical requests were really processed by Turbo:
+
+```bash
+uv run debug/repair_transcription_model_provenance.py \
+  --apply --confirm-turbo
+```
+
+The script records the old and new values in `metadata.modelCorrection`. Do not
+rewrite every `large-v3` record blindly: records made while the GPU really had
+the non-Turbo model should retain their original provenance. Use
+`--start-after` and `--start-before` to bound the repair when only a known time
+window was processed by Turbo.
+
 The normal `daemon.py` process performs discovery, ingestion, and device-info
 backfill only. It does not calculate VAD. After a chunk is inserted, the backend
 change-stream trigger creates a `vad` job, and `python-worker` runs the shared

@@ -17,6 +17,13 @@ import {
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
 
+// Some workers run long, externally-backed operations (for example Whisper
+// batches). BullMQ's default 30s lock is too short for a busy Deno process or
+// a brief Redis scheduling hiccup and can produce a false "could not renew
+// lock" while the child process is still making progress.
+const WORKER_LOCK_DURATION_MS = 10 * 60 * 1000;
+const WORKER_LOCK_RENEW_TIME_MS = 60 * 1000;
+
 function getQueueName(type: string): string {
   return `jobs-${type}`;
 }
@@ -246,6 +253,8 @@ export function createWorker(
     {
       connection: redis,
       concurrency: 1,
+      lockDuration: WORKER_LOCK_DURATION_MS,
+      lockRenewTime: WORKER_LOCK_RENEW_TIME_MS,
     },
   );
 }

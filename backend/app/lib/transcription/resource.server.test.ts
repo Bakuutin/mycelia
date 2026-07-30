@@ -36,7 +36,10 @@ Deno.test("dedicated STT environment drives transcription and records the report
     expect((init?.body as FormData).get("language")).toBe(null);
 
     return new Response(JSON.stringify({ text: "hello", segments: [] }), {
-      headers: { "X-Whisper-Model": "large-v3-turbo" },
+      headers: {
+        "X-Whisper-Model": "large-v3-turbo",
+        "X-Whisper-VAD-Filter": "true",
+      },
     });
   };
 
@@ -53,6 +56,7 @@ Deno.test("dedicated STT environment drives transcription and records the report
     expect(result.metadata).toEqual({
       model: "large-v3-turbo",
       provider: "remote_openai_compatible",
+      whisperVadFilter: true,
     });
   } finally {
     globalThis.fetch = originalFetch;

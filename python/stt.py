@@ -143,6 +143,11 @@ def transcribe_with_remote_server(
         tqdm.write(f"Transcription model used: {model_used}")
         REPORTED_TRANSCRIPTION_MODELS.add(model_used)
 
+    vad_filter_header = response.headers.get("X-Whisper-VAD-Filter")
+    whisper_vad_filter = None if vad_filter_header is None else (
+        vad_filter_header.strip().lower() in {"1", "true", "yes", "on"}
+    )
+
     metadata = transcript.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -150,6 +155,11 @@ def transcribe_with_remote_server(
         **metadata,
         "model": model_used,
         "provider": "remote_openai_compatible",
+        **(
+            {"whisperVadFilter": whisper_vad_filter}
+            if whisper_vad_filter is not None
+            else {}
+        ),
     }
     return transcript
 
@@ -684,7 +694,7 @@ if __name__ == '__main__':
         '--model',
         default=os.getenv('STT_MODEL') or 'whisper',
         help=(
-            'Required remote STT model, for example large-v3. '
+            'Required remote STT model, for example large-v3-turbo. '
             'Defaults to STT_MODEL or the generic whisper alias.'
         ),
     )

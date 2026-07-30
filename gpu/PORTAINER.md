@@ -4,7 +4,7 @@ This deployment runs speech-to-text as two containers on an NVIDIA GPU host:
 
 | Container | Required | Purpose |
 | --- | --- | --- |
-| `mycelia-stt-whisper-1` | Yes | Loads the configured Whisper model (`large-v3` by default) with `faster-whisper` on CUDA and performs transcription. Port 9000 stays internal. |
+| `mycelia-stt-whisper-1` | Yes | Loads the configured Whisper model (`large-v3-turbo` by default) with `faster-whisper` on CUDA and performs transcription. Port 9000 stays internal. |
 | `mycelia-stt-proxy-1` | Yes | Exposes the authenticated OpenAI-compatible `POST /v1/audio/transcriptions` API. |
 | `cloudflared` | No | Only needed when a Cloudflare Tunnel that owns the chosen hostname is configured to route to this proxy. It is not needed for direct Tailscale access. |
 
@@ -33,7 +33,7 @@ http://100.119.163.116:8001
    | --- | --- | --- |
    | `PROXY_API_KEY` | Generate with `openssl rand -hex 32` | Required. Store it as a secret and use the same value in Mycelia. |
    | `PROXY_PORT` | `8001` | Published host port. Change it if already occupied. |
-   | `ASR_MODEL` | `large-v3` | Optional Whisper model override. The proxy and Whisper container must use the same value. |
+   | `ASR_MODEL` | `large-v3-turbo` | Optional Whisper model override. The proxy and Whisper container must use the same value. |
 
 6. Deploy the stack. The first pull is large and can outlive a reverse-proxy request timeout. If Portainer times out, pre-pull `onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu` from **Images**, then deploy again.
 7. Keep both `whisper` and `proxy` running. Do not publish Whisper's internal port 9000.
@@ -70,11 +70,43 @@ proxy; it does not change the configured Whisper model or delete its cache.
 ### Change the Whisper model
 
 1. Open the `mycelia-stt` stack in Portainer and select **Editor**.
-2. Under **Environment variables**, set `ASR_MODEL` to the desired model, for example `large-v3`.
-3. Select **Update the stack** and confirm the redeploy. Portainer recreates the `whisper` and `proxy` containers with the same model setting.
+2. Under **Environment variables**, set `ASR_MODEL` to the desired model, for example `large-v3-turbo`.
+3. Select **Update the stack** and confirm the redeploy. Portainer must recreate both the `whisper` and `proxy` containers with the same model setting; verify the resulting container environment and `/v1/models` response.
 4. Watch `mycelia-stt-whisper-1` logs. The first transcription after a model change may take longer while the model is downloaded or loaded.
 
-`large-v3` is already the default in `docker-compose.portainer.yml`, so removing the `ASR_MODEL` override also selects it. The model cache volume is retained during a normal stack update.
+`large-v3-turbo` is already the default in `docker-compose.portainer.yml`, so removing the `ASR_MODEL` override also selects it. Do not leave a stale Portainer stack variable with the old model value: either update it to the desired model or set the compose value explicitly. The model cache volume is retained during a normal stack update.
+
+The two `ASR_MODEL` entries in the compose editor should be references to the
+same stack variable: `${ASR_MODEL:-large-v3-turbo}`. With that form, change the
+value once under Portainer's **Environment variables**. Do not maintain three
+independent hard-coded model names.
+
+The model is loaded once by the Whisper container at startup. Sending a different
+`model` value with `/v1/audio/transcriptions` does not hot-swap the GPU model;
+the proxy accepts the stable `whisper` alias and rejects a named model that does
+not match `ASR_MODEL`. To change the loaded model, change `ASR_MODEL` in the
+stack configuration and recreate the stack. Mycelia's `transcription.model`
+setting controls the request/validation model; it does not redeploy the remote
+Docker stack.
+
+### Avoid confusing the UI model with the loaded model
+
+Mycelia's **STT model** field is a request/validation setting. It may display
+`large-v3` even while the remote GPU container is loading `large-v3-turbo`.
+The authoritative checks are the container environment and the proxy's
+authenticated `/v1/models` response:
+
+```bash
+docker inspect mycelia-stt-whisper-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^ASR_MODEL='
+docker inspect mycelia-stt-proxy-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^ASR_MODEL='
+curl --fail-with-body \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
+  http://100.119.163.116:8001/v1/models
+```
+
+Only after all three checks agree should the STT model be saved in Mycelia.
 
 ### Unload the model after five idle minutes
 
@@ -152,7 +184,7 @@ smoke test. Run the command from the repository root.
 curl --fail-with-body \
   -H "Authorization: Bearer $PROXY_API_KEY" \
   -F "file=@test.wav;type=audio/wav" \
-  -F "model=large-v3" \
+  -F "model=large-v3-turbo" \
   -F "language=en" \
   http://100.119.163.116:8001/v1/audio/transcriptions
 ```
@@ -188,10 +220,18 @@ uv run stt.py --limit 1
 
 The proxy returns its configured model in `X-Whisper-Model`. Transcriptions created by `python/stt.py` store this provenance in MongoDB at `transcriptions.metadata.model`, with the provider recorded at `transcriptions.metadata.provider`. Set `STT_MODEL` in Mycelia only as a fallback when using another OpenAI-compatible server that does not return the header.
 
+The proxy also sends `vad_filter=true` to the Whisper `/asr` endpoint when
+`WHISPER_VAD_FILTER=true`. The GPU compose files enable this by default. The
+effective setting is returned by `/v1/stt/status` as `whisperVadFilter` and is
+stored on new transcriptions as `transcriptions.metadata.whisperVadFilter`.
+This distinguishes records processed with Whisper's internal VAD from records
+made by an older proxy or with the option disabled. Set
+`WHISPER_VAD_FILTER=false` in Portainer and redeploy the proxy to disable it.
+
 Require a specific model when starting the worker:
 
 ```bash
-docker compose exec python-worker python stt.py --model large-v3
+docker compose exec python-worker python stt.py --model large-v3-turbo
 ```
 
 The worker prints both the requested model and the model reported by the server. The Portainer service loads one model per deployment, so `--model` verifies that the requested model is loaded; it does not hot-swap models. A mismatch stops transcription with an error instead of saving misleading provenance. Change `ASR_MODEL` in Portainer and redeploy before requesting a different model.

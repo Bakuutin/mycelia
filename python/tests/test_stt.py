@@ -27,7 +27,10 @@ class RemoteTranscriptionTest(TestCase):
 
     def test_records_model_from_proxy_header(self):
         response = MagicMock()
-        response.headers = {"X-Whisper-Model": "large-v3-turbo"}
+        response.headers = {
+            "X-Whisper-Model": "large-v3-turbo",
+            "X-Whisper-VAD-Filter": "true",
+        }
         response.json.return_value = {
             "segments": [],
             "metadata": {"language": "en"},
@@ -42,6 +45,7 @@ class RemoteTranscriptionTest(TestCase):
                 "language": "en",
                 "model": "large-v3-turbo",
                 "provider": "remote_openai_compatible",
+                "whisperVadFilter": True,
             },
         )
         self.assertEqual(request.call_args.kwargs["data"], {"model": "whisper"})

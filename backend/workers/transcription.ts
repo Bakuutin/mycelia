@@ -33,6 +33,10 @@ export const schema = z.object({
   type: z.literal("transcription"),
   sequenceId: z.string().optional(),
   batchSize: z.number().int().min(1).max(32).optional(),
+  // Queue-level timeout tuning is persisted with each job so the timeout
+  // remains reproducible if settings change while a batch is running.
+  batchTimeoutBaseSeconds: z.number().int().min(60).max(1800).optional(),
+  batchTimeoutPerSequenceSeconds: z.number().int().min(15).max(300).optional(),
 });
 
 const capability: JobCapability = {

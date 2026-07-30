@@ -276,6 +276,14 @@ export class TranscriptionResource
               proxyResponse.headers.get("X-Whisper-Model") ||
               provider.model ||
               "unknown";
+            const vadFilterHeader = proxyResponse.headers.get(
+              "X-Whisper-VAD-Filter",
+            );
+            const whisperVadFilter = vadFilterHeader == null
+              ? undefined
+              : ["1", "true", "yes", "on"].includes(
+                vadFilterHeader.trim().toLowerCase(),
+              );
             const responseMetadata = jsonResponse.metadata &&
                 typeof jsonResponse.metadata === "object"
               ? jsonResponse.metadata
@@ -286,6 +294,7 @@ export class TranscriptionResource
               provider: provider.source === "stt_env"
                 ? "remote_openai_compatible"
                 : "configured_inference",
+              ...(whisperVadFilter === undefined ? {} : { whisperVadFilter }),
             };
             span.setStatus({ code: 1 });
             return jsonResponse;
