@@ -57,6 +57,11 @@ export const env = {
 
   // Transcription Configuration
   TRANSCRIPTION_LANGUAGE: Deno.env.get("TRANSCRIPTION_LANGUAGE") || "auto",
+  // Keep the original one-sequence-per-job behavior unless explicitly enabled.
+  // This preserves stable GPU pacing while retaining the batch/prefetch code.
+  TRANSCRIPTION_BATCHING_ENABLED: Deno.env.get(
+    "TRANSCRIPTION_BATCHING_ENABLED",
+  ) === "true",
   // Number of ready sequences kept in one worker job. The worker pre-assembles
   // the next sequence while Whisper is transcribing the current one.
   TRANSCRIPTION_BATCH_SIZE: (() => {

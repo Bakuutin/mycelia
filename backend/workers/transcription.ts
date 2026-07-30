@@ -82,7 +82,9 @@ const capability: JobCapability = {
       callResource("mongo", input, { jwt, myceliaUrl });
     const transcriptionResource = (input: any) =>
       callResource("transcription", input, { jwt, myceliaUrl });
-    const batchSize = requestedBatchSize ?? env.TRANSCRIPTION_BATCH_SIZE;
+    const batchSize = env.TRANSCRIPTION_BATCHING_ENABLED
+      ? requestedBatchSize ?? env.TRANSCRIPTION_BATCH_SIZE
+      : 1;
     let progressState: Record<string, unknown> = {};
     const updateProgress = async (updates: Record<string, unknown>) => {
       progressState = { ...progressState, ...updates };
