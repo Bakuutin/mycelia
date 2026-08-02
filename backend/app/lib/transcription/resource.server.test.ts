@@ -58,10 +58,13 @@ Deno.test("dedicated STT environment drives transcription and records the report
 
     expect(result.metadata).toEqual({
       model: "large-v3-turbo",
+      requestedModel: "whisper",
+      reportedModel: "large-v3-turbo",
       provider: "openai_compatible",
       providerProfileId: "environment",
       providerProfileName: "Environment STT",
       providerSource: "stt_env",
+      providerBaseUrl: "http://stt.example:8001/",
       whisperVadFilter: true,
     });
   } finally {
@@ -196,7 +199,7 @@ Deno.test("STT models probe accepts a healthy provider without models route", as
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (input: string | URL | Request) => {
     const url = String(input);
-    if (url.endsWith("/v1/models")) {
+    if (url.endsWith("/v1/models") || url.endsWith("/v1/stt/status")) {
       return Promise.resolve(new Response("Not Found", { status: 404 }));
     }
     expect(url).toBe("http://argmax.example:10301/health");
@@ -216,5 +219,41 @@ Deno.test("STT models probe accepts a healthy provider without models route", as
     restoreEnv("STT_SERVER_URL", previous.url);
     restoreEnv("PROXY_API_KEY", previous.key);
     restoreEnv("STT_MODEL", previous.model);
+  }
+});
+
+Deno.test("STT models probe uses the provider-reported model from STT status", async () => {
+  const previous = {
+    url: Deno.env.get("STT_SERVER_URL"),
+    key: Deno.env.get("PROXY_API_KEY"),
+  };
+  Deno.env.set("STT_SERVER_URL", "http://stt.example:8001");
+  Deno.env.set("PROXY_API_KEY", "test-key");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/v1/models")) {
+      return Promise.resolve(new Response("Not Found", { status: 404 }));
+    }
+    expect(url).toBe("http://stt.example:8001/v1/stt/status");
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        model: "large-v3-turbo",
+      })),
+    );
+  };
+
+  try {
+    const result = await new TranscriptionResource().use(
+      { action: "models" },
+      {} as Auth,
+    ) as Record<string, any>;
+    expect(result.success).toBe(true);
+    expect(result.models).toEqual(["large-v3-turbo"]);
+    expect(result.reportedModel).toBe("large-v3-turbo");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("STT_SERVER_URL", previous.url);
+    restoreEnv("PROXY_API_KEY", previous.key);
   }
 });

@@ -37,6 +37,16 @@ type RouteHealth = {
   message: string;
 };
 
+type EnvironmentRoute = {
+  configured: boolean;
+  enabled: boolean;
+  baseUrl?: string;
+  model?: string;
+  priority: number;
+  concurrency: number;
+  message: string;
+};
+
 const emptyProfile = (): SttProfile => ({
   id: `stt-provider-${Date.now()}`,
   name: "New STT provider",
@@ -54,6 +64,9 @@ const TranscriptionSettingsPage = () => {
   const [draft, setDraft] = useState<SttProfile>(emptyProfile);
   const [includeEnvironment, setIncludeEnvironment] = useState(false);
   const [environmentPriority, setEnvironmentPriority] = useState(50);
+  const [environmentRoute, setEnvironmentRoute] = useState<
+    EnvironmentRoute | null
+  >(null);
   const [batchSize, setBatchSize] = useState(16);
   const [baseTimeout, setBaseTimeout] = useState(120);
   const [perSequenceTimeout, setPerSequenceTimeout] = useState(60);
@@ -89,7 +102,10 @@ const TranscriptionSettingsPage = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const config = await callResource("config", { action: "get" });
+        const [config, environment] = await Promise.all([
+          callResource("config", { action: "get" }),
+          callResource("transcription", { action: "environment_status" }),
+        ]);
         const legacy = config?.transcription ?? {};
         const saved = config?.transcriptionProfiles?.profiles as
           | Array<Partial<SttProfile>>
@@ -124,8 +140,10 @@ const TranscriptionSettingsPage = () => {
           config?.transcriptionProfiles?.includeEnvironment ?? false,
         );
         setEnvironmentPriority(
-          config?.transcriptionProfiles?.environmentPriority ?? 50,
+          environment?.priority ??
+            config?.transcriptionProfiles?.environmentPriority ?? 50,
         );
+        setEnvironmentRoute(environment ?? null);
         setBatchSize(legacy.batchSize ?? 16);
         setBaseTimeout(legacy.batchTimeoutBaseSeconds ?? 120);
         setPerSequenceTimeout(
@@ -216,12 +234,15 @@ const TranscriptionSettingsPage = () => {
       }
     }
     const enabled = nextProfiles.filter((profile) => profile.enabled);
-    if (enabled.length === 0 && !includeEnvironment) {
+    if (
+      enabled.length === 0 &&
+      !(includeEnvironment && environmentRoute?.configured)
+    ) {
       return "Enable at least one provider or the environment route.";
     }
     const total = enabled.reduce(
       (sum, profile) => sum + profile.concurrency,
-      includeEnvironment ? 1 : 0,
+      includeEnvironment && environmentRoute?.configured ? 1 : 0,
     );
     if (total > 8) return "Enabled STT slots cannot exceed 8 in total.";
     if (
@@ -264,7 +285,7 @@ const TranscriptionSettingsPage = () => {
     const enabled = nextProfiles.filter((profile) => profile.enabled);
     const totalConcurrency = enabled.reduce(
       (sum, profile) => sum + profile.concurrency,
-      includeEnvironment ? 1 : 0,
+      includeEnvironment && environmentRoute?.configured ? 1 : 0,
     );
     const legacyProfile =
       [...enabled].sort((a, b) =>
@@ -360,10 +381,12 @@ const TranscriptionSettingsPage = () => {
       setModels(nextModels);
       setMessage({
         success: Boolean(result?.success),
-        text: result?.message ||
-          (nextModels.length
-            ? `Loaded ${nextModels.length} model(s).`
-            : "Provider is healthy and does not expose /v1/models."),
+        text: result?.reportedModel
+          ? `${result.message} (actual: ${result.reportedModel})`
+          : result?.message ||
+            (nextModels.length
+              ? `Loaded ${nextModels.length} model(s).`
+              : "Provider is healthy and does not expose /v1/models."),
       });
     } catch (error) {
       setMessage({
@@ -389,7 +412,7 @@ const TranscriptionSettingsPage = () => {
   const enabledSlots = currentProfiles.filter((profile) => profile.enabled)
     .reduce(
       (sum, profile) => sum + profile.concurrency,
-      includeEnvironment ? 1 : 0,
+      includeEnvironment && environmentRoute?.configured ? 1 : 0,
     );
 
   return (
@@ -421,14 +444,20 @@ const TranscriptionSettingsPage = () => {
       <Card className="space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <Switch
-            checked={includeEnvironment}
+            checked={includeEnvironment &&
+              Boolean(environmentRoute?.configured)}
             onCheckedChange={setIncludeEnvironment}
+            disabled={!environmentRoute?.configured}
             aria-label="Use environment STT route"
           />
           <div className="min-w-56 flex-1">
             <p className="font-medium">Backend environment route</p>
             <p className="text-xs text-muted-foreground">
-              STT_SERVER_URL / PROXY_API_KEY · 1 slot · secret hidden
+              {environmentRoute?.configured
+                ? `${environmentRoute.baseUrl} · ${
+                  environmentRoute.model || "whisper"
+                } · 1 slot · deployment managed`
+                : "STT_SERVER_URL / PROXY_API_KEY not configured in the backend environment"}
             </p>
           </div>
           <div className="w-36 space-y-1">
@@ -439,7 +468,7 @@ const TranscriptionSettingsPage = () => {
               min={1}
               max={100}
               value={environmentPriority}
-              disabled={!includeEnvironment}
+              disabled={!includeEnvironment || !environmentRoute?.configured}
               onChange={(event) =>
                 setEnvironmentPriority(Number(event.target.value))}
             />
@@ -449,7 +478,19 @@ const TranscriptionSettingsPage = () => {
               {healthById.get("environment")!.status}
             </Badge>
           )}
+          <Badge
+            variant={environmentRoute?.configured ? "outline" : "destructive"}
+          >
+            {environmentRoute?.configured
+              ? includeEnvironment ? "Enabled" : "Disabled"
+              : "Unavailable"}
+          </Badge>
         </div>
+        <p className="text-xs text-muted-foreground">
+          {environmentRoute?.message || "Checking backend environment route…"}
+          {environmentRoute?.configured &&
+            " Its URL, API key and default model can only be changed in .env."}
+        </p>
       </Card>
 
       <div className="flex flex-wrap items-center justify-between gap-3">

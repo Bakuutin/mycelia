@@ -50,6 +50,23 @@ function extractModels(body: string): string[] {
   }
 }
 
+function extractReportedSttModel(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body);
+    const value = [
+      parsed?.model,
+      parsed?.loadedModel,
+      parsed?.effectiveModel,
+      parsed?.asrModel,
+    ].find((candidate): candidate is string =>
+      typeof candidate === "string" && candidate.trim().length > 0
+    );
+    return value ? normalizeProviderModelId(value) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function probeProvider(input: {
   id: ExternalServiceId;
   label: string;
@@ -92,14 +109,35 @@ async function probeProvider(input: {
     let effectiveResponse = response;
     let usedHealthFallback = false;
     if (shouldFallbackToSttHealth(input.id, response.status)) {
-      effectiveResponse = await fetch(getProviderHealthUrl(input.baseUrl), {
-        headers: { Authorization: `Bearer ${input.apiKey}` },
-        signal: AbortSignal.timeout(5_000),
-      });
-      body = await effectiveResponse.text();
-      usedHealthFallback = effectiveResponse.ok;
+      const statusResponse = await fetch(
+        `${input.baseUrl.trim().replace(/\/+$/, "")}/v1/stt/status`,
+        {
+          headers: { Authorization: `Bearer ${input.apiKey}` },
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      const statusBody = await statusResponse.text();
+      const statusModel = statusResponse.ok
+        ? extractReportedSttModel(statusBody)
+        : undefined;
+      if (statusModel) {
+        body = statusBody;
+        effectiveResponse = statusResponse;
+        usedHealthFallback = true;
+      } else {
+        effectiveResponse = await fetch(getProviderHealthUrl(input.baseUrl), {
+          headers: { Authorization: `Bearer ${input.apiKey}` },
+          signal: AbortSignal.timeout(5_000),
+        });
+        body = await effectiveResponse.text();
+        usedHealthFallback = effectiveResponse.ok;
+      }
     }
-    const models = response.ok ? extractModels(body) : [];
+    const models = response.ok
+      ? extractModels(body)
+      : extractReportedSttModel(body)
+      ? [extractReportedSttModel(body)!]
+      : [];
     const configuredModel = input.model
       ? normalizeProviderModelId(input.model)
       : undefined;
@@ -115,8 +153,9 @@ async function probeProvider(input: {
       }
       : classifyServiceResponse(effectiveResponse.status, body);
     if (usedHealthFallback) {
-      classification.message =
-        "Connection successful; provider uses the configured STT model";
+      classification.message = models.length > 0
+        ? `Connection successful; provider reports loaded model ${models[0]}`
+        : "Connection successful; provider uses the configured STT model";
     }
     return {
       id: input.id,
@@ -229,7 +268,7 @@ export async function getExternalServicesHealth(
           providerProfileId: provider.id,
           providerProfileName: provider.name,
           status: route.status,
-          model: provider.model,
+          model: route.models?.[0] || provider.model,
           priority: provider.priority,
           concurrency: provider.concurrency,
           latencyMs: route.latencyMs,

@@ -27,6 +27,11 @@ const transcriptionRequestSchema = z.discriminatedUnion("action", [
     baseUrl: z.string().url().optional(),
     apiKey: z.string().optional(),
   }),
+  z.object({
+    // The environment route is intentionally inspectable but never editable:
+    // its URL, credentials and default model belong to the deployment .env.
+    action: z.literal("environment_status"),
+  }),
 ]);
 
 type TranscriptionRequest = z.infer<typeof transcriptionRequestSchema>;
@@ -47,6 +52,46 @@ export type ResolvedTranscriptionProvider = {
     | "transcription_config"
     | "inference_config";
 };
+
+function listedModels(body: string): string[] {
+  try {
+    const parsed = JSON.parse(body);
+    const entries: unknown[] = Array.isArray(parsed?.data)
+      ? parsed.data
+      : Array.isArray(parsed?.models)
+      ? parsed.models
+      : [];
+    const modelIds = entries.map((entry: unknown): string => {
+      if (typeof entry === "string") return entry;
+      if (!entry || typeof entry !== "object") return "";
+      const candidate = entry as Record<string, unknown>;
+      return [candidate.id, candidate.model, candidate.name].find(
+        (value): value is string => typeof value === "string",
+      ) || "";
+    }).map((model: string) => model.trim().replace(/^models\//, ""))
+      .filter(Boolean);
+    return [...new Set(modelIds)].sort();
+  } catch {
+    return [];
+  }
+}
+
+function reportedSttModel(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body);
+    const candidates = [
+      parsed?.model,
+      parsed?.loadedModel,
+      parsed?.effectiveModel,
+      parsed?.asrModel,
+    ];
+    return candidates.find((value): value is string =>
+      typeof value === "string" && value.trim().length > 0
+    )?.trim().replace(/^models\//, "");
+  } catch {
+    return undefined;
+  }
+}
 
 export class TranscriptionResource
   implements Resource<TranscriptionRequest, TranscriptionResponse> {
@@ -176,6 +221,37 @@ export class TranscriptionResource
 
     try {
       switch (input.action) {
+        case "environment_status": {
+          let config: Awaited<ReturnType<typeof getServerConfig>> | null = null;
+          try {
+            config = await getServerConfig();
+          } catch {
+            // Configuration storage is optional for environment-only installs.
+          }
+          const baseUrl = Deno.env.get("STT_SERVER_URL")?.trim();
+          const hasApiKey = Boolean(Deno.env.get("PROXY_API_KEY")?.trim());
+          const configured = Boolean(baseUrl && hasApiKey);
+          const profilesConfigured = Boolean(
+            config?.transcriptionProfiles?.profiles?.length,
+          );
+          return {
+            configured,
+            enabled: profilesConfigured
+              ? Boolean(config?.transcriptionProfiles?.includeEnvironment)
+              : configured,
+            baseUrl: baseUrl?.replace(/\/+$/, ""),
+            model: Deno.env.get("STT_MODEL")?.trim() ||
+              (!profilesConfigured
+                ? config?.transcription?.model?.trim()
+                : undefined) ||
+              "whisper",
+            priority: config?.transcriptionProfiles?.environmentPriority ?? 50,
+            concurrency: 1,
+            message: configured
+              ? "Deployment-managed route; URL, key and model are read-only here."
+              : "STT_SERVER_URL and PROXY_API_KEY are not both configured in the backend environment.",
+          };
+        }
         case "health": {
           const configured = await this.getInferenceProvider();
           const baseUrl = input.baseUrl?.trim() || configured?.baseUrl;
@@ -211,49 +287,47 @@ export class TranscriptionResource
             signal: AbortSignal.timeout(5_000),
           });
           const body = await response.text();
-          let models: string[] = [];
-          if (response.ok) {
-            try {
-              const parsed = JSON.parse(body);
-              const entries = Array.isArray(parsed?.data)
-                ? parsed.data
-                : Array.isArray(parsed?.models)
-                ? parsed.models
-                : [];
-              const modelIds: string[] = entries.map((entry: unknown) => {
-                if (typeof entry === "string") return entry;
-                if (!entry || typeof entry !== "object") return "";
-                const candidate = entry as Record<string, unknown>;
-                return [candidate.id, candidate.model, candidate.name].find(
-                  (value): value is string => typeof value === "string",
-                ) || "";
-              }).map((model: string) => model.trim().replace(/^models\//, ""))
-                .filter((model: string): model is string => Boolean(model));
-              models = [...new Set<string>(modelIds)].sort();
-            } catch {
-              models = [];
-            }
-          }
+          let models = response.ok ? listedModels(body) : [];
+          let reportedModel = response.ok ? reportedSttModel(body) : undefined;
 
           let usedHealthFallback = false;
           let effectiveStatus = response.status;
-          if ([404, 405].includes(response.status) && configured?.model) {
-            const healthResponse = await fetch(
-              `${baseUrl.replace(/\/+$/, "")}/health`,
+          if ([404, 405].includes(response.status)) {
+            const statusResponse = await fetch(
+              `${baseUrl.replace(/\/+$/, "")}/v1/stt/status`,
               {
                 headers: { Authorization: `Bearer ${apiKey}` },
                 signal: AbortSignal.timeout(5_000),
               },
             );
-            effectiveStatus = healthResponse.status;
-            if (healthResponse.ok) {
-              models = [configured.model];
+            effectiveStatus = statusResponse.status;
+            const statusBody = await statusResponse.text();
+            reportedModel = statusResponse.ok
+              ? reportedSttModel(statusBody)
+              : undefined;
+            if (reportedModel) {
+              models = [reportedModel];
               usedHealthFallback = true;
+            } else {
+              const healthResponse = await fetch(
+                `${baseUrl.replace(/\/+$/, "")}/health`,
+                {
+                  headers: { Authorization: `Bearer ${apiKey}` },
+                  signal: AbortSignal.timeout(5_000),
+                },
+              );
+              effectiveStatus = healthResponse.status;
+              if (healthResponse.ok && configured?.model) {
+                models = [configured.model];
+                usedHealthFallback = true;
+              }
             }
           }
 
           const message = usedHealthFallback
-            ? "Provider is healthy and uses the configured STT model"
+            ? reportedModel
+              ? `Provider reports loaded model ${reportedModel}`
+              : "Provider is healthy and uses the configured STT model"
             : response.ok
             ? models.length > 0
               ? `Found ${models.length} STT model${
@@ -269,6 +343,7 @@ export class TranscriptionResource
             models,
             modelsUrl,
             configuredModel: configured?.model,
+            reportedModel,
           };
         }
         case "transcribe": {
@@ -382,10 +457,14 @@ export class TranscriptionResource
             jsonResponse.metadata = {
               ...responseMetadata,
               model: reportedModel,
+              requestedModel: input.model || provider.model || "whisper",
+              reportedModel: proxyResponse.headers.get("X-Whisper-Model") ||
+                jsonResponse.model || undefined,
               provider: "openai_compatible",
               providerProfileId: provider.id,
               providerProfileName: provider.name,
               providerSource: provider.source,
+              providerBaseUrl: provider.baseUrl,
               ...(whisperVadFilter === undefined ? {} : { whisperVadFilter }),
             };
             span.setStatus({ code: 1 });

@@ -64,6 +64,19 @@ describe("TranscriptionSettingsPage", () => {
       if (resource === "config" && input.action === "get") {
         return Promise.resolve(config);
       }
+      if (
+        resource === "transcription" && input.action === "environment_status"
+      ) {
+        return Promise.resolve({
+          configured: true,
+          enabled: true,
+          baseUrl: "http://environment-stt:8001",
+          model: "large-v3-turbo",
+          priority: 30,
+          concurrency: 1,
+          message: "Deployment-managed route",
+        });
+      }
       if (resource === "jobs" && input.action === "pipeline_health") {
         return Promise.resolve({
           services: [{
@@ -135,5 +148,14 @@ describe("TranscriptionSettingsPage", () => {
         concurrency: 4,
       });
     });
+  });
+
+  it("shows the environment route as a read-only deployment-managed server", async () => {
+    renderPage();
+
+    expect(await screen.findByText(/environment-stt:8001/)).toBeInTheDocument();
+    expect(screen.getByText(/default model can only be changed in \.env/))
+      .toBeInTheDocument();
+    expect(screen.getByLabelText("Use environment STT route")).toBeEnabled();
   });
 });
