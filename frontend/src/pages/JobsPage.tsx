@@ -429,7 +429,14 @@ function JobProgressCell({ job }: { job: JobInfo }) {
           )}
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             {result.audioDuration != null && (
-              <span>{result.audioDuration.toFixed(1)}s</span>
+              <span>{result.audioDuration.toFixed(1)}s audio</span>
+            )}
+            {Number(result.inferenceMs) > 0 && result.audioDuration > 0 && (
+              <span>
+                {(result.inferenceMs / 1000).toFixed(1)}s STT · {(
+                  result.audioDuration / (result.inferenceMs / 1000)
+                ).toFixed(2)}× realtime
+              </span>
             )}
             {result.wordCount != null
               ? <span>{result.wordCount} words</span>

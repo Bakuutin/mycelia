@@ -23,6 +23,7 @@ type PreparedAudio = {
 type BatchSequence = {
   sequenceId: string;
   sequenceStart?: string;
+  audioDuration: number;
   audioPreparationMs: number;
   prefetchWaitMs: number;
   inferenceMs: number;
@@ -50,6 +51,7 @@ const capability: JobCapability = {
     hasMore: z.boolean().optional(),
     transcriptionId: z.string().nullable().optional(),
     audioDuration: z.number().optional(),
+    inferenceMs: z.number().optional(),
     audioSize: z.number().optional(),
     wordCount: z.number().optional(),
     textLength: z.number().optional(),
@@ -511,6 +513,8 @@ const capability: JobCapability = {
       let processed = 0;
       let lastResult: any;
       const batchSequences: BatchSequence[] = [];
+      let totalAudioDuration = 0;
+      let totalInferenceMs = 0;
 
       await updateProgress({
         stage: sequence ? "batch_starting" : "idle",
@@ -587,9 +591,12 @@ const capability: JobCapability = {
             prefetchNext,
           );
           processed += lastResult.processed || 0;
+          totalAudioDuration += Number(lastResult.audioDuration) || 0;
+          totalInferenceMs += Number(lastResult.inferenceMs) || 0;
           batchSequences.push({
             sequenceId: sequence._id.toString(),
             sequenceStart: sequence.start?.toISOString?.() || sequence.start,
+            audioDuration: Number(lastResult.audioDuration) || 0,
             audioPreparationMs: lastResult.audioPreparationMs ?? 0,
             prefetchWaitMs: lastResult.prefetchWaitMs ?? 0,
             inferenceMs: lastResult.inferenceMs ?? 0,
@@ -642,6 +649,10 @@ const capability: JobCapability = {
       return {
         ...(lastResult || { status: "success" }),
         processed,
+        // Unlike the final sequence result, these totals describe all audio
+        // handled by this job and the actual STT request time for the batch.
+        audioDuration: totalAudioDuration,
+        inferenceMs: totalInferenceMs,
         batchSize,
         batchSequences,
         hasMore,
