@@ -15,7 +15,6 @@ import {
   getExternalServicesHealth,
 } from "@/lib/jobs/service-health.ts";
 import { cancelRunningJob } from "@/lib/jobs/processor.ts";
-import { LLMResource } from "@/lib/llm/resource.server.ts";
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -80,24 +79,6 @@ const DismissFailedJobSchema = z.object({
 const GetJobSchema = z.object({
   action: z.literal("get"),
   id: z.string(),
-});
-
-const ListOpenRouterBatchesSchema = z.object({
-  action: z.literal("openrouter_batch_list"),
-  limit: z.number().int().min(1).max(100).default(25),
-});
-
-const CancelOpenRouterBatchSchema = z.object({
-  action: z.literal("openrouter_batch_cancel"),
-  id: z.string(),
-});
-
-const GetOpenRouterBatchControlSchema = z.object({
-  action: z.literal("openrouter_batch_control"),
-});
-
-const ResumeOpenRouterBatchSchema = z.object({
-  action: z.literal("openrouter_batch_resume"),
 });
 
 interface JobModelProvenanceEntry {
@@ -243,10 +224,6 @@ const RequestSchema = z.union([
   CancelJobSchema,
   DismissFailedJobSchema,
   GetJobSchema,
-  ListOpenRouterBatchesSchema,
-  CancelOpenRouterBatchSchema,
-  GetOpenRouterBatchControlSchema,
-  ResumeOpenRouterBatchSchema,
   EnqueueJobSchema,
   SchemasSchema,
   PauseWorkerSchema,
@@ -440,14 +417,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     switch (input.action) {
       case "get":
         return this.get(input, auth);
-      case "openrouter_batch_list":
-        return this.listOpenRouterBatches(input, auth);
-      case "openrouter_batch_cancel":
-        return this.cancelOpenRouterBatch(input, auth);
-      case "openrouter_batch_control":
-        return this.getOpenRouterBatchControl(auth);
-      case "openrouter_batch_resume":
-        return this.resumeOpenRouterBatch(auth);
       case "enqueue":
         return this.enqueue(input, auth);
       case "cancel":
@@ -655,115 +624,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       success: true,
       jobId: job.id,
     };
-  }
-
-  private async listOpenRouterBatches(
-    input: z.infer<typeof ListOpenRouterBatchesSchema>,
-    auth: Auth,
-  ) {
-    const mongo = await getMongoResource(auth);
-    const batches = await mongo({
-      action: "find",
-      collection: "openrouter_batches",
-      query: {},
-      options: {
-        sort: { submittedAt: -1 },
-        limit: input.limit,
-        projection: {
-          batchId: 1,
-          ownerJobId: 1,
-          task: 1,
-          model: 1,
-          status: 1,
-          requestCounts: 1,
-          usage: 1,
-          submittedAt: 1,
-          completedAt: 1,
-          importedAt: 1,
-          importCounts: 1,
-          updatedAt: 1,
-        },
-      },
-    });
-    return batches.map((batch: any) => ({
-      id: batch._id?.toString(),
-      ...batch,
-      _id: undefined,
-    }));
-  }
-
-  private async cancelOpenRouterBatch(
-    input: z.infer<typeof CancelOpenRouterBatchSchema>,
-    auth: Auth,
-  ) {
-    const mongo = await getMongoResource(auth);
-    const batches = await mongo({
-      action: "find",
-      collection: "openrouter_batches",
-      query: { _id: new ObjectId(input.id) },
-      options: { limit: 1 },
-    });
-    const batch = batches[0];
-    if (!batch) throw new Error(`OpenRouter batch ${input.id} not found`);
-    if (["completed", "failed", "expired", "cancelled"].includes(batch.status)) {
-      return { success: true, cancelled: false, status: batch.status };
-    }
-
-    const remote = await new LLMResource().use({
-      action: "batch_cancel",
-      batchId: batch.batchId,
-    }, auth) as Record<string, unknown>;
-    const now = new Date();
-    await mongo({
-      action: "updateOne",
-      collection: "openrouter_batches",
-      query: { _id: batch._id },
-      update: {
-        $set: {
-          status: remote.status ?? "cancelling",
-          cancellationRequestedAt: now,
-          updatedAt: now,
-        },
-      },
-    });
-    await mongo({
-      action: "updateMany",
-      collection: "objects",
-      query: { "_summarizationClaim.jobId": batch.ownerJobId },
-      update: { $unset: { _summarizationClaim: "" } },
-    });
-    return { success: true, cancelled: true, batchId: batch.batchId, status: remote.status };
-  }
-
-  private async getOpenRouterBatchControl(auth: Auth) {
-    const mongo = await getMongoResource(auth);
-    const control = await mongo({
-      action: "findOne",
-      collection: "openrouter_batch_control",
-      query: { _id: "openrouter_batch" },
-    });
-    return {
-      paused: Boolean(control?.paused),
-      reason: control?.reason,
-      pausedAt: control?.pausedAt,
-      resumedAt: control?.resumedAt,
-    };
-  }
-
-  private async resumeOpenRouterBatch(auth: Auth) {
-    const mongo = await getMongoResource(auth);
-    const now = new Date();
-    await mongo({
-      action: "updateOne",
-      collection: "openrouter_batch_control",
-      query: { _id: "openrouter_batch" },
-      update: {
-        $set: { paused: false, resumedAt: now, updatedAt: now },
-        $unset: { reason: "", pausedAt: "" },
-      },
-      options: { upsert: true },
-    });
-    return { success: true, paused: false, resumedAt: now };
   }
 
   private async cancel(input: z.infer<typeof CancelJobSchema>, auth: Auth) {

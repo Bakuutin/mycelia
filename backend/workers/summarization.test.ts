@@ -2,7 +2,6 @@ import { expect } from "@std/expect";
 import {
   buildSummarySourceRefs,
   getSummarizationRetryDelayMs,
-  isConversationClaimActive,
   isTerminalSummarizationResponseError,
 } from "./summarization.ts";
 
@@ -10,18 +9,6 @@ Deno.test("summarization retries back off and remain bounded", () => {
   expect(getSummarizationRetryDelayMs(1)).toBe(15 * 60 * 1000);
   expect(getSummarizationRetryDelayMs(2)).toBe(30 * 60 * 1000);
   expect(getSummarizationRetryDelayMs(99)).toBe(24 * 60 * 60 * 1000);
-});
-
-Deno.test("a batch claim stays active beyond the normal worker timeout", () => {
-  const now = Date.parse("2026-07-30T00:30:00.000Z");
-  expect(isConversationClaimActive({
-    startedAt: "2026-07-30T00:00:00.000Z",
-    holdUntil: "2026-07-31T00:00:00.000Z",
-  }, now)).toBe(true);
-  expect(isConversationClaimActive({
-    startedAt: "2026-07-30T00:00:00.000Z",
-    holdUntil: "2026-07-30T00:20:00.000Z",
-  }, now)).toBe(false);
 });
 
 Deno.test("summary source receipt records exact chunks and transcripts", () => {

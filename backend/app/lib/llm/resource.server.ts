@@ -87,45 +87,12 @@ const chatCompletionRequestSchema = z.object({
     .optional(),
 });
 
-const batchRequestItemSchema = z.object({
-  custom_id: z.string().trim().min(1).max(256),
-  // OpenRouter validates the endpoint-specific body. Keeping this permissive
-  // lets the resource support all documented batch API skins without leaking
-  // batch transport details into workers.
-  body: z.record(z.string(), z.unknown()),
-});
-
-const batchSubmitRequestSchema = z.object({
-  action: z.literal("batch_submit"),
-  endpoint: z.enum([
-    "/v1/chat/completions",
-    "/v1/responses",
-    "/v1/messages",
-    "/v1/embeddings",
-  ]),
-  model: z.string().trim().min(1),
-  requests: z.array(batchRequestItemSchema).min(1).max(100),
-});
-
-const batchGetRequestSchema = z.object({
-  action: z.literal("batch_get"),
-  batchId: z.string().trim().min(1),
-});
-
-const batchCancelRequestSchema = z.object({
-  action: z.literal("batch_cancel"),
-  batchId: z.string().trim().min(1),
-});
-
 const listModelsRequestSchema = z.object({
   action: z.literal("list"),
 });
 
 const llmRequestSchema = z.discriminatedUnion("action", [
   chatCompletionRequestSchema,
-  batchSubmitRequestSchema,
-  batchGetRequestSchema,
-  batchCancelRequestSchema,
   listModelsRequestSchema,
 ]);
 
@@ -224,38 +191,6 @@ function isOpenRouterPromptCachingBaseUrl(baseUrl: string): boolean {
   } catch {
     return false;
   }
-}
-
-function getOpenRouterBatchBaseUrl(baseUrl: string): string | null {
-  try {
-    const url = new URL(baseUrl);
-    if (url.hostname !== "openrouter.ai") return null;
-    return `${url.protocol}//${url.host}/api/beta/batches`;
-  } catch {
-    return null;
-  }
-}
-
-async function readOpenRouterBatchResponse(response: Response): Promise<any> {
-  const text = await response.text();
-  let parsed: unknown = null;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    // Preserve the useful provider body in a bounded error below.
-  }
-  if (!response.ok) {
-    const detail = typeof parsed === "object" && parsed !== null
-      ? JSON.stringify(parsed)
-      : text;
-    throw new Error(
-      `OpenRouter Batch API error (${response.status}): ${detail.slice(0, 1000)}`,
-    );
-  }
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("OpenRouter Batch API returned an invalid JSON response");
-  }
-  return parsed;
 }
 
 export class LLMResource implements Resource<LLMRequest, LLMResponse> {
@@ -393,52 +328,6 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
     try {
       switch (input.action) {
-        case "batch_submit":
-        case "batch_get":
-        case "batch_cancel": {
-          const provider = await this.getInferenceProvider();
-          if (!provider) {
-            throw new Error(
-              "Inference provider not configured. Please configure it in server settings.",
-            );
-          }
-          const batchBaseUrl = getOpenRouterBatchBaseUrl(provider.baseUrl);
-          if (!batchBaseUrl) {
-            throw new Error(
-              "OpenRouter Batch API requires an active provider with base URL https://openrouter.ai/api/v1",
-            );
-          }
-
-          let url = batchBaseUrl;
-          let method = "GET";
-          let body: Record<string, unknown> | undefined;
-          if (input.action === "batch_submit") {
-            method = "POST";
-            // Property order is intentional: OpenRouter stream-parses batch
-            // input and requires endpoint/model before requests.
-            body = {
-              endpoint: input.endpoint,
-              model: this.resolveModelAlias(input.model, provider),
-              requests: input.requests,
-            };
-          } else {
-            url = `${batchBaseUrl}/${encodeURIComponent(input.batchId)}`;
-            if (input.action === "batch_cancel") {
-              method = "POST";
-              url += "/cancel";
-            }
-          }
-
-          const batchResponse = await fetch(url, {
-            method,
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${provider.apiKey}`,
-            },
-            ...(body ? { body: JSON.stringify(body) } : {}),
-          });
-          return await readOpenRouterBatchResponse(batchResponse);
-        }
         case "completions": {
           const {
             action,

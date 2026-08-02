@@ -29,13 +29,11 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  Ban,
   Check,
   CheckCircle,
   ChevronDown,
   Clock,
   Copy,
-  Layers,
   PauseCircle,
   Play,
   PlayCircle,
@@ -166,25 +164,6 @@ type VadJobFormData = {
   originalId?: string;
   start?: Date;
   end?: Date;
-};
-
-type OpenRouterBatch = {
-  id: string;
-  batchId: string;
-  task: string;
-  model: string;
-  status: string;
-  requestCounts?: { total?: number; completed?: number; failed?: number };
-  usage?: { cost?: number; prompt_tokens?: number; completion_tokens?: number };
-  submittedAt?: string;
-  completedAt?: string;
-  importCounts?: { imported?: number; failed?: number };
-};
-
-type OpenRouterBatchControl = {
-  paused: boolean;
-  reason?: string;
-  pausedAt?: string;
 };
 
 /**
@@ -1188,38 +1167,6 @@ export default function JobsPage() {
       await api.callResource("config", {
         action: "get",
       }) as InferenceRoutingConfig,
-  });
-
-  const { data: openRouterBatches = [], refetch: refetchOpenRouterBatches } = useQuery({
-    queryKey: ["openrouter-batches"],
-    queryFn: async () => await api.callResource("jobs", {
-      action: "openrouter_batch_list",
-      limit: 25,
-    }) as OpenRouterBatch[],
-    refetchInterval: 30_000,
-  });
-
-  const cancelOpenRouterBatchMutation = useMutation({
-    mutationFn: async (id: string) => await api.callResource("jobs", {
-      action: "openrouter_batch_cancel",
-      id,
-    }),
-    onSuccess: () => void refetchOpenRouterBatches(),
-  });
-
-  const { data: openRouterBatchControl, refetch: refetchOpenRouterBatchControl } = useQuery({
-    queryKey: ["openrouter-batch-control"],
-    queryFn: async () => await api.callResource("jobs", {
-      action: "openrouter_batch_control",
-    }) as OpenRouterBatchControl,
-    refetchInterval: 30_000,
-  });
-
-  const resumeOpenRouterBatchMutation = useMutation({
-    mutationFn: async () => await api.callResource("jobs", {
-      action: "openrouter_batch_resume",
-    }),
-    onSuccess: () => void refetchOpenRouterBatchControl(),
   });
 
   useEffect(() => {
@@ -2259,71 +2206,6 @@ export default function JobsPage() {
           </Button>
         </div>
       </div>
-
-      {(openRouterBatches.length > 0 || openRouterBatchControl?.paused) && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Layers className="h-5 w-5" />
-              OpenRouter batches
-              <Badge variant="outline">24h async</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {openRouterBatchControl?.paused && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/5 p-3">
-                <div className="text-sm">
-                  <span className="font-medium text-amber-600 dark:text-amber-400">New submissions paused.</span>
-                  {openRouterBatchControl.reason ? ` ${openRouterBatchControl.reason}` : " Resolve the provider-wide error before continuing."}
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => resumeOpenRouterBatchMutation.mutate()}
-                  disabled={resumeOpenRouterBatchMutation.isPending}
-                >
-                  <Play className="mr-2 h-4 w-4" /> Resume submissions
-                </Button>
-              </div>
-            )}
-            {openRouterBatches.map((batch) => {
-              const submittedAt = batch.submittedAt ? new Date(batch.submittedAt) : null;
-              const finishedAt = batch.completedAt ? new Date(batch.completedAt) : null;
-              const elapsed = submittedAt
-                ? formatJobDuration(submittedAt.getTime(), finishedAt?.getTime())
-                : null;
-              const terminal = ["completed", "failed", "expired", "cancelled"].includes(batch.status);
-              return (
-                <div key={batch.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3">
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={terminal ? "secondary" : "outline"}>{batch.status}</Badge>
-                      <span className="font-mono text-xs">{batch.model}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {batch.requestCounts?.completed ?? 0}/{batch.requestCounts?.total ?? 0} completed
-                      {batch.requestCounts?.failed ? ` · ${batch.requestCounts.failed} provider failed` : ""}
-                      {batch.importCounts ? ` · ${batch.importCounts.imported ?? 0} imported` : ""}
-                      {elapsed !== null ? ` · ${elapsed} elapsed` : ""}
-                      {typeof batch.usage?.cost === "number" ? ` · $${batch.usage.cost.toFixed(6)}` : ""}
-                    </div>
-                  </div>
-                  {!terminal && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => cancelOpenRouterBatchMutation.mutate(batch.id)}
-                      disabled={cancelOpenRouterBatchMutation.isPending}
-                    >
-                      <Ban className="mr-2 h-4 w-4" /> Cancel batch
-                    </Button>
-                  )}
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
 
       {pausedPipelineWorkers.length > 0 && (
         <Card className="border-amber-500/50 bg-amber-500/5">
