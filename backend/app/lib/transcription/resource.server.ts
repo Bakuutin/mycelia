@@ -67,8 +67,40 @@ export class TranscriptionResource
       // Dedicated environment-only deployments may not expose config storage.
     }
 
+    const sttBaseUrl = Deno.env.get("STT_SERVER_URL")?.trim();
+    const sttApiKey = Deno.env.get("PROXY_API_KEY")?.trim();
+    const resolveEnvironmentProvider = ():
+      | ResolvedTranscriptionProvider
+      | null => {
+      if (!sttBaseUrl && !sttApiKey) return null;
+      if (!sttBaseUrl || !sttApiKey) {
+        throw new Error(
+          "STT_SERVER_URL and PROXY_API_KEY must both be set for dedicated STT.",
+        );
+      }
+      const legacyConfiguredModel = config?.transcriptionProfiles?.profiles
+          ?.length
+        ? undefined
+        : config?.transcription?.model?.trim();
+      return {
+        id: "environment",
+        name: "Environment STT",
+        baseUrl: sttBaseUrl,
+        apiKey: sttApiKey,
+        // URL and credentials may remain environment-managed while the
+        // model is selected from the web UI.
+        model: Deno.env.get("STT_MODEL")?.trim() || legacyConfiguredModel ||
+          "whisper",
+        concurrency: 1,
+        enabled: true,
+        source: "stt_env",
+      };
+    };
+
     if (config?.transcriptionProfiles?.profiles?.length) {
-      return config.transcriptionProfiles.profiles.map((profile) => ({
+      const configuredProviders = config.transcriptionProfiles.profiles.map((
+        profile,
+      ) => ({
         id: profile.id,
         name: profile.name,
         baseUrl: profile.baseUrl,
@@ -78,32 +110,17 @@ export class TranscriptionResource
         enabled: profile.enabled,
         source: "transcription_profile" as const,
       }));
+      if (!config.transcriptionProfiles.includeEnvironment) {
+        return configuredProviders;
+      }
+      const environmentProvider = resolveEnvironmentProvider();
+      return environmentProvider
+        ? [environmentProvider, ...configuredProviders]
+        : configuredProviders;
     }
 
-    const sttBaseUrl = Deno.env.get("STT_SERVER_URL")?.trim();
-    const sttApiKey = Deno.env.get("PROXY_API_KEY")?.trim();
-
     if (sttBaseUrl || sttApiKey) {
-      if (!sttBaseUrl || !sttApiKey) {
-        throw new Error(
-          "STT_SERVER_URL and PROXY_API_KEY must both be set for dedicated STT.",
-        );
-      }
-
-      const configuredModel = config?.transcription?.model?.trim();
-      return [{
-        id: "environment",
-        name: "Environment STT",
-        baseUrl: sttBaseUrl,
-        apiKey: sttApiKey,
-        // URL and credentials may remain environment-managed while the model
-        // is selected from the web UI. An explicit saved selection wins.
-        model: configuredModel || Deno.env.get("STT_MODEL")?.trim() ||
-          "whisper",
-        concurrency: 1,
-        enabled: true,
-        source: "stt_env",
-      }];
+      return [resolveEnvironmentProvider()!];
     }
 
     config ??= await getServerConfig();

@@ -7,6 +7,16 @@ export function getWorkerConcurrencyCap(workerType: string): number {
   return WORKER_CONCURRENCY_CAPS[workerType] ?? MAX_WORKER_CONCURRENCY;
 }
 
+export function getWorkerConcurrencyRange(workerType: string): {
+  min: number;
+  max: number;
+} {
+  return {
+    min: MIN_WORKER_CONCURRENCY,
+    max: getWorkerConcurrencyCap(workerType),
+  };
+}
+
 export function normalizeWorkerConcurrency(
   workerType: string,
   value: unknown,

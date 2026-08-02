@@ -169,6 +169,7 @@ const InferenceSettingsPage = () => {
   const [activeProfileId, setActiveProfileId] = useState("");
   const [sttProfiles, setSttProfiles] = useState<SttProfile[]>([]);
   const [activeSttProfileId, setActiveSttProfileId] = useState("");
+  const [includeEnvironmentStt, setIncludeEnvironmentStt] = useState(false);
 
   const form = useForm<InferenceConfig>({
     resolver: zodResolver(inferenceConfigSchema),
@@ -297,6 +298,9 @@ const InferenceSettingsPage = () => {
           setActiveProfileId(nextActiveId);
           setSttProfiles(nextSttProfiles);
           setActiveSttProfileId(activeSttProfile.id);
+          setIncludeEnvironmentStt(
+            configResult.transcriptionProfiles?.includeEnvironment ?? false,
+          );
           form.reset({
             baseUrl: activeProfile.baseUrl,
             apiKey: activeProfile.apiKey,
@@ -472,7 +476,10 @@ const InferenceSettingsPage = () => {
           transcriptionProfiles: nextSttProfiles.every((profile) =>
               profile.baseUrl && profile.apiKey
             )
-            ? { profiles: nextSttProfiles }
+            ? {
+              profiles: nextSttProfiles,
+              includeEnvironment: includeEnvironmentStt,
+            }
             : null,
         },
       });
@@ -533,7 +540,7 @@ const InferenceSettingsPage = () => {
       }
       const totalConcurrency = enabledProfiles.reduce(
         (sum, profile) => sum + profile.concurrency,
-        0,
+        includeEnvironmentStt ? 1 : 0,
       );
       if (totalConcurrency > 8) {
         setError("Enabled STT provider concurrency cannot exceed 8 in total.");
@@ -542,7 +549,10 @@ const InferenceSettingsPage = () => {
       await callResource("config", {
         action: "patch",
         updates: {
-          transcriptionProfiles: { profiles: nextProfiles },
+          transcriptionProfiles: {
+            profiles: nextProfiles,
+            includeEnvironment: includeEnvironmentStt,
+          },
           transcription: {
             // Keep the legacy route populated for older deployments and use
             // it as the global home for batching/timeout settings.
@@ -1154,10 +1164,22 @@ const InferenceSettingsPage = () => {
               <h3 className="text-lg font-semibold">Speech-to-text route</h3>
               <p className="text-sm text-muted-foreground">
                 Each enabled profile reserves its own parallel slots. Once
-                profiles are saved they replace the legacy environment route;
-                the selected provider is snapshotted into every queued job.
+                queued, the selected provider is snapshotted into the job.
               </p>
             </div>
+            <label className="flex items-center gap-3 rounded-md border p-3 text-sm">
+              <Switch
+                checked={includeEnvironmentStt}
+                onCheckedChange={setIncludeEnvironmentStt}
+              />
+              <span>
+                Also use the backend environment STT route
+                <span className="block text-xs text-muted-foreground">
+                  Reserves 1 slot from STT_SERVER_URL / PROXY_API_KEY without
+                  exposing its secret in this form.
+                </span>
+              </span>
+            </label>
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={activeSttProfileId}

@@ -2255,6 +2255,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         paused: await workerPauseManager.getEffectivePauseState(workerType),
         desiredConcurrency: config?.workers?.[workerType]?.concurrency ?? 1,
         effectiveConcurrency: runtime.effectiveConcurrency,
+        minConcurrency: runtime.minConcurrency,
         maxConcurrency: runtime.maxConcurrency,
         running: runtime.running,
         active: workerJobs.filter((job) => job.state === "active").length,

@@ -1,8 +1,8 @@
 import type { Worker } from "bullmq";
 import { ObjectId } from "bson";
-import { createWorker, getQueueEvents, enqueueJob } from "./queue.ts";
+import { createWorker, enqueueJob, getQueueEvents } from "./queue.ts";
 import { cancelRunningJob, processJob } from "./processor.ts";
-import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";
+import { discoverJobWorkers, jobRegistry } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
@@ -11,7 +11,7 @@ import { env } from "#/env.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getContinuationJobData, shouldContinueJobChain } from "./job-chain.ts";
 import {
-  getWorkerConcurrencyCap,
+  getWorkerConcurrencyRange,
   normalizeWorkerConcurrency,
 } from "./worker-concurrency.ts";
 
@@ -22,7 +22,7 @@ export async function startWorkers() {
 
   // Discover and register all job workers
   await discoverJobWorkers();
-  
+
   // Sync discovered workers with database
   const { workerDiscovery } = await import("./worker-discovery.ts");
   await workerDiscovery.syncDiscoveredWorkers();
@@ -68,9 +68,9 @@ export async function startWorkers() {
         action: "updateOne",
         collection: "jobs",
         query: { _id: new ObjectId(jobId) },
-        update: { 
-          $set: { 
-            state: "active", 
+        update: {
+          $set: {
+            state: "active",
             startedAt,
             updatedAt: new Date(),
             ...(isRestart
@@ -111,13 +111,13 @@ export async function startWorkers() {
         action: "updateOne",
         collection: "jobs",
         query: { _id: new ObjectId(jobId) },
-        update: { 
-          $set: { 
-            state: "completed", 
+        update: {
+          $set: {
+            state: "completed",
             finishedAt,
             result: returnvalue,
-            updatedAt: new Date() 
-          } 
+            updatedAt: new Date(),
+          },
         },
       });
 
@@ -181,14 +181,14 @@ export async function startWorkers() {
         action: "updateOne",
         collection: "jobs",
         query: { _id: new ObjectId(jobId) },
-        update: { 
-          $set: { 
-            state: "failed", 
+        update: {
+          $set: {
+            state: "failed",
             finishedAt,
             failedReason: failedReason,
             updatedAt: new Date(),
             ...(partialResult ? { partialResult } : {}),
-          } 
+          },
         },
       });
 
@@ -205,14 +205,22 @@ export async function startWorkers() {
 
     worker.on("completed", async (job) => {
       console.log(`[${jobType}] Local worker completed job ${job.id}`);
-      console.log(`[${jobType}] Job ${job.id} result:`, JSON.stringify(job.returnvalue));
+      console.log(
+        `[${jobType}] Job ${job.id} result:`,
+        JSON.stringify(job.returnvalue),
+      );
 
       if (shouldContinueJobChain(job.returnvalue)) {
-        console.log(`[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`);
+        console.log(
+          `[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`,
+        );
         try {
-          await enqueueJob(getContinuationJobData(job.data) as typeof job.data, {
-            trigger: { type: "auto", reason: "hasMore" },
-          });
+          await enqueueJob(
+            getContinuationJobData(job.data) as typeof job.data,
+            {
+              trigger: { type: "auto", reason: "hasMore" },
+            },
+          );
         } catch (error) {
           console.warn(
             `[${jobType}] Deferred hasMore continuation: ${
@@ -228,7 +236,10 @@ export async function startWorkers() {
     });
 
     worker.on("failed", (job, err) => {
-      console.error(`[${jobType}] Local worker failed job ${job?.id}:`, err.message);
+      console.error(
+        `[${jobType}] Local worker failed job ${job?.id}:`,
+        err.message,
+      );
     });
 
     worker.on("progress", async (job, progress) => {
@@ -238,11 +249,11 @@ export async function startWorkers() {
         action: "updateOne",
         collection: "jobs",
         query: { _id: new ObjectId(job.id) },
-        update: { 
-          $set: { 
+        update: {
+          $set: {
             progress,
-            updatedAt: new Date() 
-          } 
+            updatedAt: new Date(),
+          },
         },
       });
 
@@ -260,7 +271,9 @@ export async function startWorkers() {
     workers.set(jobType, worker);
   }
 
-  console.log(`Started ${workers.size} worker(s) for ${jobTypes.length} job types`);
+  console.log(
+    `Started ${workers.size} worker(s) for ${jobTypes.length} job types`,
+  );
   console.log(`Python worker expected at: ${env.PYTHON_WORKER_URL}`);
 
   // Restore paused workers from config
@@ -275,7 +288,10 @@ async function restorePausedWorkers() {
       await workerPauseManager.initFromConfig(config.workers);
     }
   } catch (err) {
-    console.error("[workers] Failed to restore paused workers from config:", err);
+    console.error(
+      "[workers] Failed to restore paused workers from config:",
+      err,
+    );
   }
 }
 
@@ -290,10 +306,12 @@ export async function stopWorkers() {
 
 export function getWorkerRuntimeStatus(workerType: string) {
   const worker = workers.get(workerType);
+  const range = getWorkerConcurrencyRange(workerType);
   return {
     running: worker != null,
     effectiveConcurrency: worker?.concurrency ?? 0,
-    maxConcurrency: getWorkerConcurrencyCap(workerType),
+    minConcurrency: range.min,
+    maxConcurrency: range.max,
   };
 }
 

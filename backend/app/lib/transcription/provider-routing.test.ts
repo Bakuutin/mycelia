@@ -62,4 +62,16 @@ Deno.test("STT profile config requires an enabled route and at most eight slots"
     .toHaveLength(
       2,
     );
+  expect(
+    zTranscriptionProfilesConfig.parse({
+      profiles: profiles.map((profile) => ({ ...profile, enabled: false })),
+      includeEnvironment: true,
+    }).includeEnvironment,
+  ).toBe(true);
+  expect(() =>
+    zTranscriptionProfilesConfig.parse({
+      profiles: [{ ...profiles[0], concurrency: 8 }],
+      includeEnvironment: true,
+    })
+  ).toThrow(/cannot exceed 8/);
 });

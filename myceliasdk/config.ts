@@ -80,9 +80,10 @@ export const zTranscriptionProviderProfile = z.object({
 
 export const zTranscriptionProfilesConfig = z.object({
   profiles: z.array(zTranscriptionProviderProfile).min(1).max(8),
+  includeEnvironment: z.boolean().optional().default(false),
 }).superRefine((value, context) => {
   const enabled = value.profiles.filter((profile) => profile.enabled);
-  if (enabled.length === 0) {
+  if (enabled.length === 0 && !value.includeEnvironment) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["profiles"],
@@ -91,7 +92,7 @@ export const zTranscriptionProfilesConfig = z.object({
   }
   const totalConcurrency = enabled.reduce(
     (sum, profile) => sum + profile.concurrency,
-    0,
+    value.includeEnvironment ? 1 : 0,
   );
   if (totalConcurrency > 8) {
     context.addIssue({

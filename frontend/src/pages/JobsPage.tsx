@@ -74,6 +74,7 @@ type WorkerStatus = {
     paused: boolean;
     desiredConcurrency: number;
     effectiveConcurrency: number;
+    minConcurrency: number;
     maxConcurrency: number;
     running: boolean;
     active: number;
@@ -3130,7 +3131,7 @@ export default function JobsPage() {
                           <div className="flex items-center justify-center gap-1">
                             <Input
                               type="number"
-                              min={1}
+                              min={runtime?.minConcurrency ?? 1}
                               max={runtime?.maxConcurrency ?? 8}
                               value={concurrencyDrafts[worker.type] ??
                                 String(runtime?.desiredConcurrency ?? 1)}
@@ -3181,6 +3182,8 @@ export default function JobsPage() {
                                 pipelineHealth?.transcriptionRuntime
                                   .configuredBatchSize ?? "—"
                               }`}
+                            {runtime &&
+                              ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
                           </div>
                         </TableCell>
                         <TableCell className="text-center py-1">

@@ -3,6 +3,7 @@ import {
   assertWorkerConcurrency,
   getAvailableForceStartSlots,
   getWorkerConcurrencyCap,
+  getWorkerConcurrencyRange,
   normalizeWorkerConcurrency,
 } from "./worker-concurrency.ts";
 import { zWorkerConfig } from "@myceliasdk/config.ts";
@@ -23,6 +24,10 @@ Deno.test("transcription runtime can use provider-aware parallel slots", () => {
 });
 
 Deno.test("worker concurrency accepts the general one through eight range", () => {
+  expect(getWorkerConcurrencyRange("summarization")).toEqual({
+    min: 1,
+    max: 8,
+  });
   expect(assertWorkerConcurrency("summarization", 1)).toBe(1);
   expect(assertWorkerConcurrency("summarization", 8)).toBe(8);
   expect(() => assertWorkerConcurrency("summarization", 0)).toThrow();
