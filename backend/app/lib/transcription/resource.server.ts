@@ -231,7 +231,26 @@ export class TranscriptionResource
             }
           }
 
-          const message = response.ok
+          let usedHealthFallback = false;
+          let effectiveStatus = response.status;
+          if ([404, 405].includes(response.status) && configured?.model) {
+            const healthResponse = await fetch(
+              `${baseUrl.replace(/\/+$/, "")}/health`,
+              {
+                headers: { Authorization: `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(5_000),
+              },
+            );
+            effectiveStatus = healthResponse.status;
+            if (healthResponse.ok) {
+              models = [configured.model];
+              usedHealthFallback = true;
+            }
+          }
+
+          const message = usedHealthFallback
+            ? "Provider is healthy and uses the configured STT model"
+            : response.ok
             ? models.length > 0
               ? `Found ${models.length} STT model${
                 models.length === 1 ? "" : "s"
@@ -240,8 +259,8 @@ export class TranscriptionResource
             : body.trim().replace(/\s+/g, " ").slice(0, 300) ||
               `HTTP ${response.status}`;
           return {
-            success: response.ok && models.length > 0,
-            status: response.status,
+            success: (response.ok || usedHealthFallback) && models.length > 0,
+            status: effectiveStatus,
             message,
             models,
             modelsUrl,

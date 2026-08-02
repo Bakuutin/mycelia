@@ -181,3 +181,39 @@ Deno.test("STT models probe reports normalized selectable models", async () => {
     restoreEnv("STT_MODEL", previous.model);
   }
 });
+
+Deno.test("STT models probe accepts a healthy provider without models route", async () => {
+  const previous = {
+    url: Deno.env.get("STT_SERVER_URL"),
+    key: Deno.env.get("PROXY_API_KEY"),
+    model: Deno.env.get("STT_MODEL"),
+  };
+  Deno.env.set("STT_SERVER_URL", "http://argmax.example:10301");
+  Deno.env.set("PROXY_API_KEY", "test-key");
+  Deno.env.set("STT_MODEL", "large-v3-v20240930_626MB");
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/v1/models")) {
+      return Promise.resolve(new Response("Not Found", { status: 404 }));
+    }
+    expect(url).toBe("http://argmax.example:10301/health");
+    return Promise.resolve(new Response('{"status":"ok"}'));
+  };
+
+  try {
+    const result = await new TranscriptionResource().use(
+      { action: "models" },
+      {} as Auth,
+    ) as Record<string, any>;
+    expect(result.success).toBe(true);
+    expect(result.status).toBe(200);
+    expect(result.models).toEqual(["large-v3-v20240930_626MB"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("STT_SERVER_URL", previous.url);
+    restoreEnv("PROXY_API_KEY", previous.key);
+    restoreEnv("STT_MODEL", previous.model);
+  }
+});

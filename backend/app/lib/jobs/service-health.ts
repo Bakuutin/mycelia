@@ -6,8 +6,10 @@ import {
   type ExternalServiceId,
   getJobServiceDependencies,
   getModelsUrl,
+  getProviderHealthUrl,
   JOB_SERVICE_DEPENDENCIES,
   normalizeProviderModelId,
+  shouldFallbackToSttHealth,
 } from "./service-health.shared.ts";
 export * from "./service-health.shared.ts";
 
@@ -86,7 +88,17 @@ async function probeProvider(input: {
       headers: { Authorization: `Bearer ${input.apiKey}` },
       signal: AbortSignal.timeout(5_000),
     });
-    const body = await response.text();
+    let body = await response.text();
+    let effectiveResponse = response;
+    let usedHealthFallback = false;
+    if (shouldFallbackToSttHealth(input.id, response.status)) {
+      effectiveResponse = await fetch(getProviderHealthUrl(input.baseUrl), {
+        headers: { Authorization: `Bearer ${input.apiKey}` },
+        signal: AbortSignal.timeout(5_000),
+      });
+      body = await effectiveResponse.text();
+      usedHealthFallback = effectiveResponse.ok;
+    }
     const models = response.ok ? extractModels(body) : [];
     const configuredModel = input.model
       ? normalizeProviderModelId(input.model)
@@ -101,7 +113,11 @@ async function probeProvider(input: {
         message:
           `Configured model "${configuredModel}" is not advertised by this provider`,
       }
-      : classifyServiceResponse(response.status, body);
+      : classifyServiceResponse(effectiveResponse.status, body);
+    if (usedHealthFallback) {
+      classification.message =
+        "Connection successful; provider uses the configured STT model";
+    }
     return {
       id: input.id,
       label: input.label,
@@ -114,7 +130,7 @@ async function probeProvider(input: {
       providerProfileName: input.providerProfileName,
       model: input.model,
       models,
-      httpStatus: response.status,
+      httpStatus: effectiveResponse.status,
       latencyMs: Math.round(performance.now() - startedAt),
       checkedAt,
       usedBy,

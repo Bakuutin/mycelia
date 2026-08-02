@@ -3,7 +3,9 @@ import {
   classifyServiceResponse,
   getJobServiceDependencies,
   getModelsUrl,
+  getProviderHealthUrl,
   normalizeProviderModelId,
+  shouldFallbackToSttHealth,
 } from "./service-health.shared.ts";
 
 Deno.test("normalizes provider model endpoints", () => {
@@ -16,6 +18,16 @@ Deno.test("normalizes provider model endpoints", () => {
   ).toBe(
     "https://generativelanguage.googleapis.com/v1beta/openai/models",
   );
+});
+
+Deno.test("falls back to STT health when a provider has no models route", () => {
+  expect(getProviderHealthUrl("http://host:10301/")).toBe(
+    "http://host:10301/health",
+  );
+  expect(shouldFallbackToSttHealth("stt", 404)).toBe(true);
+  expect(shouldFallbackToSttHealth("stt", 405)).toBe(true);
+  expect(shouldFallbackToSttHealth("stt", 500)).toBe(false);
+  expect(shouldFallbackToSttHealth("llm", 404)).toBe(false);
 });
 
 Deno.test("normalizes Google model resource names for routing", () => {

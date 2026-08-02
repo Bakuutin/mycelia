@@ -52,6 +52,17 @@ export function getModelsUrl(baseUrl: string): string {
   return `${normalizeOpenAIBaseUrl(baseUrl)}/models`;
 }
 
+export function getProviderHealthUrl(baseUrl: string): string {
+  return `${baseUrl.trim().replace(/\/+$/, "")}/health`;
+}
+
+export function shouldFallbackToSttHealth(
+  serviceId: ExternalServiceId,
+  modelsStatus: number,
+): boolean {
+  return serviceId === "stt" && [404, 405].includes(modelsStatus);
+}
+
 export function normalizeProviderModelId(model: string): string {
   return model.trim().replace(/^models\//, "");
 }
