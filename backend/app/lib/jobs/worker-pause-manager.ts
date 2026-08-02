@@ -35,6 +35,47 @@ class WorkerPauseManager {
     return this.pausedWorkers.has(workerType);
   }
 
+  /** Read the durable BullMQ pause flag and reconcile the in-memory cache. */
+  async getEffectivePauseState(workerType: string): Promise<boolean> {
+    const paused = await getQueue(workerType).isPaused();
+    if (paused) this.pausedWorkers.add(workerType);
+    else this.pausedWorkers.delete(workerType);
+    return paused;
+  }
+
+  /**
+   * Apply one pause state to several queues. If one operation fails, restore
+   * every queue already changed to the state observed before this request.
+   */
+  async setWorkersPaused(
+    workerTypes: string[],
+    paused: boolean,
+  ): Promise<Record<string, { paused: boolean }>> {
+    const before = new Map<string, boolean>();
+    const changed: string[] = [];
+    try {
+      for (const workerType of workerTypes) {
+        const current = await this.getEffectivePauseState(workerType);
+        before.set(workerType, current);
+        if (current === paused) continue;
+        if (paused) await this.pauseWorker(workerType);
+        else await this.resumeWorker(workerType);
+        changed.push(workerType);
+      }
+    } catch (error) {
+      for (const workerType of changed.reverse()) {
+        const previous = before.get(workerType) ?? false;
+        if (previous) await this.pauseWorker(workerType);
+        else await this.resumeWorker(workerType);
+      }
+      throw error;
+    }
+
+    return Object.fromEntries(
+      workerTypes.map((workerType) => [workerType, { paused }]),
+    );
+  }
+
   /**
    * Get all paused worker types.
    */

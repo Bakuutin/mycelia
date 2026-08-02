@@ -75,6 +75,18 @@ export const zWorkerConfig = z.object({
   paused: z.boolean().optional().default(false).describe(
     "Whether this worker is paused and won't process new jobs.",
   ),
+  concurrency: z.number().int().min(1).max(8).optional().default(1).describe(
+    "Desired number of BullMQ jobs processed concurrently by this worker.",
+  ),
+  presetId: z.string().trim().min(1).optional().describe(
+    "Reserved worker-specific preset binding for future routing.",
+  ),
+  routingContext: z.object({
+    sourceId: z.string().trim().min(1).optional(),
+    providerProfileId: z.string().trim().min(1).optional(),
+  }).optional().describe(
+    "Reserved non-secret routing defaults snapshotted into newly queued jobs.",
+  ),
 });
 
 export type WorkerConfig = z.infer<typeof zWorkerConfig>;

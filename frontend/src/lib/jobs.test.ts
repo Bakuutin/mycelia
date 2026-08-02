@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { formatJobDuration } from "./jobDuration";
 import { getJobErrorCode, parseJobError } from "./jobErrors";
+import { getToggledWorkerFilter } from "./jobFilters";
 
 describe("parseJobError", () => {
   it("explains an unavailable configured inference server", () => {
@@ -128,5 +129,25 @@ describe("formatJobDuration", () => {
 
   it("does not display negative duration from stale restart timestamps", () => {
     expect(formatJobDuration(5_000, 4_000)).toBe("Restarted");
+  });
+});
+
+describe("getToggledWorkerFilter", () => {
+  it("selects one worker and restores all workers on the second click", () => {
+    const selected = getToggledWorkerFilter(
+      true,
+      new Set(),
+      "summarization",
+    );
+    expect(selected.allSelected).toBe(false);
+    expect([...selected.selectedTypes]).toEqual(["summarization"]);
+
+    const restored = getToggledWorkerFilter(
+      selected.allSelected,
+      selected.selectedTypes,
+      "summarization",
+    );
+    expect(restored.allSelected).toBe(true);
+    expect([...restored.selectedTypes]).toEqual([]);
   });
 });

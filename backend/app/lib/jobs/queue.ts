@@ -5,7 +5,12 @@ import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
 import { env } from "#/env.ts";
-import type { EnqueueJobOptions, JobData, JobResult } from "./types.ts";
+import type {
+  EnqueueJobOptions,
+  JobData,
+  JobResult,
+  JobRoutingContext,
+} from "./types.ts";
 export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
 import { assertJobServicesHealthy } from "./service-health.ts";
@@ -183,6 +188,37 @@ export async function enqueueJob(
     }
   }
 
+  if (!mergedData.routingContext) {
+    try {
+      const configResource = await getConfigResource(auth);
+      const config = await configResource({ action: "get" }) as any;
+      const workerConfig = config?.workers?.[data.type] ?? {};
+      const activeProfile = config?.llmProfiles?.profiles?.find(
+        (profile: any) => profile.id === config?.llmProfiles?.activeProfileId,
+      );
+      const routingContext: JobRoutingContext = {
+        ...(workerConfig.presetId ? { presetId: workerConfig.presetId } : {}),
+        ...(workerConfig.routingContext?.sourceId
+          ? { sourceId: workerConfig.routingContext.sourceId }
+          : {}),
+        providerProfileId: workerConfig.routingContext?.providerProfileId ??
+          activeProfile?.id,
+        providerProfileName: activeProfile?.name,
+        model: typeof mergedData.model === "string"
+          ? mergedData.model
+          : undefined,
+        resolvedAt: new Date().toISOString(),
+      };
+      mergedData.routingContext = routingContext;
+    } catch (error) {
+      console.warn(
+        `[queue] Could not snapshot routing context for ${data.type}:`,
+        error,
+      );
+      mergedData.routingContext = { resolvedAt: new Date().toISOString() };
+    }
+  }
+
   const parsedData = jobRegistry.validateJobData(mergedData);
 
   if (!parsedData.type) {
@@ -215,6 +251,9 @@ export async function enqueueJob(
       state: "waiting",
       attempts: 0,
       trigger: triggerWithPrincipal,
+      ...(options?.restartedFromJobId
+        ? { restartedFromJobId: options.restartedFromJobId }
+        : {}),
       createdAt: new Date(),
       updatedAt: new Date(),
     },
@@ -238,13 +277,14 @@ export async function getJob(
 export function createWorker(
   type: string,
   processor: (job: Job<JobData>) => Promise<JobResult>,
+  concurrency = 1,
 ): Worker<JobData, JobResult> {
   return new Worker<JobData, JobResult>(
     getQueueName(type),
     processor,
     {
       connection: redis,
-      concurrency: 1,
+      concurrency,
       lockDuration: WORKER_LOCK_DURATION_MS,
       lockRenewTime: WORKER_LOCK_RENEW_TIME_MS,
     },

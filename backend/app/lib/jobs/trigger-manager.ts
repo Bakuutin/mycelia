@@ -11,6 +11,8 @@ import { enqueueJob } from "./queue.ts";
 import { EnqueueJobOptions } from "./types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, sift } from "@/lib/mongo/core.server.ts";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
+import { normalizeWorkerConcurrency } from "./worker-concurrency.ts";
 
 // Logging helper for consistent format
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -198,8 +200,15 @@ export class TriggerManager {
         }
       }
 
-      // 1. Check maxConcurrency if defined
-      if (cap.manifest.maxConcurrency !== undefined) {
+      // Runtime concurrency is operator-configurable. The manifest value is a
+      // legacy discovery hint and must not silently pin every trigger to one
+      // job while the BullMQ worker is configured for more.
+      {
+        const config = await getServerConfig();
+        const maxConcurrency = normalizeWorkerConcurrency(
+          jobName,
+          config?.workers?.[jobName]?.concurrency,
+        );
         const activeJobs = await mongo({
           action: "count",
           collection: "jobs",
@@ -209,12 +218,12 @@ export class TriggerManager {
           },
         }) as number;
 
-        if (activeJobs >= cap.manifest.maxConcurrency) {
+        if (activeJobs >= maxConcurrency) {
           log("DEBUG", `Skipping trigger - max concurrency reached`, {
             jobName,
             reason,
             activeJobs,
-            maxConcurrency: cap.manifest.maxConcurrency,
+            maxConcurrency,
           });
           return;
         }

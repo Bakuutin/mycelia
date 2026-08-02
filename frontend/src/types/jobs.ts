@@ -17,6 +17,16 @@ export type JobInfo = {
   failedReason?: string;
   attemptsMade?: number;
   restarted?: boolean;
+  restartedFromJobId?: string;
+  restartJobId?: string;
+  routingContext?: {
+    presetId?: string;
+    sourceId?: string;
+    providerProfileId?: string;
+    providerProfileName?: string;
+    model?: string;
+    resolvedAt: string;
+  };
   updatedOn?: number;
   queueState?: string | null;
   queuePresent?: boolean;

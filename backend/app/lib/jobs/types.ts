@@ -4,7 +4,17 @@
  */
 export interface JobData {
   type: string;
+  routingContext?: JobRoutingContext;
   [key: string]: unknown;
+}
+
+export interface JobRoutingContext {
+  presetId?: string;
+  sourceId?: string;
+  providerProfileId?: string;
+  providerProfileName?: string;
+  model?: string;
+  resolvedAt: string;
 }
 
 export interface JobProgress {
@@ -26,4 +36,5 @@ export interface EnqueueJobOptions {
     reason?: string;
     principal?: string;
   };
+  restartedFromJobId?: string;
 }

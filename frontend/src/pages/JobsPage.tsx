@@ -64,11 +64,31 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
+import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
 
 type WorkerStatus = {
-  workers: Record<string, { paused: boolean }>;
+  checkedAt: string;
+  workers: Record<string, {
+    paused: boolean;
+    desiredConcurrency: number;
+    effectiveConcurrency: number;
+    maxConcurrency: number;
+    running: boolean;
+    active: number;
+    waiting: number;
+    delayed: number;
+    staleActive: number;
+    staleClaims: number;
+    staleJobs: Array<{
+      id: string;
+      createdAt?: string;
+      startedAt?: string;
+      updatedAt?: string;
+      progress?: Record<string, any>;
+    }>;
+  }>;
 };
 
 type ExternalServiceHealth = {
@@ -1099,6 +1119,9 @@ export default function JobsPage() {
   const [serviceTestResults, setServiceTestResults] = useState<
     Partial<Record<"stt" | "llm", string>>
   >({});
+  const [concurrencyDrafts, setConcurrencyDrafts] = useState<
+    Record<string, string>
+  >({});
 
   const toggleHideEmpty = () => {
     const newParams = new URLSearchParams(searchParams);
@@ -1144,7 +1167,25 @@ export default function JobsPage() {
       });
       return response as WorkerStatus;
     },
+    refetchInterval: 10000,
   });
+
+  useEffect(() => {
+    if (!workerStatus?.workers) return;
+    setConcurrencyDrafts((current) => {
+      const next = { ...current };
+      for (
+        const [workerType, status] of Object.entries(
+          workerStatus.workers,
+        )
+      ) {
+        if (next[workerType] === undefined) {
+          next[workerType] = String(status.desiredConcurrency);
+        }
+      }
+      return next;
+    });
+  }, [workerStatus]);
 
   const {
     data: pipelineHealth,
@@ -1212,6 +1253,13 @@ export default function JobsPage() {
     staleTime: 30000, // Refresh every 30 seconds
   });
 
+  const refreshWorkerViews = () => {
+    refetchWorkerStatus();
+    refetchPipelineHealth();
+    queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    queryClient.invalidateQueries({ queryKey: ["job-stats"] });
+  };
+
   const pauseWorkerMutation = useMutation({
     mutationFn: async (workerType: string) => {
       await api.callResource("jobs", {
@@ -1219,9 +1267,9 @@ export default function JobsPage() {
         workerType,
       });
     },
-    onSuccess: () => {
-      refetchWorkerStatus();
-    },
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(error instanceof Error ? error.message : "Failed to pause worker"),
   });
 
   const resumeWorkerMutation = useMutation({
@@ -1231,9 +1279,9 @@ export default function JobsPage() {
         workerType,
       });
     },
-    onSuccess: () => {
-      refetchWorkerStatus();
-    },
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(error instanceof Error ? error.message : "Failed to resume worker"),
   });
 
   const pauseAllMutation = useMutation({
@@ -1242,9 +1290,9 @@ export default function JobsPage() {
         action: "pause_all",
       });
     },
-    onSuccess: () => {
-      refetchWorkerStatus();
-    },
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(error instanceof Error ? error.message : "Failed to pause workers"),
   });
 
   const resumeAllMutation = useMutation({
@@ -1253,9 +1301,77 @@ export default function JobsPage() {
         action: "resume_all",
       });
     },
-    onSuccess: () => {
-      refetchWorkerStatus();
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(
+        error instanceof Error ? error.message : "Failed to resume workers",
+      ),
+  });
+
+  const setWorkerConcurrencyMutation = useMutation({
+    mutationFn: async ({
+      workerType,
+      concurrency,
+    }: {
+      workerType: string;
+      concurrency: number;
+    }) =>
+      await api.callResource("jobs", {
+        action: "set_worker_concurrency",
+        workerType,
+        concurrency,
+      }) as {
+        workerType: string;
+        desiredConcurrency: number;
+        effectiveConcurrency: number;
+      },
+    onSuccess: (result) => {
+      setConcurrencyDrafts((current) => ({
+        ...current,
+        [result.workerType]: String(result.desiredConcurrency),
+      }));
     },
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(
+        error instanceof Error ? error.message : "Failed to set concurrency",
+      ),
+  });
+
+  const restartJobMutation = useMutation({
+    mutationFn: async (jobId: string) =>
+      await api.callResource("jobs", {
+        action: "restart_job",
+        id: jobId,
+      }) as { originalJobId: string; restartedJobId: string },
+    onSuccess: (result) =>
+      alert(
+        `Restarted ${result.originalJobId.slice(-6)} as ` +
+          result.restartedJobId.slice(-6),
+      ),
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(error instanceof Error ? error.message : "Failed to restart job"),
+  });
+
+  const forceStartMutation = useMutation({
+    mutationFn: async ({
+      workerType,
+      count,
+    }: {
+      workerType: string;
+      count: number;
+    }) =>
+      await api.callResource("jobs", {
+        action: "force_start",
+        workerType,
+        count,
+      }) as { workerType: string; startedCount: number },
+    onSuccess: (result) =>
+      alert(`Started ${result.startedCount} ${result.workerType} job(s).`),
+    onSettled: refreshWorkerViews,
+    onError: (error) =>
+      alert(error instanceof Error ? error.message : "Failed to start jobs"),
   });
 
   const resumePipelineMutation = useMutation({
@@ -2012,6 +2128,17 @@ export default function JobsPage() {
     syncTypeToUrl(types, false);
   };
 
+  const toggleOnlyType = (type: string) => {
+    const next = getToggledWorkerFilter(
+      allTypesSelected,
+      filterTypes,
+      type,
+    );
+    setAllTypesSelected(next.allSelected);
+    setFilterTypes(next.selectedTypes);
+    syncTypeToUrl(next.selectedTypes, next.allSelected);
+  };
+
   const selectOnlyStatus = (status: string) => {
     setFilterStatuses(new Set([status]));
   };
@@ -2048,10 +2175,10 @@ export default function JobsPage() {
   };
 
   const getTypesLabel = () => {
-    if (allTypesSelected) return "All Types";
-    if (filterTypes.size === 0) return "No Types";
+    if (allTypesSelected) return "All workers";
+    if (filterTypes.size === 0) return "No workers";
     if (filterTypes.size === 1) return Array.from(filterTypes)[0];
-    return `${filterTypes.size} types`;
+    return `${filterTypes.size} workers`;
   };
 
   const getStatusesLabel = () => {
@@ -2163,19 +2290,23 @@ export default function JobsPage() {
             variant="default"
             size="sm"
             onClick={() => resumeAllMutation.mutate()}
-            disabled={resumeAllMutation.isPending || !somePaused}
+            disabled={resumeAllMutation.isPending ||
+              pauseAllMutation.isPending ||
+              !somePaused}
           >
             <PlayCircle className="h-4 w-4 mr-2" />
-            Resume All
+            {resumeAllMutation.isPending ? "Resuming…" : "Resume All"}
           </Button>
           <Button
             variant="secondary"
             size="sm"
             onClick={() => pauseAllMutation.mutate()}
-            disabled={pauseAllMutation.isPending || allPaused === true}
+            disabled={pauseAllMutation.isPending ||
+              resumeAllMutation.isPending ||
+              allPaused === true}
           >
             <PauseCircle className="h-4 w-4 mr-2" />
-            Pause All
+            {pauseAllMutation.isPending ? "Pausing…" : "Pause All"}
           </Button>
           <Button
             variant="destructive"
@@ -2446,9 +2577,9 @@ export default function JobsPage() {
                               <p className="break-all font-mono text-xs text-muted-foreground">
                                 default {profile.defaultAlias} →{" "}
                                 {profile.aliases[profile.defaultAlias]}
-                                {" · "}small → {profile.aliases.small}
-                                {" · "}medium → {profile.aliases.medium}
-                                {" · "}large → {profile.aliases.large}
+                                · small → {profile.aliases.small}
+                                · medium → {profile.aliases.medium}
+                                · large → {profile.aliases.large}
                               </p>
                             );
                           })()}
@@ -2723,8 +2854,11 @@ export default function JobsPage() {
                 <TableHeader>
                   <TableRow className="h-8">
                     <TableHead className="w-[40px] pl-4">On</TableHead>
-                    <TableHead className="w-[80px]">Actions</TableHead>
+                    <TableHead className="w-[105px]">Actions</TableHead>
                     <TableHead>Worker</TableHead>
+                    <TableHead className="text-center w-[145px]">
+                      Concurrency
+                    </TableHead>
                     <TableHead className="text-center w-[50px]">
                       Active
                     </TableHead>
@@ -2754,10 +2888,22 @@ export default function JobsPage() {
                     const stats = jobTypeStats.find((s) =>
                       s.type === worker.type
                     );
+                    const runtime = workerStatus?.workers[worker.type];
+                    const liveJobs = (runtime?.active ?? 0) +
+                      (runtime?.waiting ?? 0) + (runtime?.delayed ?? 0);
+                    const forceStartSlots = isPaused ? 0 : Math.max(
+                      0,
+                      (runtime?.effectiveConcurrency ?? 1) - liveJobs,
+                    );
                     return (
                       <TableRow
                         key={worker.type}
-                        className={`h-9 ${isPaused ? "bg-amber-500/5" : ""}`}
+                        className={`h-9 ${isPaused ? "bg-amber-500/5" : ""} ${
+                          !allTypesSelected && filterTypes.size === 1 &&
+                            filterTypes.has(worker.type)
+                            ? "ring-1 ring-inset ring-primary/30"
+                            : ""
+                        }`}
                       >
                         <TableCell className="pl-4 py-1">
                           <Checkbox
@@ -2766,6 +2912,7 @@ export default function JobsPage() {
                               handleToggleWorker(worker.type, isPaused)}
                             disabled={isMutating}
                             className="cursor-pointer"
+                            aria-label={`${worker.type} enabled`}
                           />
                         </TableCell>
                         <TableCell className="py-1">
@@ -2777,6 +2924,7 @@ export default function JobsPage() {
                                     variant="ghost"
                                     size="icon"
                                     className="h-7 w-7"
+                                    aria-label={`Run ${worker.type} job`}
                                   >
                                     <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
                                   </Button>
@@ -2792,6 +2940,7 @@ export default function JobsPage() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-7 w-7"
+                                  aria-label={`Clear ${worker.type} queue`}
                                   disabled={clearQueueMutation.isPending ||
                                     ((stats?.waiting ?? 0) +
                                         (stats?.delayed ?? 0) === 0)}
@@ -2810,13 +2959,82 @@ export default function JobsPage() {
                                 Clear {worker.type} queue
                               </TooltipContent>
                             </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  disabled={resetWorkerMutation.isPending}
+                            <DropdownMenu>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      disabled={restartJobMutation.isPending ||
+                                        forceStartMutation.isPending ||
+                                        resetWorkerMutation.isPending}
+                                      aria-label={`Recovery actions for ${worker.type}`}
+                                    >
+                                      <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Restart stale or force start
+                                </TooltipContent>
+                              </Tooltip>
+                              <DropdownMenuContent align="end" className="w-72">
+                                {runtime?.staleJobs?.length
+                                  ? runtime.staleJobs.map((staleJob) => (
+                                    <DropdownMenuItem
+                                      key={staleJob.id}
+                                      onClick={() => {
+                                        if (
+                                          confirm(
+                                            `Restart stale ${worker.type} job ${staleJob.id}? The original job will remain in history.`,
+                                          )
+                                        ) {
+                                          restartJobMutation.mutate(
+                                            staleJob.id,
+                                          );
+                                        }
+                                      }}
+                                    >
+                                      <RotateCcw className="mr-2 h-4 w-4" />
+                                      Restart stale job …{staleJob.id.slice(-6)}
+                                    </DropdownMenuItem>
+                                  ))
+                                  : (
+                                    <DropdownMenuItem disabled>
+                                      No stale active jobs
+                                    </DropdownMenuItem>
+                                  )}
+                                <DropdownMenuSeparator />
+                                {forceStartSlots > 0
+                                  ? Array.from(
+                                    { length: forceStartSlots },
+                                    (_, index) => index + 1,
+                                  ).map((count) => (
+                                    <DropdownMenuItem
+                                      key={count}
+                                      onClick={() =>
+                                        forceStartMutation.mutate({
+                                          workerType: worker.type,
+                                          count,
+                                        })}
+                                    >
+                                      <PlayCircle className="mr-2 h-4 w-4" />
+                                      Force start {count}{" "}
+                                      job{count > 1 ? "s" : ""}
+                                    </DropdownMenuItem>
+                                  ))
+                                  : (
+                                    <DropdownMenuItem disabled>
+                                      {isPaused
+                                        ? "Resume worker before force start"
+                                        : "No free concurrency slots"}
+                                    </DropdownMenuItem>
+                                  )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
                                   onClick={() =>
                                     handleResetWorker(
                                       worker.type,
@@ -2826,19 +3044,24 @@ export default function JobsPage() {
                                       stats?.staleClaims ?? 0,
                                     )}
                                 >
-                                  <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Reset state and start one fresh {worker.type}
-                                {" "}
-                                job
-                              </TooltipContent>
-                            </Tooltip>
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Danger: reset entire worker
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </TableCell>
                         <TableCell className="py-1">
-                          <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            className="flex items-center gap-1.5 text-left hover:text-primary"
+                            onClick={() => toggleOnlyType(worker.type)}
+                            title={!allTypesSelected &&
+                                filterTypes.size === 1 &&
+                                filterTypes.has(worker.type)
+                              ? "Show all workers"
+                              : `Show only ${worker.type} jobs`}
+                          >
                             <span className="text-xs text-muted-foreground w-4">
                               {worker.order < 999 ? worker.order : ""}
                             </span>
@@ -2852,6 +3075,63 @@ export default function JobsPage() {
                             <span className="text-xs text-muted-foreground hidden lg:inline">
                               — {worker.description}
                             </span>
+                          </button>
+                        </TableCell>
+                        <TableCell className="py-1">
+                          <div className="flex items-center justify-center gap-1">
+                            <Input
+                              type="number"
+                              min={1}
+                              max={runtime?.maxConcurrency ?? 8}
+                              value={concurrencyDrafts[worker.type] ??
+                                String(runtime?.desiredConcurrency ?? 1)}
+                              onChange={(event) =>
+                                setConcurrencyDrafts((current) => ({
+                                  ...current,
+                                  [worker.type]: event.target.value,
+                                }))}
+                              className="h-7 w-14 px-2 text-center"
+                              aria-label={`${worker.type} desired concurrency`}
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              disabled={setWorkerConcurrencyMutation
+                                .isPending ||
+                                Number(
+                                    concurrencyDrafts[worker.type] ??
+                                      runtime?.desiredConcurrency ?? 1,
+                                  ) ===
+                                  (runtime?.desiredConcurrency ?? 1)}
+                              onClick={() =>
+                                setWorkerConcurrencyMutation.mutate({
+                                  workerType: worker.type,
+                                  concurrency: Number(
+                                    concurrencyDrafts[worker.type],
+                                  ),
+                                })}
+                              title="Save and apply concurrency"
+                            >
+                              <Save className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                          <div className="text-center text-[10px] text-muted-foreground">
+                            {setWorkerConcurrencyMutation.isPending &&
+                                setWorkerConcurrencyMutation.variables
+                                    ?.workerType === worker.type
+                              ? "applying…"
+                              : `effective ${
+                                runtime?.effectiveConcurrency ?? "—"
+                              }`}
+                            {runtime && runtime.desiredConcurrency !==
+                                runtime.effectiveConcurrency &&
+                              ` · desired ${runtime.desiredConcurrency}`}
+                            {worker.type === "transcription" &&
+                              ` · batch ${
+                                pipelineHealth?.transcriptionRuntime
+                                  .configuredBatchSize ?? "—"
+                              }`}
                           </div>
                         </TableCell>
                         <TableCell className="text-center py-1">
@@ -3017,7 +3297,7 @@ export default function JobsPage() {
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
-                placeholder="Search by ID or type..."
+                placeholder="Search by ID or worker..."
                 className="pl-8"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -3043,7 +3323,7 @@ export default function JobsPage() {
                     onCheckedChange={(checked) =>
                       checked ? selectAllTypes() : selectNoTypes()}
                   />
-                  All Types
+                  All workers
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {isLoadingSchemas
@@ -3240,14 +3520,37 @@ export default function JobsPage() {
                       </TableCell>
                       <TableCell
                         className="font-medium cursor-pointer hover:text-primary hover:underline"
-                        onClick={() => selectOnlyType(job.type)}
-                        title={`Filter by ${job.type}`}
+                        onClick={() => toggleOnlyType(job.type)}
+                        title={!allTypesSelected && filterTypes.size === 1 &&
+                            filterTypes.has(job.type)
+                          ? "Show all workers"
+                          : `Filter by ${job.type}`}
                       >
-                        {job.type === "summarization" &&
-                            Array.isArray(job.result?.summaries) &&
-                            job.result.summaries.length > 0
-                          ? `Batch summarization · ${job.result.summaries.length}`
-                          : job.type}
+                        <div>
+                          {job.type === "summarization" &&
+                              Array.isArray(job.result?.summaries) &&
+                              job.result.summaries.length > 0
+                            ? `Batch summarization · ${job.result.summaries.length}`
+                            : job.type}
+                        </div>
+                        {job.restartedFromJobId && (
+                          <Link
+                            to={`/jobs/${job.restartedFromJobId}`}
+                            onClick={(event) => event.stopPropagation()}
+                            className="block text-[10px] font-normal text-amber-500 hover:underline"
+                          >
+                            restarted from …{job.restartedFromJobId.slice(-6)}
+                          </Link>
+                        )}
+                        {job.restartJobId && (
+                          <Link
+                            to={`/jobs/${job.restartJobId}`}
+                            onClick={(event) => event.stopPropagation()}
+                            className="block text-[10px] font-normal text-amber-500 hover:underline"
+                          >
+                            restarted as …{job.restartJobId.slice(-6)}
+                          </Link>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm">
                         {job.timestamp

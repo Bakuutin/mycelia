@@ -13,7 +13,7 @@ interface JobUpdate {
 
 export function subscribeToJob(
   jobId: string,
-  onUpdate: (job: JobUpdate) => void
+  onUpdate: (job: JobUpdate) => void,
 ): () => void {
   return wsClient.subscribe(`jobs:${jobId}`, (event) => {
     if (
@@ -31,7 +31,7 @@ export function subscribeToJob(
 export async function waitForJobCompletion(
   jobId: string,
   jobType: string,
-  timeout = 60000
+  timeout = 60000,
 ): Promise<any> {
   const fetchCurrentState = async () => {
     try {
@@ -77,7 +77,7 @@ export async function waitForJobCompletion(
 export async function pollJob(
   jobId: string,
   jobType: string = "summarization",
-  timeout = 60000
+  timeout = 60000,
 ): Promise<any> {
   return waitForJobCompletion(jobId, jobType, timeout);
 }

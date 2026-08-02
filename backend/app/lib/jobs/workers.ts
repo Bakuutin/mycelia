@@ -1,7 +1,7 @@
 import type { Worker } from "bullmq";
 import { ObjectId } from "bson";
 import { createWorker, getQueueEvents, enqueueJob } from "./queue.ts";
-import { processJob } from "./processor.ts";
+import { cancelRunningJob, processJob } from "./processor.ts";
 import { jobRegistry, discoverJobWorkers } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
@@ -10,8 +10,12 @@ import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getContinuationJobData, shouldContinueJobChain } from "./job-chain.ts";
+import {
+  getWorkerConcurrencyCap,
+  normalizeWorkerConcurrency,
+} from "./worker-concurrency.ts";
 
-const workers: Worker[] = [];
+const workers = new Map<string, Worker>();
 
 export async function startWorkers() {
   console.log("Starting job workers...");
@@ -24,9 +28,14 @@ export async function startWorkers() {
   await workerDiscovery.syncDiscoveredWorkers();
 
   const jobTypes = jobRegistry.getJobTypes();
+  const config = await getServerConfig();
 
   for (const jobType of jobTypes) {
-    const worker = createWorker(jobType, processJob);
+    const concurrency = normalizeWorkerConcurrency(
+      jobType,
+      config?.workers?.[jobType]?.concurrency,
+    );
+    const worker = createWorker(jobType, processJob, concurrency);
 
     // Global events listener to ensure MongoDB is in sync with BullMQ
     // This catches events even from other worker instances (like Python workers)
@@ -248,10 +257,10 @@ export async function startWorkers() {
       console.error(`[${jobType}] Worker error:`, err);
     });
 
-    workers.push(worker);
+    workers.set(jobType, worker);
   }
 
-  console.log(`Started ${workers.length} worker(s) for ${jobTypes.length} job types`);
+  console.log(`Started ${workers.size} worker(s) for ${jobTypes.length} job types`);
   console.log(`Python worker expected at: ${env.PYTHON_WORKER_URL}`);
 
   // Restore paused workers from config
@@ -273,7 +282,38 @@ async function restorePausedWorkers() {
 export async function stopWorkers() {
   console.log("Stopping job workers...");
 
-  await Promise.all(workers.map((worker) => worker.close()));
+  await Promise.all([...workers.values()].map((worker) => worker.close()));
+  workers.clear();
 
   console.log("All workers stopped");
+}
+
+export function getWorkerRuntimeStatus(workerType: string) {
+  const worker = workers.get(workerType);
+  return {
+    running: worker != null,
+    effectiveConcurrency: worker?.concurrency ?? 0,
+    maxConcurrency: getWorkerConcurrencyCap(workerType),
+  };
+}
+
+export function setWorkerRuntimeConcurrency(
+  workerType: string,
+  concurrency: number,
+): number {
+  const worker = workers.get(workerType);
+  if (!worker) throw new Error(`Worker ${workerType} is not running`);
+  worker.concurrency = concurrency;
+  return worker.concurrency;
+}
+
+export function cancelActiveWorkerJob(
+  workerType: string,
+  jobId: string,
+): { bullmqCancelled: boolean; processTerminated: boolean } {
+  const worker = workers.get(workerType);
+  return {
+    bullmqCancelled: worker?.cancelJob(jobId, "targeted_restart") ?? false,
+    processTerminated: cancelRunningJob(jobId),
+  };
 }

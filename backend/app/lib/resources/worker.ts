@@ -15,6 +15,17 @@ import {
   getExternalServicesHealth,
 } from "@/lib/jobs/service-health.ts";
 import { cancelRunningJob } from "@/lib/jobs/processor.ts";
+import {
+  cancelActiveWorkerJob,
+  getWorkerRuntimeStatus,
+  setWorkerRuntimeConcurrency,
+} from "@/lib/jobs/workers.ts";
+import {
+  assertWorkerConcurrency,
+  getAvailableForceStartSlots,
+} from "@/lib/jobs/worker-concurrency.ts";
+
+const STALE_JOB_AGE_MS = 15 * 60 * 1000;
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -159,6 +170,23 @@ const GetWorkerStatusSchema = z.object({
   action: z.literal("get_worker_status"),
 });
 
+const SetWorkerConcurrencySchema = z.object({
+  action: z.literal("set_worker_concurrency"),
+  workerType: z.string(),
+  concurrency: z.number().int().min(1).max(8),
+});
+
+const RestartJobSchema = z.object({
+  action: z.literal("restart_job"),
+  id: z.string(),
+});
+
+const ForceStartSchema = z.object({
+  action: z.literal("force_start"),
+  workerType: z.string(),
+  count: z.number().int().min(1).max(8).default(1),
+});
+
 const ListWorkersSchema = z.object({
   action: z.literal("list_workers"),
 });
@@ -231,6 +259,9 @@ const RequestSchema = z.union([
   PauseAllSchema,
   ResumeAllSchema,
   GetWorkerStatusSchema,
+  SetWorkerConcurrencySchema,
+  RestartJobSchema,
+  ForceStartSchema,
   ListWorkersSchema,
   GetWorkerDefaultsSchema,
   UpdateWorkerDefaultsSchema,
@@ -407,6 +438,7 @@ async function findSupersededFailedJobIds(
 export class JobsResource implements Resource<WorkerProgressRequest, any> {
   code = "jobs";
   description = "Update job progress, list jobs, or enqueue a new job";
+  private activeWorkerActions = new Set<string>();
 
   schemas = {
     request: RequestSchema,
@@ -449,6 +481,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.resumeAll(auth);
       case "get_worker_status":
         return this.getWorkerStatus(auth);
+      case "set_worker_concurrency":
+        return this.setWorkerConcurrency(input, auth);
+      case "restart_job":
+        return this.restartJob(input, auth);
+      case "force_start":
+        return this.forceStart(input, auth);
       case "list_workers":
         return this.listWorkers(auth);
       case "get_worker_defaults":
@@ -604,6 +642,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       processedOn: job.startedAt?.getTime(),
       failedReason: job.failedReason,
       restarted: job.restartInfo != null,
+      restartedFromJobId: job.restartedFromJobId,
+      restartJobId: job.restartJobId,
+      routingContext: job.data?.routingContext,
       updatedOn: job.updatedAt?.getTime(),
       queueState,
       queuePresent: queueJob != null,
@@ -1649,6 +1690,11 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     });
 
     let claimsCleared = 0;
+    for (const job of liveJobs) {
+      if (job.state === "active") {
+        claimsCleared += await this.releaseJobClaims(job, mongo, now);
+      }
+    }
     if (workerType === "summarization") {
       const claimResult = await mongo({
         action: "updateMany",
@@ -1656,7 +1702,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         query: { "_summarizationClaim.jobId": { $exists: true } },
         update: { $unset: { _summarizationClaim: "" } },
       });
-      claimsCleared = claimResult.modifiedCount ?? 0;
+      claimsCleared += claimResult.modifiedCount ?? 0;
     }
 
     let restartedJobId: string | undefined;
@@ -1680,6 +1726,261 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       restartedJobId,
       paused: !restart,
     };
+  }
+
+  private async setWorkerConcurrency(
+    input: z.infer<typeof SetWorkerConcurrencySchema>,
+    auth: Auth,
+  ) {
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+    const concurrency = assertWorkerConcurrency(
+      input.workerType,
+      input.concurrency,
+    );
+    const previous = getWorkerRuntimeStatus(input.workerType)
+      .effectiveConcurrency;
+    const effectiveConcurrency = setWorkerRuntimeConcurrency(
+      input.workerType,
+      concurrency,
+    );
+
+    try {
+      await this.persistWorkerConfig(
+        input.workerType,
+        { concurrency },
+        auth,
+      );
+    } catch (error) {
+      if (previous > 0) {
+        setWorkerRuntimeConcurrency(input.workerType, previous);
+      }
+      throw error;
+    }
+
+    return {
+      success: true,
+      workerType: input.workerType,
+      desiredConcurrency: concurrency,
+      effectiveConcurrency,
+    };
+  }
+
+  private async releaseJobClaims(
+    job: Record<string, any>,
+    mongo: Awaited<ReturnType<typeof getMongoResource>>,
+    now: Date,
+  ): Promise<number> {
+    const jobId = job._id.toString();
+    if (job.type === "summarization") {
+      const result = await mongo({
+        action: "updateMany",
+        collection: "objects",
+        query: { "_summarizationClaim.jobId": jobId },
+        update: { $unset: { _summarizationClaim: "" } },
+      });
+      return result.modifiedCount ?? 0;
+    }
+
+    if (job.type === "conversation_extractor") {
+      const result = await mongo({
+        action: "updateMany",
+        collection: "conversation_chunks",
+        query: { state: "processing", processedByJobId: jobId },
+        update: {
+          $set: {
+            state: "error",
+            error: "Worker job was restarted by the operator",
+            extractionLastErrorAt: now,
+            extractionRetryAfter: now,
+          },
+          $unset: { processingStartedAt: "" },
+        },
+      });
+      return result.modifiedCount ?? 0;
+    }
+
+    if (job.type === "transcription") {
+      const sequenceIds = new Set<string>();
+      const addId = (value: unknown) => {
+        if (typeof value === "string" && ObjectId.isValid(value)) {
+          sequenceIds.add(value);
+        }
+      };
+      addId(job.data?.sequenceId);
+      addId(job.progress?.sequenceId);
+      addId(job.progress?.prefetch?.sequenceId);
+      for (const item of job.progress?.batchSequences ?? []) {
+        addId(item?.sequenceId);
+      }
+      if (sequenceIds.size === 0) return 0;
+      const result = await mongo({
+        action: "updateMany",
+        collection: "transcription_sequences",
+        query: {
+          _id: {
+            $in: [...sequenceIds].map((id) => new ObjectId(id)),
+          },
+          state: "processing",
+        },
+        update: { $set: { state: "ready", updatedAt: now } },
+      });
+      return result.modifiedCount ?? 0;
+    }
+
+    return 0;
+  }
+
+  private async restartJob(
+    input: z.infer<typeof RestartJobSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: { _id: new ObjectId(input.id) },
+      options: { limit: 1 },
+    });
+    const job = jobs[0];
+    if (!job) throw new Error(`Job ${input.id} not found`);
+    if (job.state !== "active") {
+      throw new Error("Only an active job can be restarted");
+    }
+    const updatedAt = job.updatedAt ?? job.startedAt ?? job.createdAt;
+    if (
+      !updatedAt ||
+      new Date(updatedAt).getTime() > Date.now() - STALE_JOB_AGE_MS
+    ) {
+      throw new Error("This job is still updating and is not stale");
+    }
+
+    await assertJobServicesHealthy(job.type, true);
+    const now = new Date();
+    const cancelled = await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: job._id, state: "active" },
+      update: {
+        $set: {
+          state: "cancelled",
+          cancelReason: "targeted_restart",
+          finishedAt: now,
+          updatedAt: now,
+        },
+      },
+    });
+    if ((cancelled.modifiedCount ?? 0) === 0) {
+      throw new Error("Job state changed before it could be restarted");
+    }
+
+    const cancellation = cancelActiveWorkerJob(job.type, input.id);
+    const claimsReleased = await this.releaseJobClaims(job, mongo, now);
+    const restarted = await enqueueJob(
+      job.data,
+      {
+        trigger: { type: "manual", reason: `targeted_restart:${input.id}` },
+        restartedFromJobId: input.id,
+      },
+      await getServerAuth(),
+    );
+
+    await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: job._id },
+      update: {
+        $set: {
+          restartedAt: new Date(),
+          restartJobId: restarted.id,
+        },
+      },
+    });
+    await publishJobUpdate(input.id, job.type, "job.state", {
+      state: "cancelled",
+      finishedOn: now.getTime(),
+      restartJobId: restarted.id,
+    });
+
+    return {
+      success: true,
+      workerType: job.type,
+      originalJobId: input.id,
+      restartedJobId: restarted.id,
+      claimsReleased,
+      ...cancellation,
+    };
+  }
+
+  private async forceStart(
+    input: z.infer<typeof ForceStartSchema>,
+    auth: Auth,
+  ) {
+    const types = jobRegistry.getJobTypes();
+    if (!types.includes(input.workerType)) {
+      throw new Error(`Unknown worker type: ${input.workerType}`);
+    }
+    if (this.activeWorkerActions.has(input.workerType)) {
+      throw new Error(
+        `Another ${input.workerType} launch is already in progress`,
+      );
+    }
+    this.activeWorkerActions.add(input.workerType);
+    try {
+      if (await workerPauseManager.getEffectivePauseState(input.workerType)) {
+        throw new Error(
+          `Resume ${input.workerType} before force starting jobs`,
+        );
+      }
+      await assertJobServicesHealthy(input.workerType, true);
+      const runtime = getWorkerRuntimeStatus(input.workerType);
+      if (!runtime.running) {
+        throw new Error(`Worker ${input.workerType} is not running`);
+      }
+
+      const mongo = await getMongoResource(auth);
+      const liveJobs = await mongo({
+        action: "count",
+        collection: "jobs",
+        query: {
+          type: input.workerType,
+          state: { $in: ["active", "waiting", "delayed"] },
+        },
+      }) as number;
+      const availableSlots = getAvailableForceStartSlots(
+        runtime.effectiveConcurrency,
+        liveJobs,
+      );
+      if (input.count > availableSlots) {
+        throw new Error(
+          `${input.workerType} has ${availableSlots} available slot(s); ` +
+            `${liveJobs} live job(s) already use concurrency ` +
+            `${runtime.effectiveConcurrency}`,
+        );
+      }
+
+      const jobIds: string[] = [];
+      for (let i = 0; i < input.count; i++) {
+        const job = await enqueueJob(
+          { type: input.workerType },
+          { trigger: { type: "manual", reason: "force_start" } },
+          await getServerAuth(),
+        );
+        if (job.id) jobIds.push(job.id);
+      }
+      return {
+        success: true,
+        workerType: input.workerType,
+        requestedCount: input.count,
+        startedCount: jobIds.length,
+        jobIds,
+        availableSlotsBefore: availableSlots,
+      };
+    } finally {
+      this.activeWorkerActions.delete(input.workerType);
+    }
   }
 
   private async list(input: z.infer<typeof ListJobsSchema>, auth: Auth) {
@@ -1718,6 +2019,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       processedOn: job.startedAt?.getTime(),
       failedReason: job.failedReason,
       restarted: job.restartInfo != null,
+      restartedFromJobId: job.restartedFromJobId,
+      restartJobId: job.restartJobId,
+      routingContext: job.data?.routingContext,
     }));
   }
 
@@ -1813,8 +2117,18 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       throw new Error(`Unknown worker type: ${workerType}`);
     }
 
-    await workerPauseManager.pauseWorker(workerType);
-    await this.persistWorkerConfig(workerType, { paused: true }, auth);
+    const wasPaused = await workerPauseManager.getEffectivePauseState(
+      workerType,
+    );
+    if (!wasPaused) {
+      await workerPauseManager.pauseWorker(workerType);
+    }
+    try {
+      await this.persistWorkerConfig(workerType, { paused: true }, auth);
+    } catch (error) {
+      if (!wasPaused) await workerPauseManager.resumeWorker(workerType);
+      throw error;
+    }
 
     return { success: true, workerType, paused: true };
   }
@@ -1831,45 +2145,134 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       throw new Error(`Unknown worker type: ${workerType}`);
     }
 
-    await workerPauseManager.resumeWorker(workerType);
-    await this.persistWorkerConfig(workerType, { paused: false }, auth);
+    const wasPaused = await workerPauseManager.getEffectivePauseState(
+      workerType,
+    );
+    if (wasPaused) {
+      await workerPauseManager.resumeWorker(workerType);
+    }
+    try {
+      await this.persistWorkerConfig(workerType, { paused: false }, auth);
+    } catch (error) {
+      if (wasPaused) await workerPauseManager.pauseWorker(workerType);
+      throw error;
+    }
 
     return { success: true, workerType, paused: false };
   }
 
   private async pauseAll(auth: Auth) {
     const types = jobRegistry.getJobTypes();
-
-    for (const workerType of types) {
-      await workerPauseManager.pauseWorker(workerType);
-      await this.persistWorkerConfig(workerType, { paused: true }, auth);
+    const before = Object.fromEntries(
+      await Promise.all(types.map(async (workerType) =>
+        [
+          workerType,
+          await workerPauseManager.getEffectivePauseState(workerType),
+        ] as const
+      )),
+    );
+    const workers = await workerPauseManager.setWorkersPaused(types, true);
+    try {
+      await this.persistWorkersConfig(types, { paused: true }, auth);
+    } catch (error) {
+      for (const workerType of types) {
+        if (!before[workerType]) {
+          await workerPauseManager.resumeWorker(workerType);
+        }
+      }
+      throw error;
     }
-
-    return { success: true, pausedWorkers: types };
+    return { success: true, pausedWorkers: types, workers };
   }
 
   private async resumeAll(auth: Auth) {
     const types = jobRegistry.getJobTypes();
-
-    for (const workerType of types) {
-      await workerPauseManager.resumeWorker(workerType);
-      await this.persistWorkerConfig(workerType, { paused: false }, auth);
+    const before = Object.fromEntries(
+      await Promise.all(types.map(async (workerType) =>
+        [
+          workerType,
+          await workerPauseManager.getEffectivePauseState(workerType),
+        ] as const
+      )),
+    );
+    const workers = await workerPauseManager.setWorkersPaused(types, false);
+    try {
+      await this.persistWorkersConfig(types, { paused: false }, auth);
+    } catch (error) {
+      for (const workerType of types) {
+        if (before[workerType]) {
+          await workerPauseManager.pauseWorker(workerType);
+        }
+      }
+      throw error;
     }
-
-    return { success: true, resumedWorkers: types };
+    return { success: true, resumedWorkers: types, workers };
   }
 
-  private async getWorkerStatus(_auth: Auth) {
+  private async getWorkerStatus(auth: Auth) {
     const types = jobRegistry.getJobTypes();
-    const status: Record<string, { paused: boolean }> = {};
+    const configResource = await getConfigResource(auth);
+    const config = await configResource({ action: "get" }) as any;
+    const mongo = await getMongoResource(auth);
+    const staleCutoff = new Date(Date.now() - STALE_JOB_AGE_MS);
+    const liveJobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        type: { $in: types },
+        state: { $in: ["active", "waiting", "delayed"] },
+      },
+      options: {
+        limit: 5000,
+        projection: {
+          type: 1,
+          state: 1,
+          createdAt: 1,
+          startedAt: 1,
+          updatedAt: 1,
+          progress: 1,
+        },
+      },
+    }) as any[];
+    const staleClaims = await mongo({
+      action: "count",
+      collection: "objects",
+      query: {
+        "_summarizationClaim.startedAt": { $lte: staleCutoff.toISOString() },
+      },
+    }) as number;
 
+    const status: Record<string, any> = {};
     for (const workerType of types) {
+      const workerJobs = liveJobs.filter((job) => job.type === workerType);
+      const staleJobs = workerJobs.filter((job) =>
+        job.state === "active" &&
+        new Date(job.updatedAt ?? job.startedAt ?? job.createdAt).getTime() <=
+          staleCutoff.getTime()
+      );
+      const runtime = getWorkerRuntimeStatus(workerType);
       status[workerType] = {
-        paused: workerPauseManager.isPaused(workerType),
+        paused: await workerPauseManager.getEffectivePauseState(workerType),
+        desiredConcurrency: config?.workers?.[workerType]?.concurrency ?? 1,
+        effectiveConcurrency: runtime.effectiveConcurrency,
+        maxConcurrency: runtime.maxConcurrency,
+        running: runtime.running,
+        active: workerJobs.filter((job) => job.state === "active").length,
+        waiting: workerJobs.filter((job) => job.state === "waiting").length,
+        delayed: workerJobs.filter((job) => job.state === "delayed").length,
+        staleActive: staleJobs.length,
+        staleClaims: workerType === "summarization" ? staleClaims : 0,
+        staleJobs: staleJobs.map((job) => ({
+          id: job._id.toString(),
+          createdAt: job.createdAt,
+          startedAt: job.startedAt,
+          updatedAt: job.updatedAt,
+          progress: job.progress,
+        })),
       };
     }
 
-    return { workers: status };
+    return { checkedAt: new Date().toISOString(), workers: status };
   }
 
   private async stats(auth: Auth) {
@@ -2178,7 +2581,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
   private async persistWorkerConfig(
     workerType: string,
-    config: { paused: boolean },
+    config: { paused?: boolean; concurrency?: number },
     auth: Auth,
   ) {
     const configResource = await getConfigResource(auth);
@@ -2187,6 +2590,22 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       action: "patch",
       path: `workers.${workerType}`,
       updates: config,
+    });
+  }
+
+  private async persistWorkersConfig(
+    workerTypes: string[],
+    config: { paused?: boolean; concurrency?: number },
+    auth: Auth,
+  ) {
+    const configResource = await getConfigResource(auth);
+    await configResource({
+      action: "patch",
+      updates: {
+        workers: Object.fromEntries(
+          workerTypes.map((workerType) => [workerType, config]),
+        ),
+      },
     });
   }
 
@@ -2279,6 +2698,21 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return [{ path: ["jobs", "all"], actions: ["resume"] }];
       case "get_worker_status":
         return [{ path: ["jobs"], actions: ["read"] }];
+      case "set_worker_concurrency":
+        return [{
+          path: ["jobs", input.workerType],
+          actions: ["configure"],
+        }];
+      case "restart_job":
+        return [{
+          path: ["jobs", input.id],
+          actions: ["cancel", "enqueue"],
+        }];
+      case "force_start":
+        return [{
+          path: ["jobs", input.workerType],
+          actions: ["enqueue"],
+        }];
       case "list_workers":
         return [{ path: ["jobs"], actions: ["read"] }];
       case "get_worker_defaults":

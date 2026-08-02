@@ -94,10 +94,15 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
     }
     console.log(JSON.stringify(data));
 
+    const routingContext = (data as JobData).routingContext;
     data = JSON.parse(JSON.stringify(data)); // serialize native json types
+    const capabilityData = { ...(data as JobData) };
+    delete capabilityData.routingContext;
 
-    
-    return fromJSONSchema(capability.manifest.inputSchema).parse(data) as JobData;
+    const parsed = fromJSONSchema(capability.manifest.inputSchema).parse(
+      capabilityData,
+    ) as JobData;
+    return routingContext ? { ...parsed, routingContext } : parsed;
   }
 
   /**

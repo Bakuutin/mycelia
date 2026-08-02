@@ -7,10 +7,10 @@ Deno.test(
   "jobRegistry discovers job types dynamically",
   withFixtures(["JobWorkers"], () => {
     const types = jobRegistry.getJobTypes();
-    
+
     // Should have discovered some job types
     expect(types.length).toBeGreaterThan(0);
-    
+
     // Should include known job types
     expect(types).toContain("vad");
     expect(types).toContain("summarization");
@@ -45,6 +45,27 @@ Deno.test(
 
     const result = jobRegistry.validateJobData(vadData);
     expect(result.type).toBe("vad");
+  }),
+);
+
+Deno.test(
+  "jobRegistry preserves the reserved routing snapshot",
+  withFixtures(["JobWorkers"], () => {
+    const result = jobRegistry.validateJobData({
+      type: "vad",
+      limit: 500,
+      routingContext: {
+        presetId: "future-source-preset",
+        providerProfileId: "llm-primary",
+        resolvedAt: "2026-08-02T00:00:00.000Z",
+      },
+    });
+
+    expect(result.routingContext).toEqual({
+      presetId: "future-source-preset",
+      providerProfileId: "llm-primary",
+      resolvedAt: "2026-08-02T00:00:00.000Z",
+    });
   }),
 );
 

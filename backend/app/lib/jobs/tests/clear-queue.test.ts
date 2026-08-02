@@ -31,6 +31,41 @@ Deno.test("reset_worker requires scoped lifecycle permissions", () => {
   }]);
 });
 
+Deno.test("worker concurrency requires scoped configure permission", () => {
+  const resource = new JobsResource();
+  expect(resource.extractActions({
+    action: "set_worker_concurrency",
+    workerType: "summarization",
+    concurrency: 4,
+  })).toEqual([{
+    path: ["jobs", "summarization"],
+    actions: ["configure"],
+  }]);
+});
+
+Deno.test("targeted restart preserves scoped cancel and enqueue permissions", () => {
+  const resource = new JobsResource();
+  expect(resource.extractActions({
+    action: "restart_job",
+    id: "job-id",
+  })).toEqual([{
+    path: ["jobs", "job-id"],
+    actions: ["cancel", "enqueue"],
+  }]);
+});
+
+Deno.test("force start requires enqueue permission for one worker", () => {
+  const resource = new JobsResource();
+  expect(resource.extractActions({
+    action: "force_start",
+    workerType: "summarization",
+    count: 2,
+  })).toEqual([{
+    path: ["jobs", "summarization"],
+    actions: ["enqueue"],
+  }]);
+});
+
 Deno.test("clear_failed requires delete permission for one worker type", () => {
   const resource = new JobsResource();
 
