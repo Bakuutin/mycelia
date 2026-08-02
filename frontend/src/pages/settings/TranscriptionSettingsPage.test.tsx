@@ -91,9 +91,18 @@ describe("TranscriptionSettingsPage", () => {
                 providerProfileId: "remote",
                 status: "unavailable",
                 message: "offline",
+                model: "large-v3-turbo",
               },
             ],
           }],
+        });
+      }
+      if (resource === "transcription" && input.action === "models") {
+        return Promise.resolve({
+          success: true,
+          message: "Provider reports loaded model large-v3-turbo",
+          reportedModel: "large-v3-turbo",
+          models: ["large-v3-turbo"],
         });
       }
       return Promise.resolve({ success: true, message: "ok" });
@@ -157,5 +166,17 @@ describe("TranscriptionSettingsPage", () => {
     expect(screen.getByText(/default model can only be changed in \.env/))
       .toBeInTheDocument();
     expect(screen.getByLabelText("Use environment STT route")).toBeEnabled();
+  });
+
+  it("selects the provider-reported model when loading models", async () => {
+    renderPage();
+    await screen.findByText("Local Argmax");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Remote Whisper/ }));
+    await user.click(screen.getByRole("button", { name: "Load models" }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("large-v3-turbo")).toBeInTheDocument();
+    });
   });
 });

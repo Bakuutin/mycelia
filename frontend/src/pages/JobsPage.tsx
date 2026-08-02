@@ -1222,6 +1222,18 @@ export default function JobsPage() {
     staleTime: 15000,
   });
 
+  const transcriptionModelByProfileId = useMemo(() => {
+    const stt = pipelineHealth?.services.find((service) =>
+      service.id === "stt"
+    );
+    return new Map(
+      stt?.routes?.filter((route) => Boolean(route.model)).map((route) => [
+        route.providerProfileId,
+        route.model!,
+      ]) ?? [],
+    );
+  }, [pipelineHealth]);
+
   const { data: inferenceRoutingConfig } = useQuery({
     queryKey: ["inference-routing-config"],
     queryFn: async () =>
@@ -3591,8 +3603,14 @@ export default function JobsPage() {
                           job.routingContext?.providerProfileName && (
                           <div className="text-[10px] font-normal text-muted-foreground">
                             {job.routingContext.providerProfileName}
-                            {job.routingContext.model
-                              ? ` · ${job.routingContext.model}`
+                            {transcriptionModelByProfileId.get(
+                                job.routingContext.providerProfileId || "",
+                              ) || job.routingContext.model
+                              ? ` · ${
+                                transcriptionModelByProfileId.get(
+                                  job.routingContext.providerProfileId || "",
+                                ) || job.routingContext.model
+                              }`
                               : ""}
                           </div>
                         )}

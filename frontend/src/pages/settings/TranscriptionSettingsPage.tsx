@@ -35,6 +35,7 @@ type RouteHealth = {
   providerProfileId: string;
   status: "healthy" | "loading" | "unavailable" | "misconfigured";
   message: string;
+  model?: string;
 };
 
 type EnvironmentRoute = {
@@ -83,7 +84,7 @@ const TranscriptionSettingsPage = () => {
     } | null
   >(null);
 
-  const refreshHealth = async () => {
+  const refreshHealth = async (): Promise<RouteHealth[]> => {
     setRefreshing(true);
     try {
       const pipeline = await callResource("jobs", {
@@ -93,7 +94,9 @@ const TranscriptionSettingsPage = () => {
       const stt = pipeline?.services?.find((service: { id: string }) =>
         service.id === "stt"
       );
-      setRouteHealth(stt?.routes ?? []);
+      const routes = stt?.routes ?? [];
+      setRouteHealth(routes);
+      return routes;
     } finally {
       setRefreshing(false);
     }
@@ -149,7 +152,21 @@ const TranscriptionSettingsPage = () => {
         setPerSequenceTimeout(
           legacy.batchTimeoutPerSequenceSeconds ?? 60,
         );
-        await refreshHealth();
+        const routes = await refreshHealth();
+        const modelByProfileId = new Map(
+          routes
+            .filter((route) => Boolean(route.model))
+            .map((route) => [route.providerProfileId, route.model!]),
+        );
+        const profilesWithDetectedModels = nextProfiles.map((profile) => ({
+          ...profile,
+          model: modelByProfileId.get(profile.id) || profile.model,
+        }));
+        const activeWithDetectedModel = profilesWithDetectedModels.find(
+          (profile) => profile.id === active.id,
+        )!;
+        setProfiles(profilesWithDetectedModels);
+        setDraft(activeWithDetectedModel);
       } catch (error) {
         setMessage({
           success: false,
@@ -379,10 +396,16 @@ const TranscriptionSettingsPage = () => {
       });
       const nextModels = Array.isArray(result?.models) ? result.models : [];
       setModels(nextModels);
+      const detectedModel = result?.reportedModel || nextModels[0];
+      if (detectedModel) {
+        setDraft((current) => ({ ...current, model: detectedModel }));
+      }
       setMessage({
         success: Boolean(result?.success),
-        text: result?.reportedModel
-          ? `${result.message} (actual: ${result.reportedModel})`
+        text: detectedModel
+          ? `${
+            result.message || "Loaded STT model"
+          } (selected: ${detectedModel})`
           : result?.message ||
             (nextModels.length
               ? `Loaded ${nextModels.length} model(s).`
