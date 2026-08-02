@@ -37,6 +37,21 @@ BUILD_ALL=1 swift run argmax-cli serve \
 The first launch may take longer while the selected model is downloaded. The
 server loads one model, so restart it to switch models.
 
+## Which command should I run?
+
+These commands have different roles; they must not run together.
+
+| Command | Role | When to use it |
+| --- | --- | --- |
+| `argmax-cli serve` | Long-running local **STT server**. It loads one Whisper model and waits for HTTP requests. | Start this first and leave it running while Mycelia processes audio. |
+| `docker compose exec python-worker python stt.py ...` | One-off direct **recovery/backfill client** inside the Mycelia container. | Use only when the automatic Jobs transcription pipeline is deliberately stopped or unavailable. This is the preferred manual form. |
+| `uv run stt.py ...` | The same one-off direct client, run from the Mac host. | Use for Python-development debugging only, or when the Docker worker cannot be used. |
+
+For normal operation, start one `argmax-cli serve` process, add it in
+**Settings -> Speech-to-text** as `http://host.docker.internal:10301`, then use
+the automatic transcription worker. Do not run either `stt.py` command while
+that queue is healthy: direct processing and Jobs can claim the same audio.
+
 ## Test the server
 
 Test the endpoint before connecting Mycelia:
@@ -46,7 +61,7 @@ curl -fsS http://127.0.0.1:10301/health
 curl -fsS \
   -H 'Authorization: Bearer local-no-auth' \
   -F 'file=@test.wav;type=audio/wav' \
-  -F 'model=large-v3-v20240930_turbo_632MB' \
+  -F 'model=large-v3-v20240930_626MB' \
   -F 'response_format=verbose_json' \
   http://127.0.0.1:10301/v1/audio/transcriptions | jq .
 ```
@@ -60,6 +75,14 @@ ffmpeg -i input.m4a -ar 16000 -ac 1 -c:a pcm_s16le test.wav
 
 Use the exact model passed to `argmax-cli serve`; the non-Turbo example is
 `large-v3-v20240930_626MB`.
+
+`argmax-cli serve` is model-fixed: the `model` form field sent by curl,
+Mycelia, or `stt.py` does not switch its loaded model. Clients should send the
+same model ID as the server for correct routing and provenance. Check it with:
+
+```bash
+curl -fsS http://127.0.0.1:10301/v1/models | jq .
+```
 
 ## Configure multiple providers in Mycelia
 
@@ -86,7 +109,25 @@ The **Backend environment STT route** represents `STT_SERVER_URL`,
 alongside UI-managed providers and has one slot. Its secret is never displayed
 in the form.
 
-## Run `stt.py` on the host
+## Manual recovery: run `stt.py` in Docker (preferred)
+
+Inside the Compose `python-worker`, `127.0.0.1` points to the container itself.
+Use the Docker hostname for the Mac instead:
+
+```bash
+cd /path/to/mycelia
+
+docker compose exec python-worker python stt.py \
+  --server http://host.docker.internal:10301 \
+  --api-key local \
+  --model large-v3-v20240930_626MB \
+  --limit 1
+```
+
+This uses the worker's existing Mycelia connection. `--limit 1` is a bounded
+recovery run, not a server process.
+
+## Manual recovery: run `stt.py` on the host
 
 Mycelia still needs backend access for MongoDB and resource APIs. Configure
 `MYCELIA_URL`, `MYCELIA_CLIENT_ID`, and `MYCELIA_TOKEN` in the repo `.env`.
@@ -100,7 +141,7 @@ export UV_CACHE_DIR=/tmp/uv-cache
 uv run stt.py \
   --server http://127.0.0.1:10301 \
   --api-key local \
-  --model large-v3-v20240930_turbo_632MB \
+  --model large-v3-v20240930_626MB \
   --limit 1
 ```
 
@@ -108,28 +149,13 @@ Argmax does not require an API key, but `stt.py` requires a non-empty value for
 a dedicated STT endpoint. `local` is only a placeholder; it is sent as a bearer
 token and is not a real credential.
 
-## Run `stt.py` in Docker
-
-Inside the Compose `python-worker`, `127.0.0.1` points to the container itself.
-Use the Docker hostname for the Mac instead:
-
-```bash
-cd /path/to/mycelia
-
-docker compose exec python-worker python stt.py \
-  --server http://host.docker.internal:10301 \
-  --api-key local \
-  --model large-v3-v20240930_turbo_632MB \
-  --limit 1
-```
-
 To make the Docker configuration persistent, add the following to the repo
 `.env`, using the same model that was passed to `argmax-cli serve`:
 
 ```dotenv
 STT_SERVER_URL=http://host.docker.internal:10301
 PROXY_API_KEY=local
-STT_MODEL=large-v3-v20240930_turbo_632MB
+STT_MODEL=large-v3-v20240930_626MB
 ```
 
 Recreate the worker so it receives the new environment, then perform a small
