@@ -14,6 +14,7 @@ const profiles: TranscriptionProviderProfile[] = [
     apiKey: "local-key",
     model: "large-v3",
     enabled: true,
+    priority: 10,
     concurrency: 1,
   },
   {
@@ -23,6 +24,7 @@ const profiles: TranscriptionProviderProfile[] = [
     apiKey: "cloud-key",
     model: "whisper-1",
     enabled: true,
+    priority: 20,
     concurrency: 2,
   },
 ];
@@ -36,14 +38,25 @@ Deno.test("STT provider capacity sums enabled profile slots", () => {
 });
 
 Deno.test("STT provider selection reserves waiting jobs against profile slots", () => {
-  expect(selectTranscriptionProvider(profiles, {})?.id).toBe("cloud");
-  expect(selectTranscriptionProvider(profiles, { cloud: 1 })?.id).toBe(
-    "local",
+  expect(selectTranscriptionProvider(profiles, {})?.id).toBe("local");
+  expect(selectTranscriptionProvider(profiles, { local: 1 })?.id).toBe(
+    "cloud",
   );
   expect(selectTranscriptionProvider(profiles, { cloud: 1, local: 1 })?.id)
     .toBe("cloud");
   expect(selectTranscriptionProvider(profiles, { cloud: 2, local: 1 })).toBe(
     null,
+  );
+});
+
+Deno.test("STT providers with equal priority balance by reserved-slot load", () => {
+  const equalPriority = profiles.map((profile) => ({
+    ...profile,
+    priority: 10,
+  }));
+  expect(selectTranscriptionProvider(equalPriority, {})?.id).toBe("cloud");
+  expect(selectTranscriptionProvider(equalPriority, { cloud: 1 })?.id).toBe(
+    "local",
   );
 });
 
@@ -74,4 +87,24 @@ Deno.test("STT profile config requires an enabled route and at most eight slots"
       includeEnvironment: true,
     })
   ).toThrow(/cannot exceed 8/);
+});
+
+Deno.test("STT priority defaults safely for existing configurations", () => {
+  const legacyProfile = { ...profiles[0] } as Record<string, unknown>;
+  delete legacyProfile.priority;
+  const parsed = zTranscriptionProfilesConfig.parse({
+    profiles: [legacyProfile],
+  });
+  expect(parsed.profiles[0].priority).toBe(50);
+  expect(parsed.environmentPriority).toBe(50);
+  expect(() =>
+    zTranscriptionProfilesConfig.parse({
+      profiles: [{ ...profiles[0], priority: 0 }],
+    })
+  ).toThrow();
+  expect(() =>
+    zTranscriptionProfilesConfig.parse({
+      profiles: [{ ...profiles[0], priority: 101 }],
+    })
+  ).toThrow();
 });

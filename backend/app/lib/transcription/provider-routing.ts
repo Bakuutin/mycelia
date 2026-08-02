@@ -30,7 +30,9 @@ export function getTranscriptionProviderCapacity(
 }
 
 /**
- * Select the least-loaded provider that still has a free configured slot.
+ * Select the highest-priority provider that still has a free configured slot.
+ * Lower numeric priorities are preferred; equal priorities are balanced by
+ * reserved-slot load.
  * Waiting and delayed jobs count as reserved slots so BullMQ cannot later run
  * two jobs against a provider whose profile allows only one.
  */
@@ -43,7 +45,8 @@ export function selectTranscriptionProvider(
     .sort((a, b) => {
       const aRatio = (load[a.id] ?? 0) / a.concurrency;
       const bRatio = (load[b.id] ?? 0) / b.concurrency;
-      return aRatio - bRatio || a.name.localeCompare(b.name) ||
+      return a.priority - b.priority || aRatio - bRatio ||
+        a.name.localeCompare(b.name) ||
         a.id.localeCompare(b.id);
     });
   return candidates[0] ?? null;

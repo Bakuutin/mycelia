@@ -230,6 +230,7 @@ export async function getExternalServicesHealth(
           providerProfileName: provider.name,
           status: route.status,
           model: provider.model,
+          priority: provider.priority,
           concurrency: provider.concurrency,
           latencyMs: route.latencyMs,
           message: route.message,

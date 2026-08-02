@@ -108,6 +108,7 @@ Deno.test("transcription uses the snapshotted profile and model", async () => {
         baseUrl: "https://stt.example.com",
         apiKey: "cloud-key",
         model: "current-model",
+        priority: 20,
         concurrency: 2,
         enabled: true,
         source: "transcription_profile",

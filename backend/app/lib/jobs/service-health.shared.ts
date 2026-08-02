@@ -29,6 +29,7 @@ export interface ExternalServiceHealth {
     providerProfileName: string;
     status: ExternalServiceStatus;
     model?: string;
+    priority: number;
     concurrency: number;
     latencyMs?: number;
     message: string;

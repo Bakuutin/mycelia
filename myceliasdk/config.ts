@@ -75,12 +75,16 @@ export const zTranscriptionProviderProfile = z.object({
   apiKey: z.string(),
   model: z.string().trim().min(1).default("whisper"),
   enabled: z.boolean().default(true),
+  // Lower values are preferred. Providers sharing a priority are balanced by
+  // reserved-slot load, and lower-priority routes are used as overflow.
+  priority: z.number().int().min(1).max(100).default(50),
   concurrency: z.number().int().min(1).max(8).default(1),
 });
 
 export const zTranscriptionProfilesConfig = z.object({
   profiles: z.array(zTranscriptionProviderProfile).min(1).max(8),
   includeEnvironment: z.boolean().optional().default(false),
+  environmentPriority: z.number().int().min(1).max(100).optional().default(50),
 }).superRefine((value, context) => {
   const enabled = value.profiles.filter((profile) => profile.enabled);
   if (enabled.length === 0 && !value.includeEnvironment) {

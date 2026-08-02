@@ -42,12 +42,49 @@ server loads one model, so restart it to switch models.
 Test the endpoint before connecting Mycelia:
 
 ```bash
-curl -X POST http://127.0.0.1:10301/v1/audio/transcriptions \
-  -H "Authorization: Bearer local" \
-  -F "file=@/absolute/path/to/test.wav" \
-  -F "model=large-v3-v20240930_turbo_632MB" \
-  -F "response_format=verbose_json"
+curl -fsS http://127.0.0.1:10301/health
+curl -fsS \
+  -H 'Authorization: Bearer local-no-auth' \
+  -F 'file=@test.wav;type=audio/wav' \
+  -F 'model=large-v3-v20240930_turbo_632MB' \
+  -F 'response_format=verbose_json' \
+  http://127.0.0.1:10301/v1/audio/transcriptions | jq .
 ```
+
+Run the second command from the directory containing `test.wav`, or replace
+`@test.wav` with an absolute path. To create a predictable 16 kHz mono WAV:
+
+```bash
+ffmpeg -i input.m4a -ar 16000 -ac 1 -c:a pcm_s16le test.wav
+```
+
+Use the exact model passed to `argmax-cli serve`; the non-Turbo example is
+`large-v3-v20240930_626MB`.
+
+## Configure multiple providers in Mycelia
+
+Open **Settings -> Speech-to-text**. Every configured route is shown as a card.
+Select a card to edit it or press **Add provider**, then set:
+
+- **STT Base URL**: use `http://host.docker.internal:10301` for Argmax running
+  on the same Mac as the Docker stack; use the remote proxy URL for a remote
+  service.
+- **STT API Key**: use the real proxy secret, or `local-no-auth` for Argmax.
+- **STT model**: the exact model accepted by that server.
+- **Priority**: `1` is highest. Routes at the same priority load-balance;
+  lower-priority routes are overflow when earlier routes have no free slots.
+- **Slots**: maximum parallel jobs reserved for that provider (`1-8`).
+- **Enabled**: disabled routes receive no newly queued jobs.
+
+Press **Save STT route**. The transcription worker concurrency becomes the sum
+of enabled provider slots, up to the global limit of eight. Batch size remains
+separate: sequences inside one transcription job are processed serially, while
+provider slots control how many jobs can call STT servers in parallel.
+
+The **Backend environment STT route** represents `STT_SERVER_URL`,
+`PROXY_API_KEY`, and `STT_MODEL` from the backend environment. It can be enabled
+alongside UI-managed providers and has one slot. Its secret is never displayed
+in the form.
 
 ## Run `stt.py` on the host
 
@@ -110,3 +147,28 @@ writes the result to Mycelia.
 
 Do not run this direct worker alongside Mycelia's healthy automatic
 transcription pipeline, because both can claim the same pending chunks.
+
+## Google Cloud Speech-to-Text
+
+A Gemini API key from Google AI Studio is not accepted by Google Cloud
+Speech-to-Text. Cloud STT uses Google Cloud authentication such as Application
+Default Credentials or a service account. It also does not expose Mycelia's
+OpenAI-compatible `/v1/audio/transcriptions` contract directly. A dedicated
+adapter is therefore required before it can be selected as an STT provider in
+this UI.
+
+That adapter should authenticate with ADC, translate Mycelia's multipart audio
+request to Google STT, normalize the transcript and segments back to the
+OpenAI-compatible response shape, and handle long recordings through chunking or
+Google Cloud Storage. Until then, do not place a Gemini key in the STT API key
+field.
+
+References:
+
+- [Google Cloud STT authentication](https://docs.cloud.google.com/speech-to-text/docs/v1/authentication)
+- [Synchronous recognition limits and usage](https://docs.cloud.google.com/speech-to-text/docs/v1/sync-recognize)
+- [Speech-to-Text pricing](https://cloud.google.com/speech-to-text/pricing)
+- [Google Cloud Free Program](https://cloud.google.com/free)
+- [Cloud Vision pricing](https://cloud.google.com/vision/pricing)
+- [Cloud Natural Language pricing](https://cloud.google.com/natural-language/pricing)
+- [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)

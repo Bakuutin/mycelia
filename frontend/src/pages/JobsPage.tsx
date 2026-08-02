@@ -114,6 +114,7 @@ type ExternalServiceHealth = {
     providerProfileName: string;
     status: "healthy" | "loading" | "unavailable" | "misconfigured";
     model?: string;
+    priority: number;
     concurrency: number;
     latencyMs?: number;
     message: string;
@@ -2623,6 +2624,7 @@ export default function JobsPage() {
                                         {route.providerProfileName}
                                       </span>
                                       <span className="font-mono text-muted-foreground">
+                                        P{route.priority} ·{" "}
                                         {route.model || "unknown"} ·{" "}
                                         {route.concurrency}{" "}
                                         slot{route.concurrency ===
@@ -2637,7 +2639,7 @@ export default function JobsPage() {
                                   ))}
                                 </div>
                                 <Button asChild size="sm" variant="outline">
-                                  <Link to="/settings/inference">
+                                  <Link to="/settings/speech-to-text">
                                     Configure STT providers
                                   </Link>
                                 </Button>

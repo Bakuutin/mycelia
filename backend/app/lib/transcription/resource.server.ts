@@ -38,6 +38,7 @@ export type ResolvedTranscriptionProvider = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  priority: number;
   concurrency: number;
   enabled: boolean;
   source:
@@ -91,6 +92,7 @@ export class TranscriptionResource
         // model is selected from the web UI.
         model: Deno.env.get("STT_MODEL")?.trim() || legacyConfiguredModel ||
           "whisper",
+        priority: config?.transcriptionProfiles?.environmentPriority ?? 50,
         concurrency: 1,
         enabled: true,
         source: "stt_env",
@@ -106,6 +108,7 @@ export class TranscriptionResource
         baseUrl: profile.baseUrl,
         apiKey: profile.apiKey,
         model: profile.model,
+        priority: profile.priority,
         concurrency: profile.concurrency,
         enabled: profile.enabled,
         source: "transcription_profile" as const,
@@ -134,6 +137,7 @@ export class TranscriptionResource
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       model: provider.model || "whisper",
+      priority: 50,
       concurrency: 1,
       enabled: true,
       source: config.transcription

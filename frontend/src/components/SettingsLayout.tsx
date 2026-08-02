@@ -1,5 +1,19 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Bot, Database, Key, Monitor, Palette, Settings, Flag, FileText, Shield, FileSearch, Server, Cog, ScrollText, UserRound } from "lucide-react";
+import {
+  AudioLines,
+  Cog,
+  Database,
+  FileSearch,
+  Flag,
+  Key,
+  Monitor,
+  Palette,
+  ScrollText,
+  Server,
+  Settings,
+  Shield,
+  UserRound,
+} from "lucide-react";
 
 const SettingsLayout = () => {
   const location = useLocation();
@@ -24,7 +38,13 @@ const SettingsLayout = () => {
       name: "Inference",
       path: "/settings/inference",
       icon: Server,
-      description: "Configure OpenAI-compatible inference provider",
+      description: "Configure LLM providers and model routing",
+    },
+    {
+      name: "Speech-to-text",
+      path: "/settings/speech-to-text",
+      icon: AudioLines,
+      description: "Manage local and remote STT servers",
     },
     {
       name: "Prompts",
@@ -121,7 +141,8 @@ const SettingsLayout = () => {
             <div className="space-y-1">
               {serverSettings.map((tab) => {
                 const Icon = tab.icon;
-                const isActive = location.pathname === tab.path || location.pathname.startsWith(tab.path);
+                const isActive = location.pathname === tab.path ||
+                  location.pathname.startsWith(tab.path);
 
                 return (
                   <Link
@@ -155,7 +176,8 @@ const SettingsLayout = () => {
             <div className="space-y-1">
               {administrationSettings.map((tab) => {
                 const Icon = tab.icon;
-                const isActive = location.pathname === tab.path || location.pathname.startsWith(tab.path);
+                const isActive = location.pathname === tab.path ||
+                  location.pathname.startsWith(tab.path);
 
                 return (
                   <Link

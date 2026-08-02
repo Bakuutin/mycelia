@@ -13,7 +13,8 @@ your own words.
 ### Audio Ingestion & Processing
 
 - Continuous import from Apple Voice Memos, Google Drive, and local folders.
-- Automated pipeline: VAD → Transcription → Conversation extraction → Summarization.
+- Automated pipeline: VAD → Transcription → Conversation extraction →
+  Summarization.
 - Smart chunking, waveform normalization, and diarization-friendly segments.
 - Whisper transcription via local GPU or any remote OpenAI-compatible server.
 - Audio recording, playback (0.5x–3x speed, volume up to 300%), and WAV export.
@@ -29,13 +30,15 @@ your own words.
 
 ### AI Chat
 
-- Chat with your memory — tool-calling agent with access to all backend resources.
+- Chat with your memory — tool-calling agent with access to all backend
+  resources.
 - Streaming responses, file uploads, and speech input.
 - Chat history with rename and management.
 
 ### Object Management
 
-- Create, edit, and browse People, Events, Conversations, Relationships, and Promises.
+- Create, edit, and browse People, Events, Conversations, Relationships, and
+  Promises.
 - Per-object audio player with transcript sync and segment navigation.
 - LLM summarization with model selection and cost estimation.
 - Summary comparison (side-by-side, star/favorite).
@@ -54,10 +57,14 @@ your own words.
 
 ### Infrastructure & Auth
 
-- One-command Docker setup (`docker compose up -d`) with backend, frontend, Python worker, MongoDB, and Redis.
-- OAuth 2.0 with PKCE, `.well-known` metadata, JWT login, and API key management.
-- MCP (Model Context Protocol) server endpoint for remote operations and scripting.
-- First-run setup wizard with automatic API key creation and inference provider configuration.
+- One-command Docker setup (`docker compose up -d`) with backend, frontend,
+  Python worker, MongoDB, and Redis.
+- OAuth 2.0 with PKCE, `.well-known` metadata, JWT login, and API key
+  management.
+- MCP (Model Context Protocol) server endpoint for remote operations and
+  scripting.
+- First-run setup wizard with automatic API key creation and inference provider
+  configuration.
 - OpenTelemetry observability (optional).
 - Feature flags, access logging, and server configuration UI.
 
@@ -65,23 +72,26 @@ your own words.
 
 - Messenger platform import (Telegram, Signal).
 - LLM provider configuration with model aliases (small / medium / large).
-- OpenAI-compatible API endpoints (`/v1/audio/transcriptions`, `/llm/chat/completions`).
+- OpenAI-compatible API endpoints (`/v1/audio/transcriptions`,
+  `/llm/chat/completions`).
 - MongoDB full-text search alongside GridFS-backed storage.
 
 ## Roadmap
 
 **In progress**
 
-- Friend-Lite companion app + advanced backend (`friend/`) wiring semantic memories and wearable capture back into Mycelia.
-- GPU diarization stack replacing the current batch-only flow (`diarizator/` Helm charts + WebUI).
-- Semantic search + vector memory integration connecting Qdrant-backed pipelines and the OpenMemory MCP bridges into the main timeline.
+- Friend-Lite companion app + advanced backend (`friend/`) wiring semantic
+  memories and wearable capture back into Mycelia.
+- GPU diarization stack replacing the current batch-only flow (`diarizator/`
+  Helm charts + WebUI).
+- Semantic search + vector memory integration connecting Qdrant-backed pipelines
+  and the OpenMemory MCP bridges into the main timeline.
 
 **Planned**
 
 - Multi-device & multi-modal capture (health, geolocation, photos, sensors).
 - Privacy + usage dashboards, token metering, and export flows.
 - Processing / artifact templates, batch operations, and backup automation.
-
 
 ## 🚀 Quick Start
 
@@ -99,6 +109,7 @@ cd mycelia
 ```
 
 The setup script automatically:
+
 - Creates `.env` from `.env.example`
 - Generates a secure `SECRET_KEY`
 - Starts all services with Docker Compose
@@ -113,7 +124,8 @@ If you need API tokens in `.env` (for Python daemon or CLI access):
 ./scripts/setup.sh --with-tokens --start
 ```
 
-This starts MongoDB temporarily to generate `MYCELIA_CLIENT_ID` and `MYCELIA_TOKEN`.
+This starts MongoDB temporarily to generate `MYCELIA_CLIENT_ID` and
+`MYCELIA_TOKEN`.
 
 #### Syncing After Updates
 
@@ -124,7 +136,10 @@ After pulling updates, new environment variables may be added to `.env.example`:
 ./scripts/sync-env.sh --dry-run # Preview changes without modifying
 ```
 
-> **Note**: For local development, Mycelia uses a self-signed certificate. You may need to click "Advanced" and "Proceed" in your browser. See [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and SSL.
+> **Note**: For local development, Mycelia uses a self-signed certificate. You
+> may need to click "Advanced" and "Proceed" in your browser. See
+> [NETWORKING.md](docs/NETWORKING.md) for more details on port configuration and
+> SSL.
 
 ### Import Existing Audio Files
 
@@ -156,13 +171,13 @@ if you want to import Apple Voice Memos.
 
 #### Daemon Options
 
-| Option | Purpose |
-| --- | --- |
-| `--once` | Run one cycle and exit instead of watching continuously. |
-| `--reset-errors` | Clear cached source-file ingestion errors before importing again. |
-| `--vad-only` | Skip discovery/import and process only chunks without VAD metadata. |
-| `--vad-limit N` | Process at most `N` chunks per VAD cycle; default is `1000`. |
-| `--vad-batch-size N` | Fetch `N` chunks per VAD database batch; default is `100`. |
+| Option               | Purpose                                                             |
+| -------------------- | ------------------------------------------------------------------- |
+| `--once`             | Run one cycle and exit instead of watching continuously.            |
+| `--reset-errors`     | Clear cached source-file ingestion errors before importing again.   |
+| `--vad-only`         | Skip discovery/import and process only chunks without VAD metadata. |
+| `--vad-limit N`      | Process at most `N` chunks per VAD cycle; default is `1000`.        |
+| `--vad-batch-size N` | Fetch `N` chunks per VAD database batch; default is `100`.          |
 
 `--reset-errors` cannot be combined with `--vad-only`. Both VAD numeric options
 must be greater than zero.
@@ -194,10 +209,55 @@ chunk is inserted, the backend automatically runs the remaining stages:
 daemon import -> VAD -> speech sequence creation -> remote STT -> conversations
 ```
 
-The automatic transcription resource prefers the dedicated `STT_SERVER_URL`,
-`PROXY_API_KEY`, and optional `STT_MODEL` values from `.env`. If those dedicated
-variables are absent, it keeps the previous behavior and uses the inference
-provider configured in Mycelia Settings.
+Configure one or more transcription routes on the dedicated **Settings ->
+Speech-to-text** page. Each provider has an OpenAI-compatible base URL, API key,
+model, enabled switch, priority, and parallel slot count. Lower priority numbers
+are selected first; providers with the same priority are load-balanced, and
+lower-priority routes receive overflow when earlier routes are full. A job keeps
+its selected provider snapshot even if routing is edited later.
+
+The dedicated `STT_SERVER_URL`, `PROXY_API_KEY`, and optional `STT_MODEL`
+variables from `.env` appear as the **Backend environment STT route**. Enable
+that route in the same settings card if it should run alongside UI-managed local
+or remote providers. Its secret remains environment-managed.
+
+For a local Argmax server on port 10301, use `http://host.docker.internal:10301`
+in the Mycelia UI. Test it directly from the Mac before adding it:
+
+```bash
+curl -fsS http://127.0.0.1:10301/health
+curl -fsS \
+  -H 'Authorization: Bearer local-no-auth' \
+  -F 'file=@test.wav;type=audio/wav' \
+  -F 'model=large-v3-v20240930_626MB' \
+  -F 'response_format=verbose_json' \
+  http://127.0.0.1:10301/v1/audio/transcriptions | jq .
+```
+
+Argmax does not validate this placeholder bearer token, but Mycelia requires a
+non-empty profile key. See
+[Local STT with Argmax and Whisper](docs/LOCAL_STT.md) for startup, Docker
+networking, and model-specific examples.
+
+### Google services and credentials
+
+A Google AI Studio / Gemini API key can be used for a Gemini LLM preset and
+Gemini image understanding, but it is **not** a Google Cloud Speech-to-Text
+credential. Cloud STT requires its API to be enabled and Application Default
+Credentials or a service account; do not paste a Gemini key into an STT profile.
+Mycelia does not yet include the Google-specific authentication and long-audio
+adapter, so Cloud STT should not be added as an OpenAI-compatible route until
+that adapter exists.
+
+Potential Google integrations include
+[Cloud Speech-to-Text](https://cloud.google.com/speech-to-text/pricing),
+[Cloud Vision OCR](https://cloud.google.com/vision/pricing),
+[Cloud Natural Language](https://cloud.google.com/natural-language/pricing), and
+[Gemini multimodal models](https://ai.google.dev/gemini-api/docs/pricing). The
+Google Cloud free program and product quotas can change; verify the current
+[Google Cloud Free Program](https://cloud.google.com/free) before relying on a
+quota. Keep all credentials in environment or secret storage and never commit
+them.
 
 #### Debugging conversation re-extraction
 
@@ -225,10 +285,10 @@ exported JSONL file or credentials.
 LLM routing is configured separately in **Settings -> Inference**. Choose a
 default model for new memory chats independently from the preset's background
 task default, optionally override summaries, conversation extraction, or
-tagging, and choose the failure policy for each feature:
-**Stop with error** or retry once with a specific fallback model. The same
-provider settings can be supplied with `OPENAI_BASE_URL`, `OPENAI_API_KEY`,
-`OPENAI_MODEL`, and `OPENAI_CHAT_MODEL` in `.env`. Per-feature fallback defaults are
+tagging, and choose the failure policy for each feature: **Stop with error** or
+retry once with a specific fallback model. The same provider settings can be
+supplied with `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`, and
+`OPENAI_CHAT_MODEL` in `.env`. Per-feature fallback defaults are
 `SUMMARIZATION_FALLBACK_MODEL`, `CONVERSATION_EXTRACTION_FALLBACK_MODEL`, and
 `TAGGER_FALLBACK_MODEL`; leave them unset to stop on error. Streaming chat never
 switches models silently.
@@ -247,25 +307,25 @@ stores it in `transcriptions.metadata.model`.
 
 ### Change the Whisper model in Portainer
 
-The model shown in **Settings -> Inference -> STT model** is the model name
-Mycelia sends for request validation. It does not load a model into the GPU.
-The model that is actually loaded is controlled by `ASR_MODEL` in the
+The model shown in **Settings -> Speech-to-text -> Selected server** is the
+model name Mycelia sends for request validation. It does not load a model into
+the GPU. The model that is actually loaded is controlled by `ASR_MODEL` in the
 Portainer stack and is loaded when the Whisper container starts.
 
 Whisper's internal VAD filter is controlled by the single stack variable
 `WHISPER_VAD_FILTER` (default `true` in the GPU compose files). When enabled,
-the proxy passes `vad_filter=true` to Whisper and records the effective value
-in `transcriptions.metadata.whisperVadFilter`. Set it to `false` and redeploy
-the proxy if this filtering should be disabled. The status endpoint exposes
-the current value as `whisperVadFilter`.
+the proxy passes `vad_filter=true` to Whisper and records the effective value in
+`transcriptions.metadata.whisperVadFilter`. Set it to `false` and redeploy the
+proxy if this filtering should be disabled. The status endpoint exposes the
+current value as `whisperVadFilter`.
 
 To change it, for example to `large-v3-turbo`:
 
 1. Open Portainer -> **Stacks -> mycelia-stt -> Editor**.
-2. Set `ASR_MODEL` to `large-v3-turbo` in the stack environment variables.
-   Make sure the Whisper and proxy services use the same value. If the compose
-   file contains a literal `ASR_MODEL`, remove or update any old Portainer
-   stack variable that could override it.
+2. Set `ASR_MODEL` to `large-v3-turbo` in the stack environment variables. Make
+   sure the Whisper and proxy services use the same value. If the compose file
+   contains a literal `ASR_MODEL`, remove or update any old Portainer stack
+   variable that could override it.
 
    In the repository's `gpu/docker-compose.portainer.yml`, the two service
    entries use `${ASR_MODEL:-large-v3-turbo}`. They are references to one
@@ -289,8 +349,8 @@ To change it, for example to `large-v3-turbo`:
    press **Save STT route**. This keeps request validation and provenance
    aligned with the model actually loaded remotely.
 
-If Mycelia shows `large-v3` while `/v1/models` returns `large-v3-turbo`, the
-GPU is using Turbo and only Mycelia's saved request setting is stale. If
+If Mycelia shows `large-v3` while `/v1/models` returns `large-v3-turbo`, the GPU
+is using Turbo and only Mycelia's saved request setting is stale. If
 `/v1/models` returns `502 Bad gateway`, update the proxy image first; an old
 proxy image sends that endpoint to its obsolete Ollama catch-all route.
 
@@ -312,9 +372,9 @@ uv run debug/repair_transcription_model_provenance.py \
 
 The script records the old and new values in `metadata.modelCorrection`. Do not
 rewrite every `large-v3` record blindly: records made while the GPU really had
-the non-Turbo model should retain their original provenance. Use
-`--start-after` and `--start-before` to bound the repair when only a known time
-window was processed by Turbo.
+the non-Turbo model should retain their original provenance. Use `--start-after`
+and `--start-before` to bound the repair when only a known time window was
+processed by Turbo.
 
 The normal `daemon.py` process performs discovery, ingestion, and device-info
 backfill only. It does not calculate VAD. After a chunk is inserted, the backend
@@ -360,11 +420,10 @@ docker compose exec python-worker python daemon.py \
   --vad-batch-size 100
 ```
 
-This is process-level parallelism: importing and VAD can run simultaneously.
-Do not start multiple VAD-only processes against the same database, or combine
-one with an active queued VAD worker. Direct VAD selects chunks with no VAD
-metadata but does not claim them, so concurrent workers can process the same
-chunks.
+This is process-level parallelism: importing and VAD can run simultaneously. Do
+not start multiple VAD-only processes against the same database, or combine one
+with an active queued VAD worker. Direct VAD selects chunks with no VAD metadata
+but does not claim them, so concurrent workers can process the same chunks.
 
 After VAD marks speech chunks, inspect and run the direct STT worker only if the
 automatic transcription queue is not running:
@@ -376,12 +435,12 @@ docker compose exec python-worker python stt.py
 
 The host daemon log is written to `~/Library/mycelia/logs/daemon.log`.
 
-
 ### Configuration
 
 When you first open the frontend, you'll be guided through a setup wizard:
 
-1. **Server Connection** (`/setup`) - Connects to the backend and automatically creates your first API key.
+1. **Server Connection** (`/setup`) - Connects to the backend and automatically
+   creates your first API key.
 
 2. **Inference Provider** (`/setup/inference`) - Configure an OpenAI-compatible
    endpoint and initial model. Settings → Inference then lets you separate the
@@ -392,7 +451,8 @@ You can reconfigure these settings anytime in Settings.
 
 #### Managing API Keys
 
-- **Via Settings UI**: Go to Settings → API Keys to create, view, and revoke keys
+- **Via Settings UI**: Go to Settings → API Keys to create, view, and revoke
+  keys
 - **Via Terminal** (for initial setup or automation):
   ```bash
   docker compose run --rm backend deno run -A server.ts token-create
@@ -401,6 +461,7 @@ You can reconfigure these settings anytime in Settings.
 ## For Developers
 
 See **[DEVELOPMENT.md](DEVELOPMENT.md)** for:
+
 - Docker dev mode with hot reload
 - Native development setup (Deno + Vite)
 - Python tooling (audio import, STT, conversation extraction)
