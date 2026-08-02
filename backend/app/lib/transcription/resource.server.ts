@@ -14,6 +14,8 @@ const transcriptionRequestSchema = z.discriminatedUnion("action", [
     fileType: z.string().optional(),
     language: z.string().optional(),
     prompt: z.string().optional(),
+    providerProfileId: z.string().optional(),
+    model: z.string().optional(),
   }),
   z.object({
     action: z.literal("health"),
@@ -30,6 +32,21 @@ const transcriptionRequestSchema = z.discriminatedUnion("action", [
 type TranscriptionRequest = z.infer<typeof transcriptionRequestSchema>;
 type TranscriptionResponse = any | Response;
 
+export type ResolvedTranscriptionProvider = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  concurrency: number;
+  enabled: boolean;
+  source:
+    | "stt_env"
+    | "transcription_profile"
+    | "transcription_config"
+    | "inference_config";
+};
+
 export class TranscriptionResource
   implements Resource<TranscriptionRequest, TranscriptionResponse> {
   code = "transcription";
@@ -42,14 +59,27 @@ export class TranscriptionResource
     response: z.any() as z.ZodType<TranscriptionResponse>,
   };
 
-  async getInferenceProvider(): Promise<
-    {
-      baseUrl: string;
-      apiKey: string;
-      model?: string;
-      source: "stt_env" | "transcription_config" | "inference_config";
-    } | null
-  > {
+  async getInferenceProviders(): Promise<ResolvedTranscriptionProvider[]> {
+    let config: Awaited<ReturnType<typeof getServerConfig>> | null = null;
+    try {
+      config = await getServerConfig();
+    } catch {
+      // Dedicated environment-only deployments may not expose config storage.
+    }
+
+    if (config?.transcriptionProfiles?.profiles?.length) {
+      return config.transcriptionProfiles.profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        baseUrl: profile.baseUrl,
+        apiKey: profile.apiKey,
+        model: profile.model,
+        concurrency: profile.concurrency,
+        enabled: profile.enabled,
+        source: "transcription_profile" as const,
+      }));
+    }
+
     const sttBaseUrl = Deno.env.get("STT_SERVER_URL")?.trim();
     const sttApiKey = Deno.env.get("PROXY_API_KEY")?.trim();
 
@@ -60,38 +90,56 @@ export class TranscriptionResource
         );
       }
 
-      let configuredModel: string | undefined;
-      try {
-        configuredModel = (await getServerConfig()).transcription?.model
-          ?.trim();
-      } catch {
-        // Environment-only and isolated test deployments may not expose the
-        // config resource. The STT_MODEL fallback remains valid there.
-      }
-      return {
+      const configuredModel = config?.transcription?.model?.trim();
+      return [{
+        id: "environment",
+        name: "Environment STT",
         baseUrl: sttBaseUrl,
         apiKey: sttApiKey,
         // URL and credentials may remain environment-managed while the model
         // is selected from the web UI. An explicit saved selection wins.
         model: configuredModel || Deno.env.get("STT_MODEL")?.trim() ||
           "whisper",
+        concurrency: 1,
+        enabled: true,
         source: "stt_env",
-      };
+      }];
     }
 
-    const config = await getServerConfig();
+    config ??= await getServerConfig();
     const provider = config.transcription || config.inference;
     if (!provider?.baseUrl || !provider?.apiKey) {
-      return null;
+      return [];
     }
-    return {
+    return [{
+      id: "legacy",
+      name: "Legacy STT route",
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
-      model: provider.model,
+      model: provider.model || "whisper",
+      concurrency: 1,
+      enabled: true,
       source: config.transcription
         ? "transcription_config"
         : "inference_config",
-    };
+    }];
+  }
+
+  async getInferenceProvider(
+    profileId?: string,
+  ): Promise<ResolvedTranscriptionProvider | null> {
+    const providers = await this.getInferenceProviders();
+    if (profileId) {
+      const provider = providers.find((candidate) =>
+        candidate.id === profileId
+      );
+      if (!provider) {
+        throw new Error(`STT provider profile not found: ${profileId}`);
+      }
+      return provider;
+    }
+    return providers.find((provider) => provider.enabled) ?? providers[0] ??
+      null;
   }
 
   async use(
@@ -184,7 +232,9 @@ export class TranscriptionResource
           };
         }
         case "transcribe": {
-          const provider = await this.getInferenceProvider();
+          const provider = await this.getInferenceProvider(
+            input.providerProfileId,
+          );
           if (!provider) {
             span.setStatus({
               code: 2,
@@ -241,7 +291,7 @@ export class TranscriptionResource
           if (input.prompt) {
             formData.append("prompt", input.prompt);
           }
-          formData.append("model", provider.model || "whisper");
+          formData.append("model", input.model || provider.model || "whisper");
 
           const proxyResponse = await fetch(
             provider.baseUrl.replace(/\/$/, "") + "/v1/audio/transcriptions",
@@ -274,6 +324,7 @@ export class TranscriptionResource
             const jsonResponse = JSON.parse(responseText);
             const reportedModel =
               proxyResponse.headers.get("X-Whisper-Model") ||
+              input.model ||
               provider.model ||
               "unknown";
             const vadFilterHeader = proxyResponse.headers.get(
@@ -291,9 +342,10 @@ export class TranscriptionResource
             jsonResponse.metadata = {
               ...responseMetadata,
               model: reportedModel,
-              provider: provider.source === "stt_env"
-                ? "remote_openai_compatible"
-                : "configured_inference",
+              provider: "openai_compatible",
+              providerProfileId: provider.id,
+              providerProfileName: provider.name,
+              providerSource: provider.source,
               ...(whisperVadFilter === undefined ? {} : { whisperVadFilter }),
             };
             span.setStatus({ code: 1 });

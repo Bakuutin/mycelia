@@ -1,5 +1,8 @@
 import { expect } from "@std/expect";
-import { TranscriptionResource } from "./resource.server.ts";
+import {
+  type ResolvedTranscriptionProvider,
+  TranscriptionResource,
+} from "./resource.server.ts";
 import type { Auth } from "@/lib/auth/core.server.ts";
 
 function restoreEnv(name: string, value: string | undefined) {
@@ -55,7 +58,10 @@ Deno.test("dedicated STT environment drives transcription and records the report
 
     expect(result.metadata).toEqual({
       model: "large-v3-turbo",
-      provider: "remote_openai_compatible",
+      provider: "openai_compatible",
+      providerProfileId: "environment",
+      providerProfileName: "Environment STT",
+      providerSource: "stt_env",
       whisperVadFilter: true,
     });
   } finally {
@@ -87,6 +93,54 @@ Deno.test("dedicated STT configuration rejects a missing proxy key", async () =>
   } finally {
     restoreEnv("STT_SERVER_URL", previousUrl);
     restoreEnv("PROXY_API_KEY", previousKey);
+  }
+});
+
+Deno.test("transcription uses the snapshotted profile and model", async () => {
+  class ProfileResource extends TranscriptionResource {
+    override getInferenceProvider(
+      profileId?: string,
+    ): Promise<ResolvedTranscriptionProvider> {
+      expect(profileId).toBe("cloud-stt");
+      return Promise.resolve({
+        id: "cloud-stt",
+        name: "Cloud STT",
+        baseUrl: "https://stt.example.com",
+        apiKey: "cloud-key",
+        model: "current-model",
+        concurrency: 2,
+        enabled: true,
+        source: "transcription_profile",
+      });
+    }
+  }
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    expect(String(input)).toBe(
+      "https://stt.example.com/v1/audio/transcriptions",
+    );
+    expect((init?.body as FormData).get("model")).toBe("snapshotted-model");
+    return Promise.resolve(
+      new Response(JSON.stringify({ text: "hello", segments: [] })),
+    );
+  };
+
+  try {
+    const result = await new ProfileResource().use({
+      action: "transcribe",
+      file: new Uint8Array([1]),
+      providerProfileId: "cloud-stt",
+      model: "snapshotted-model",
+    }, {} as Auth) as Record<string, any>;
+    expect(result.metadata.providerProfileId).toBe("cloud-stt");
+    expect(result.metadata.providerProfileName).toBe("Cloud STT");
+    expect(result.metadata.model).toBe("snapshotted-model");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

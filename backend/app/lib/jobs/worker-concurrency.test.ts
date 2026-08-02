@@ -16,10 +16,10 @@ Deno.test("worker concurrency defaults to one and clamps legacy values", () => {
   expect(normalizeWorkerConcurrency("summarization", 99)).toBe(8);
 });
 
-Deno.test("transcription keeps serial job execution despite batching", () => {
-  expect(getWorkerConcurrencyCap("transcription")).toBe(1);
-  expect(normalizeWorkerConcurrency("transcription", 8)).toBe(1);
-  expect(() => assertWorkerConcurrency("transcription", 2)).toThrow();
+Deno.test("transcription runtime can use provider-aware parallel slots", () => {
+  expect(getWorkerConcurrencyCap("transcription")).toBe(8);
+  expect(normalizeWorkerConcurrency("transcription", 8)).toBe(8);
+  expect(assertWorkerConcurrency("transcription", 2)).toBe(2);
 });
 
 Deno.test("worker concurrency accepts the general one through eight range", () => {

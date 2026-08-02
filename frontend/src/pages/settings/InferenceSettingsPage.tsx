@@ -49,6 +49,9 @@ const inferenceConfigSchema = z.object({
   ]),
   transcriptionApiKey: z.string(),
   transcriptionModel: z.string(),
+  transcriptionProfileName: z.string().min(1, "STT profile name is required"),
+  transcriptionProfileEnabled: z.boolean(),
+  transcriptionProfileConcurrency: z.coerce.number().int().min(1).max(8),
   transcriptionBatchSize: z.coerce.number().int().min(1).max(32),
   transcriptionBatchTimeoutBaseSeconds: z.coerce.number().int().min(60).max(
     1800,
@@ -89,6 +92,16 @@ type LlmProfile = {
     enabled?: boolean;
     sessionPrefix?: string;
   };
+};
+
+type SttProfile = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  enabled: boolean;
+  concurrency: number;
 };
 
 const MODEL_ROUTES = [
@@ -154,6 +167,8 @@ const InferenceSettingsPage = () => {
   const [sttModels, setSttModels] = useState<string[]>([]);
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState("");
+  const [sttProfiles, setSttProfiles] = useState<SttProfile[]>([]);
+  const [activeSttProfileId, setActiveSttProfileId] = useState("");
 
   const form = useForm<InferenceConfig>({
     resolver: zodResolver(inferenceConfigSchema),
@@ -171,6 +186,9 @@ const InferenceSettingsPage = () => {
       transcriptionBaseUrl: "",
       transcriptionApiKey: "",
       transcriptionModel: "whisper",
+      transcriptionProfileName: "Primary STT",
+      transcriptionProfileEnabled: true,
+      transcriptionProfileConcurrency: 1,
       transcriptionBatchSize: 16,
       transcriptionBatchTimeoutBaseSeconds: 120,
       transcriptionBatchTimeoutPerSequenceSeconds: 60,
@@ -216,7 +234,25 @@ const InferenceSettingsPage = () => {
         if (configResult) {
           const llmConfig = configResult.llm || configResult.inference || {};
           const transcriptionConfig = configResult.transcription || {};
-          const storedTranscriptionKey = transcriptionConfig.apiKey || "";
+          const savedSttProfiles = configResult.transcriptionProfiles
+            ?.profiles as
+              | SttProfile[]
+              | undefined;
+          const nextSttProfiles: SttProfile[] = savedSttProfiles?.length
+            ? savedSttProfiles
+            : [{
+              id: "primary",
+              name: "Primary STT",
+              baseUrl: transcriptionConfig.baseUrl || "",
+              apiKey: transcriptionConfig.apiKey || "",
+              model: transcriptionConfig.model || "whisper",
+              enabled: true,
+              concurrency: 1,
+            }];
+          const activeSttProfile = nextSttProfiles.find((profile) =>
+            profile.enabled
+          ) ?? nextSttProfiles[0];
+          const storedTranscriptionKey = activeSttProfile.apiKey || "";
           const malformedTranscriptionKey = /^https?:\/\//i.test(
             storedTranscriptionKey.trim(),
           );
@@ -259,6 +295,8 @@ const InferenceSettingsPage = () => {
           )!;
           setProfiles(nextProfiles);
           setActiveProfileId(nextActiveId);
+          setSttProfiles(nextSttProfiles);
+          setActiveSttProfileId(activeSttProfile.id);
           form.reset({
             baseUrl: activeProfile.baseUrl,
             apiKey: activeProfile.apiKey,
@@ -271,11 +309,14 @@ const InferenceSettingsPage = () => {
             promptCachingEnabled: activeProfile.promptCaching?.enabled ?? true,
             promptCacheSessionPrefix:
               activeProfile.promptCaching?.sessionPrefix || "mycelia",
-            transcriptionBaseUrl: transcriptionConfig.baseUrl || "",
+            transcriptionBaseUrl: activeSttProfile.baseUrl,
             transcriptionApiKey: malformedTranscriptionKey
               ? ""
               : storedTranscriptionKey,
-            transcriptionModel: transcriptionConfig.model || "whisper",
+            transcriptionModel: activeSttProfile.model,
+            transcriptionProfileName: activeSttProfile.name,
+            transcriptionProfileEnabled: activeSttProfile.enabled,
+            transcriptionProfileConcurrency: activeSttProfile.concurrency,
             transcriptionBatchSize: transcriptionConfig.batchSize || 16,
             transcriptionBatchTimeoutBaseSeconds:
               transcriptionConfig.batchTimeoutBaseSeconds || 120,
@@ -327,6 +368,18 @@ const InferenceSettingsPage = () => {
       };
       const nextProfiles = profiles.map((profile) =>
         profile.id === activeProfileId ? currentProfile : profile
+      );
+      const currentSttProfile: SttProfile = {
+        id: activeSttProfileId,
+        name: data.transcriptionProfileName.trim(),
+        baseUrl: data.transcriptionBaseUrl.trim(),
+        apiKey: data.transcriptionApiKey.trim(),
+        model: data.transcriptionModel.trim() || "whisper",
+        enabled: data.transcriptionProfileEnabled,
+        concurrency: data.transcriptionProfileConcurrency,
+      };
+      const nextSttProfiles = sttProfiles.map((profile) =>
+        profile.id === activeSttProfileId ? currentSttProfile : profile
       );
       const globalModel = currentProfile.aliases[currentProfile.defaultAlias];
       const invalidFallback = MODEL_ROUTES.find((route) => {
@@ -406,9 +459,9 @@ const InferenceSettingsPage = () => {
             promptCaching: currentProfile.promptCaching,
           },
           transcription: {
-            baseUrl: data.transcriptionBaseUrl.trim(),
-            apiKey: data.transcriptionApiKey.trim(),
-            model: data.transcriptionModel.trim() || "whisper",
+            baseUrl: currentSttProfile.baseUrl,
+            apiKey: currentSttProfile.apiKey,
+            model: currentSttProfile.model,
             batchSize: data.transcriptionBatchSize,
             batchTimeoutBaseSeconds: data.transcriptionBatchTimeoutBaseSeconds,
             batchTimeoutPerSequenceSeconds:
@@ -416,11 +469,17 @@ const InferenceSettingsPage = () => {
             fallbackEnabled: false,
             fallbackModel: "",
           },
+          transcriptionProfiles: nextSttProfiles.every((profile) =>
+              profile.baseUrl && profile.apiKey
+            )
+            ? { profiles: nextSttProfiles }
+            : null,
         },
       });
       await Promise.all(workerUpdates);
       setWorkerDefaults(updatedDefaults);
       setProfiles(nextProfiles);
+      setSttProfiles(nextSttProfiles);
       setSaveSuccess(true);
     } catch (err) {
       setError(
@@ -438,6 +497,8 @@ const InferenceSettingsPage = () => {
       "transcriptionBaseUrl",
       "transcriptionApiKey",
       "transcriptionModel",
+      "transcriptionProfileName",
+      "transcriptionProfileConcurrency",
       "transcriptionBatchSize",
       "transcriptionBatchTimeoutBaseSeconds",
       "transcriptionBatchTimeoutPerSequenceSeconds",
@@ -449,21 +510,60 @@ const InferenceSettingsPage = () => {
       setSaving(true);
       setError(null);
       setSaveSuccess(false);
+      const currentProfile: SttProfile = {
+        id: activeSttProfileId,
+        name: data.transcriptionProfileName.trim(),
+        baseUrl: data.transcriptionBaseUrl.trim(),
+        apiKey: data.transcriptionApiKey.trim(),
+        model: data.transcriptionModel.trim() || "whisper",
+        enabled: data.transcriptionProfileEnabled,
+        concurrency: data.transcriptionProfileConcurrency,
+      };
+      const nextProfiles = sttProfiles.map((profile) =>
+        profile.id === activeSttProfileId ? currentProfile : profile
+      );
+      if (nextProfiles.some((profile) => !profile.baseUrl || !profile.apiKey)) {
+        setError("Every STT provider profile needs a URL and API key.");
+        return;
+      }
+      const enabledProfiles = nextProfiles.filter((profile) => profile.enabled);
+      if (enabledProfiles.length === 0) {
+        setError("Enable at least one STT provider profile.");
+        return;
+      }
+      const totalConcurrency = enabledProfiles.reduce(
+        (sum, profile) => sum + profile.concurrency,
+        0,
+      );
+      if (totalConcurrency > 8) {
+        setError("Enabled STT provider concurrency cannot exceed 8 in total.");
+        return;
+      }
       await callResource("config", {
         action: "patch",
-        path: "transcription",
         updates: {
-          baseUrl: data.transcriptionBaseUrl.trim(),
-          apiKey: data.transcriptionApiKey.trim(),
-          model: data.transcriptionModel.trim() || "whisper",
-          batchSize: data.transcriptionBatchSize,
-          batchTimeoutBaseSeconds: data.transcriptionBatchTimeoutBaseSeconds,
-          batchTimeoutPerSequenceSeconds:
-            data.transcriptionBatchTimeoutPerSequenceSeconds,
-          fallbackEnabled: false,
-          fallbackModel: "",
+          transcriptionProfiles: { profiles: nextProfiles },
+          transcription: {
+            // Keep the legacy route populated for older deployments and use
+            // it as the global home for batching/timeout settings.
+            baseUrl: currentProfile.baseUrl,
+            apiKey: currentProfile.apiKey,
+            model: currentProfile.model,
+            batchSize: data.transcriptionBatchSize,
+            batchTimeoutBaseSeconds: data.transcriptionBatchTimeoutBaseSeconds,
+            batchTimeoutPerSequenceSeconds:
+              data.transcriptionBatchTimeoutPerSequenceSeconds,
+            fallbackEnabled: false,
+            fallbackModel: "",
+          },
         },
       });
+      await callResource("jobs", {
+        action: "set_worker_concurrency",
+        workerType: "transcription",
+        concurrency: totalConcurrency,
+      });
+      setSttProfiles(nextProfiles);
       setSaveSuccess(true);
     } catch (err) {
       setError(
@@ -526,6 +626,51 @@ const InferenceSettingsPage = () => {
     setProfiles(nextProfiles);
     setActiveProfileId(nextProfiles[0].id);
     loadProfileIntoForm(nextProfiles[0]);
+  };
+
+  const loadSttProfileIntoForm = (profile: SttProfile) => {
+    form.setValue("transcriptionProfileName", profile.name);
+    form.setValue("transcriptionBaseUrl", profile.baseUrl);
+    form.setValue("transcriptionApiKey", profile.apiKey);
+    form.setValue("transcriptionModel", profile.model);
+    form.setValue("transcriptionProfileEnabled", profile.enabled);
+    form.setValue("transcriptionProfileConcurrency", profile.concurrency);
+    setSttTestResult(null);
+    setSttModelsResult(null);
+    setSttModels([]);
+  };
+
+  const selectSttProfile = (profileId: string) => {
+    const profile = sttProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) return;
+    setActiveSttProfileId(profileId);
+    loadSttProfileIntoForm(profile);
+  };
+
+  const addSttProfile = () => {
+    const id = `stt-provider-${Date.now()}`;
+    const profile: SttProfile = {
+      id,
+      name: `STT provider ${sttProfiles.length + 1}`,
+      baseUrl: "",
+      apiKey: "",
+      model: "whisper",
+      enabled: true,
+      concurrency: 1,
+    };
+    setSttProfiles((current) => [...current, profile]);
+    setActiveSttProfileId(id);
+    loadSttProfileIntoForm(profile);
+  };
+
+  const deleteSttProfile = () => {
+    if (sttProfiles.length <= 1) return;
+    const nextProfiles = sttProfiles.filter((profile) =>
+      profile.id !== activeSttProfileId
+    );
+    setSttProfiles(nextProfiles);
+    setActiveSttProfileId(nextProfiles[0].id);
+    loadSttProfileIntoForm(nextProfiles[0]);
   };
 
   const testApiConnection = async () => {
@@ -1008,12 +1153,80 @@ const InferenceSettingsPage = () => {
             <div>
               <h3 className="text-lg font-semibold">Speech-to-text route</h3>
               <p className="text-sm text-muted-foreground">
-                Used by the transcription worker. If STT_SERVER_URL and
-                PROXY_API_KEY are set in the backend environment, they take
-                precedence; the effective source is shown on Jobs.
+                Each enabled profile reserves its own parallel slots. Once
+                profiles are saved they replace the legacy environment route;
+                the selected provider is snapshotted into every queued job.
               </p>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={activeSttProfileId}
+                onValueChange={selectSttProfile}
+              >
+                <SelectTrigger className="min-w-56 flex-1">
+                  <SelectValue placeholder="Choose STT provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sttProfiles.map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id}>
+                      {profile.name}
+                      {profile.enabled ? "" : " (disabled)"}
+                      {` · ${profile.concurrency} slot${
+                        profile.concurrency === 1 ? "" : "s"
+                      }`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="button" variant="outline" onClick={addSttProfile}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add provider
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={deleteSttProfile}
+                disabled={sttProfiles.length <= 1}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </Button>
+            </div>
             <div className="grid gap-4 md:grid-cols-6">
+              <div className="space-y-2 md:col-span-3">
+                <Label htmlFor="transcriptionProfileName">Provider name</Label>
+                <Input
+                  id="transcriptionProfileName"
+                  {...form.register("transcriptionProfileName")}
+                  placeholder="Local Whisper"
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="transcriptionProfileConcurrency">
+                  Provider slots
+                </Label>
+                <Input
+                  id="transcriptionProfileConcurrency"
+                  type="number"
+                  min={1}
+                  max={8}
+                  {...form.register("transcriptionProfileConcurrency", {
+                    valueAsNumber: true,
+                  })}
+                />
+              </div>
+              <div className="flex items-end md:col-span-1">
+                <label className="flex items-center gap-2 pb-2 text-sm">
+                  <Switch
+                    checked={form.watch("transcriptionProfileEnabled")}
+                    onCheckedChange={(checked) =>
+                      form.setValue("transcriptionProfileEnabled", checked, {
+                        shouldDirty: true,
+                      })}
+                  />
+                  Enabled
+                </label>
+              </div>
               <div className="space-y-2 md:col-span-6">
                 <Label htmlFor="transcriptionBaseUrl">STT Base URL</Label>
                 <Input
@@ -1121,9 +1334,10 @@ const InferenceSettingsPage = () => {
                 />
               </div>
               <p className="md:col-span-6 text-xs text-muted-foreground">
-                Recommended: 16 sequences. Timeout = base + per-sequence × batch
-                size (16 defaults to 18 min). Whisper runs one sequence at a
-                time while preparing the next one.
+                Batch size is per job and remains sequential inside that job.
+                Provider slots run jobs in parallel. Saving these profiles also
+                applies the sum of enabled provider slots as transcription
+                worker concurrency (maximum 8).
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">

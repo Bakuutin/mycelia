@@ -24,6 +24,15 @@ export interface ExternalServiceHealth {
   message: string;
   checkedAt: string;
   usedBy: string[];
+  routes?: Array<{
+    providerProfileId: string;
+    providerProfileName: string;
+    status: ExternalServiceStatus;
+    model?: string;
+    concurrency: number;
+    latencyMs?: number;
+    message: string;
+  }>;
 }
 
 export const JOB_SERVICE_DEPENDENCIES: Record<string, ExternalServiceId[]> = {

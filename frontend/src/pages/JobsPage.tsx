@@ -108,6 +108,15 @@ type ExternalServiceHealth = {
   message: string;
   checkedAt: string;
   usedBy: string[];
+  routes?: Array<{
+    providerProfileId: string;
+    providerProfileName: string;
+    status: "healthy" | "loading" | "unavailable" | "misconfigured";
+    model?: string;
+    concurrency: number;
+    latencyMs?: number;
+    message: string;
+  }>;
 };
 
 type PipelineBacklog = {
@@ -176,6 +185,15 @@ type InferenceRoutingConfig = {
     apiKey?: string;
     model?: string;
   } | null;
+  transcriptionProfiles?: {
+    profiles: Array<{
+      id: string;
+      name: string;
+      model: string;
+      enabled: boolean;
+      concurrency: number;
+    }>;
+  } | null;
 };
 
 type VadJobFormData = {
@@ -209,7 +227,7 @@ const WORKER_PIPELINE = [
   {
     type: "transcription",
     order: 4,
-    description: "Transcribes sequences to text using LLM",
+    description: "Transcribes sequences through configured STT providers",
   },
   {
     type: "conversation_chunk_creator",
@@ -2588,65 +2606,96 @@ export default function JobsPage() {
 
                       {service.id === "stt" && (
                         <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                          <Label className="text-xs">
-                            Model for transcription jobs
-                          </Label>
-                          <div className="flex flex-wrap gap-2">
-                            <Select
-                              value={selectedSttModel}
-                              onValueChange={setSelectedSttModel}
-                              disabled={!service.models?.length}
-                            >
-                              <SelectTrigger className="min-w-52 flex-1">
-                                <SelectValue placeholder="Load STT models first" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {[
-                                  ...new Set([
-                                    ...(service.models || []),
-                                    ...(selectedSttModel
-                                      ? [selectedSttModel]
-                                      : []),
-                                  ]),
-                                ].map((model) => (
-                                  <SelectItem key={model} value={model}>
-                                    {model}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              size="sm"
-                              onClick={() =>
-                                saveSttModelMutation.mutate(selectedSttModel)}
-                              disabled={!selectedSttModel ||
-                                saveSttModelMutation.isPending}
-                            >
-                              <Save className="mr-2 h-3.5 w-3.5" />
-                              Save model
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => testServiceMutation.mutate("stt")}
-                              disabled={testServiceMutation.isPending}
-                            >
-                              <RefreshCw
-                                className={`mr-2 h-3.5 w-3.5 ${
-                                  testServiceMutation.isPending &&
-                                    testServiceMutation.variables === "stt"
-                                    ? "animate-spin"
-                                    : ""
-                                }`}
-                              />
-                              Test & load models
-                            </Button>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Gateway health and Whisper model discovery are
-                            separate checks. The saved model is used even when
-                            the STT URL and key come from environment variables.
-                          </p>
+                          {service.routes?.length
+                            ? (
+                              <>
+                                <Label className="text-xs">
+                                  Provider-aware transcription routes
+                                </Label>
+                                <div className="space-y-1">
+                                  {service.routes.map((route) => (
+                                    <div
+                                      key={route.providerProfileId}
+                                      className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
+                                    >
+                                      <span className="font-medium">
+                                        {route.providerProfileName}
+                                      </span>
+                                      <span className="font-mono text-muted-foreground">
+                                        {route.model || "unknown"} ·{" "}
+                                        {route.concurrency}{" "}
+                                        slot{route.concurrency ===
+                                            1
+                                          ? ""
+                                          : "s"}
+                                      </span>
+                                      <Badge variant="secondary">
+                                        {route.status}
+                                      </Badge>
+                                    </div>
+                                  ))}
+                                </div>
+                                <Button asChild size="sm" variant="outline">
+                                  <Link to="/settings/inference">
+                                    Configure STT providers
+                                  </Link>
+                                </Button>
+                              </>
+                            )
+                            : (
+                              <>
+                                <Label className="text-xs">
+                                  Model for transcription jobs
+                                </Label>
+                                <div className="flex flex-wrap gap-2">
+                                  <Select
+                                    value={selectedSttModel}
+                                    onValueChange={setSelectedSttModel}
+                                    disabled={!service.models?.length}
+                                  >
+                                    <SelectTrigger className="min-w-52 flex-1">
+                                      <SelectValue placeholder="Load STT models first" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {[
+                                        ...new Set([
+                                          ...(service.models || []),
+                                          ...(selectedSttModel
+                                            ? [selectedSttModel]
+                                            : []),
+                                        ]),
+                                      ].map((model) => (
+                                        <SelectItem key={model} value={model}>
+                                          {model}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <Button
+                                    size="sm"
+                                    onClick={() =>
+                                      saveSttModelMutation.mutate(
+                                        selectedSttModel,
+                                      )}
+                                    disabled={!selectedSttModel ||
+                                      saveSttModelMutation.isPending}
+                                  >
+                                    <Save className="mr-2 h-3.5 w-3.5" />
+                                    Save model
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      testServiceMutation.mutate("stt")}
+                                    disabled={testServiceMutation.isPending}
+                                  >
+                                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                                    Test & load models
+                                  </Button>
+                                </div>
+                              </>
+                            )}
                         </div>
                       )}
 
@@ -3533,6 +3582,15 @@ export default function JobsPage() {
                             ? `Batch summarization · ${job.result.summaries.length}`
                             : job.type}
                         </div>
+                        {job.type === "transcription" &&
+                          job.routingContext?.providerProfileName && (
+                          <div className="text-[10px] font-normal text-muted-foreground">
+                            {job.routingContext.providerProfileName}
+                            {job.routingContext.model
+                              ? ` · ${job.routingContext.model}`
+                              : ""}
+                          </div>
+                        )}
                         {job.restartedFromJobId && (
                           <Link
                             to={`/jobs/${job.restartedFromJobId}`}

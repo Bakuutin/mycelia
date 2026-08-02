@@ -71,7 +71,9 @@ const capability: JobCapability = {
     { resource: "db/transcriptions", action: "write", effect: "allow" },
     { resource: "transcription/audio", action: "transcribe", effect: "allow" },
   ],
-  maxConcurrency: 1, // Only one transcription at a time to avoid overloading provider
+  // Runtime concurrency is configured in Jobs. Provider-aware queue routing
+  // reserves each profile's slots before a job can reach this worker.
+  maxConcurrency: 8,
   use: async (job) => {
     const { sequenceId, batchSize: requestedBatchSize } = job.data as z.infer<
       typeof schema
@@ -82,6 +84,9 @@ const capability: JobCapability = {
       callResource("mongo", input, { jwt, myceliaUrl });
     const transcriptionResource = (input: any) =>
       callResource("transcription", input, { jwt, myceliaUrl });
+    const providerProfileId = job.data.routingContext?.providerProfileId;
+    const providerProfileName = job.data.routingContext?.providerProfileName;
+    const providerModel = job.data.routingContext?.model;
     const batchSize = env.TRANSCRIPTION_BATCHING_ENABLED
       ? requestedBatchSize ?? env.TRANSCRIPTION_BATCH_SIZE
       : 1;
@@ -225,6 +230,8 @@ const capability: JobCapability = {
           fileName: "combined.wav",
           fileType: "audio/wav",
           language,
+          providerProfileId,
+          model: providerModel,
         });
         const transcriptDuration = Date.now() - transcriptStart;
         log("INFO", `Transcription API returned`, {
@@ -343,6 +350,8 @@ const capability: JobCapability = {
             segmentCount: filteredSegments.length,
             language: language || "auto",
             jobId: job.id,
+            providerProfileId,
+            providerProfileName,
           },
         };
 
@@ -414,6 +423,8 @@ const capability: JobCapability = {
           prefetchWaitMs,
           inferenceMs: transcriptDuration,
           prefetched: Boolean(preparedAudio),
+          providerProfileId,
+          providerProfileName,
         };
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);

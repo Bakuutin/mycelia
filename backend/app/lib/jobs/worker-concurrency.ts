@@ -1,12 +1,7 @@
 export const MIN_WORKER_CONCURRENCY = 1;
 export const MAX_WORKER_CONCURRENCY = 8;
 
-const WORKER_CONCURRENCY_CAPS: Record<string, number> = {
-  // One transcription job already batches several sequences and keeps Whisper
-  // inference serial. Running multiple transcription jobs would bypass that
-  // pacing and can exhaust GPU memory.
-  transcription: 1,
-};
+const WORKER_CONCURRENCY_CAPS: Record<string, number> = {};
 
 export function getWorkerConcurrencyCap(workerType: string): number {
   return WORKER_CONCURRENCY_CAPS[workerType] ?? MAX_WORKER_CONCURRENCY;

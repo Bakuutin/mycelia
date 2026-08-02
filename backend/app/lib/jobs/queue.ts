@@ -13,11 +13,16 @@ import type {
 } from "./types.ts";
 export type { EnqueueJobOptions };
 import { jobRegistry } from "./job-registry.ts";
-import { assertJobServicesHealthy } from "./service-health.ts";
+import {
+  assertJobServicesHealthy,
+  getExternalServicesHealth,
+} from "./service-health.ts";
 import {
   applySummarizationDefaults,
   type SummarizationDefaults,
 } from "./summarization-defaults.ts";
+import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
+import { selectTranscriptionProvider } from "@/lib/transcription/provider-routing.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
@@ -154,6 +159,9 @@ export async function enqueueJob(
         batchTimeoutPerSequenceSeconds = configuredPerSequence;
       }
     } catch (error) {
+      if (data.type === "transcription") {
+        throw error;
+      }
       console.warn(
         "[queue] Could not read transcription batch settings; using defaults:",
         error,
@@ -196,19 +204,75 @@ export async function enqueueJob(
       const activeProfile = config?.llmProfiles?.profiles?.find(
         (profile: any) => profile.id === config?.llmProfiles?.activeProfileId,
       );
-      const routingContext: JobRoutingContext = {
-        ...(workerConfig.presetId ? { presetId: workerConfig.presetId } : {}),
-        ...(workerConfig.routingContext?.sourceId
-          ? { sourceId: workerConfig.routingContext.sourceId }
-          : {}),
-        providerProfileId: workerConfig.routingContext?.providerProfileId ??
-          activeProfile?.id,
-        providerProfileName: activeProfile?.name,
-        model: typeof mergedData.model === "string"
-          ? mergedData.model
-          : undefined,
-        resolvedAt: new Date().toISOString(),
-      };
+      let routingContext: JobRoutingContext;
+      if (data.type === "transcription") {
+        const configuredProviders = (await new TranscriptionResource()
+          .getInferenceProviders()).filter((provider) => provider.enabled);
+        if (configuredProviders.length === 0) {
+          throw new Error("No enabled STT provider profiles are configured");
+        }
+        const sttHealth = (await getExternalServicesHealth()).find((service) =>
+          service.id === "stt"
+        );
+        const healthyProfileIds = new Set(
+          sttHealth?.routes?.filter((route) => route.status === "healthy")
+            .map((route) => route.providerProfileId) ?? [],
+        );
+        const providers = sttHealth?.routes?.length
+          ? configuredProviders.filter((provider) =>
+            healthyProfileIds.has(provider.id)
+          )
+          : configuredProviders;
+        if (providers.length === 0) {
+          throw new Error("No healthy STT provider profiles are available");
+        }
+        const transcriptionQueue = getQueue("transcription");
+        const reservedJobs = await transcriptionQueue.getJobs(
+          [
+            "active",
+            "wait",
+            "delayed",
+            "paused",
+            "prioritized",
+          ],
+          0,
+          -1,
+          true,
+        );
+        const load: Record<string, number> = {};
+        for (const reservedJob of reservedJobs) {
+          const profileId = reservedJob.data.routingContext?.providerProfileId;
+          if (profileId) load[profileId] = (load[profileId] ?? 0) + 1;
+        }
+        const provider = selectTranscriptionProvider(providers, load);
+        if (!provider) {
+          throw new Error(
+            "All enabled STT provider concurrency slots are reserved",
+          );
+        }
+        routingContext = {
+          ...(workerConfig.presetId ? { presetId: workerConfig.presetId } : {}),
+          sourceId: `stt:${provider.id}`,
+          providerProfileId: provider.id,
+          providerProfileName: provider.name,
+          model: provider.model,
+          resolvedAt: new Date().toISOString(),
+        };
+      } else {
+        routingContext = {
+          ...(workerConfig.presetId ? { presetId: workerConfig.presetId } : {}),
+          ...(workerConfig.routingContext?.sourceId
+            ? { sourceId: workerConfig.routingContext.sourceId }
+            : {}),
+          providerProfileId: workerConfig.routingContext?.providerProfileId ??
+            activeProfile?.id,
+          providerProfileName: activeProfile?.name,
+          model: typeof mergedData.model === "string"
+            ? mergedData.model
+            : undefined,
+          resolvedAt: new Date().toISOString(),
+        };
+      }
       mergedData.routingContext = routingContext;
     } catch (error) {
       console.warn(
@@ -216,6 +280,35 @@ export async function enqueueJob(
         error,
       );
       mergedData.routingContext = { resolvedAt: new Date().toISOString() };
+    }
+  }
+
+  if (data.type === "transcription") {
+    const providerProfileId = mergedData.routingContext?.providerProfileId;
+    if (!providerProfileId) {
+      throw new Error(
+        "Transcription job is missing its provider routing snapshot",
+      );
+    }
+    const provider = await new TranscriptionResource().getInferenceProvider(
+      providerProfileId,
+    );
+    if (!provider) {
+      throw new Error(`STT provider profile not found: ${providerProfileId}`);
+    }
+    const reservedJobs = await getQueue("transcription").getJobs(
+      ["active", "wait", "delayed", "paused", "prioritized"],
+      0,
+      -1,
+      true,
+    );
+    const reservedForProvider = reservedJobs.filter((job) =>
+      job.data.routingContext?.providerProfileId === providerProfileId
+    ).length;
+    if (reservedForProvider >= provider.concurrency) {
+      throw new Error(
+        `STT provider ${provider.name} has no free concurrency slots`,
+      );
     }
   }
 

@@ -68,6 +68,51 @@ export const zTranscriptionProviderConfig = zProviderConfig.extend({
   batchTimeoutPerSequenceSeconds: z.number().int().min(15).max(300).optional(),
 });
 
+export const zTranscriptionProviderProfile = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  baseUrl: z.string().url(),
+  apiKey: z.string(),
+  model: z.string().trim().min(1).default("whisper"),
+  enabled: z.boolean().default(true),
+  concurrency: z.number().int().min(1).max(8).default(1),
+});
+
+export const zTranscriptionProfilesConfig = z.object({
+  profiles: z.array(zTranscriptionProviderProfile).min(1).max(8),
+}).superRefine((value, context) => {
+  const enabled = value.profiles.filter((profile) => profile.enabled);
+  if (enabled.length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["profiles"],
+      message: "At least one STT provider profile must be enabled",
+    });
+  }
+  const totalConcurrency = enabled.reduce(
+    (sum, profile) => sum + profile.concurrency,
+    0,
+  );
+  if (totalConcurrency > 8) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["profiles"],
+      message: "Enabled STT provider concurrency cannot exceed 8 in total",
+    });
+  }
+  const ids = new Set<string>();
+  for (const [index, profile] of value.profiles.entries()) {
+    if (ids.has(profile.id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["profiles", index, "id"],
+        message: `Duplicate STT provider profile id: ${profile.id}`,
+      });
+    }
+    ids.add(profile.id);
+  }
+});
+
 // Deprecated: use llm and transcription instead
 export const zInferenceProviderConfig = zProviderConfig;
 
@@ -101,6 +146,7 @@ export const zServerConfig = z.object({
   llm: zProviderConfig.optional().nullable(),
   llmProfiles: zLlmProfilesConfig.optional().nullable(),
   transcription: zTranscriptionProviderConfig.optional().nullable(),
+  transcriptionProfiles: zTranscriptionProfilesConfig.optional().nullable(),
   // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({

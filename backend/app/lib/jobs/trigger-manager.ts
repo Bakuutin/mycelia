@@ -203,44 +203,53 @@ export class TriggerManager {
       // Runtime concurrency is operator-configurable. The manifest value is a
       // legacy discovery hint and must not silently pin every trigger to one
       // job while the BullMQ worker is configured for more.
-      {
-        const config = await getServerConfig();
-        const maxConcurrency = normalizeWorkerConcurrency(
-          jobName,
-          config?.workers?.[jobName]?.concurrency,
-        );
-        const activeJobs = await mongo({
-          action: "count",
-          collection: "jobs",
-          query: {
-            type: jobName,
-            state: { $in: ["waiting", "active"] },
-          },
-        }) as number;
+      const config = await getServerConfig();
+      const maxConcurrency = normalizeWorkerConcurrency(
+        jobName,
+        config?.workers?.[jobName]?.concurrency,
+      );
+      const activeJobs = await mongo({
+        action: "count",
+        collection: "jobs",
+        query: {
+          type: jobName,
+          state: { $in: ["waiting", "active"] },
+        },
+      }) as number;
 
-        if (activeJobs >= maxConcurrency) {
-          log("DEBUG", `Skipping trigger - max concurrency reached`, {
-            jobName,
-            reason,
-            activeJobs,
-            maxConcurrency,
-          });
-          return;
-        }
+      if (activeJobs >= maxConcurrency) {
+        log("DEBUG", `Skipping trigger - max concurrency reached`, {
+          jobName,
+          reason,
+          activeJobs,
+          maxConcurrency,
+        });
+        return;
       }
 
-      // 2. Enqueue job
-      log("INFO", `Enqueuing job`, { jobName, reason });
+      // Fill every free runtime slot. Discovery workers use atomic source
+      // claims, while STT additionally reserves a provider-profile slot for
+      // each queued job.
+      const freeSlots = maxConcurrency - activeJobs;
+      log("INFO", `Enqueuing jobs`, { jobName, reason, freeSlots });
       const enqueueOptions: EnqueueJobOptions = {
         trigger: {
           type: "auto",
           reason,
         },
       };
-      await enqueueJob({
-        type: jobName,
-      } as any, enqueueOptions);
-      log("INFO", `Job enqueued successfully`, { jobName, reason });
+      let enqueued = 0;
+      for (let index = 0; index < freeSlots; index += 1) {
+        await enqueueJob({
+          type: jobName,
+        } as any, enqueueOptions);
+        enqueued += 1;
+      }
+      log("INFO", `Jobs enqueued successfully`, {
+        jobName,
+        reason,
+        enqueued,
+      });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       log("ERROR", `Error triggering job`, {

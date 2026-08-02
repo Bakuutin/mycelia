@@ -149,21 +149,82 @@ export async function getExternalServicesHealth(
 
   const transcriptionResource = new TranscriptionResource();
   const llmResource = new LLMResource();
-  const [sttProvider, llmProvider] = await Promise.all([
-    transcriptionResource.getInferenceProvider().catch(() => null),
+  const [sttProviders, llmProvider] = await Promise.all([
+    transcriptionResource.getInferenceProviders().catch(() => []),
     llmResource.getInferenceProvider().catch(() => null),
   ]);
 
-  const services = await Promise.all([
-    probeProvider({
+  const enabledSttProviders = sttProviders.filter((provider) =>
+    provider.enabled
+  );
+  const sttRouteHealth = await Promise.all(
+    enabledSttProviders.map((provider) =>
+      probeProvider({
+        id: "stt",
+        label: provider.name,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        source: provider.source,
+        providerProfileId: provider.id,
+        providerProfileName: provider.name,
+        model: provider.model,
+      })
+    ),
+  );
+  const healthySttRoutes = sttRouteHealth.filter((route) =>
+    route.status === "healthy"
+  );
+  const hasSttProfileRoutes = enabledSttProviders.some((provider) =>
+    provider.source === "transcription_profile"
+  );
+  const representativeStt = healthySttRoutes[0] ??
+    sttRouteHealth.find((route) => route.status === "loading") ??
+    sttRouteHealth[0] ?? await probeProvider({
       id: "stt",
       label: "Speech-to-text",
-      baseUrl: sttProvider?.baseUrl,
-      apiKey: sttProvider?.apiKey,
-      source: sttProvider?.source,
-      model: sttProvider?.model,
-    }),
-    probeProvider({
+    });
+  const sttService: ExternalServiceHealth = {
+    ...representativeStt,
+    label: enabledSttProviders.length > 1
+      ? `Speech-to-text (${enabledSttProviders.length} routes)`
+      : "Speech-to-text",
+    status: healthySttRoutes.length > 0 ? "healthy" : representativeStt.status,
+    configured: enabledSttProviders.length > 0,
+    providerProfileId: undefined,
+    providerProfileName: hasSttProfileRoutes
+      ? `${healthySttRoutes.length}/${enabledSttProviders.length} healthy`
+      : representativeStt.providerProfileName,
+    models: [
+      ...new Set(sttRouteHealth.flatMap((route) => route.models ?? [])),
+    ],
+    message: enabledSttProviders.length > 0
+      ? `${healthySttRoutes.length}/${enabledSttProviders.length} enabled STT routes healthy; ` +
+        `${
+          enabledSttProviders.reduce((sum, provider) =>
+            sum + provider.concurrency, 0)
+        } total slot(s)`
+      : representativeStt.message,
+    routes: hasSttProfileRoutes
+      ? sttRouteHealth.map((route) => {
+        const provider = enabledSttProviders.find((candidate) =>
+          candidate.id === route.providerProfileId
+        )!;
+        return {
+          providerProfileId: provider.id,
+          providerProfileName: provider.name,
+          status: route.status,
+          model: provider.model,
+          concurrency: provider.concurrency,
+          latencyMs: route.latencyMs,
+          message: route.message,
+        };
+      })
+      : undefined,
+  };
+
+  const services = [
+    sttService,
+    await probeProvider({
       id: "llm",
       label: "LLM inference",
       baseUrl: llmProvider?.baseUrl,
@@ -173,7 +234,7 @@ export async function getExternalServicesHealth(
       providerProfileName: llmProvider?.profileName,
       model: llmProvider?.model,
     }),
-  ]);
+  ];
 
   cached = { checkedAt: now, services };
   return services;
