@@ -95,7 +95,7 @@ type WorkerStatus = {
 type ExternalServiceHealth = {
   id: "stt" | "llm";
   label: string;
-  status: "healthy" | "loading" | "unavailable" | "misconfigured";
+  status: "disabled" | "healthy" | "loading" | "unavailable" | "misconfigured";
   configured: boolean;
   baseUrl?: string;
   modelsUrl?: string;
@@ -112,7 +112,13 @@ type ExternalServiceHealth = {
   routes?: Array<{
     providerProfileId: string;
     providerProfileName: string;
-    status: "healthy" | "loading" | "unavailable" | "misconfigured";
+    status:
+      | "disabled"
+      | "healthy"
+      | "loading"
+      | "unavailable"
+      | "misconfigured";
+    enabled: boolean;
     model?: string;
     priority: number;
     concurrency: number;
@@ -194,7 +200,12 @@ type InferenceRoutingConfig = {
       model: string;
       enabled: boolean;
       concurrency: number;
+      priority: number;
+      baseUrl: string;
+      apiKey: string;
     }>;
+    includeEnvironment?: boolean;
+    environmentPriority?: number;
   } | null;
 };
 
@@ -1236,7 +1247,9 @@ export default function JobsPage() {
         action: "pipeline_health",
       }) as PipelineHealth;
     },
-    refetchInterval: 30000,
+    // Probe providers only from the explicit Refresh/Test actions. Continuous
+    // polling wakes local Argmax servers through /v1/models.
+    refetchInterval: false,
     staleTime: 15000,
   });
 
@@ -1712,6 +1725,75 @@ export default function JobsPage() {
           ? error.message
           : "Failed to save STT model",
       }));
+    },
+  });
+
+  const setSttRouteEnabledMutation = useMutation({
+    mutationFn: async ({ profileId, enabled }: {
+      profileId: string;
+      enabled: boolean;
+    }) => {
+      const config = await api.callResource("config", {
+        action: "get",
+      }) as InferenceRoutingConfig;
+      const profiles = config.transcriptionProfiles?.profiles ?? [];
+      if (!profiles.some((profile) => profile.id === profileId)) {
+        throw new Error("STT route no longer exists");
+      }
+      await api.callResource("config", {
+        action: "patch",
+        updates: {
+          transcriptionProfiles: {
+            profiles: profiles.map((profile) =>
+              profile.id === profileId ? { ...profile, enabled } : profile
+            ),
+            includeEnvironment:
+              config.transcriptionProfiles?.includeEnvironment ?? false,
+            environmentPriority:
+              config.transcriptionProfiles?.environmentPriority ?? 50,
+          },
+        },
+      });
+      // An explicit enable is the one time we immediately wake this server to
+      // confirm it came back. Disabling does not probe the server.
+      return enabled
+        ? await api.callResource("jobs", {
+          action: "pipeline_health",
+          force: true,
+        }) as PipelineHealth
+        : null;
+    },
+    onSuccess: (health, { profileId, enabled }) => {
+      queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
+      if (health) {
+        queryClient.setQueryData(["pipeline-health"], health);
+      } else {
+        queryClient.setQueryData<PipelineHealth | undefined>(
+          ["pipeline-health"],
+          (current) =>
+            current
+              ? {
+                ...current,
+                services: current.services.map((service) =>
+                  service.id !== "stt" || !service.routes ? service : {
+                    ...service,
+                    routes: service.routes.map((route) =>
+                      route.providerProfileId === profileId
+                        ? {
+                          ...route,
+                          enabled,
+                          status: "disabled",
+                          message:
+                            "Disabled for new transcription jobs; no health probe was sent.",
+                        }
+                        : route
+                    ),
+                  }
+                ),
+              }
+              : current,
+        );
+      }
     },
   });
 
@@ -2644,15 +2726,40 @@ export default function JobsPage() {
                                 <Label className="text-xs">
                                   Provider-aware transcription routes
                                 </Label>
+                                <p className="text-xs text-muted-foreground">
+                                  The toggle controls Mycelia routing for new
+                                  jobs; it does not stop the server process.
+                                </p>
                                 <div className="space-y-1">
                                   {service.routes.map((route) => (
                                     <div
                                       key={route.providerProfileId}
                                       className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
                                     >
-                                      <span className="font-medium">
-                                        {route.providerProfileName}
-                                      </span>
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <Switch
+                                          checked={route.enabled}
+                                          disabled={setSttRouteEnabledMutation
+                                            .isPending}
+                                          onCheckedChange={(enabled) =>
+                                            setSttRouteEnabledMutation.mutate({
+                                              profileId:
+                                                route.providerProfileId,
+                                              enabled,
+                                            })}
+                                          aria-label={`Enable ${route.providerProfileName} STT route`}
+                                        />
+                                        <div className="min-w-0">
+                                          <div className="truncate font-medium">
+                                            {route.providerProfileName}
+                                          </div>
+                                          <div className="text-muted-foreground">
+                                            {route.enabled
+                                              ? "Enabled for new jobs"
+                                              : "Disabled for new jobs"}
+                                          </div>
+                                        </div>
+                                      </div>
                                       <span className="font-mono text-muted-foreground">
                                         P{route.priority} ·{" "}
                                         {route.model || "unknown"} ·{" "}
@@ -2662,7 +2769,12 @@ export default function JobsPage() {
                                           ? ""
                                           : "s"}
                                       </span>
-                                      <Badge variant="secondary">
+                                      <Badge
+                                        variant="secondary"
+                                        className={route.status === "disabled"
+                                          ? "bg-muted text-muted-foreground"
+                                          : undefined}
+                                      >
                                         {route.status}
                                       </Badge>
                                     </div>

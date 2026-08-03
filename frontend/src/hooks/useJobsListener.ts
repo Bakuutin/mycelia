@@ -140,24 +140,13 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
           };
           return updated;
         } else {
-          const processedOn = jobData.processedOn || (event.event === "job.started" || event.event === "job.active" || event.event === "job.progress" || newState === "active" ? Date.now() : undefined);
-          const finishedOn = jobData.finishedOn || (event.event === "job.completed" || event.event === "job.failed" || newState === "completed" || newState === "failed" ? Date.now() : undefined);
-
-          const newJob: JobInfo = {
-            id: jobData.jobId,
-            type: jobData.jobType,
-            data: {},
-            state: newState,
-            progress: jobData.progress,
-            result: jobData.result,
-            timestamp: jobData.timestamp ?? Date.now(),
-            failedReason: jobData.failedReason,
-            processedOn,
-            finishedOn,
-          };
-          // Keep it sorted by timestamp desc
-          const newJobs = [newJob, ...oldJobs];
-          return newJobs.sort((a, b) => b.timestamp - a.timestamp).slice(0, 1500); // Allow some buffer over 1000
+          // WebSocket job events intentionally contain only changing runtime
+          // fields. Fetch the canonical row once so newly-created jobs retain
+          // their immutable routing snapshot (STT server/model) immediately,
+          // instead of showing it only after a manual page reload.
+          // This is a Mycelia Jobs request, not a provider health probe.
+          void queryClient.invalidateQueries({ queryKey });
+          return oldJobs;
         }
       });
 

@@ -2,6 +2,7 @@ import { normalizeOpenAIBaseUrl } from "../llm/model-routing.ts";
 
 export type ExternalServiceId = "stt" | "llm";
 export type ExternalServiceStatus =
+  | "disabled"
   | "healthy"
   | "loading"
   | "unavailable"
@@ -28,6 +29,7 @@ export interface ExternalServiceHealth {
     providerProfileId: string;
     providerProfileName: string;
     status: ExternalServiceStatus;
+    enabled: boolean;
     model?: string;
     priority: number;
     concurrency: number;

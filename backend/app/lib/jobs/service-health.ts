@@ -13,9 +13,14 @@ import {
 } from "./service-health.shared.ts";
 export * from "./service-health.shared.ts";
 
-const CACHE_MS = 15_000;
-let cached: { checkedAt: number; services: ExternalServiceHealth[] } | null =
-  null;
+// Worker enqueue decisions still need a recent provider status, but the Jobs
+// page must not repeatedly wake otherwise-idle local STT servers.
+const CACHE_MS = 5 * 60_000;
+let cached: {
+  checkedAt: number;
+  fingerprint: string;
+  services: ExternalServiceHealth[];
+} | null = null;
 
 function extractModels(body: string): string[] {
   try {
@@ -197,21 +202,38 @@ async function probeProvider(input: {
 export async function getExternalServicesHealth(
   force = false,
 ): Promise<ExternalServiceHealth[]> {
-  const now = Date.now();
-  if (!force && cached && now - cached.checkedAt < CACHE_MS) {
-    return cached.services;
-  }
-
   const transcriptionResource = new TranscriptionResource();
   const llmResource = new LLMResource();
   const [sttProviders, llmProvider] = await Promise.all([
     transcriptionResource.getInferenceProviders().catch(() => []),
     llmResource.getInferenceProvider().catch(() => null),
   ]);
+  const fingerprint = JSON.stringify({
+    stt: sttProviders.map((provider) => ({
+      id: provider.id,
+      enabled: provider.enabled,
+      baseUrl: provider.baseUrl,
+      model: provider.model,
+      concurrency: provider.concurrency,
+    })),
+    llm: llmProvider && {
+      baseUrl: llmProvider.baseUrl,
+      model: llmProvider.model,
+    },
+  });
+  const now = Date.now();
+  if (
+    !force && cached && cached.fingerprint === fingerprint &&
+    now - cached.checkedAt < CACHE_MS
+  ) {
+    return cached.services;
+  }
 
   const enabledSttProviders = sttProviders.filter((provider) =>
     provider.enabled
   );
+  const allSttRoutesDisabled = sttProviders.length > 0 &&
+    enabledSttProviders.length === 0;
   const sttRouteHealth = await Promise.all(
     enabledSttProviders.map((provider) =>
       probeProvider({
@@ -229,7 +251,7 @@ export async function getExternalServicesHealth(
   const healthySttRoutes = sttRouteHealth.filter((route) =>
     route.status === "healthy"
   );
-  const hasSttProfileRoutes = enabledSttProviders.some((provider) =>
+  const hasSttProfileRoutes = sttProviders.some((provider) =>
     provider.source === "transcription_profile"
   );
   const representativeStt = healthySttRoutes[0] ??
@@ -243,7 +265,11 @@ export async function getExternalServicesHealth(
     label: enabledSttProviders.length > 1
       ? `Speech-to-text (${enabledSttProviders.length} routes)`
       : "Speech-to-text",
-    status: healthySttRoutes.length > 0 ? "healthy" : representativeStt.status,
+    status: allSttRoutesDisabled
+      ? "disabled"
+      : healthySttRoutes.length > 0
+      ? "healthy"
+      : representativeStt.status,
     configured: enabledSttProviders.length > 0,
     providerProfileId: undefined,
     providerProfileName: hasSttProfileRoutes
@@ -252,7 +278,9 @@ export async function getExternalServicesHealth(
     models: [
       ...new Set(sttRouteHealth.flatMap((route) => route.models ?? [])),
     ],
-    message: enabledSttProviders.length > 0
+    message: allSttRoutesDisabled
+      ? "All STT routes are disabled for new transcription jobs; no health probe was sent."
+      : enabledSttProviders.length > 0
       ? `${healthySttRoutes.length}/${enabledSttProviders.length} enabled STT routes healthy; ` +
         `${
           enabledSttProviders.reduce((sum, provider) =>
@@ -260,19 +288,26 @@ export async function getExternalServicesHealth(
         } total slot(s)`
       : representativeStt.message,
     routes: hasSttProfileRoutes
-      ? sttRouteHealth.map((route) => {
-        const provider = enabledSttProviders.find((candidate) =>
-          candidate.id === route.providerProfileId
-        )!;
+      ? sttProviders.filter((provider) =>
+        provider.source === "transcription_profile"
+      ).map((provider) => {
+        const route = sttRouteHealth.find((candidate) =>
+          candidate.providerProfileId === provider.id
+        );
         return {
           providerProfileId: provider.id,
           providerProfileName: provider.name,
-          status: route.status,
-          model: route.models?.[0] || provider.model,
+          status: provider.enabled
+            ? route?.status ?? "unavailable"
+            : "disabled",
+          enabled: provider.enabled,
+          model: route?.models?.[0] || provider.model,
           priority: provider.priority,
           concurrency: provider.concurrency,
-          latencyMs: route.latencyMs,
-          message: route.message,
+          latencyMs: route?.latencyMs,
+          message: provider.enabled
+            ? route?.message ?? "Provider health is unavailable"
+            : "Disabled for new transcription jobs; no health probe was sent.",
         };
       })
       : undefined,
@@ -292,7 +327,7 @@ export async function getExternalServicesHealth(
     }),
   ];
 
-  cached = { checkedAt: now, services };
+  cached = { checkedAt: now, fingerprint, services };
   return services;
 }
 
