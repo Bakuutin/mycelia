@@ -3610,13 +3610,15 @@ export default function JobsPage() {
                           job.routingContext?.providerProfileName && (
                           <div className="text-[10px] font-normal text-muted-foreground">
                             {job.routingContext.providerProfileName}
-                            {transcriptionModelByProfileId.get(
+                            {job.routingContext.model ||
+                              transcriptionModelByProfileId.get(
                                 job.routingContext.providerProfileId || "",
-                              ) || job.routingContext.model
+                              )
                               ? ` · ${
-                                transcriptionModelByProfileId.get(
-                                  job.routingContext.providerProfileId || "",
-                                ) || job.routingContext.model
+                                job.routingContext.model ||
+                                  transcriptionModelByProfileId.get(
+                                    job.routingContext.providerProfileId || "",
+                                  )
                               }`
                               : ""}
                           </div>

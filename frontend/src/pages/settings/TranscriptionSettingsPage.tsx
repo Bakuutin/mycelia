@@ -59,6 +59,11 @@ const emptyProfile = (): SttProfile => ({
   concurrency: 1,
 });
 
+// Keep the local Argmax full Turbo variant selectable before a server probe.
+// The probe can add provider-specific models, but should not be required to
+// persist a routing snapshot for this known profile.
+const knownSttModels = ["large-v3-v20240930_turbo"];
+
 const TranscriptionSettingsPage = () => {
   const [profiles, setProfiles] = useState<SttProfile[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -83,6 +88,11 @@ const TranscriptionSettingsPage = () => {
       text: string;
     } | null
   >(null);
+
+  const modelOptions = useMemo(
+    () => Array.from(new Set([...knownSttModels, ...models])),
+    [models],
+  );
 
   const refreshHealth = async (): Promise<RouteHealth[]> => {
     setRefreshing(true);
@@ -685,7 +695,15 @@ const TranscriptionSettingsPage = () => {
                 }))}
             />
             <datalist id="stt-models">
-              {models.map((model) => <option key={model} value={model} />)}
+              {modelOptions.map((model) => (
+                <option
+                  key={model}
+                  value={model}
+                  label={model === "large-v3-v20240930_turbo"
+                    ? "Argmax full Turbo (1.64 GB)"
+                    : undefined}
+                />
+              ))}
             </datalist>
           </div>
         </div>

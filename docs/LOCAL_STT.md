@@ -14,28 +14,74 @@ cd argmax-oss-swift
 make build-local-server
 ```
 
-Start the accuracy-oriented compressed Whisper Large V3 model:
+## Choose a model and compute backend
+
+Use the full Turbo variant for the local Mac route. It is the official Argmax
+Turbo artifact and is the best starting point on this machine:
 
 ```bash
 BUILD_ALL=1 swift run argmax-cli serve \
   --host 0.0.0.0 \
   --port 10301 \
-  --model large-v3-v20240930_626MB \
+  --model large-v3-v20240930_turbo \
+  --download-model-path /private/tmp/argmax-whisper-models \
+  --audio-encoder-compute-units cpuAndGPU \
+  --text-decoder-compute-units cpuAndGPU \
   --verbose
 ```
 
-For faster transcription, start the Large V3 Turbo model instead:
+The server loads one model only. Stop it and start the next command to switch
+models. Do not run two models on port `10301`.
+
+| Model ID | Official artifact size | Use it when |
+| --- | ---: | --- |
+| [`large-v3-v20240930_turbo`](https://huggingface.co/argmaxinc/whisperkit-coreml/tree/main/openai_whisper-large-v3-v20240930_turbo) | 1.64 GB | **Recommended local full Turbo.** The full Turbo artifact; highest disk and memory requirement. |
+| [`large-v3-v20240930_turbo_632MB`](https://huggingface.co/argmaxinc/whisperkit-coreml/tree/main/openai_whisper-large-v3-v20240930_turbo_632MB) | 646 MB | A smaller, separately published 4-bit-compressed Turbo artifact. Try it only when the full model is too large or slow to load; benchmark quality and speed on the target Mac. |
+| `large-v3-v20240930_626MB` | approximately 626 MB | The older compressed Large V3 option. Keep it as the low-footprint fallback. |
+
+The 1.64 GB and 646 MB figures are download-artifact sizes, not a guarantee of
+runtime memory use or transcription quality. The Argmax model repository marks
+both `turbo` artifacts as 4-bit compressed; their disk footprints and Core ML
+graphs are nevertheless different. Never infer which model processed a past
+job from the server's current model: Mycelia records the selected profile model
+in each job's `routingContext.model`.
+
+### `cpuAndGPU` versus the default Neural Engine path
+
+Argmax defaults both the audio encoder and text decoder to
+`cpuAndNeuralEngine`. That is normally the power-efficient Apple Silicon path,
+but the first Core ML specialization can take a long time and may appear stuck
+before the HTTP server opens its port. The `cpuAndGPU` flags above keep those
+models on CPU/GPU instead:
+
+- Use **`cpuAndGPU`** for the full Turbo command above, or when the ANE path
+  does not reach `/v1/models` after the model download. It avoids the long ANE
+  AOT specialization we observed with the 632 MB artifact on this Mac.
+- Try the default **`cpuAndNeuralEngine`** only after the server is otherwise
+  stable and benchmark it on the same audio. It can be a good choice for
+  sustained, energy-efficient local operation, but it is not automatically
+  faster for every model/macOS combination.
+- Do not call a model "faster" merely from its name or download size. Use the
+  Jobs `× realtime` value from a newly completed job, or time the same test
+  file with curl, before changing the production route.
+
+For the 632 MB experimental variant, use the same explicit GPU options rather
+than allowing the default ANE path:
 
 ```bash
 BUILD_ALL=1 swift run argmax-cli serve \
   --host 0.0.0.0 \
   --port 10301 \
   --model large-v3-v20240930_turbo_632MB \
+  --download-model-path /private/tmp/argmax-whisper-models \
+  --audio-encoder-compute-units cpuAndGPU \
+  --text-decoder-compute-units cpuAndGPU \
   --verbose
 ```
 
-The first launch may take longer while the selected model is downloaded. The
-server loads one model, so restart it to switch models.
+The first launch downloads model files, and the first load may still take time
+to create Core ML caches. Wait for both `Server started` and
+`GET /v1/models` before enabling the route in Mycelia.
 
 ## Which command should I run?
 
@@ -61,7 +107,7 @@ curl -fsS http://127.0.0.1:10301/health
 curl -fsS \
   -H 'Authorization: Bearer local-no-auth' \
   -F 'file=@test.wav;type=audio/wav' \
-  -F 'model=large-v3-v20240930_626MB' \
+  -F 'model=large-v3-v20240930_turbo' \
   -F 'response_format=verbose_json' \
   http://127.0.0.1:10301/v1/audio/transcriptions | jq .
 ```
@@ -73,8 +119,8 @@ Run the second command from the directory containing `test.wav`, or replace
 ffmpeg -i input.m4a -ar 16000 -ac 1 -c:a pcm_s16le test.wav
 ```
 
-Use the exact model passed to `argmax-cli serve`; the non-Turbo example is
-`large-v3-v20240930_626MB`.
+Use the exact model passed to `argmax-cli serve`; this example uses the full
+Turbo model `large-v3-v20240930_turbo`.
 
 `argmax-cli serve` is model-fixed: the `model` form field sent by curl,
 Mycelia, or `stt.py` does not switch its loaded model. Clients should send the
