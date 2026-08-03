@@ -30,6 +30,47 @@ type BatchSequence = {
   prefetched: boolean;
 };
 
+type SequenceResult = Record<string, any>;
+
+/**
+ * A transcription job can process several sequences.  Its final result must
+ * describe the complete batch rather than whichever sequence happened to run
+ * last: an empty final sequence must not hide earlier saved transcriptions.
+ */
+export function aggregateBatchTranscriptionResult(
+  lastResult: SequenceResult | undefined,
+  sequenceResults: SequenceResult[],
+): SequenceResult {
+  const fallback = lastResult || { status: "success" };
+  const transcribed = sequenceResults.filter((result) =>
+    result?.result === "transcribed" ||
+    Boolean(result?.transcriptionId) ||
+    Number(result?.wordCount) > 0 ||
+    Number(result?.segmentCount) > 0
+  );
+
+  // Preserve the per-sequence empty result when the whole batch was empty.
+  if (transcribed.length === 0) return fallback;
+
+  const latestTranscribed = transcribed.at(-1)!;
+  const total = (field: string) =>
+    sequenceResults.reduce(
+      (sum, result) => sum + (Number(result?.[field]) || 0),
+      0,
+    );
+
+  return {
+    ...fallback,
+    result: "transcribed",
+    transcriptionId: latestTranscribed.transcriptionId ?? null,
+    wordCount: total("wordCount"),
+    textLength: total("textLength"),
+    segmentCount: total("segmentCount"),
+    audioSize: total("audioSize"),
+    textPreview: latestTranscribed.textPreview ?? fallback.textPreview,
+  };
+}
+
 export const schema = z.object({
   type: z.literal("transcription"),
   sequenceId: z.string().optional(),
@@ -512,6 +553,7 @@ const capability: JobCapability = {
       let preparedAudio: Promise<PreparedAudio> | undefined;
       let processed = 0;
       let lastResult: any;
+      const sequenceResults: SequenceResult[] = [];
       const batchSequences: BatchSequence[] = [];
       let totalAudioDuration = 0;
       let totalInferenceMs = 0;
@@ -591,6 +633,7 @@ const capability: JobCapability = {
             prefetchNext,
           );
           processed += lastResult.processed || 0;
+          sequenceResults.push(lastResult);
           totalAudioDuration += Number(lastResult.audioDuration) || 0;
           totalInferenceMs += Number(lastResult.inferenceMs) || 0;
           batchSequences.push({
@@ -647,7 +690,7 @@ const capability: JobCapability = {
         remainingCount,
       });
       return {
-        ...(lastResult || { status: "success" }),
+        ...aggregateBatchTranscriptionResult(lastResult, sequenceResults),
         processed,
         // Unlike the final sequence result, these totals describe all audio
         // handled by this job and the actual STT request time for the batch.

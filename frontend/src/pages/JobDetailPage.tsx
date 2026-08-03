@@ -41,8 +41,16 @@ interface TranscriptionDoc {
 }
 
 interface ConversationChunk {
-    _id: string;
+    _id: unknown;
     text?: string;
+    state?: string;
+    start?: string;
+    end?: string;
+    transcriptionCount?: number;
+    totalTextLength?: number;
+    segmentsFound?: number;
+    conversationsCreated?: number;
+    processedByJobId?: string;
 }
 
 const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
@@ -281,6 +289,7 @@ export default function JobDetailPage() {
     // when list websocket events are missed.
     const job = fetchedJob || cachedJob;
     const isTranscriptionJob = job?.type === "transcription";
+    const isConversationExtractorJob = job?.type === "conversation_extractor";
     const isLoading = (isListenerLoading && !cachedJob) || (isFetching && !cachedJob);
 
     const logDateRange = (() => {
@@ -377,6 +386,35 @@ export default function JobDetailPage() {
             return response as ConversationChunk[];
         },
         enabled: transcriptionChunkIds.length > 0,
+    });
+
+    const { data: extractedChunks = [] } = useQuery({
+        queryKey: ["extractor-job-chunks", id],
+        queryFn: async () => {
+            if (!id) return [];
+            const response = await api.callResource("mongo", {
+                action: "find",
+                collection: "conversation_chunks",
+                query: { processedByJobId: id },
+                options: {
+                    sort: { start: 1 },
+                    limit: 50,
+                    projection: {
+                        _id: 1,
+                        state: 1,
+                        start: 1,
+                        end: 1,
+                        transcriptionCount: 1,
+                        totalTextLength: 1,
+                        segmentsFound: 1,
+                        conversationsCreated: 1,
+                        processedByJobId: 1,
+                    },
+                },
+            });
+            return response as ConversationChunk[];
+        },
+        enabled: !!id && isConversationExtractorJob,
     });
 
     useWebSocketSubscription(
@@ -905,6 +943,34 @@ export default function JobDetailPage() {
                                     {r.description}
                                 </div>
                             )}
+                            {job.type === "conversation_chunk_creator" &&
+                                (r.processed ?? 0) === 0 && (
+                                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                                    <div className="font-medium">Scheduled check — no work due</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        No unassigned transcriptions or stale open chunks were found. No chunk was changed and no LLM was called.
+                                    </div>
+                                </div>
+                            )}
+                            {job.type === "conversation_extractor" &&
+                                (r.chunksProcessed ?? 0) === 0 && (
+                                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                                    <div className="font-medium">Idle check — no LLM call</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        No ready conversation chunks were available, so the worker exited without running extraction.
+                                    </div>
+                                </div>
+                            )}
+                            {job.type === "conversation_extractor" &&
+                                (r.chunksProcessed ?? 0) > 0 &&
+                                (r.conversationsCreated ?? 0) === 0 && (
+                                <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-sm">
+                                    <div className="font-medium text-sky-500">Useful negative result — decision saved</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        Segmentation examined the chunk and found no usable conversation. The chunk is stored as empty with model provenance, so automatic extraction will not retry it. Metadata extraction was skipped; no conversation, emoji, entity, agreement, or link objects were created.
+                                    </div>
+                                </div>
+                            )}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 {config.metrics.map((m) => (
                                     <MetricCell key={m.label} icon={m.icon} label={m.label} value={m.value} />
@@ -960,6 +1026,42 @@ export default function JobDetailPage() {
                                             ))}
                                         </div>
                                     )}
+                                </div>
+                            )}
+                            {job.type === "conversation_extractor" && extractedChunks.length > 0 && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-2">
+                                        Processed Chunks ({extractedChunks.length})
+                                    </div>
+                                    <div className="space-y-2">
+                                        {extractedChunks.map((chunk) => {
+                                            const chunkId = formatValue(chunk._id).replace(/^"(.*)"$/, "$1");
+                                            return (
+                                                <div key={chunkId} className="rounded-lg border p-3 text-sm">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <code className="text-xs">{chunkId}</code>
+                                                    <Badge variant={chunk.state === "empty" ? "secondary" : "outline"}>
+                                                        {chunk.state ?? "unknown"}
+                                                    </Badge>
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                                    <span>{chunk.transcriptionCount ?? 0} transcriptions</span>
+                                                    <span>{chunk.totalTextLength ?? 0} characters</span>
+                                                    <span>{chunk.segmentsFound ?? 0} segments</span>
+                                                    <span>{chunk.conversationsCreated ?? 0} conversations</span>
+                                                    {chunk.start && chunk.end && (
+                                                        <Link
+                                                            className="text-primary hover:underline"
+                                                            to={`/timeline?start=${new Date(chunk.start).getTime()}&end=${new Date(chunk.end).getTime()}`}
+                                                        >
+                                                            Open time range
+                                                        </Link>
+                                                    )}
+                                                </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             )}
                             {job.type === "summarization" && batchSummaries.length > 0 && (

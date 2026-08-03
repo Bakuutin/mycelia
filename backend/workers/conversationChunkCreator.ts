@@ -204,6 +204,40 @@ class ChunkingEngine {
 
 type MongoFn = (input: any) => Promise<any>;
 
+/**
+ * Keep the 30-second safety poll without creating a durable Job for every
+ * empty tick. New transcriptions still trigger immediately, while stale open
+ * chunks become eligible after the same timeout as before.
+ */
+export async function hasPendingConversationChunkWork(
+  mongo: MongoFn,
+  now = new Date(),
+): Promise<boolean> {
+  const unassigned = await mongo({
+    action: "findOne",
+    collection: "transcriptions",
+    query: { chunk_id: { $exists: false } },
+    options: { projection: { _id: 1 } },
+  });
+  if (unassigned) return true;
+
+  const nowMs = now.getTime();
+  const staleOpenChunk = await mongo({
+    action: "findOne",
+    collection: "conversation_chunks",
+    query: {
+      state: "open",
+      $or: [
+        { lastActivityAt: { $lt: new Date(nowMs - GAP_TIMEOUT_MS) } },
+        { end: { $lt: new Date(nowMs - CHUNK_END_STALENESS_MS) } },
+      ],
+    },
+    options: { projection: { _id: 1 } },
+  });
+
+  return Boolean(staleOpenChunk);
+}
+
 async function findStaleOpenChunks(mongo: MongoFn): Promise<OpenChunk[]> {
   const now = Date.now();
   // Find chunks that are stale either by:
@@ -774,6 +808,7 @@ const capability: JobCapability = {
     { resource: "db/conversation_chunks", action: "delete", effect: "allow" },
   ],
   maxConcurrency: 1,
+  hasPendingWork: ({ mongo }) => hasPendingConversationChunkWork(mongo),
   use: async (job) => {
     const data = job.data as ConversationChunkCreatorJobData;
 

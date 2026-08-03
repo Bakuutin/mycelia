@@ -529,9 +529,10 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         return (
           <Badge
             variant="secondary"
-            className="bg-amber-500/10 text-amber-500 text-xs"
+            className="bg-muted text-muted-foreground text-xs"
+            title="Scheduled safety check found no unassigned transcriptions or stale chunks"
           >
-            Empty
+            No work due
           </Badge>
         );
       }
@@ -660,6 +661,16 @@ function JobProgressCell({ job }: { job: JobInfo }) {
       return (
         <div className="space-y-1">
           <JobDateRange job={job} />
+          {(result.chunksProcessed ?? 0) > 0 &&
+              (result.conversationsCreated ?? 0) === 0 && (
+            <Badge
+              variant="secondary"
+              className="bg-sky-500/10 text-sky-500 text-xs"
+              title="The chunk was reviewed and saved as having no usable conversation"
+            >
+              Reviewed · no conversation
+            </Badge>
+          )}
           {result.description && (
             <div
               className="max-w-xl truncate text-xs text-foreground"

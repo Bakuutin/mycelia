@@ -11,7 +11,6 @@ export interface JobTriggerSource extends TriggerSource {
   // Use sift syntax for filters so they can be serialized
   filter?: Record<string, any>;
 }
-
 /**
  * A job capability represents a worker that can process a specific job type.
  * Each capability defines its own name, processor, and data schema.
@@ -24,6 +23,14 @@ export interface JobCapability<T = Job<JobData>> extends Omit<CapabilityManifest
   triggers?: Omit<Triggers, 'sources'> & {
     sources: JobTriggerSource[];
   };
+  /**
+   * Optional cheap guard for automatic triggers. Returning false skips job
+   * creation while keeping the trigger itself active for future work.
+   */
+  hasPendingWork?: (context: {
+    mongo: (input: any) => Promise<any>;
+    reason: string;
+  }) => Promise<boolean>;
   maxConcurrency?: number;
   
 }

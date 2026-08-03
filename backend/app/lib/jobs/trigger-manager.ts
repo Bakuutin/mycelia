@@ -227,6 +227,18 @@ export class TriggerManager {
         return;
       }
 
+      const implementation = await this.registry.loadImplementation(jobName);
+      if (
+        implementation.hasPendingWork &&
+        !await implementation.hasPendingWork({ mongo, reason })
+      ) {
+        log("DEBUG", `Skipping trigger - no pending work`, {
+          jobName,
+          reason,
+        });
+        return;
+      }
+
       // Fill every free runtime slot. Discovery workers use atomic source
       // claims, while STT additionally reserves a provider-profile slot for
       // each queued job.
