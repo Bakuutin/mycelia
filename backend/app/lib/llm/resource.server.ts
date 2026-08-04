@@ -6,11 +6,21 @@ import { meter, tracer } from "@/lib/telemetry.ts";
 import {
   getConfiguredFallback,
   normalizeOpenAIBaseUrl,
-  resolveConfiguredModel,
   sanitizeProviderBaseUrl,
 } from "./model-routing.ts";
 import { normalizeChatCompletionResponse } from "./completion-response.ts";
 import { getPromptCacheUsage } from "./prompt-cache-usage.ts";
+import {
+  getEnabledLlmProviders,
+  LlmProviderLimiter,
+  type ResolvedLlmProvider,
+  resolveProviderModel,
+  selectLlmProviders,
+} from "./provider-routing.ts";
+
+// Server-wide limiter: every worker call funnels through this backend
+// process, so a single instance enforces the per-provider request budgets.
+const llmProviderLimiter = new LlmProviderLimiter();
 
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
   description: "Total number of LLM requests",
@@ -91,9 +101,24 @@ const listModelsRequestSchema = z.object({
   action: z.literal("list"),
 });
 
+const providerModelsRequestSchema = z.object({
+  action: z.literal("models"),
+  baseUrl: z.string().url().optional(),
+  apiKey: z.string().optional(),
+  profileId: z.string().optional(),
+});
+
+const environmentStatusRequestSchema = z.object({
+  // The environment route is intentionally inspectable but never editable:
+  // its URL, credentials and models belong to the deployment .env.
+  action: z.literal("environment_status"),
+});
+
 const llmRequestSchema = z.discriminatedUnion("action", [
   chatCompletionRequestSchema,
   listModelsRequestSchema,
+  providerModelsRequestSchema,
+  environmentStatusRequestSchema,
 ]);
 
 type LLMRequest = z.infer<typeof llmRequestSchema>;
@@ -110,6 +135,28 @@ function isOpenRouterBaseUrl(baseUrl: string): boolean {
 function readFiniteCost(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return value;
+}
+
+function listedModelIds(body: string): string[] {
+  try {
+    const parsed = JSON.parse(body);
+    const entries: unknown[] = Array.isArray(parsed?.data)
+      ? parsed.data
+      : Array.isArray(parsed?.models)
+      ? parsed.models
+      : [];
+    const modelIds = entries.map((entry: unknown): string => {
+      if (typeof entry === "string") return entry;
+      if (!entry || typeof entry !== "object") return "";
+      const candidate = entry as Record<string, unknown>;
+      return [candidate.id, candidate.model, candidate.name].find(
+        (value): value is string => typeof value === "string",
+      ) || "";
+    }).map((model: string) => model.trim()).filter(Boolean);
+    return [...new Set(modelIds)].sort();
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -169,7 +216,10 @@ export interface InferenceProviderConfig {
 
 function getOpenRouterSessionId(
   baseUrl: string,
-  provider: InferenceProviderConfig,
+  provider: {
+    promptCachingEnabled: boolean;
+    promptCacheSessionPrefix?: string;
+  },
   requestedSessionId: string | undefined,
 ): string | undefined {
   if (
@@ -196,6 +246,12 @@ function isOpenRouterPromptCachingBaseUrl(baseUrl: string): boolean {
 export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   code = "llm";
   description = "LLM chat completions";
+  // Injectable for tests so provider resolution never depends on a live DB.
+  #loadConfig: typeof getServerConfig;
+
+  constructor(loadConfig: typeof getServerConfig = getServerConfig) {
+    this.#loadConfig = loadConfig;
+  }
   schemas: {
     request: z.ZodType<LLMRequest>;
     response: z.ZodType<LLMResponse>;
@@ -204,112 +260,145 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
     response: z.any() as z.ZodType<LLMResponse>,
   };
 
-  async getInferenceProvider(): Promise<InferenceProviderConfig | null> {
-    // TODO: move env vars logic to getServerConfig,
-    // also to allow setting any config value as flattened nested env vars
-    // (e.g. MYCELIA__INFERENCE__API_KEY, MYCELIA__INFERENCE__MODEL)
+  /**
+   * Resolve every configured LLM route, mirroring the STT provider model.
+   * Configured profiles are the source of truth; the environment route is a
+   * separately prioritized, read-only route instead of a hard override.
+   */
+  async getInferenceProviders(): Promise<ResolvedLlmProvider[]> {
+    let config: Awaited<ReturnType<typeof getServerConfig>> | null = null;
+    try {
+      config = await this.#loadConfig();
+    } catch {
+      // Environment-only deployments may not expose config storage.
+    }
 
-    // Stateless config: read from env vars first (ushadow pattern)
-    const envBaseUrl = Deno.env.get("OPENAI_BASE_URL");
-    const envApiKey = Deno.env.get("OPENAI_API_KEY");
+    const envBaseUrl = Deno.env.get("OPENAI_BASE_URL")?.trim();
+    const envApiKey = Deno.env.get("OPENAI_API_KEY")?.trim();
     // Model resolution: OPENAI_MODEL (for override) > BASE_MODEL (primary config)
-    const envModel = Deno.env.get("OPENAI_MODEL") || Deno.env.get("BASE_MODEL");
-    const envChatModel = Deno.env.get("OPENAI_CHAT_MODEL") ||
-      Deno.env.get("CHAT_MODEL");
+    const envModel = (Deno.env.get("OPENAI_MODEL") ||
+      Deno.env.get("BASE_MODEL"))?.trim();
+    const envChatModel = (Deno.env.get("OPENAI_CHAT_MODEL") ||
+      Deno.env.get("CHAT_MODEL"))?.trim();
     const envFallbackModel = Deno.env.get("OPENAI_FALLBACK_MODEL");
     const envFallbackEnabledValue = Deno.env.get("OPENAI_FALLBACK_ENABLED");
-    const envFallbackEnabled = envFallbackEnabledValue === "true";
-    const envPromptCachingEnabled =
-      Deno.env.get("OPENROUTER_PROMPT_CACHING") !==
-        "false";
-    const envPromptCacheSessionPrefix = Deno.env.get(
-      "OPENROUTER_SESSION_PREFIX",
-    );
+    const envAlias = (name: string) =>
+      Deno.env.get(name)?.trim() || envModel || undefined;
 
-    if (envBaseUrl && envApiKey) {
+    const resolveEnvironmentProvider = (): ResolvedLlmProvider | null => {
+      if (!envBaseUrl || !envApiKey) return null;
       return {
+        id: "environment",
+        name: "Environment LLM",
         baseUrl: envBaseUrl,
         apiKey: envApiKey,
-        model: envModel,
-        chatModel: envChatModel || envModel,
+        // Unset MODEL_* aliases fall back to the environment default model so
+        // env-only deployments keep serving every alias.
+        aliases: {
+          small: envAlias("MODEL_SMALL"),
+          medium: envAlias("MODEL_MEDIUM"),
+          large: envAlias("MODEL_LARGE"),
+        },
         defaultAlias: "medium",
-        smallModel: Deno.env.get("MODEL_SMALL"),
-        mediumModel: Deno.env.get("MODEL_MEDIUM"),
-        largeModel: Deno.env.get("MODEL_LARGE"),
-        profileId: "environment",
-        profileName: "Environment overrides",
-        fallbackEnabled: envFallbackEnabled,
+        chatModel: envChatModel || envModel,
+        enabled: true,
+        priority: config?.llmProfiles?.environmentPriority ?? 50,
+        concurrency: config?.llmProfiles?.environmentConcurrency ?? 4,
+        fallbackEnabled: envFallbackEnabledValue === "true",
         fallbackModel: envFallbackModel,
-        promptCachingEnabled: envPromptCachingEnabled,
-        promptCacheSessionPrefix: envPromptCacheSessionPrefix,
+        promptCachingEnabled: Deno.env.get("OPENROUTER_PROMPT_CACHING") !==
+          "false",
+        promptCacheSessionPrefix: Deno.env.get("OPENROUTER_SESSION_PREFIX"),
+        source: "llm_env",
       };
+    };
+
+    if (config?.llmProfiles?.profiles?.length) {
+      const configuredProviders: ResolvedLlmProvider[] = config.llmProfiles
+        .profiles.map((profile) => ({
+          id: profile.id,
+          name: profile.name,
+          baseUrl: profile.baseUrl,
+          apiKey: profile.apiKey,
+          aliases: { ...profile.aliases },
+          defaultAlias: profile.defaultAlias ?? "medium",
+          chatModel: profile.chatModel,
+          enabled: profile.enabled ?? true,
+          priority: profile.priority ?? 50,
+          concurrency: profile.concurrency ?? 4,
+          promptCachingEnabled: profile.promptCaching?.enabled ?? true,
+          promptCacheSessionPrefix: profile.promptCaching?.sessionPrefix,
+          source: "llm_profile" as const,
+        }));
+      if (!config.llmProfiles.includeEnvironment) {
+        return configuredProviders;
+      }
+      const environmentProvider = resolveEnvironmentProvider();
+      return environmentProvider
+        ? [environmentProvider, ...configuredProviders]
+        : configuredProviders;
     }
 
-    // Fallback to MongoDB config for backward compatibility
-    const config = await getServerConfig();
-    const activeProfile = config.llmProfiles?.profiles.find((profile) =>
-      profile.id === config.llmProfiles?.activeProfileId
-    );
-    if (activeProfile?.baseUrl && activeProfile.apiKey) {
-      const defaultAlias = activeProfile.defaultAlias ?? "medium";
-      return {
-        baseUrl: activeProfile.baseUrl,
-        apiKey: activeProfile.apiKey,
-        model: activeProfile.aliases[defaultAlias],
-        chatModel: activeProfile.chatModel ||
-          activeProfile.aliases[defaultAlias],
-        defaultAlias,
-        smallModel: activeProfile.aliases.small,
-        mediumModel: activeProfile.aliases.medium,
-        largeModel: activeProfile.aliases.large,
-        profileId: activeProfile.id,
-        profileName: activeProfile.name,
-        fallbackEnabled: false,
-        promptCachingEnabled: activeProfile.promptCaching?.enabled ?? true,
-        promptCacheSessionPrefix: activeProfile.promptCaching?.sessionPrefix,
-      };
-    }
-    const provider = config.llm || config.inference;
+    const environmentProvider = resolveEnvironmentProvider();
+    if (environmentProvider) return [environmentProvider];
+
+    const provider = config?.llm || config?.inference;
     if (!provider?.baseUrl || !provider?.apiKey) {
-      return null;
+      return [];
     }
-    return {
+    const legacyModel = envModel || provider.model?.trim() || undefined;
+    const legacyAlias = (name: string) =>
+      Deno.env.get(name)?.trim() || legacyModel;
+    return [{
+      id: "legacy",
+      name: "Legacy provider",
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
-      model: envModel || provider.model,
-      chatModel: envChatModel || provider.chatModel || envModel ||
-        provider.model,
+      aliases: {
+        small: legacyAlias("MODEL_SMALL"),
+        medium: legacyAlias("MODEL_MEDIUM"),
+        large: legacyAlias("MODEL_LARGE"),
+      },
       defaultAlias: "medium",
-      smallModel: Deno.env.get("MODEL_SMALL"),
-      mediumModel: Deno.env.get("MODEL_MEDIUM"),
-      largeModel: Deno.env.get("MODEL_LARGE"),
-      profileId: "legacy",
-      profileName: "Legacy provider",
+      chatModel: envChatModel || provider.chatModel?.trim() || legacyModel,
+      enabled: true,
+      priority: 50,
+      concurrency: 4,
       fallbackEnabled: envFallbackEnabledValue === undefined
         ? provider.fallbackEnabled ?? false
-        : envFallbackEnabled,
+        : envFallbackEnabledValue === "true",
       fallbackModel: envFallbackModel || provider.fallbackModel,
       promptCachingEnabled: provider.promptCaching?.enabled ?? true,
       promptCacheSessionPrefix: provider.promptCaching?.sessionPrefix,
-    };
+      source: "legacy",
+    }];
   }
 
   /**
-   * Resolve model aliases (small/medium/large) to actual model names.
-   * Explicit model IDs stay explicit. Legacy aliases resolve through
-   * BASE_MODEL, then MODEL_* mappings, then the configured global model.
+   * Backward-compatible view of the highest-priority enabled route for
+   * callers that only need a single provider (chat defaults, health).
    */
-  resolveModelAlias(
-    modelName: string,
-    provider: InferenceProviderConfig,
-  ): string {
-    return resolveConfiguredModel(modelName, {
-      defaultModel: provider.model,
-      baseModel: Deno.env.get("BASE_MODEL"),
-      smallModel: provider.smallModel || Deno.env.get("MODEL_SMALL"),
-      mediumModel: provider.mediumModel || Deno.env.get("MODEL_MEDIUM"),
-      largeModel: provider.largeModel || Deno.env.get("MODEL_LARGE"),
-    });
+  async getInferenceProvider(): Promise<InferenceProviderConfig | null> {
+    const providers = await this.getInferenceProviders();
+    const provider = getEnabledLlmProviders(providers)[0];
+    if (!provider) return null;
+    const defaultAlias = provider.defaultAlias;
+    return {
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.aliases[defaultAlias],
+      chatModel: provider.chatModel || provider.aliases[defaultAlias],
+      defaultAlias,
+      smallModel: provider.aliases.small,
+      mediumModel: provider.aliases.medium,
+      largeModel: provider.aliases.large,
+      profileId: provider.id,
+      profileName: provider.name,
+      fallbackEnabled: provider.fallbackEnabled ?? false,
+      fallbackModel: provider.fallbackModel,
+      promptCachingEnabled: provider.promptCachingEnabled,
+      promptCacheSessionPrefix: provider.promptCacheSessionPrefix,
+    };
   }
 
   async use(input: LLMRequest, auth: Auth): Promise<LLMResponse> {
@@ -336,8 +425,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             ...body
           } = input;
 
-          const provider = await this.getInferenceProvider();
-          if (!provider) {
+          const allProviders = await this.getInferenceProviders();
+          // The failover chain: enabled providers that can serve the
+          // requested alias or explicit model, in priority order.
+          const chain = selectLlmProviders(allProviders, input.model);
+          if (chain.length === 0) {
             llmErrorsCounter.add(1, {
               error_type: "provider_not_configured",
               model: input.model,
@@ -347,128 +439,253 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               message: "Inference provider not configured",
             });
             throw new Error(
-              "Inference provider not configured. Please configure it in server settings.",
+              allProviders.length > 0
+                ? `No enabled LLM provider can serve model "${input.model}". ` +
+                  "Check provider enablement, priorities and alias mappings in server settings."
+                : "Inference provider not configured. Please configure it in server settings.",
             );
           }
 
-          const baseUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
-          const sessionId = getOpenRouterSessionId(
-            baseUrl,
-            provider,
-            requestedSessionId,
-          );
+          const providerAttempts: Array<{
+            providerProfileId: string;
+            providerProfileName: string;
+            providerBaseUrl: string;
+            model: string;
+            fallbackUsed: boolean;
+            error?: string;
+          }> = [];
 
-          // Legacy aliases resolve to the configured global default. Explicit
-          // task models remain explicit and are never silently replaced.
-          resolvedModel = this.resolveModelAlias(input.model, provider);
-          // A caller can explicitly provide a fallback model, or provide an
-          // empty string to opt out. Calls that do not declare a policy retain
-          // the provider-level fallback for backwards compatibility.
-          const requestControlsFallback = input.fallbackModel !== undefined;
-          const requestedFallback = requestControlsFallback
-            ? input.fallbackModel
-            : provider.fallbackModel;
-          const configuredFallback = requestedFallback
-            ? this.resolveModelAlias(requestedFallback, provider)
-            : undefined;
-          const fallbackModel = getConfiguredFallback(
-            resolvedModel,
-            requestControlsFallback
-              ? Boolean(requestedFallback?.trim())
-              : provider.fallbackEnabled,
-            configuredFallback,
-          );
+          let proxyResponse: Response | null = null;
+          let succeeded: {
+            provider: ResolvedLlmProvider;
+            baseUrl: string;
+            sessionId: string | undefined;
+            fallbackModel: string | null;
+            fallbackUsed: boolean;
+            releaseSlot: () => void;
+          } | null = null;
 
-          // Record request with resolved model
-          llmRequestCounter.add(1, {
-            action: input.action,
-            model: resolvedModel,
-          });
-
-          span.setAttributes({
-            "llm.model": resolvedModel,
-            "llm.base_url": baseUrl,
-            "llm.has_api_key": !!provider.apiKey,
-          });
-
-          const sendRequest = (model: string) =>
-            fetch(`${baseUrl}/chat/completions`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${provider.apiKey}`,
-              },
-              body: JSON.stringify({
-                ...body,
-                model,
-                ...(sessionId ? { session_id: sessionId } : {}),
-              }),
-            });
-
-          let proxyResponse: Response;
-          let primaryError: string | null = null;
-          let responseErrorBody: string | null = null;
-          let fallbackUsed = false;
-
-          try {
-            proxyResponse = await sendRequest(resolvedModel);
-            if (!proxyResponse.ok) {
-              responseErrorBody = await proxyResponse.text();
-              primaryError = `HTTP ${proxyResponse.status}: ${
-                responseErrorBody.slice(0, 500)
-              }`;
+          // Serve the request within per-provider parallel-request budgets:
+          // prefer the highest-priority route with a free slot, overflow to
+          // the next route when saturated, and wait for any release when
+          // every eligible route is at capacity.
+          const failedProviderIds = new Set<string>();
+          while (!succeeded) {
+            const remaining = selectLlmProviders(
+              allProviders.filter((provider) =>
+                !failedProviderIds.has(provider.id)
+              ),
+              input.model,
+              llmProviderLimiter.load(),
+            );
+            if (remaining.length === 0) break;
+            const candidate = remaining.find((provider) =>
+              llmProviderLimiter.tryAcquire(provider)
+            );
+            if (!candidate) {
+              await llmProviderLimiter.waitForRelease();
+              continue;
             }
-          } catch (error) {
-            primaryError = error instanceof Error
-              ? error.message
-              : String(error);
-            proxyResponse = new Response(null, { status: 502 });
+            let released = false;
+            const releaseSlot = () => {
+              if (released) return;
+              released = true;
+              llmProviderLimiter.release(candidate.id);
+            };
+            try {
+              const baseUrl = normalizeOpenAIBaseUrl(candidate.baseUrl);
+              const sessionId = getOpenRouterSessionId(
+                baseUrl,
+                candidate,
+                requestedSessionId,
+              );
+
+              // Aliases resolve through the provider's alias map. Explicit
+              // task models remain explicit and are never silently replaced.
+              resolvedModel = resolveProviderModel(input.model, candidate)!;
+              // A caller can explicitly provide a fallback model, or provide an
+              // empty string to opt out. Calls that do not declare a policy
+              // retain the provider-level fallback for backwards compatibility.
+              const requestControlsFallback = input.fallbackModel !== undefined;
+              const requestedFallback = requestControlsFallback
+                ? input.fallbackModel
+                : candidate.fallbackModel;
+              const configuredFallback = requestedFallback
+                ? resolveProviderModel(requestedFallback, candidate) ??
+                  undefined
+                : undefined;
+              const fallbackModel = getConfiguredFallback(
+                resolvedModel,
+                requestControlsFallback
+                  ? Boolean(requestedFallback?.trim())
+                  : candidate.fallbackEnabled ?? false,
+                configuredFallback,
+              );
+
+              // Record request with resolved model
+              llmRequestCounter.add(1, {
+                action: input.action,
+                model: resolvedModel,
+              });
+
+              span.setAttributes({
+                "llm.model": resolvedModel,
+                "llm.base_url": baseUrl,
+                "llm.has_api_key": !!candidate.apiKey,
+                "llm.provider_profile_id": candidate.id,
+              });
+
+              const sendRequest = (model: string) =>
+                fetch(`${baseUrl}/chat/completions`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${candidate.apiKey}`,
+                  },
+                  body: JSON.stringify({
+                    ...body,
+                    model,
+                    ...(sessionId ? { session_id: sessionId } : {}),
+                  }),
+                });
+
+              let response: Response;
+              let attemptError: string | null = null;
+              let fallbackUsed = false;
+
+              try {
+                response = await sendRequest(resolvedModel);
+                if (!response.ok) {
+                  const errorBody = await response.text();
+                  attemptError = `HTTP ${response.status}: ${
+                    errorBody.slice(0, 500)
+                  }`;
+                }
+              } catch (error) {
+                attemptError = error instanceof Error
+                  ? error.message
+                  : String(error);
+                response = new Response(null, { status: 502 });
+              }
+
+              // Model-level fallback retries within the same provider before
+              // the chain advances to the next route.
+              if (attemptError && fallbackModel) {
+                console.warn(
+                  `[llm] Primary model "${resolvedModel}" failed; retrying explicitly configured fallback "${fallbackModel}": ${attemptError}`,
+                );
+                span.setAttribute("llm.fallback_used", true);
+                fallbackUsed = true;
+                resolvedModel = fallbackModel;
+                try {
+                  response = await sendRequest(resolvedModel);
+                  if (response.ok) {
+                    attemptError = null;
+                  } else {
+                    const errorBody = await response.text();
+                    attemptError =
+                      `${attemptError} Fallback HTTP ${response.status}: ${
+                        errorBody.slice(0, 500)
+                      }`;
+                  }
+                } catch (error) {
+                  attemptError = `${attemptError} Fallback error: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`;
+                  response = new Response(null, { status: 502 });
+                }
+              }
+
+              span.setAttributes({
+                "llm.response_status": response.status,
+                "llm.response_ok": response.ok,
+              });
+
+              providerAttempts.push({
+                providerProfileId: candidate.id,
+                providerProfileName: candidate.name,
+                // Persist only the normalized provider route, never credentials.
+                providerBaseUrl: sanitizeProviderBaseUrl(baseUrl),
+                model: resolvedModel,
+                fallbackUsed,
+                ...(attemptError ? { error: attemptError } : {}),
+              });
+
+              if (!attemptError && response.ok) {
+                proxyResponse = response;
+                // The slot stays reserved until the response body is consumed.
+                succeeded = {
+                  provider: candidate,
+                  baseUrl,
+                  sessionId,
+                  fallbackModel,
+                  fallbackUsed,
+                  releaseSlot,
+                };
+                break;
+              }
+
+              llmErrorsCounter.add(1, {
+                error_type: "provider_failover",
+                model: resolvedModel,
+                status_code: response.status.toString(),
+              });
+              console.warn(
+                `[llm] Provider "${candidate.name}" failed for requested model "${input.model}"; trying next route: ${attemptError}`,
+              );
+              failedProviderIds.add(candidate.id);
+              releaseSlot();
+            } catch (error) {
+              releaseSlot();
+              throw error;
+            }
           }
 
-          if (primaryError && fallbackModel) {
-            console.warn(
-              `[llm] Primary model "${resolvedModel}" failed; retrying explicitly configured fallback "${fallbackModel}": ${primaryError}`,
-            );
-            span.setAttribute("llm.fallback_used", true);
-            fallbackUsed = true;
-            resolvedModel = fallbackModel;
-            proxyResponse = await sendRequest(resolvedModel);
-            responseErrorBody = null;
-          }
-
-          span.setAttributes({
-            "llm.response_status": proxyResponse.status,
-            "llm.response_ok": proxyResponse.ok,
-          });
-
-          if (!proxyResponse.ok) {
-            // The primary response body may already have been read while
-            // deciding whether to invoke the configured fallback. Reuse that
-            // captured body so the actual provider error is preserved.
-            const errorBody = responseErrorBody ?? await proxyResponse.text();
+          if (!succeeded || !proxyResponse) {
             llmErrorsCounter.add(1, {
               error_type: "api_error",
               model: resolvedModel,
-              status_code: proxyResponse.status.toString(),
             });
             span.setStatus({
               code: 2,
-              message: `API error: ${proxyResponse.status}`,
+              message: "All LLM provider routes failed",
             });
-            const primaryContext = primaryError
-              ? ` Primary model error: ${primaryError}.`
-              : "";
+            const detail = providerAttempts.map((attempt) =>
+              `${attempt.providerProfileName} (${attempt.model}): ${
+                attempt.error ?? "unknown error"
+              }`
+            ).join("; ");
             throw new Error(
-              `LLM API error (${proxyResponse.status}); requested model "${input.model}" resolved to "${resolvedModel}" at ${baseUrl}: ${
-                errorBody.slice(0, 500)
-              }${primaryContext}`,
+              `LLM API error; requested model "${input.model}" failed on ${providerAttempts.length} provider route(s): ${detail}`,
             );
           }
+
+          const provider = succeeded.provider;
+          const baseUrl = succeeded.baseUrl;
+          const sessionId = succeeded.sessionId;
+          const fallbackModel = succeeded.fallbackModel;
+          const fallbackUsed = succeeded.fallbackUsed;
 
           // Check if streaming is requested
           if (input.stream) {
             span.setStatus({ code: 1 }); // Success
-            return new Response(proxyResponse.body, {
+            const releaseSlot = succeeded.releaseSlot;
+            // Hold the provider slot until the stream is fully consumed or
+            // the client cancels; release is idempotent.
+            const monitoredBody = proxyResponse.body
+              ? proxyResponse.body.pipeThrough(
+                new TransformStream({
+                  flush() {
+                    releaseSlot();
+                  },
+                  cancel() {
+                    releaseSlot();
+                  },
+                }),
+              )
+              : null;
+            if (!monitoredBody) releaseSlot();
+            return new Response(monitoredBody, {
               headers: {
                 "Content-Type": "text/event-stream",
                 "Cache-Control": "no-cache",
@@ -477,9 +694,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             });
           }
 
-          const responseText = await proxyResponse.text();
-
+          let responseText = "";
           try {
+            responseText = await proxyResponse.text();
             const jsonResponse = JSON.parse(responseText);
 
             normalizeChatCompletionResponse(jsonResponse, {
@@ -498,8 +715,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               fallbackUsed,
               // Persist only the normalized provider route, never credentials.
               providerBaseUrl: sanitizeProviderBaseUrl(baseUrl),
-              providerProfileId: provider.profileId,
-              providerProfileName: provider.profileName,
+              providerProfileId: provider.id,
+              providerProfileName: provider.name,
+              // Every route tried for this request, including failed ones, so
+              // job provenance shows provider failover explicitly.
+              providerAttempts,
               promptCaching: sessionId
                 ? { enabled: true, sessionId, ...promptCacheUsage }
                 : { enabled: false },
@@ -557,11 +777,15 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             throw new Error(
               `Invalid JSON response from model "${resolvedModel}": ${errorMessage}. Response: ${preview}`,
             );
+          } finally {
+            succeeded.releaseSlot();
           }
         }
         case "list": {
-          const provider = await this.getInferenceProvider();
-          if (!provider) {
+          const providers = getEnabledLlmProviders(
+            await this.getInferenceProviders(),
+          );
+          if (providers.length === 0) {
             span.setStatus({
               code: 2,
               message: "Inference provider not configured",
@@ -571,68 +795,209 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             );
           }
 
-          const baseUrl = normalizeOpenAIBaseUrl(provider.baseUrl);
+          // Fetch available models from every enabled route so task routing
+          // can offer models grouped by provider. Unreachable providers only
+          // annotate their own entry instead of failing the whole listing.
+          const providerListings = await Promise.all(
+            providers.map(async (candidate) => {
+              const baseUrl = normalizeOpenAIBaseUrl(candidate.baseUrl);
+              try {
+                const response = await fetch(`${baseUrl}/models`, {
+                  headers: { "Authorization": `Bearer ${candidate.apiKey}` },
+                  signal: AbortSignal.timeout(10_000),
+                });
+                if (!response.ok) {
+                  const errorText = await response.text();
+                  return {
+                    provider: candidate,
+                    entries: [] as unknown[],
+                    error: `HTTP ${response.status}: ${
+                      errorText.slice(0, 200)
+                    }`,
+                  };
+                }
+                const data = await response.json();
+                return {
+                  provider: candidate,
+                  entries: Array.isArray(data?.data) ? data.data : [],
+                  error: undefined,
+                };
+              } catch (error) {
+                return {
+                  provider: candidate,
+                  entries: [] as unknown[],
+                  error: error instanceof Error ? error.message : String(error),
+                };
+              }
+            }),
+          );
 
-          // Fetch available models from inference provider
-          const modelsResponse = await fetch(`${baseUrl}/models`, {
-            headers: { "Authorization": `Bearer ${provider.apiKey}` },
-          });
-
-          if (!modelsResponse.ok) {
-            const errorText = await modelsResponse.text();
+          if (providerListings.every((listing) => listing.error)) {
             span.setStatus({
               code: 2,
-              message: `Failed to fetch models: ${modelsResponse.status}`,
+              message: "Failed to fetch models from every provider",
             });
             throw new Error(
-              `Failed to fetch models (${modelsResponse.status}): ${
-                errorText.slice(0, 200)
+              `Failed to fetch models: ${
+                providerListings.map((listing) =>
+                  `${listing.provider.name}: ${listing.error}`
+                ).join("; ")
               }`,
             );
           }
 
-          const modelsData = await modelsResponse.json();
+          // The primary route keeps the backward-compatible top-level shape.
+          const primary = providers[0];
+          const seenModelIds = new Set<string>();
+          const mergedModels = providerListings.flatMap((listing) =>
+            listing.entries.filter((entry: unknown) => {
+              const id = entry && typeof entry === "object" &&
+                  typeof (entry as { id?: unknown }).id === "string"
+                ? (entry as { id: string }).id
+                : typeof entry === "string"
+                ? entry
+                : undefined;
+              if (!id || seenModelIds.has(id)) return false;
+              seenModelIds.add(id);
+              return true;
+            })
+          );
 
-          // Get category config from env vars
           const categories = {
             small: {
-              default: provider.smallModel || Deno.env.get("MODEL_SMALL") ||
-                provider.model || "small",
+              default: primary.aliases.small || "small",
               models: [] as string[],
             },
             medium: {
-              default: provider.mediumModel || Deno.env.get("MODEL_MEDIUM") ||
-                provider.model ||
-                "medium",
+              default: primary.aliases.medium || "medium",
               models: [] as string[],
             },
             large: {
-              default: provider.largeModel || Deno.env.get("MODEL_LARGE") ||
-                provider.model || "large",
+              default: primary.aliases.large || "large",
               models: [] as string[],
             },
           };
 
           span.setStatus({ code: 1 });
           return {
-            models: modelsData.data || [],
+            models: mergedModels,
             categories,
-            defaultAlias: provider.defaultAlias || "medium",
-            defaultModel: this.resolveModelAlias(
-              provider.defaultAlias || "medium",
-              provider,
-            ),
-            chatDefaultModel: this.resolveModelAlias(
-              provider.chatModel || provider.defaultAlias ||
-                provider.model || "medium",
-              provider,
-            ),
+            defaultAlias: primary.defaultAlias,
+            defaultModel: primary.aliases[primary.defaultAlias] ||
+              primary.defaultAlias,
+            chatDefaultModel: primary.chatModel ||
+              primary.aliases[primary.defaultAlias] || primary.defaultAlias,
             resolvedAliases: {
-              small: this.resolveModelAlias("small", provider),
-              medium: this.resolveModelAlias("medium", provider),
-              large: this.resolveModelAlias("large", provider),
+              small: primary.aliases.small || "small",
+              medium: primary.aliases.medium || "medium",
+              large: primary.aliases.large || "large",
             },
-            providerProfileName: provider.profileName,
+            providerProfileName: primary.name,
+            providers: providerListings.map(({ provider, entries, error }) => ({
+              id: provider.id,
+              name: provider.name,
+              source: provider.source,
+              enabled: provider.enabled,
+              priority: provider.priority,
+              concurrency: provider.concurrency,
+              defaultAlias: provider.defaultAlias,
+              aliases: provider.aliases,
+              chatModel: provider.chatModel,
+              models: entries.map((entry: unknown) =>
+                entry && typeof entry === "object" &&
+                  typeof (entry as { id?: unknown }).id === "string"
+                  ? (entry as { id: string }).id
+                  : typeof entry === "string"
+                  ? entry
+                  : ""
+              ).filter(Boolean),
+              ...(error ? { error } : {}),
+            })),
+          };
+        }
+        case "models": {
+          const providers = await this.getInferenceProviders();
+          let baseUrl = input.baseUrl?.trim();
+          let apiKey = input.apiKey;
+          if (input.profileId) {
+            const profile = providers.find((candidate) =>
+              candidate.id === input.profileId
+            );
+            if (!profile) {
+              throw new Error(
+                `LLM provider profile not found: ${input.profileId}`,
+              );
+            }
+            baseUrl = baseUrl || profile.baseUrl;
+            apiKey = apiKey ?? profile.apiKey;
+          }
+          if (!baseUrl) {
+            const configured = getEnabledLlmProviders(providers)[0];
+            baseUrl = configured?.baseUrl;
+            apiKey = apiKey ?? configured?.apiKey;
+          }
+          if (!baseUrl) {
+            throw new Error("LLM provider URL is required");
+          }
+
+          const modelsUrl = `${normalizeOpenAIBaseUrl(baseUrl)}/models`;
+          const response = await fetch(modelsUrl, {
+            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+            signal: AbortSignal.timeout(10_000),
+          });
+          const bodyText = await response.text();
+          const models = response.ok ? listedModelIds(bodyText) : [];
+          return {
+            success: response.ok,
+            status: response.status,
+            message: response.ok
+              ? models.length > 0
+                ? `Found ${models.length} model${
+                  models.length === 1 ? "" : "s"
+                }`
+                : "The provider responded, but advertised no named models"
+              : bodyText.trim().replace(/\s+/g, " ").slice(0, 300) ||
+                `HTTP ${response.status}`,
+            models,
+            modelsUrl,
+          };
+        }
+        case "environment_status": {
+          let config: Awaited<ReturnType<typeof getServerConfig>> | null = null;
+          try {
+            config = await this.#loadConfig();
+          } catch {
+            // Configuration storage is optional for environment-only installs.
+          }
+          const baseUrl = Deno.env.get("OPENAI_BASE_URL")?.trim();
+          const hasApiKey = Boolean(Deno.env.get("OPENAI_API_KEY")?.trim());
+          const configured = Boolean(baseUrl && hasApiKey);
+          const profilesConfigured = Boolean(
+            config?.llmProfiles?.profiles?.length,
+          );
+          const envModel = (Deno.env.get("OPENAI_MODEL") ||
+            Deno.env.get("BASE_MODEL"))?.trim();
+          const envAlias = (name: string) =>
+            Deno.env.get(name)?.trim() || envModel;
+          return {
+            configured,
+            enabled: profilesConfigured
+              ? Boolean(config?.llmProfiles?.includeEnvironment)
+              : configured,
+            baseUrl: baseUrl?.replace(/\/+$/, ""),
+            model: envModel,
+            chatModel: (Deno.env.get("OPENAI_CHAT_MODEL") ||
+              Deno.env.get("CHAT_MODEL"))?.trim() || envModel,
+            aliases: {
+              small: envAlias("MODEL_SMALL"),
+              medium: envAlias("MODEL_MEDIUM"),
+              large: envAlias("MODEL_LARGE"),
+            },
+            priority: config?.llmProfiles?.environmentPriority ?? 50,
+            concurrency: config?.llmProfiles?.environmentConcurrency ?? 4,
+            message: configured
+              ? "Deployment-managed route; URL, key and models are read-only here."
+              : "OPENAI_BASE_URL and OPENAI_API_KEY are not both configured in the backend environment.",
           };
         }
         default:
@@ -658,7 +1023,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   }
 
   extractActions(input: LLMRequest) {
-    if (input.action === "list") {
+    if (
+      input.action === "list" || input.action === "models" ||
+      input.action === "environment_status"
+    ) {
       return [{
         path: ["llm", "models"],
         actions: ["list"],

@@ -15,10 +15,12 @@ export const zProviderConfig = z.object({
   }).optional(),
 });
 
+// Each alias is optional: a provider without a mapping for the requested
+// alias is skipped by the routing failover chain ("None" in the UI).
 export const zModelAliasMap = z.object({
-  small: z.string().min(1),
-  medium: z.string().min(1),
-  large: z.string().min(1),
+  small: z.string().min(1).optional(),
+  medium: z.string().min(1).optional(),
+  large: z.string().min(1).optional(),
 });
 
 export const zLlmProviderProfile = z.object({
@@ -29,6 +31,14 @@ export const zLlmProviderProfile = z.object({
   aliases: zModelAliasMap,
   defaultAlias: z.enum(["small", "medium", "large"]).default("medium"),
   chatModel: z.string().min(1).optional(),
+  enabled: z.boolean().default(true),
+  // Lower values are preferred. Providers are tried in priority order and
+  // lower-priority routes serve as failover targets.
+  priority: z.number().int().min(1).max(100).default(50),
+  // Maximum simultaneous chat-completion requests routed to this provider.
+  // Requests beyond the limit overflow to the next route by priority, or
+  // wait for a free slot when every route is saturated.
+  concurrency: z.number().int().min(1).max(32).default(4),
   // OpenRouter uses session IDs only as a routing key. The provider still
   // decides whether a particular prompt prefix is cacheable.
   promptCaching: z.object({
@@ -38,8 +48,32 @@ export const zLlmProviderProfile = z.object({
 });
 
 export const zLlmProfilesConfig = z.object({
-  activeProfileId: z.string().min(1),
+  // Deprecated: routing is priority-based; kept so older configs still parse.
+  activeProfileId: z.string().min(1).optional(),
   profiles: z.array(zLlmProviderProfile).min(1),
+  includeEnvironment: z.boolean().optional().default(false),
+  environmentPriority: z.number().int().min(1).max(100).optional().default(50),
+  environmentConcurrency: z.number().int().min(1).max(32).optional().default(4),
+}).superRefine((value, context) => {
+  const enabled = value.profiles.filter((profile) => profile.enabled);
+  if (enabled.length === 0 && !value.includeEnvironment) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["profiles"],
+      message: "At least one LLM provider profile must be enabled",
+    });
+  }
+  const ids = new Set<string>();
+  for (const [index, profile] of value.profiles.entries()) {
+    if (ids.has(profile.id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["profiles", index, "id"],
+        message: `Duplicate LLM provider profile id: ${profile.id}`,
+      });
+    }
+    ids.add(profile.id);
+  }
 });
 
 export const zTranscriptionCachePolicy = z.object({
@@ -131,6 +165,11 @@ export const zWorkerConfig = z.object({
   presetId: z.string().trim().min(1).optional().describe(
     "Reserved worker-specific preset binding for future routing.",
   ),
+  triggerIntervalSeconds: z.number().int().min(0).max(86400).optional()
+    .describe(
+      "Scheduled-run interval override in seconds. 0 disables scheduled runs " +
+        "(event triggers still fire); unset keeps the worker's default.",
+    ),
   routingContext: z.object({
     sourceId: z.string().trim().min(1).optional(),
     providerProfileId: z.string().trim().min(1).optional(),

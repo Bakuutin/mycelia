@@ -5,6 +5,7 @@ import { withFixtures } from "@/tests/fixtures.server.ts";
 import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { up as configureExplicitLlmRouting } from "../../migrations/0019_explicit_llm_model_routing.ts";
 import { up as separateSummaryPromptModel } from "../../migrations/0023_separate_summary_prompt_model.ts";
+import { up as configureLlmProviderRouting } from "../../migrations/0024_llm_provider_routing.ts";
 
 Deno.test(
   "migrations can run",
@@ -112,5 +113,75 @@ Deno.test(
       name: "summarization",
     });
     expect(worker?.defaultOverrides?.model).toBe("custom-summary-model");
+  }),
+);
+
+Deno.test(
+  "LLM provider routing migration keeps only the active profile enabled",
+  withFixtures([
+    "Mongo",
+  ], async ({ db }) => {
+    const configId = new ObjectId("000000000000000000000000");
+    await db.collection("configs").updateOne(
+      { _id: configId },
+      {
+        $set: {
+          llmProfiles: {
+            activeProfileId: "secondary",
+            profiles: [
+              { id: "primary", name: "Primary" },
+              { id: "secondary", name: "Secondary" },
+            ],
+          },
+        },
+      },
+      { upsert: true },
+    );
+
+    await configureLlmProviderRouting(db);
+
+    const config = await db.collection("configs").findOne({ _id: configId });
+    const profiles = config?.llmProfiles?.profiles;
+    expect(profiles?.map((profile: Record<string, unknown>) => ({
+      id: profile.id,
+      enabled: profile.enabled,
+      priority: profile.priority,
+    }))).toEqual([
+      { id: "primary", enabled: false, priority: 50 },
+      { id: "secondary", enabled: true, priority: 50 },
+    ]);
+    expect(typeof config?.llmProfiles?.includeEnvironment).toBe("boolean");
+    expect(typeof config?.llmProfiles?.environmentPriority).toBe("number");
+  }),
+);
+
+Deno.test(
+  "LLM provider routing migration enables the first profile without an active match",
+  withFixtures([
+    "Mongo",
+  ], async ({ db }) => {
+    const configId = new ObjectId("000000000000000000000000");
+    await db.collection("configs").updateOne(
+      { _id: configId },
+      {
+        $set: {
+          llmProfiles: {
+            activeProfileId: "missing",
+            profiles: [
+              { id: "primary", name: "Primary" },
+              { id: "secondary", name: "Secondary", enabled: true },
+            ],
+          },
+        },
+      },
+      { upsert: true },
+    );
+
+    await configureLlmProviderRouting(db);
+
+    const config = await db.collection("configs").findOne({ _id: configId });
+    const profiles = config?.llmProfiles?.profiles;
+    expect(profiles?.[0]?.enabled).toBe(true);
+    expect(profiles?.[1]?.enabled).toBe(true);
   }),
 );
