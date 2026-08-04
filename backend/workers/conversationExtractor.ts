@@ -1702,6 +1702,18 @@ const capability: JobCapability = {
       relationshipErrors += result.relationshipErrors;
       artifacts.push(...result.artifacts);
       inferenceRuns.push(...(result.inferenceRuns ?? []));
+      if (result.inferenceRuns?.length) {
+        // Live routing info for the jobs list while the job is active.
+        try {
+          await job.updateProgress({
+            stage: "chunk_done",
+            chunksProcessed,
+            inference: summarizeInferenceUsage(inferenceRuns),
+          });
+        } catch {
+          // Progress updates are best-effort.
+        }
+      }
     }
 
     const inference = summarizeInferenceUsage(inferenceRuns);

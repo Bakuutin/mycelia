@@ -197,6 +197,13 @@ type JobInferenceUsage = {
   fallbackUsed?: boolean;
   failoverUsed?: boolean;
   calls?: number;
+  mixed?: boolean;
+  byProvider?: Array<{
+    providerProfileId?: string;
+    providerProfileName?: string;
+    resolvedModel?: string;
+    calls: number;
+  }>;
 };
 type LlmProfile = {
   id: string;
@@ -4062,9 +4069,12 @@ export default function JobsPage() {
                           // they only snapshot the model for extraction.
                           const isSnapshotOnly =
                             job.type === "conversation_chunk_creator";
-                          const inference = job.result?.inference as
-                            | JobInferenceUsage
-                            | undefined;
+                          // Active jobs stream their current route through
+                          // progress; completed jobs carry it in the result.
+                          const inference = (job.result?.inference ??
+                            job.progress?.inference) as
+                              | JobInferenceUsage
+                              | undefined;
                           if (
                             inference?.resolvedModel ||
                             inference?.providerProfileName
@@ -4082,6 +4092,28 @@ export default function JobsPage() {
                               served && resolved && served !== resolved
                             ) {
                               modelLabel = `${modelLabel} (served ${served})`;
+                            }
+                            if (inference.mixed && inference.byProvider) {
+                              // Calls in this job were served by several
+                              // providers; show the full breakdown.
+                              return (
+                                <div
+                                  className="text-[10px] font-normal text-muted-foreground"
+                                  title="Calls in this job were served by several providers (saturated routes overflow by priority)"
+                                >
+                                  {inference.byProvider.map((entry) =>
+                                    `${
+                                      entry.providerProfileName ||
+                                      entry.providerProfileId
+                                    } ×${entry.calls}${
+                                      entry.resolvedModel
+                                        ? ` (${entry.resolvedModel})`
+                                        : ""
+                                    }`
+                                  ).join(" + ")}
+                                  {inference.fallbackUsed ? " · fallback" : ""}
+                                </div>
+                              );
                             }
                             return (
                               <div

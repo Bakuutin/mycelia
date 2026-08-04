@@ -517,6 +517,10 @@ const capability: JobCapability = {
         current: i + 1,
         total: conversationsToProcess.length,
         conversationId: conversation._id.toString(),
+        // Live routing info for the jobs list while the job is active.
+        ...(inferenceRuns.length > 0
+          ? { inference: summarizeInferenceUsage(inferenceRuns) }
+          : {}),
       });
 
       try {

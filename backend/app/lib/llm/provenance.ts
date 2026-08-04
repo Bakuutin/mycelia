@@ -45,6 +45,16 @@ export type InferenceUsageSummary = {
   // True when at least one request was served by a non-primary route.
   failoverUsed?: boolean;
   calls: number;
+  // True when calls in this job were served by more than one provider; the
+  // top-level fields then describe the most-used provider and byProvider
+  // carries the full breakdown.
+  mixed?: boolean;
+  byProvider?: Array<{
+    providerProfileId?: string;
+    providerProfileName?: string;
+    resolvedModel?: string;
+    calls: number;
+  }>;
 };
 
 export function summarizeInferenceUsage(
@@ -54,19 +64,52 @@ export function summarizeInferenceUsage(
     provenance.resolvedModel || provenance.providerProfileId
   );
   if (relevant.length === 0) return undefined;
-  const last = relevant[relevant.length - 1];
+
+  // Batches can hit different providers per call (a saturated route
+  // overflows by priority). Group the calls so the summary reports the
+  // most-used provider and flags mixed usage instead of pretending the
+  // whole job ran on whichever provider happened to serve the last call.
+  const groups = new Map<string, {
+    last: InferenceProvenance;
+    calls: number;
+  }>();
+  for (const provenance of relevant) {
+    const key = provenance.providerProfileId ??
+      provenance.providerProfileName ?? provenance.providerBaseUrl ??
+      "unknown";
+    const group = groups.get(key);
+    if (group) {
+      group.calls += 1;
+      group.last = provenance;
+    } else {
+      groups.set(key, { last: provenance, calls: 1 });
+    }
+  }
+  const byProvider = [...groups.values()]
+    .sort((a, b) => b.calls - a.calls)
+    .map((group) => ({
+      providerProfileId: group.last.providerProfileId,
+      providerProfileName: group.last.providerProfileName,
+      resolvedModel: group.last.resolvedModel,
+      calls: group.calls,
+    }));
+  const dominant = byProvider[0];
+  const dominantLast = [...groups.values()]
+    .sort((a, b) => b.calls - a.calls)[0].last;
+
   return {
-    providerProfileId: last.providerProfileId,
-    providerProfileName: last.providerProfileName,
-    providerBaseUrl: last.providerBaseUrl,
-    requestedModel: last.requestedModel,
-    resolvedModel: last.resolvedModel,
-    responseModel: last.responseModel,
+    providerProfileId: dominant.providerProfileId,
+    providerProfileName: dominant.providerProfileName,
+    providerBaseUrl: dominantLast.providerBaseUrl,
+    requestedModel: dominantLast.requestedModel,
+    resolvedModel: dominant.resolvedModel,
+    responseModel: dominantLast.responseModel,
     fallbackUsed: relevant.some((provenance) => provenance.fallbackUsed),
     failoverUsed: relevant.some((provenance) =>
       (provenance.providerAttempts?.length ?? 0) > 1
     ),
     calls: relevant.length,
+    ...(byProvider.length > 1 ? { mixed: true, byProvider } : {}),
   };
 }
 

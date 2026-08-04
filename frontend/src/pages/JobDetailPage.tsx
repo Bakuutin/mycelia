@@ -882,6 +882,21 @@ export default function JobDetailPage() {
                             ...(r.skipped != null && r.skipped > 0 ? [{ icon: AlertTriangle as LucideIcon, label: "Skipped", value: r.skipped }] : []),
                             ...(r.title ? [{ icon: FileText as LucideIcon, label: "Title", value: r.title }] : []),
                             ...(r.start && r.end ? [{ icon: Clock as LucideIcon, label: "Time Range", value: `${format(new Date(r.start), "PPp")} — ${format(new Date(r.end), "PPp")}` }] : []),
+                            ...(r.inference?.mixed && Array.isArray(r.inference?.byProvider)
+                                ? [{
+                                    icon: BarChart3 as LucideIcon,
+                                    label: "LLM routes (per call)",
+                                    value: r.inference.byProvider.map((entry: any) =>
+                                        `${entry.providerProfileName || entry.providerProfileId} ×${entry.calls}${entry.resolvedModel ? ` (${entry.resolvedModel})` : ""}`
+                                    ).join(" + "),
+                                }]
+                                : r.inference?.providerProfileName
+                                ? [{
+                                    icon: BarChart3 as LucideIcon,
+                                    label: "LLM route",
+                                    value: `${r.inference.providerProfileName}${r.inference.resolvedModel ? ` · ${r.inference.resolvedModel}` : ""}`,
+                                }]
+                                : []),
                         ],
                         errors: r.errors,
                     },

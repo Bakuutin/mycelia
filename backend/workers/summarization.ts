@@ -1108,6 +1108,19 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         }
         if (result.inference) {
           inferenceRuns.push(result.inference as InferenceProvenance);
+          // Live routing info for the jobs list while the batch is active.
+          try {
+            await job.updateProgress({
+              ...(typeof job.progress === "object" && job.progress !== null
+                ? job.progress as Record<string, unknown>
+                : {}),
+              processed,
+              skipped,
+              inference: summarizeInferenceUsage(inferenceRuns),
+            });
+          } catch {
+            // Progress updates are best-effort.
+          }
         }
       } else {
         if (target.objectId) {

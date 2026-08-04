@@ -61,3 +61,34 @@ Deno.test("preserves OpenRouter prompt-cache usage in inference provenance", () 
     },
   });
 });
+
+Deno.test("summarizeInferenceUsage reports the dominant provider and mixed breakdown", async () => {
+  const { summarizeInferenceUsage } = await import("./provenance.ts");
+  const run = (provider: string, model: string) => ({
+    requestedModel: "small",
+    resolvedModel: model,
+    fallbackUsed: false,
+    providerProfileId: provider,
+    providerProfileName: provider,
+  });
+
+  const single = summarizeInferenceUsage([
+    run("selfhost", "qwen"),
+    run("selfhost", "qwen"),
+  ]);
+  expect(single?.providerProfileName).toBe("selfhost");
+  expect(single?.mixed).toBeUndefined();
+  expect(single?.calls).toBe(2);
+
+  const mixed = summarizeInferenceUsage([
+    run("selfhost", "qwen"),
+    run("openrouter", "deepseek"),
+    run("openrouter", "deepseek"),
+  ]);
+  expect(mixed?.mixed).toBe(true);
+  // The most-used provider leads, not whichever served the last call.
+  expect(mixed?.providerProfileName).toBe("openrouter");
+  expect(mixed?.resolvedModel).toBe("deepseek");
+  expect(mixed?.byProvider?.map((p) => `${p.providerProfileName}:${p.calls}`))
+    .toEqual(["openrouter:2", "selfhost:1"]);
+});
