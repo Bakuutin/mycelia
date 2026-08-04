@@ -148,6 +148,67 @@ function EditableTitle({
   );
 }
 
+// Compact "which AI made this" rows for the Metadata card. Shows the
+// provider, alias and model recorded for extraction, summaries and tagging
+// when that provenance exists on the object.
+function AiGenerationInfo({ object }: { object: any }) {
+    const formatProvenance = (p?: {
+        providerProfileName?: string;
+        requestedModel?: string;
+        resolvedModel?: string;
+    }): string | null => {
+        if (!p) return null;
+        const requested = p.requestedModel;
+        const resolved = p.resolvedModel;
+        const model = requested && resolved && requested !== resolved
+            ? `${requested} → ${resolved}`
+            : resolved || requested;
+        if (!p.providerProfileName && !model) return null;
+        return [p.providerProfileName, model].filter(Boolean).join(" · ");
+    };
+
+    const rows: Array<{ label: string; value: string }> = [];
+    const extractionLabel = formatProvenance(object?.metadata?.extractedWith);
+    if (extractionLabel) {
+        rows.push({ label: "Extraction", value: extractionLabel });
+    } else {
+        // Entities carry generatedWith instead of extractedWith.
+        const generatedLabel = formatProvenance(object?.metadata?.generatedWith);
+        if (generatedLabel) rows.push({ label: "Extracted by", value: generatedLabel });
+    }
+    const summaries: any[] = Array.isArray(object?.summaries) ? object.summaries : [];
+    summaries.forEach((summary, index) => {
+        const label = formatProvenance({
+            providerProfileName: summary?.provenance?.providerProfileName,
+            requestedModel: summary?.requestedModel ?? summary?.model,
+            resolvedModel: summary?.resolvedModel ?? summary?.modelName,
+        });
+        if (label) {
+            rows.push({
+                label: summaries.length > 1 ? `Summary #${index + 1}` : "Summary",
+                value: label,
+            });
+        }
+    });
+    const taggingRuns = object?.metadata?.aiProvenance?.taggingRuns;
+    const lastTagging = Array.isArray(taggingRuns) ? taggingRuns[taggingRuns.length - 1] : undefined;
+    const taggingLabel = formatProvenance(lastTagging);
+    if (taggingLabel) rows.push({ label: "Tagging", value: taggingLabel });
+
+    if (rows.length === 0) return null;
+    return (
+        <div className="pt-1.5 mt-1.5 border-t border-border/50 space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">AI generation</div>
+            {rows.map((row) => (
+                <div key={row.label} className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">{row.label}:</span>
+                    <span className="text-right break-all font-mono" title={row.value}>{row.value}</span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 const ObjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -588,6 +649,7 @@ const ObjectDetailPage = () => {
               <span className="text-muted-foreground">Version:</span>
               <span>{object.version}</span>
             </div>
+            <AiGenerationInfo object={object} />
           </div>
         </div>
 
