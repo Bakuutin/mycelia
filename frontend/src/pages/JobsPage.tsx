@@ -244,41 +244,49 @@ function getJobInferenceFacets(job: JobInfo): {
   const providers = new Set<string>();
   const models = new Set<string>();
   const aliases = new Set<string>();
-  // Non-LLM jobs still carry an enqueue-time routing snapshot; they never
-  // call a provider, so they must not match inference filters.
-  if (!LLM_JOB_TYPES.has(job.type)) {
+  const isAlias = (value: string) =>
+    value === "small" || value === "medium" || value === "large";
+
+  // Jobs that already ran report what actually served them; facets must
+  // reflect the executed route only, so filtering by a model never matches
+  // jobs that merely *requested* it before falling back elsewhere.
+  const usages = [
+    job.result?.inference as JobInferenceUsage | undefined,
+    job.progress?.inference as JobInferenceUsage | undefined,
+  ].filter(Boolean) as JobInferenceUsage[];
+
+  if (usages.length > 0) {
+    for (const usage of usages) {
+      if (usage.providerProfileName) providers.add(usage.providerProfileName);
+      // The alias facet keeps what the task asked for; the model facet keeps
+      // what actually ran (provider-reported name wins over the request).
+      if (usage.requestedModel && isAlias(usage.requestedModel)) {
+        aliases.add(usage.requestedModel);
+      }
+      const executed = usage.responseModel || usage.resolvedModel;
+      if (executed && !isAlias(executed)) models.add(executed);
+      for (const entry of usage.byProvider ?? []) {
+        if (entry.providerProfileName) providers.add(entry.providerProfileName);
+        if (entry.resolvedModel && !isAlias(entry.resolvedModel)) {
+          models.add(entry.resolvedModel);
+        }
+      }
+    }
     return { providers, models, aliases };
   }
-  const addModel = (value?: string) => {
+
+  // Queued jobs have no execution record yet; fall back to the planned route
+  // and the requested model.
+  const addPlannedModel = (value?: string) => {
     if (!value) return;
-    if (value === "small" || value === "medium" || value === "large") {
-      aliases.add(value);
-    } else {
-      models.add(value);
-    }
+    if (isAlias(value)) aliases.add(value);
+    else models.add(value);
   };
-  const addUsage = (usage?: JobInferenceUsage) => {
-    if (!usage) return;
-    if (usage.providerProfileName) providers.add(usage.providerProfileName);
-    addModel(usage.requestedModel);
-    addModel(usage.resolvedModel);
-    addModel(usage.responseModel);
-    for (const entry of usage.byProvider ?? []) {
-      if (entry.providerProfileName) providers.add(entry.providerProfileName);
-      addModel(entry.resolvedModel);
-    }
-  };
-  addUsage(job.result?.inference as JobInferenceUsage | undefined);
-  addUsage(job.progress?.inference as JobInferenceUsage | undefined);
-  // The enqueue-time snapshot is only a plan; once actual usage is recorded
-  // it supersedes the plan so filters match what really served the job.
-  if (providers.size === 0 && models.size === 0 && aliases.size === 0) {
-    if (job.routingContext?.providerProfileName) {
-      providers.add(job.routingContext.providerProfileName);
-    }
-    addModel(job.routingContext?.model);
+  if (job.routingContext?.providerProfileName) {
+    providers.add(job.routingContext.providerProfileName);
   }
-  if (typeof job.data?.model === "string") addModel(job.data.model);
+  addPlannedModel(job.routingContext?.model);
+  if (typeof job.data?.model === "string") addPlannedModel(job.data.model);
   return { providers, models, aliases };
 }
 
@@ -4419,7 +4427,15 @@ export default function JobsPage() {
                                     requested !== resolved
                                   ? (
                                     <>
-                                      {modelChip(requested)}
+                                      {/* Only aliases stay clickable on the
+                                          requested side: the model filter
+                                          matches executed models, and a
+                                          fallen-back request never executed. */}
+                                      {requested === "small" ||
+                                          requested === "medium" ||
+                                          requested === "large"
+                                        ? modelChip(requested)
+                                        : requested}
                                       {" → "}
                                       {modelChip(resolved)}
                                     </>
