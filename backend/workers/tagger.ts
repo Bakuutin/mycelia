@@ -6,6 +6,7 @@ import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import {
   getInferenceProvenance,
   type InferenceProvenance,
+  summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
@@ -394,6 +395,7 @@ const capability: JobCapability = {
     > = [];
     let conversationsProcessed = 0;
     let tagsApplied = 0;
+    const inferenceRuns: InferenceProvenance[] = [];
 
     // Step 1: Fetch all tags
     console.log(`[Tagger] Job ${job.id}: fetching tags...`);
@@ -552,6 +554,7 @@ const capability: JobCapability = {
           `Conv ${conversation._id}`,
         );
         const applicableTags = taggingResult.tags;
+        inferenceRuns.push(taggingResult.provenance);
 
         // Apply min/max constraints
         const tagsToApply = applicableTags.slice(0, input.maxTags);
@@ -645,6 +648,7 @@ const capability: JobCapability = {
       `[Tagger] Job ${job.id}: completed - processed ${conversationsProcessed} conversations, applied ${tagsApplied} tags`,
     );
 
+    const inference = summarizeInferenceUsage(inferenceRuns);
     return {
       status: "completed" as const,
       success: errors.length === 0,
@@ -652,6 +656,9 @@ const capability: JobCapability = {
       processed: conversationsProcessed,
       tagsApplied,
       hasMore,
+      // Compact routing summary so the jobs list can show the provider and
+      // model that actually served this job.
+      ...(inference ? { inference } : {}),
       ...(errors.length > 0 && { errors }),
     };
   },

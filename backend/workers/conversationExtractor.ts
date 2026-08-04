@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import {
   getInferenceProvenance,
   type InferenceProvenance,
+  summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
@@ -96,6 +97,8 @@ interface ChunkProcessingResult {
   relationshipsCreated: number;
   relationshipErrors: number;
   artifacts: ExtractedConversationArtifact[];
+  // LLM routing provenance for every call made while processing this chunk.
+  inferenceRuns?: InferenceProvenance[];
 }
 
 function emptyChunkResult(claimed: boolean): ChunkProcessingResult {
@@ -1216,7 +1219,10 @@ async function processChunk(params: {
           },
         },
       });
-      return emptyChunkResult(true);
+      return {
+        ...emptyChunkResult(true),
+        inferenceRuns: [segmentationRun.provenance],
+      };
     }
 
     // Process each segment
@@ -1229,6 +1235,7 @@ async function processChunk(params: {
     let relationshipErrors = 0;
     const artifacts: ExtractedConversationArtifact[] = [];
     const metadataRuns: Array<Record<string, unknown>> = [];
+    const metadataProvenances: InferenceProvenance[] = [];
 
     for (let i = 0; i < segmentsWithUtterances.length; i++) {
       const { segment, utterances: segUtterances } = segmentsWithUtterances[i];
@@ -1447,6 +1454,7 @@ async function processChunk(params: {
         conversationId: conversationId.toString(),
         generatedAt,
       });
+      metadataProvenances.push(metadataRun.provenance);
 
       chunkConversations++;
     }
@@ -1492,6 +1500,10 @@ async function processChunk(params: {
       relationshipsCreated,
       relationshipErrors,
       artifacts,
+      inferenceRuns: [
+        segmentationRun.provenance,
+        ...metadataProvenances,
+      ],
     };
   } catch (error) {
     console.error(`Failed to process chunk ${chunk._id}:`, error);
@@ -1650,6 +1662,7 @@ const capability: JobCapability = {
     let relationshipErrors = 0;
     const artifacts: ExtractedConversationArtifact[] = [];
     const errors: ConversationError[] = [];
+    const inferenceRuns: InferenceProvenance[] = [];
 
     // Compute prompt version for idempotency (based on prompts that affect output)
     const promptVersion = createHash("sha256")
@@ -1688,8 +1701,10 @@ const capability: JobCapability = {
       relationshipsCreated += result.relationshipsCreated;
       relationshipErrors += result.relationshipErrors;
       artifacts.push(...result.artifacts);
+      inferenceRuns.push(...(result.inferenceRuns ?? []));
     }
 
+    const inference = summarizeInferenceUsage(inferenceRuns);
     const metrics = {
       chunksProcessed,
       segmentsFound,
@@ -1718,6 +1733,9 @@ const capability: JobCapability = {
       relationshipErrors,
       artifacts,
       hasMore,
+      // Compact routing summary so the jobs list can show the provider and
+      // model that actually served this job.
+      ...(inference ? { inference } : {}),
       ...(errors.length > 0 && { errors }),
     };
   },

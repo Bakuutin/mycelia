@@ -11,7 +11,11 @@ import type {
   ObjectsResponse,
 } from "@/lib/objects/resource.server.ts";
 import { getSummaryCompletionOptions } from "@/lib/llm/completion-options.ts";
-import { getInferenceProvenance } from "@/lib/llm/provenance.ts";
+import {
+  getInferenceProvenance,
+  type InferenceProvenance,
+  summarizeInferenceUsage,
+} from "@/lib/llm/provenance.ts";
 import { getChatCompletionText } from "@/lib/llm/completion-response.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
@@ -741,6 +745,7 @@ async function summarizeConversationRange(
       end: end.toISOString(),
       description: summary,
       sourceRefs,
+      inference: summaryEntry.provenance,
     };
   }
 
@@ -782,6 +787,7 @@ async function summarizeConversationRange(
     end: end.toISOString(),
     description: summary,
     sourceRefs,
+    inference: summaryEntry.provenance,
   };
 }
 
@@ -892,6 +898,19 @@ async function resolveTargets(
       filters: {
         isConversation: true,
         "summaries.0": { $exists: false },
+        // Skip conversations another summarization job is actively working
+        // on; stale claims (crashed jobs) stay eligible.
+        $and: [{
+          $or: [
+            { _summarizationClaim: { $exists: false } },
+            { _summarizationClaim: null },
+            {
+              "_summarizationClaim.startedAt": {
+                $lte: new Date(Date.now() - JOB_TIMEOUT_MS).toISOString(),
+              },
+            },
+          ],
+        }],
         $or: [
           { "_summarizationFailure.status": { $ne: "failed" } },
           { "_summarizationFailure.retryAfter": { $exists: false } },
@@ -1033,6 +1052,8 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     title?: string;
     sourceRefs?: SummarySourceRefs;
   }> = [];
+  const inferenceRuns: InferenceProvenance[] = [];
+  const skips: string[] = [];
   const jobId = job.id ?? "unknown";
 
   for (const target of targets) {
@@ -1049,8 +1070,8 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
           `[summarization] Job ${job.id}: skipping ${target.objectId} (already claimed or has summaries)`,
         );
         skipped++;
-        errors.push(
-          `Conversation ${target.objectId} is already claimed or already has a summary`,
+        skips.push(
+          `Conversation ${target.objectId} was already summarized or claimed by another job`,
         );
         continue;
       }
@@ -1084,6 +1105,9 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
             title: result.title,
             sourceRefs: result.sourceRefs as SummarySourceRefs | undefined,
           });
+        }
+        if (result.inference) {
+          inferenceRuns.push(result.inference as InferenceProvenance);
         }
       } else {
         if (target.objectId) {
@@ -1141,19 +1165,38 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   }
 
   if (processed === 0) {
+    if (errors.length === 0 && skipped > 0) {
+      // Everything raced with another job or was summarized meanwhile —
+      // nothing failed, there is simply no work left in this batch.
+      return {
+        success: true,
+        processed,
+        skipped,
+        skips,
+        summaries,
+        hasMore: hasMore ?? false,
+        message:
+          `All ${skipped} candidate(s) were already summarized or claimed by other jobs`,
+      };
+    }
     const firstError = errors[0] ?? "No conversation could be summarized";
     throw new Error(
       `Summarization processed 0 of ${targets.length} conversation(s); ${skipped} skipped or failed. ${firstError}`,
     );
   }
 
+  const inference = summarizeInferenceUsage(inferenceRuns);
   return {
     success: true,
     processed,
     skipped,
+    skips: skips.slice(0, 25),
     summaries,
     hasMore: hasMore ?? false,
     errors: errors.slice(0, 10),
+    // Compact routing summary so the jobs list can show the provider and
+    // model that actually served this job.
+    ...(inference ? { inference } : {}),
   };
 }
 
@@ -1179,6 +1222,12 @@ const capability: JobCapability = {
     hasMore: z.boolean().optional(),
     message: z.string().optional(),
     errors: z.array(z.string()).optional(),
+    skips: z.array(z.string()).optional().describe(
+      "Benign per-conversation skips (already summarized or claimed).",
+    ),
+    inference: z.record(z.string(), z.unknown()).optional().describe(
+      "Compact LLM routing summary: provider and model that served this job.",
+    ),
   })),
   policies: [
     { resource: "db/transcriptions", action: "read", effect: "allow" },
