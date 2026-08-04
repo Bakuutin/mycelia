@@ -34,15 +34,12 @@ describe("ApiClient", () => {
       const response = await client.fetch("/test");
 
       expect(response.ok).toBe(true);
-      expect((globalThis as any).fetch).toHaveBeenCalledWith(
-        "http://localhost:8000/test",
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            "Content-Type": "application/json",
-            "Authorization": "Bearer jwt-token",
-          }),
-        }),
-      );
+      const [url, init] = ((globalThis as any).fetch as any).mock.calls[0];
+      expect(url).toBe("http://localhost:8000/test");
+      // The client sends a Headers instance, not a plain object.
+      const headers = init.headers as Headers;
+      expect(headers.get("Content-Type")).toBe("application/json");
+      expect(headers.get("Authorization")).toBe("Bearer jwt-token");
     });
 
     it("throws error on failed request", async () => {
@@ -70,7 +67,7 @@ describe("ApiClient", () => {
       await client.fetch("/test");
 
       const callArgs = ((globalThis as any).fetch as any).mock.calls[0];
-      expect(callArgs[1].headers).not.toHaveProperty("Authorization");
+      expect((callArgs[1].headers as Headers).get("Authorization")).toBeNull();
     });
 
     it("merges custom headers with default headers", async () => {
@@ -85,16 +82,12 @@ describe("ApiClient", () => {
         headers: { "X-Custom-Header": "value" },
       });
 
-      expect((globalThis as any).fetch).toHaveBeenCalledWith(
-        "http://localhost:8000/test",
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            "Content-Type": "application/json",
-            "Authorization": "Bearer jwt-token",
-            "X-Custom-Header": "value",
-          }),
-        }),
-      );
+      const [url, init] = ((globalThis as any).fetch as any).mock.calls[0];
+      expect(url).toBe("http://localhost:8000/test");
+      const headers = init.headers as Headers;
+      expect(headers.get("Content-Type")).toBe("application/json");
+      expect(headers.get("Authorization")).toBe("Bearer jwt-token");
+      expect(headers.get("X-Custom-Header")).toBe("value");
     });
   });
 

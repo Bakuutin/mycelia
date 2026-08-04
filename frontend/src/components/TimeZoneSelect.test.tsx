@@ -9,7 +9,9 @@ describe("TimeZoneSelect", () => {
     useSettingsStore.setState({ favoriteTimeZones: [] });
   });
 
-  it("finds a time zone by city alias and returns the matched place", async () => {
+  // Typing through userEvent across the full tz list is slow when the whole
+  // suite runs in parallel; give it headroom beyond the default 5s.
+  it("finds a time zone by city alias and returns the matched place", { timeout: 20_000 }, async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const onPlaceSelect = vi.fn();

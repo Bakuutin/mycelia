@@ -44,7 +44,9 @@ export function formatTime(date: Date, format?: TimeFormat): string {
       });
 
     case "gregorian-local-european":
-      return date.toLocaleString("sv-SE", {
+      // en-GB yields dd/mm/yyyy; the ISO-style rendering already exists as
+      // gregorian-local-iso (sv-SE).
+      return date.toLocaleString("en-GB", {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
