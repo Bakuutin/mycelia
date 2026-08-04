@@ -1,4 +1,8 @@
 import { LLMResource } from "@/lib/llm/resource.server.ts";
+import {
+  getEnabledLlmProviders,
+  type ResolvedLlmProvider,
+} from "@/lib/llm/provider-routing.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import {
   classifyServiceResponse,
@@ -204,9 +208,11 @@ export async function getExternalServicesHealth(
 ): Promise<ExternalServiceHealth[]> {
   const transcriptionResource = new TranscriptionResource();
   const llmResource = new LLMResource();
-  const [sttProviders, llmProvider] = await Promise.all([
+  const [sttProviders, llmProviders] = await Promise.all([
     transcriptionResource.getInferenceProviders().catch(() => []),
-    llmResource.getInferenceProvider().catch(() => null),
+    llmResource.getInferenceProviders().catch(() =>
+      [] as ResolvedLlmProvider[]
+    ),
   ]);
   const fingerprint = JSON.stringify({
     stt: sttProviders.map((provider) => ({
@@ -216,10 +222,13 @@ export async function getExternalServicesHealth(
       model: provider.model,
       concurrency: provider.concurrency,
     })),
-    llm: llmProvider && {
-      baseUrl: llmProvider.baseUrl,
-      model: llmProvider.model,
-    },
+    llm: llmProviders.map((provider) => ({
+      id: provider.id,
+      enabled: provider.enabled,
+      baseUrl: provider.baseUrl,
+      model: provider.aliases[provider.defaultAlias],
+      priority: provider.priority,
+    })),
   });
   const now = Date.now();
   if (
@@ -313,19 +322,85 @@ export async function getExternalServicesHealth(
       : undefined,
   };
 
-  const services = [
-    sttService,
-    await probeProvider({
+  // Probe every enabled LLM route in parallel; the aggregate mirrors STT.
+  const enabledLlmProviders = getEnabledLlmProviders(llmProviders);
+  const allLlmRoutesDisabled = llmProviders.length > 0 &&
+    enabledLlmProviders.length === 0;
+  const llmRouteHealth = await Promise.all(
+    enabledLlmProviders.map((provider) =>
+      probeProvider({
+        id: "llm",
+        label: provider.name,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        source: provider.source,
+        providerProfileId: provider.id,
+        providerProfileName: provider.name,
+        model: provider.aliases[provider.defaultAlias],
+      })
+    ),
+  );
+  const healthyLlmRoutes = llmRouteHealth.filter((route) =>
+    route.status === "healthy"
+  );
+  const representativeLlm = healthyLlmRoutes[0] ??
+    llmRouteHealth.find((route) => route.status === "loading") ??
+    llmRouteHealth[0] ?? await probeProvider({
       id: "llm",
       label: "LLM inference",
-      baseUrl: llmProvider?.baseUrl,
-      apiKey: llmProvider?.apiKey,
-      source: Deno.env.get("OPENAI_BASE_URL") ? "llm_env" : "server_config",
-      providerProfileId: llmProvider?.profileId,
-      providerProfileName: llmProvider?.profileName,
-      model: llmProvider?.model,
-    }),
-  ];
+    });
+  const llmService: ExternalServiceHealth = {
+    ...representativeLlm,
+    label: enabledLlmProviders.length > 1
+      ? `LLM inference (${enabledLlmProviders.length} routes)`
+      : "LLM inference",
+    status: allLlmRoutesDisabled
+      ? "disabled"
+      : healthyLlmRoutes.length > 0
+      ? "healthy"
+      : representativeLlm.status,
+    configured: enabledLlmProviders.length > 0,
+    providerProfileId: enabledLlmProviders.length > 1
+      ? undefined
+      : representativeLlm.providerProfileId,
+    providerProfileName: enabledLlmProviders.length > 1
+      ? `${healthyLlmRoutes.length}/${enabledLlmProviders.length} healthy`
+      : representativeLlm.providerProfileName,
+    models: [
+      ...new Set(llmRouteHealth.flatMap((route) => route.models ?? [])),
+    ],
+    message: allLlmRoutesDisabled
+      ? "All LLM routes are disabled; no health probe was sent."
+      : enabledLlmProviders.length > 1
+      ? `${healthyLlmRoutes.length}/${enabledLlmProviders.length} enabled LLM routes healthy`
+      : representativeLlm.message,
+    routes: llmProviders.length > 0
+      ? llmProviders.map((provider) => {
+        const route = llmRouteHealth.find((candidate) =>
+          candidate.providerProfileId === provider.id
+        );
+        return {
+          providerProfileId: provider.id,
+          providerProfileName: provider.name,
+          status: provider.enabled
+            ? route?.status ?? "unavailable"
+            : "disabled" as const,
+          enabled: provider.enabled,
+          model: route?.models?.find((model) =>
+            model === provider.aliases[provider.defaultAlias]
+          ) ?? provider.aliases[provider.defaultAlias] ?? route?.models?.[0],
+          priority: provider.priority,
+          concurrency: provider.concurrency,
+          latencyMs: route?.latencyMs,
+          message: provider.enabled
+            ? route?.message ?? "Provider health is unavailable"
+            : "Disabled for new LLM requests; no health probe was sent.",
+        };
+      })
+      : undefined,
+  };
+
+  const services = [sttService, llmService];
 
   cached = { checkedAt: now, fingerprint, services };
   return services;
