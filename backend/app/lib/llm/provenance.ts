@@ -54,6 +54,8 @@ export type InferenceUsageSummary = {
     providerProfileName?: string;
     resolvedModel?: string;
     calls: number;
+    // True when this group's calls ran on the configured fallback model.
+    fallback?: boolean;
   }>;
 };
 
@@ -65,24 +67,32 @@ export function summarizeInferenceUsage(
   );
   if (relevant.length === 0) return undefined;
 
-  // Batches can hit different providers per call (a saturated route
-  // overflows by priority). Group the calls so the summary reports the
-  // most-used provider and flags mixed usage instead of pretending the
-  // whole job ran on whichever provider happened to serve the last call.
+  // Batches can hit different providers and models per call (a saturated
+  // route overflows by priority; a failed model retries on its fallback).
+  // Group by provider AND executed model so partial fallback inside one
+  // provider stays visible, and report the most-used group up top instead
+  // of pretending the whole job ran on whichever served the last call.
   const groups = new Map<string, {
     last: InferenceProvenance;
     calls: number;
+    fallbackCalls: number;
   }>();
   for (const provenance of relevant) {
-    const key = provenance.providerProfileId ??
+    const providerKey = provenance.providerProfileId ??
       provenance.providerProfileName ?? provenance.providerBaseUrl ??
       "unknown";
+    const key = `${providerKey}::${provenance.resolvedModel ?? ""}`;
     const group = groups.get(key);
     if (group) {
       group.calls += 1;
+      group.fallbackCalls += provenance.fallbackUsed ? 1 : 0;
       group.last = provenance;
     } else {
-      groups.set(key, { last: provenance, calls: 1 });
+      groups.set(key, {
+        last: provenance,
+        calls: 1,
+        fallbackCalls: provenance.fallbackUsed ? 1 : 0,
+      });
     }
   }
   const byProvider = [...groups.values()]
@@ -92,6 +102,7 @@ export function summarizeInferenceUsage(
       providerProfileName: group.last.providerProfileName,
       resolvedModel: group.last.resolvedModel,
       calls: group.calls,
+      ...(group.fallbackCalls === group.calls ? { fallback: true } : {}),
     }));
   const dominant = byProvider[0];
   const dominantLast = [...groups.values()]

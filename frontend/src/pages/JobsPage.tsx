@@ -61,6 +61,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
@@ -203,6 +216,7 @@ type JobInferenceUsage = {
     providerProfileName?: string;
     resolvedModel?: string;
     calls: number;
+    fallback?: boolean;
   }>;
 };
 type LlmProfile = {
@@ -217,6 +231,57 @@ type LlmProfile = {
   priority?: number;
   concurrency?: number;
 };
+type InferenceFilter = { kind: "provider" | "model" | "alias"; value: string };
+
+// Every provider/model/alias name a job's routing data mentions, for the
+// jobs-list inference filter. Covers actual usage (result/progress),
+// per-provider breakdowns and the enqueue-time snapshot.
+function getJobInferenceFacets(job: JobInfo): {
+  providers: Set<string>;
+  models: Set<string>;
+  aliases: Set<string>;
+} {
+  const providers = new Set<string>();
+  const models = new Set<string>();
+  const aliases = new Set<string>();
+  // Non-LLM jobs still carry an enqueue-time routing snapshot; they never
+  // call a provider, so they must not match inference filters.
+  if (!LLM_JOB_TYPES.has(job.type)) {
+    return { providers, models, aliases };
+  }
+  const addModel = (value?: string) => {
+    if (!value) return;
+    if (value === "small" || value === "medium" || value === "large") {
+      aliases.add(value);
+    } else {
+      models.add(value);
+    }
+  };
+  const addUsage = (usage?: JobInferenceUsage) => {
+    if (!usage) return;
+    if (usage.providerProfileName) providers.add(usage.providerProfileName);
+    addModel(usage.requestedModel);
+    addModel(usage.resolvedModel);
+    addModel(usage.responseModel);
+    for (const entry of usage.byProvider ?? []) {
+      if (entry.providerProfileName) providers.add(entry.providerProfileName);
+      addModel(entry.resolvedModel);
+    }
+  };
+  addUsage(job.result?.inference as JobInferenceUsage | undefined);
+  addUsage(job.progress?.inference as JobInferenceUsage | undefined);
+  // The enqueue-time snapshot is only a plan; once actual usage is recorded
+  // it supersedes the plan so filters match what really served the job.
+  if (providers.size === 0 && models.size === 0 && aliases.size === 0) {
+    if (job.routingContext?.providerProfileName) {
+      providers.add(job.routingContext.providerProfileName);
+    }
+    addModel(job.routingContext?.model);
+  }
+  if (typeof job.data?.model === "string") addModel(job.data.model);
+  return { providers, models, aliases };
+}
+
 type InferenceRoutingConfig = {
   llmProfiles?: {
     activeProfileId?: string;
@@ -1203,6 +1268,10 @@ export default function JobsPage() {
   const [serviceTestResults, setServiceTestResults] = useState<
     Partial<Record<"stt" | "llm", string>>
   >({});
+  const [inferenceFilter, setInferenceFilter] = useState<
+    InferenceFilter | null
+  >(null);
+  const [inferenceFilterOpen, setInferenceFilterOpen] = useState(false);
   const [intervalDrafts, setIntervalDrafts] = useState<
     Record<string, string>
   >({});
@@ -2278,6 +2347,33 @@ export default function JobsPage() {
     }
   };
 
+  // Facet options for the inference filter, with occurrence counts across
+  // the currently loaded jobs.
+  const inferenceFilterOptions = useMemo(() => {
+    const providers = new Map<string, number>();
+    const models = new Map<string, number>();
+    const aliases = new Map<string, number>();
+    for (const job of jobs) {
+      const facets = getJobInferenceFacets(job);
+      for (const name of facets.providers) {
+        providers.set(name, (providers.get(name) ?? 0) + 1);
+      }
+      for (const name of facets.models) {
+        models.set(name, (models.get(name) ?? 0) + 1);
+      }
+      for (const name of facets.aliases) {
+        aliases.set(name, (aliases.get(name) ?? 0) + 1);
+      }
+    }
+    const sorted = (map: Map<string, number>) =>
+      [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return {
+      providers: sorted(providers),
+      models: sorted(models),
+      aliases: sorted(aliases),
+    };
+  }, [jobs]);
+
   const filteredJobs = useMemo(() => {
     let result = jobs;
 
@@ -2311,6 +2407,20 @@ export default function JobsPage() {
         j.id.toLowerCase().includes(query) ||
         j.type.toLowerCase().includes(query)
       );
+    }
+
+    // Apply inference (provider/model/alias) filter
+    if (inferenceFilter) {
+      result = result.filter((job) => {
+        const facets = getJobInferenceFacets(job);
+        if (inferenceFilter.kind === "provider") {
+          return facets.providers.has(inferenceFilter.value);
+        }
+        if (inferenceFilter.kind === "alias") {
+          return facets.aliases.has(inferenceFilter.value);
+        }
+        return facets.models.has(inferenceFilter.value);
+      });
     }
 
     // Apply hide empty filter
@@ -2381,6 +2491,7 @@ export default function JobsPage() {
     filterTypes,
     filterStatuses,
     searchQuery,
+    inferenceFilter,
     limit,
     sortColumn,
     sortDirection,
@@ -2492,6 +2603,7 @@ export default function JobsPage() {
       !allTypesSelected ||
       filterStatuses.size !== ALL_STATUSES.length ||
       searchQuery !== "" ||
+      inferenceFilter !== null ||
       hideEmpty
     );
   }, [
@@ -2499,9 +2611,54 @@ export default function JobsPage() {
     allTypesSelected,
     filterStatuses.size,
     searchQuery,
+    inferenceFilter,
     hideEmpty,
     ALL_STATUSES.length,
   ]);
+
+  // Toggle the inference filter; clicking the same value clears it.
+  const toggleInferenceFilter = (
+    kind: InferenceFilter["kind"],
+    value: string | undefined,
+  ) => {
+    if (!value) return;
+    setInferenceFilter((current) =>
+      current && current.kind === kind && current.value === value
+        ? null
+        : { kind, value }
+    );
+  };
+
+  // Clickable facet in a job row's routing sub-line; clicking toggles the
+  // inference filter (mirrors clicking a worker type to filter by it).
+  const inferenceChip = (
+    kind: InferenceFilter["kind"],
+    value: string | undefined,
+    label?: string,
+  ) =>
+    value
+      ? (
+        <span
+          className="cursor-pointer hover:text-primary hover:underline"
+          title={`Filter jobs by ${kind}: ${value}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleInferenceFilter(kind, value);
+          }}
+        >
+          {label ?? value}
+        </span>
+      )
+      : null;
+
+  const modelChip = (value: string | undefined, label?: string) =>
+    inferenceChip(
+      value === "small" || value === "medium" || value === "large"
+        ? "alias"
+        : "model",
+      value,
+      label,
+    );
 
   // Clear all filters
   const clearFilters = () => {
@@ -2510,6 +2667,7 @@ export default function JobsPage() {
     setFilterTypes(new Set());
     setFilterStatuses(new Set(ALL_STATUSES));
     setSearchQuery("");
+    setInferenceFilter(null);
     const newParams = new URLSearchParams(searchParams);
     newParams.delete("type");
     newParams.delete("hideEmpty");
@@ -3853,6 +4011,107 @@ export default function JobsPage() {
               </DropdownMenuContent>
             </DropdownMenu>
 
+            <Popover
+              open={inferenceFilterOpen}
+              onOpenChange={setInferenceFilterOpen}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-[230px] justify-between"
+                  title="Filter jobs by LLM provider, model or alias"
+                >
+                  <span className="truncate">
+                    {inferenceFilter
+                      ? `${inferenceFilter.kind}: ${inferenceFilter.value}`
+                      : "Provider / model"}
+                  </span>
+                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[320px] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search provider, model or alias…" />
+                  <CommandList>
+                    <CommandEmpty>Nothing matches.</CommandEmpty>
+                    {inferenceFilter && (
+                      <CommandGroup>
+                        <CommandItem
+                          value="__clear"
+                          onSelect={() => {
+                            setInferenceFilter(null);
+                            setInferenceFilterOpen(false);
+                          }}
+                        >
+                          Clear filter ({inferenceFilter.kind}:{" "}
+                          {inferenceFilter.value})
+                        </CommandItem>
+                      </CommandGroup>
+                    )}
+                    {inferenceFilterOptions.providers.length > 0 && (
+                      <CommandGroup heading="Providers">
+                        {inferenceFilterOptions.providers.map((
+                          [name, count],
+                        ) => (
+                          <CommandItem
+                            key={`provider-${name}`}
+                            value={`provider ${name}`}
+                            onSelect={() => {
+                              toggleInferenceFilter("provider", name);
+                              setInferenceFilterOpen(false);
+                            }}
+                          >
+                            <span className="truncate">{name}</span>
+                            <span className="ml-auto text-xs text-muted-foreground">
+                              {count}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {inferenceFilterOptions.aliases.length > 0 && (
+                      <CommandGroup heading="Aliases">
+                        {inferenceFilterOptions.aliases.map(([name, count]) => (
+                          <CommandItem
+                            key={`alias-${name}`}
+                            value={`alias ${name}`}
+                            onSelect={() => {
+                              toggleInferenceFilter("alias", name);
+                              setInferenceFilterOpen(false);
+                            }}
+                          >
+                            <span className="truncate">{name}</span>
+                            <span className="ml-auto text-xs text-muted-foreground">
+                              {count}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {inferenceFilterOptions.models.length > 0 && (
+                      <CommandGroup heading="Models">
+                        {inferenceFilterOptions.models.map(([name, count]) => (
+                          <CommandItem
+                            key={`model-${name}`}
+                            value={`model ${name}`}
+                            onSelect={() => {
+                              toggleInferenceFilter("model", name);
+                              setInferenceFilterOpen(false);
+                            }}
+                          >
+                            <span className="truncate">{name}</span>
+                            <span className="ml-auto text-xs text-muted-foreground">
+                              {count}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -4063,18 +4322,51 @@ export default function JobsPage() {
                         )}
                         {LLM_JOB_TYPES.has(job.type) && (() => {
                           // Completed jobs report the provider and model that
-                          // actually served them; queued jobs show the route
-                          // expected to serve the requested alias or model.
+                          // actually served them; active jobs stream their
+                          // current route through progress; queued jobs show
+                          // the route expected to serve the request.
                           // Chunk-creator jobs make no LLM calls themselves —
                           // they only snapshot the model for extraction.
                           const isSnapshotOnly =
                             job.type === "conversation_chunk_creator";
-                          // Active jobs stream their current route through
-                          // progress; completed jobs carry it in the result.
                           const inference = (job.result?.inference ??
                             job.progress?.inference) as
                               | JobInferenceUsage
                               | undefined;
+                          const isCompleted = Boolean(job.result?.inference);
+                          if (
+                            inference?.mixed && inference.byProvider
+                          ) {
+                            // Calls were served by several provider/model
+                            // groups; show the breakdown with per-group
+                            // fallback markers, every part clickable.
+                            return (
+                              <div
+                                className="text-[10px] font-normal text-muted-foreground"
+                                title="Calls in this job were served by several routes (saturated routes overflow by priority; failed models retry on their fallback)"
+                              >
+                                {inference.byProvider.map((entry, index) => (
+                                  <span key={index}>
+                                    {index > 0 ? " + " : ""}
+                                    {inferenceChip(
+                                      "provider",
+                                      entry.providerProfileName ||
+                                        entry.providerProfileId,
+                                    )}
+                                    {` ×${entry.calls}`}
+                                    {entry.resolvedModel && (
+                                      <>
+                                        {" ("}
+                                        {modelChip(entry.resolvedModel)}
+                                        {entry.fallback ? ", fallback" : ""}
+                                        {")"}
+                                      </>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          }
                           if (
                             inference?.resolvedModel ||
                             inference?.providerProfileName
@@ -4082,47 +4374,57 @@ export default function JobsPage() {
                             const requested = inference.requestedModel;
                             const resolved = inference.resolvedModel;
                             const served = inference.responseModel;
-                            let modelLabel =
-                              requested && resolved && requested !== resolved
-                                ? `${requested} → ${resolved}`
-                                : resolved || requested;
-                            // A provider that silently substitutes its loaded
-                            // model is surfaced explicitly.
-                            if (
-                              served && resolved && served !== resolved
-                            ) {
-                              modelLabel = `${modelLabel} (served ${served})`;
-                            }
-                            if (inference.mixed && inference.byProvider) {
-                              // Calls in this job were served by several
-                              // providers; show the full breakdown.
+                            if (isCompleted) {
+                              // Completed jobs show only what actually ran:
+                              // the executed model, with a fallback marker
+                              // when the whole job ran on the fallback.
                               return (
                                 <div
                                   className="text-[10px] font-normal text-muted-foreground"
-                                  title="Calls in this job were served by several providers (saturated routes overflow by priority)"
+                                  title="LLM provider and model that served this job"
                                 >
-                                  {inference.byProvider.map((entry) =>
-                                    `${
-                                      entry.providerProfileName ||
-                                      entry.providerProfileId
-                                    } ×${entry.calls}${
-                                      entry.resolvedModel
-                                        ? ` (${entry.resolvedModel})`
-                                        : ""
-                                    }`
-                                  ).join(" + ")}
-                                  {inference.fallbackUsed ? " · fallback" : ""}
+                                  {inferenceChip(
+                                    "provider",
+                                    inference.providerProfileName ||
+                                      inference.providerProfileId,
+                                  )}
+                                  {" · "}
+                                  {modelChip(resolved || requested)}
+                                  {inference.fallbackUsed ? " (fallback)" : ""}
+                                  {served && resolved && served !== resolved &&
+                                    (
+                                      <>
+                                        {" (served "}
+                                        {modelChip(served)}
+                                        {")"}
+                                      </>
+                                    )}
                                 </div>
                               );
                             }
+                            // Active jobs keep the requested → resolved
+                            // notation streamed through progress.
                             return (
                               <div
                                 className="text-[10px] font-normal text-muted-foreground"
-                                title="LLM provider and model that served this job"
+                                title="LLM provider and model currently serving this job"
                               >
-                                {inference.providerProfileName ||
-                                  inference.providerProfileId}
-                                {modelLabel ? ` · ${modelLabel}` : ""}
+                                {inferenceChip(
+                                  "provider",
+                                  inference.providerProfileName ||
+                                    inference.providerProfileId,
+                                )}
+                                {" · "}
+                                {requested && resolved &&
+                                    requested !== resolved
+                                  ? (
+                                    <>
+                                      {modelChip(requested)}
+                                      {" → "}
+                                      {modelChip(resolved)}
+                                    </>
+                                  )
+                                  : modelChip(resolved || requested)}
                                 {inference.fallbackUsed ? " · fallback" : ""}
                                 {inference.failoverUsed ? " · failover" : ""}
                               </div>
@@ -4158,17 +4460,20 @@ export default function JobsPage() {
                           const resolved = requested && isAlias
                             ? planned?.aliases[requested as ModelAlias]
                             : undefined;
-                          const modelLabel = resolved
-                            ? `${requested} → ${resolved}`
-                            : requested;
                           if (isSnapshotOnly) {
                             return (
                               <div
                                 className="text-[10px] font-normal text-muted-foreground"
                                 title="Model snapshotted for later conversation extraction; this job makes no LLM calls"
                               >
-                                extraction model
-                                {modelLabel ? ` · ${modelLabel}` : ""}
+                                {"extraction model · "}
+                                {modelChip(requested)}
+                                {resolved && (
+                                  <>
+                                    {" → "}
+                                    {modelChip(resolved)}
+                                  </>
+                                )}
                               </div>
                             );
                           }
@@ -4177,9 +4482,22 @@ export default function JobsPage() {
                               className="text-[10px] font-normal text-muted-foreground"
                               title="Planned LLM route; requests may fail over by priority"
                             >
-                              {planned?.name ||
-                                context?.providerProfileName || "LLM route"}
-                              {modelLabel ? ` · ${modelLabel}` : ""}
+                              {inferenceChip(
+                                "provider",
+                                planned?.name || context?.providerProfileName,
+                              ) || "LLM route"}
+                              {requested && (
+                                <>
+                                  {" · "}
+                                  {modelChip(requested)}
+                                </>
+                              )}
+                              {resolved && (
+                                <>
+                                  {" → "}
+                                  {modelChip(resolved)}
+                                </>
+                              )}
                             </div>
                           );
                         })()}
