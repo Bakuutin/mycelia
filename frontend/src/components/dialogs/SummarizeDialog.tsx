@@ -100,10 +100,15 @@ export function SummarizeDialog({
             typeof workerDefaultsData?.defaults?.model === "string"
               ? workerDefaultsData.defaults.model.trim()
               : "";
-          const activeProfile = config?.llmProfiles?.profiles.find((profile) =>
-            profile.id === config.llmProfiles?.activeProfileId
-          );
-          const inferenceDefault = workerModel || activeProfile?.defaultAlias ||
+          // The highest-priority enabled profile supplies the default alias.
+          const primaryProfile = config?.llmProfiles?.profiles
+            .filter((profile) => profile.enabled)
+            .sort((a, b) =>
+              a.priority - b.priority || a.name.localeCompare(b.name) ||
+              a.id.localeCompare(b.id)
+            )[0];
+          const inferenceDefault = workerModel ||
+            primaryProfile?.defaultAlias ||
             config?.llm?.model || config?.inference?.model || defaultModel;
           const inferenceSource = workerModel
             ? "Summaries route"
