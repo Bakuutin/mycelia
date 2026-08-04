@@ -9,9 +9,11 @@ import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
 import {
-  normalizeOpenAIBaseUrl,
-  resolveConfiguredModel,
-} from "@/lib/llm/model-routing.ts";
+  getEnabledLlmProviders,
+  resolveProviderModel,
+  selectLlmProviders,
+} from "@/lib/llm/provider-routing.ts";
+import { normalizeOpenAIBaseUrl } from "@/lib/llm/model-routing.ts";
 import { ObjectId } from "bson";
 
 const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
@@ -123,6 +125,15 @@ export async function apiChatHandler(req: Request, res: Response) {
 
   let { messages, chatId } = req.body;
   let selectedChatModel: string | undefined;
+  // Explicit provider pin from the model picker. null clears an earlier pin;
+  // undefined leaves the stored per-chat pin untouched.
+  const rawProviderProfileId = req.body?.providerProfileId;
+  const selectedProviderProfileId: string | null | undefined =
+    typeof rawProviderProfileId === "string" && rawProviderProfileId.trim()
+      ? rawProviderProfileId.trim().slice(0, 120)
+      : rawProviderProfileId === null
+      ? null
+      : undefined;
   try {
     selectedChatModel = normalizeChatModel(req.body?.model);
   } catch (error) {
@@ -249,6 +260,8 @@ export async function apiChatHandler(req: Request, res: Response) {
 
   let activeChatId: string | undefined = chatId;
   let chatModel = selectedChatModel;
+  let chatProviderProfileId: string | undefined =
+    selectedProviderProfileId ?? undefined;
   let isNewChat = false;
 
   if (!activeChatId) {
@@ -263,6 +276,9 @@ export async function apiChatHandler(req: Request, res: Response) {
         title: "New Chat", // This might be renamed later by AI or user
         name: "New Chat", // Align with new schema 'name'
         ...(chatModel ? { model: chatModel } : {}),
+        ...(selectedProviderProfileId
+          ? { providerProfileId: selectedProviderProfileId }
+          : {}),
         platform: "mycelia",
         externalId: newChatId.toString(),
         type: "private",
@@ -287,12 +303,32 @@ export async function apiChatHandler(req: Request, res: Response) {
       return;
     }
     chatModel = selectedChatModel || chat.model;
-    if (selectedChatModel && selectedChatModel !== chat.model) {
+    chatProviderProfileId = selectedProviderProfileId === undefined
+      ? (typeof chat.providerProfileId === "string"
+        ? chat.providerProfileId
+        : undefined)
+      : selectedProviderProfileId ?? undefined;
+    const pinChanged = selectedProviderProfileId !== undefined &&
+      (selectedProviderProfileId ?? undefined) !==
+        (typeof chat.providerProfileId === "string"
+          ? chat.providerProfileId
+          : undefined);
+    if ((selectedChatModel && selectedChatModel !== chat.model) || pinChanged) {
       await mongo({
         action: "updateOne",
         collection: "chats",
         query: { _id: new ObjectId(activeChatId.toString()) },
-        update: { $set: { model: selectedChatModel } },
+        update: {
+          $set: {
+            ...(selectedChatModel ? { model: selectedChatModel } : {}),
+            ...(selectedProviderProfileId
+              ? { providerProfileId: selectedProviderProfileId }
+              : {}),
+          },
+          ...(selectedProviderProfileId === null
+            ? { $unset: { providerProfileId: "" } }
+            : {}),
+        },
       });
     }
   }
@@ -357,10 +393,13 @@ export async function apiChatHandler(req: Request, res: Response) {
     console.warn("Failed to load system prompt from config, using default.", e);
   }
 
-  // Get inference provider using stateless env vars first, MongoDB fallback
+  // Model-aware provider routing: the chat request goes to the provider that
+  // can actually serve the requested model — an explicitly pinned provider
+  // wins, then providers advertising the model, then priority order.
   const llmResource = new LLMResource();
-  const inference = await llmResource.getInferenceProvider();
-  if (!inference?.baseUrl || !inference?.apiKey) {
+  const allProviders = await llmResource.getInferenceProviders();
+  const enabledProviders = getEnabledLlmProviders(allProviders);
+  if (enabledProviders.length === 0) {
     console.error("[apiChatHandler] Inference provider is not configured", {
       requestId,
       chatId: activeChatId,
@@ -375,20 +414,58 @@ export async function apiChatHandler(req: Request, res: Response) {
     return;
   }
 
-  // A per-chat override wins. Chats without one inherit the active provider
-  // preset's chat default once, so later preset changes do not silently alter
-  // existing conversations.
-  const baseModel = Deno.env.get("BASE_MODEL");
-  const requestedModel = chatModel || inference.chatModel ||
-    inference.defaultAlias ||
-    inference.model || baseModel || "medium";
-  const actualModel = resolveConfiguredModel(requestedModel, {
-    defaultModel: inference.model,
-    baseModel,
-    smallModel: inference.smallModel || Deno.env.get("MODEL_SMALL"),
-    mediumModel: inference.mediumModel || Deno.env.get("MODEL_MEDIUM"),
-    largeModel: inference.largeModel || Deno.env.get("MODEL_LARGE"),
-  });
+  // A per-chat override wins. Chats without one inherit the primary
+  // provider's chat default once, so later preset changes do not silently
+  // alter existing conversations.
+  const primaryProvider = enabledProviders[0];
+  const requestedModel = chatModel || primaryProvider.chatModel ||
+    primaryProvider.defaultAlias || "medium";
+
+  let chatProvider = selectLlmProviders(allProviders, requestedModel)[0];
+  if (chatProviderProfileId) {
+    const pinnedProvider = allProviders.find((provider) =>
+      provider.id === chatProviderProfileId
+    );
+    if (!pinnedProvider) {
+      res.status(400).json({
+        error:
+          `The provider pinned to this chat no longer exists. Pick a model again in the model selector.`,
+        model: requestedModel,
+        requestId,
+      });
+      return;
+    }
+    if (!pinnedProvider.enabled) {
+      res.status(400).json({
+        error:
+          `Provider "${pinnedProvider.name}" is disabled. Enable it in Settings → Inference or pick a model from another provider.`,
+        model: requestedModel,
+        requestId,
+      });
+      return;
+    }
+    chatProvider = pinnedProvider;
+  }
+  if (!chatProvider) {
+    res.status(400).json({
+      error:
+        `No enabled LLM provider can serve model "${requestedModel}". Check alias mappings in Settings → Inference or pick another model.`,
+      model: requestedModel,
+      requestId,
+    });
+    return;
+  }
+  const resolvedChatModel = resolveProviderModel(requestedModel, chatProvider);
+  if (!resolvedChatModel) {
+    res.status(400).json({
+      error:
+        `Provider "${chatProvider.name}" has no model mapped for "${requestedModel}". Map the alias in Settings → Inference or pick a concrete model.`,
+      model: requestedModel,
+      requestId,
+    });
+    return;
+  }
+  const actualModel = resolvedChatModel;
 
   if (!chatModel) {
     await mongo({
@@ -400,12 +477,16 @@ export async function apiChatHandler(req: Request, res: Response) {
     chatModel = requestedModel;
   }
   res.setHeader("X-Mycelia-Model", actualModel);
+  res.setHeader("X-Mycelia-Provider", chatProvider.name);
 
   console.info("[apiChatHandler] Starting chat request", {
     requestId,
     chatId: activeChatId,
     requestedModel,
     actualModel,
+    providerProfileId: chatProvider.id,
+    providerProfileName: chatProvider.name,
+    pinned: Boolean(chatProviderProfileId),
   });
 
   let assistantPersonIdPromise: Promise<ObjectId> | undefined;
@@ -445,6 +526,8 @@ export async function apiChatHandler(req: Request, res: Response) {
           content,
           requestedModel,
           model: actualModel,
+          providerProfileId: chatProvider.id,
+          providerProfileName: chatProvider.name,
           requestId,
           ...extraRaw,
         },
@@ -462,8 +545,8 @@ export async function apiChatHandler(req: Request, res: Response) {
   try {
     const stream = streamText({
       model: createOpenAI({
-        baseURL: normalizeOpenAIBaseUrl(inference.baseUrl),
-        apiKey: inference.apiKey,
+        baseURL: normalizeOpenAIBaseUrl(chatProvider.baseUrl),
+        apiKey: chatProvider.apiKey,
       }).chat(actualModel),
       tools,
       stopWhen: stepCountIs(5),

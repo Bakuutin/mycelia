@@ -85,6 +85,8 @@ const chatCompletionRequestSchema = z.object({
   // Sent only to OpenRouter. A stable value makes its provider routing sticky,
   // which keeps a provider-side prompt cache warm across related requests.
   session_id: z.string().trim().min(1).max(128).optional(),
+  // Restrict routing to one provider profile (no cross-provider failover).
+  provider_profile_id: z.string().trim().min(1).max(120).optional(),
   fallbackModel: z.string().optional(),
   reasoning_budget: z.number().int().min(-1).optional(),
   chat_template_kwargs: z.record(z.string(), z.unknown()).optional(),
@@ -422,10 +424,26 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             action,
             fallbackModel: _fallbackModel,
             session_id: requestedSessionId,
+            provider_profile_id: pinnedProviderProfileId,
             ...body
           } = input;
 
-          const allProviders = await this.getInferenceProviders();
+          let allProviders = await this.getInferenceProviders();
+          if (pinnedProviderProfileId) {
+            allProviders = allProviders.filter((provider) =>
+              provider.id === pinnedProviderProfileId
+            );
+            if (allProviders.length === 0) {
+              llmErrorsCounter.add(1, {
+                error_type: "provider_not_configured",
+                model: input.model,
+              });
+              span.setStatus({ code: 2, message: "Pinned provider missing" });
+              throw new Error(
+                `LLM provider profile not found: ${pinnedProviderProfileId}`,
+              );
+            }
+          }
           // The failover chain: enabled providers that can serve the
           // requested alias or explicit model, in priority order.
           const chain = selectLlmProviders(allProviders, input.model);

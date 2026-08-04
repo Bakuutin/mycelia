@@ -51,6 +51,7 @@ import { ModelSelector } from "@/components/ModelSelector";
 interface ChatMessageMetadata {
   requestedModel?: string;
   model?: string;
+  providerProfileId?: string;
   requestId?: string;
   finishReason?: string;
   error?: {
@@ -67,6 +68,8 @@ type MemoryChatMessage = UIMessage<ChatMessageMetadata> & {
 type MemoryChat = Chat & {
   title?: string;
   model?: string;
+  // Provider the chat's model is pinned to; absent means automatic routing.
+  providerProfileId?: string;
 };
 
 interface ChatErrorState {
@@ -443,6 +446,9 @@ export default function ChatPage() {
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [defaultChatModel, setDefaultChatModel] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedProviderId, setSelectedProviderId] = useState<
+    string | undefined
+  >(undefined);
   const [resolvedAliases, setResolvedAliases] = useState<
     Record<string, string>
   >({});
@@ -496,12 +502,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (!chatId) {
       setSelectedModel(defaultChatModel);
+      setSelectedProviderId(undefined);
       return;
     }
 
     const selectedChat = chats.find((item) => item._id.toString() === chatId);
     if (selectedChat) {
       setSelectedModel(selectedChat.model || defaultChatModel);
+      setSelectedProviderId(selectedChat.providerProfileId || undefined);
     }
   }, [chatId, chats, defaultChatModel]);
 
@@ -623,6 +631,9 @@ export default function ChatPage() {
           body: {
             chatId,
             ...(selectedModel ? { model: selectedModel } : {}),
+            // Pin the request to the provider the model was picked from;
+            // absent means routing chooses by priority/availability.
+            providerProfileId: selectedProviderId ?? null,
           },
         },
       );
@@ -653,12 +664,20 @@ export default function ChatPage() {
     setChatError(null);
   };
 
-  const handleModelChange = async (model: string) => {
+  const handleModelChange = async (
+    model: string,
+    providerProfileId?: string,
+  ) => {
     const nextModel = model.trim();
-    if (!nextModel || nextModel === selectedModel) return;
+    if (!nextModel) return;
+    if (
+      nextModel === selectedModel && providerProfileId === selectedProviderId
+    ) return;
 
     const previousModel = selectedModel;
+    const previousProviderId = selectedProviderId;
     setSelectedModel(nextModel);
+    setSelectedProviderId(providerProfileId);
     setChatError(null);
 
     if (!chatId) return;
@@ -668,15 +687,23 @@ export default function ChatPage() {
         action: "updateOne",
         collection: "chats",
         query: { _id: new ObjectId(chatId) },
-        update: { $set: { model: nextModel } },
+        update: providerProfileId
+          ? { $set: { model: nextModel, providerProfileId } }
+          : {
+            $set: { model: nextModel },
+            $unset: { providerProfileId: "" },
+          },
       });
       setChats((current) =>
         current.map((item) =>
-          item._id.toString() === chatId ? { ...item, model: nextModel } : item
+          item._id.toString() === chatId
+            ? { ...item, model: nextModel, providerProfileId }
+            : item
         )
       );
     } catch (error) {
       setSelectedModel(previousModel);
+      setSelectedProviderId(previousProviderId);
       setChatError({
         message: error instanceof Error
           ? `Could not save the selected model: ${error.message}`
@@ -760,7 +787,11 @@ export default function ChatPage() {
               <div className="w-full sm:w-[320px]">
                 <ModelSelector
                   value={selectedModel}
-                  onChange={(model) => void handleModelChange(model)}
+                  onChange={() => {}}
+                  groupByProvider
+                  providerValue={selectedProviderId}
+                  onSelectWithProvider={(model, providerProfileId) =>
+                    void handleModelChange(model, providerProfileId)}
                   disabled={chat.status === "streaming" ||
                     chat.status === "submitted"}
                   placeholder="Use configured chat default"

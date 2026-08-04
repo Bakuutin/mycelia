@@ -26,6 +26,15 @@ const MODEL_CATEGORIES = [
   { value: "large", label: "Large", hint: "Most capable" },
 ];
 
+type ProviderListing = {
+  id: string;
+  name: string;
+  enabled?: boolean;
+  priority?: number;
+  models?: string[];
+  error?: string;
+};
+
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -34,6 +43,12 @@ interface ModelSelectorProps {
   className?: string;
   prefetch?: boolean;
   availableModels?: string[];
+  // Chat-style selection: group models under their provider and report which
+  // provider the chosen model should be pinned to. Aliases report undefined
+  // (routing picks the best provider automatically).
+  groupByProvider?: boolean;
+  providerValue?: string;
+  onSelectWithProvider?: (model: string, providerProfileId?: string) => void;
 }
 
 export function ModelSelector({
@@ -44,9 +59,15 @@ export function ModelSelector({
   className,
   prefetch = false,
   availableModels,
+  groupByProvider = false,
+  providerValue,
+  onSelectWithProvider,
 }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<string[]>([]);
+  const [providerListings, setProviderListings] = useState<ProviderListing[]>(
+    [],
+  );
   const [loading, setLoading] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -57,8 +78,14 @@ export function ModelSelector({
     try {
       const response = await callResource("llm", { action: "list" }) as {
         models?: unknown;
+        providers?: ProviderListing[];
       };
       setModels(extractModelIds(response.models));
+      setProviderListings(
+        Array.isArray(response.providers)
+          ? response.providers.filter((provider) => provider.enabled !== false)
+          : [],
+      );
       setLoadedOnce(true);
     } catch (e) {
       console.error("Failed to fetch models:", e);
@@ -90,8 +117,11 @@ export function ModelSelector({
     if (!value) return placeholder;
     const category = MODEL_CATEGORIES.find((c) => c.value === value);
     if (category) return `${category.label} (${category.hint})`;
-    return value;
-  }, [value, placeholder]);
+    const pinnedProvider = providerValue
+      ? providerListings.find((provider) => provider.id === providerValue)
+      : undefined;
+    return pinnedProvider ? `${value} @ ${pinnedProvider.name}` : value;
+  }, [value, placeholder, providerValue, providerListings]);
 
   const visibleModels = useMemo(
     () => [...new Set([...(availableModels || []), ...models])],
@@ -99,7 +129,23 @@ export function ModelSelector({
   );
 
   const handleSelect = (selectedValue: string) => {
-    onChange(selectedValue === value ? "" : selectedValue);
+    const next = selectedValue === value ? "" : selectedValue;
+    onChange(next);
+    onSelectWithProvider?.(next, undefined);
+    setOpen(false);
+  };
+
+  const handleSelectFromProvider = (
+    selectedValue: string,
+    providerProfileId: string,
+  ) => {
+    const samePick = selectedValue === value &&
+      providerProfileId === providerValue;
+    onChange(samePick ? "" : selectedValue);
+    onSelectWithProvider?.(
+      samePick ? "" : selectedValue,
+      samePick ? undefined : providerProfileId,
+    );
     setOpen(false);
   };
 
@@ -156,8 +202,38 @@ export function ModelSelector({
               ))}
             </CommandGroup>
 
+            {/* Provider-grouped models: picking one pins the provider. */}
+            {groupByProvider && providerListings.length > 0 &&
+              providerListings.map((provider) => (
+                (provider.models?.length ?? 0) > 0 && (
+                  <CommandGroup
+                    key={provider.id}
+                    heading={`${provider.name}`}
+                  >
+                    {provider.models!.map((model) => (
+                      <CommandItem
+                        key={`${provider.id}:${model}`}
+                        value={`${provider.name} ${model}`}
+                        onSelect={() =>
+                          handleSelectFromProvider(model, provider.id)}
+                      >
+                        <Check
+                          className={cn(
+                            "mr-2 h-4 w-4",
+                            value === model && providerValue === provider.id
+                              ? "opacity-100"
+                              : "opacity-0",
+                          )}
+                        />
+                        <span className="font-mono text-sm">{model}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )
+              ))}
+
             {/* Available Models from LiteLLM */}
-            {visibleModels.length > 0 && (
+            {!groupByProvider && visibleModels.length > 0 && (
               <>
                 <CommandSeparator />
                 <CommandGroup heading="Available Models">
