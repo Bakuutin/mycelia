@@ -2,6 +2,11 @@
 
 Use this note when you need to decide whether to run Mycelia's LLM stack on your own GPU or hook it up to OpenRouter's hosted models.
 
+> You do not have to choose only one: Mycelia supports multiple inference
+> providers at once with priorities and automatic failover (e.g., OpenRouter
+> as primary and a local server as backup). See [LLM_ROUTING.md](LLM_ROUTING.md)
+> and configure providers in **Settings → Inference**.
+
 ## Pick a Path
 - **Run it yourself** if you want full data control, already operate a GPU workstation, or need offline capability. Target a quantized Llama 3.3 70B build—the best quality that still fits enthusiast hardware.
 - **Use OpenRouter** if you want instant access to frontier (proprietary or MoE) models, million-token context windows, or just don't have ≥24 GB of VRAM. No extra services to host; you only manage an API key.
