@@ -92,10 +92,15 @@ export async function enqueueJob(
         projection: { prompts: 1, llm: 1, inference: 1, llmProfiles: 1 },
       },
     });
-    const activeProfile = config?.llmProfiles?.profiles?.find((profile: any) =>
-      profile.id === config?.llmProfiles?.activeProfileId
-    );
-    summarizationDefaults.defaultModel = activeProfile?.defaultAlias ||
+    // The highest-priority enabled profile supplies the default alias.
+    const primaryProfile = ((config?.llmProfiles?.profiles ?? []) as any[])
+      .filter((profile) => profile.enabled ?? true)
+      .sort((a, b) =>
+        (a.priority ?? 50) - (b.priority ?? 50) ||
+        String(a.name ?? "").localeCompare(String(b.name ?? "")) ||
+        String(a.id ?? "").localeCompare(String(b.id ?? ""))
+      )[0];
+    summarizationDefaults.defaultModel = primaryProfile?.defaultAlias ||
       config?.llm?.model || config?.inference?.model || "small";
 
     const promptId = config?.prompts?.summarization_system;
@@ -201,9 +206,32 @@ export async function enqueueJob(
       const configResource = await getConfigResource(auth);
       const config = await configResource({ action: "get" }) as any;
       const workerConfig = config?.workers?.[data.type] ?? {};
-      const activeProfile = config?.llmProfiles?.profiles?.find(
-        (profile: any) => profile.id === config?.llmProfiles?.activeProfileId,
-      );
+      // Routing is priority-based: snapshot the route expected to serve this
+      // job's model. Providers that advertise an explicitly requested model
+      // outrank blind candidates so the label matches what actually runs.
+      // Per-request failover may still use another provider; provenance
+      // records the actual one.
+      const jobModel = typeof mergedData.model === "string"
+        ? mergedData.model.trim()
+        : "";
+      const isAlias = ["small", "medium", "large"].includes(jobModel);
+      const enabledProfiles = ((config?.llmProfiles?.profiles ?? []) as any[])
+        .filter((profile) => profile.enabled ?? true)
+        .sort((a, b) =>
+          (a.priority ?? 50) - (b.priority ?? 50) ||
+          String(a.name ?? "").localeCompare(String(b.name ?? "")) ||
+          String(a.id ?? "").localeCompare(String(b.id ?? ""))
+        );
+      const canServe = (profile: any) =>
+        !jobModel || !isAlias || Boolean(profile.aliases?.[jobModel]);
+      const advertises = (profile: any) =>
+        Boolean(
+          jobModel && !isAlias &&
+            (Object.values(profile.aliases ?? {}).includes(jobModel) ||
+              profile.chatModel === jobModel),
+        );
+      const primaryProfile = enabledProfiles.find(advertises) ??
+        enabledProfiles.find(canServe) ?? enabledProfiles[0];
       let routingContext: JobRoutingContext;
       if (data.type === "transcription") {
         const configuredProviders = (await new TranscriptionResource()
@@ -265,8 +293,8 @@ export async function enqueueJob(
             ? { sourceId: workerConfig.routingContext.sourceId }
             : {}),
           providerProfileId: workerConfig.routingContext?.providerProfileId ??
-            activeProfile?.id,
-          providerProfileName: activeProfile?.name,
+            primaryProfile?.id,
+          providerProfileName: primaryProfile?.name,
           model: typeof mergedData.model === "string"
             ? mergedData.model
             : undefined,
