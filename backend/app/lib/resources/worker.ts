@@ -2251,12 +2251,20 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           staleCutoff.getTime()
       );
       const runtime = getWorkerRuntimeStatus(workerType);
+      const defaultTriggerIntervalSeconds = jobRegistry.list().find((entry) =>
+        entry.manifest.name === workerType
+      )?.manifest.triggers?.interval;
       status[workerType] = {
         paused: await workerPauseManager.getEffectivePauseState(workerType),
         desiredConcurrency: config?.workers?.[workerType]?.concurrency ?? 1,
         effectiveConcurrency: runtime.effectiveConcurrency,
         minConcurrency: runtime.minConcurrency,
         maxConcurrency: runtime.maxConcurrency,
+        // Scheduled-run cadence: capability default plus operator override.
+        defaultTriggerIntervalSeconds,
+        triggerIntervalSeconds:
+          config?.workers?.[workerType]?.triggerIntervalSeconds ??
+            defaultTriggerIntervalSeconds,
         running: runtime.running,
         active: workerJobs.filter((job) => job.state === "active").length,
         waiting: workerJobs.filter((job) => job.state === "waiting").length,

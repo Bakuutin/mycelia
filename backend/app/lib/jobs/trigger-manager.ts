@@ -83,23 +83,45 @@ export class TriggerManager {
 
     if (!isTest && triggers.interval && triggers.interval > 0) {
       if (!this.intervals.has(name)) {
-        const intervalMs = triggers.interval * 1000;
+        const defaultSeconds = triggers.interval;
         log("INFO", `Setting up interval trigger`, {
           jobName: name,
-          intervalSeconds: triggers.interval,
+          intervalSeconds: defaultSeconds,
         });
-        const intervalId = setInterval(() => {
-          log("DEBUG", `Interval trigger fired`, {
-            jobName: name,
-            intervalSeconds: triggers.interval,
-          });
-          this.checkAndTrigger(
-            cap,
-            `interval:${triggers.interval}s`,
-            { requireIdle: true },
-          );
-        }, intervalMs);
-        this.intervals.set(name, intervalId);
+        // A self-rescheduling timeout reads the operator-configured interval
+        // before every cycle, so changes in worker config apply without a
+        // restart. A configured 0 disables scheduled runs (event triggers
+        // still fire); the timer then re-checks the config every 5 minutes.
+        const scheduleNext = async () => {
+          let seconds = defaultSeconds;
+          try {
+            const config = await getServerConfig();
+            const configured = config?.workers?.[name]?.triggerIntervalSeconds;
+            if (typeof configured === "number" && configured >= 0) {
+              seconds = configured;
+            }
+          } catch {
+            // Keep the capability default when config storage is unavailable.
+          }
+          if (seconds <= 0) {
+            this.intervals.set(name, setTimeout(scheduleNext, 300_000));
+            return;
+          }
+          const timerId = setTimeout(() => {
+            log("DEBUG", `Interval trigger fired`, {
+              jobName: name,
+              intervalSeconds: seconds,
+            });
+            this.checkAndTrigger(
+              cap,
+              `interval:${seconds}s`,
+              { requireIdle: true },
+            );
+            void scheduleNext();
+          }, seconds * 1000);
+          this.intervals.set(name, timerId);
+        };
+        void scheduleNext();
       }
     }
 
