@@ -878,9 +878,12 @@ export default function JobDetailPage() {
                         metrics: [
                             { icon: Clock, label: "Processing Time", value: processingTime },
                             ...(batchSummaries.length > 0 ? [{ icon: FileText as LucideIcon, label: "Summaries Created", value: batchSummaries.length }] : []),
+                            ...(r.processed != null ? [{ icon: Check as LucideIcon, label: "Processed", value: r.processed }] : []),
+                            ...(r.skipped != null && r.skipped > 0 ? [{ icon: AlertTriangle as LucideIcon, label: "Skipped", value: r.skipped }] : []),
                             ...(r.title ? [{ icon: FileText as LucideIcon, label: "Title", value: r.title }] : []),
                             ...(r.start && r.end ? [{ icon: Clock as LucideIcon, label: "Time Range", value: `${format(new Date(r.start), "PPp")} — ${format(new Date(r.end), "PPp")}` }] : []),
                         ],
+                        errors: r.errors,
                     },
                     diarization: {
                         icon: Users, title: "Diarization Details",
@@ -976,6 +979,22 @@ export default function JobDetailPage() {
                                     <MetricCell key={m.label} icon={m.icon} label={m.label} value={m.value} />
                                 ))}
                             </div>
+                            {job.type === "summarization" &&
+                                Array.isArray(r.skips) && r.skips.length > 0 && (
+                                <div>
+                                    <div className="flex items-center gap-2 text-sm text-amber-500 mb-2">
+                                        <AlertTriangle className="h-4 w-4" />
+                                        {r.skips.length} skipped (already summarized or claimed)
+                                    </div>
+                                    <div className="bg-amber-500/5 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
+                                        {r.skips.map((skip: string, idx: number) => (
+                                            <div key={idx} className="text-xs text-amber-500/90">
+                                                {skip}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                             {config.errors && config.errors?.length > 0 && (
                                 <div>
                                     <div className="flex items-center gap-2 text-sm text-red-500 mb-2">
@@ -985,7 +1004,13 @@ export default function JobDetailPage() {
                                     <div className="bg-red-500/5 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
                                         {config.errors.map((err: any, idx: number) => (
                                             <div key={idx} className="text-xs text-red-400">
-                                                <span className="font-medium">{err.type}:</span> {err.message}
+                                                {typeof err === "string"
+                                                    ? err
+                                                    : (
+                                                        <>
+                                                            <span className="font-medium">{err.type}:</span> {err.message}
+                                                        </>
+                                                    )}
                                             </div>
                                         ))}
                                     </div>

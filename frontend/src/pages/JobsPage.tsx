@@ -76,6 +76,8 @@ type WorkerStatus = {
     effectiveConcurrency: number;
     minConcurrency: number;
     maxConcurrency: number;
+    defaultTriggerIntervalSeconds?: number;
+    triggerIntervalSeconds?: number;
     running: boolean;
     active: number;
     waiting: number;
@@ -121,7 +123,7 @@ type ExternalServiceHealth = {
     enabled: boolean;
     model?: string;
     priority: number;
-    concurrency: number;
+    concurrency?: number;
     latencyMs?: number;
     message: string;
   }>;
@@ -175,18 +177,45 @@ type PipelineHealth = {
 };
 
 type ModelAlias = "small" | "medium" | "large";
+
+// Job types whose work is served by the LLM routing chain. Their rows show
+// the provider and alias → model, mirroring the STT provider sub-line.
+const LLM_JOB_TYPES = new Set([
+  "summarization",
+  "conversation_chunk_creator",
+  "conversation_extractor",
+  "tagger",
+]);
+
+type JobInferenceUsage = {
+  providerProfileId?: string;
+  providerProfileName?: string;
+  requestedModel?: string;
+  resolvedModel?: string;
+  // Model the provider itself reported, when it differs from the request.
+  responseModel?: string;
+  fallbackUsed?: boolean;
+  failoverUsed?: boolean;
+  calls?: number;
+};
 type LlmProfile = {
   id: string;
   name: string;
   baseUrl: string;
   apiKey: string;
-  aliases: Record<ModelAlias, string>;
+  aliases: Partial<Record<ModelAlias, string>>;
   defaultAlias: ModelAlias;
+  chatModel?: string;
+  enabled?: boolean;
+  priority?: number;
+  concurrency?: number;
 };
 type InferenceRoutingConfig = {
   llmProfiles?: {
-    activeProfileId: string;
+    activeProfileId?: string;
     profiles: LlmProfile[];
+    includeEnvironment?: boolean;
+    environmentPriority?: number;
   } | null;
   transcription?: {
     baseUrl?: string;
@@ -1163,10 +1192,12 @@ export default function JobsPage() {
   const [sortColumn, setSortColumn] = useState<string>("timestamp");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [selectedProfileId, setSelectedProfileId] = useState("");
   const [selectedSttModel, setSelectedSttModel] = useState("");
   const [serviceTestResults, setServiceTestResults] = useState<
     Partial<Record<"stt" | "llm", string>>
+  >({});
+  const [intervalDrafts, setIntervalDrafts] = useState<
+    Record<string, string>
   >({});
   const [concurrencyDrafts, setConcurrencyDrafts] = useState<
     Record<string, string>
@@ -1234,6 +1265,22 @@ export default function JobsPage() {
       }
       return next;
     });
+    setIntervalDrafts((current) => {
+      const next = { ...current };
+      for (
+        const [workerType, status] of Object.entries(
+          workerStatus.workers,
+        )
+      ) {
+        if (
+          next[workerType] === undefined &&
+          typeof status.triggerIntervalSeconds === "number"
+        ) {
+          next[workerType] = String(status.triggerIntervalSeconds);
+        }
+      }
+      return next;
+    });
   }, [workerStatus]);
 
   const {
@@ -1274,11 +1321,22 @@ export default function JobsPage() {
   });
 
   useEffect(() => {
-    const activeId = inferenceRoutingConfig?.llmProfiles?.activeProfileId;
-    if (activeId) setSelectedProfileId(activeId);
     const configuredSttModel = inferenceRoutingConfig?.transcription?.model;
     if (configuredSttModel) setSelectedSttModel(configuredSttModel);
   }, [inferenceRoutingConfig]);
+
+  // Enabled profiles in failover order, for planned-route labels on queued
+  // jobs. Providers advertising an explicit model outrank blind candidates.
+  const llmRoutingProfiles = useMemo(
+    () =>
+      (inferenceRoutingConfig?.llmProfiles?.profiles ?? [])
+        .filter((profile) => profile.enabled ?? true)
+        .sort((a, b) =>
+          (a.priority ?? 50) - (b.priority ?? 50) ||
+          a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+        ),
+    [inferenceRoutingConfig],
+  );
 
   // Fetch job statistics from backend (aggregates ALL jobs, not just the 1000 loaded in frontend)
   const { data: jobStatsResponse } = useQuery({
@@ -1369,6 +1427,34 @@ export default function JobsPage() {
       alert(
         error instanceof Error ? error.message : "Failed to resume workers",
       ),
+  });
+
+  const setWorkerIntervalMutation = useMutation({
+    mutationFn: async (
+      { workerType, seconds }: { workerType: string; seconds: number },
+    ) => {
+      if (!Number.isInteger(seconds) || seconds < 0 || seconds > 86400) {
+        throw new Error("Interval must be an integer between 0 and 86400");
+      }
+      await api.callResource("config", {
+        action: "patch",
+        path: `workers.${workerType}`,
+        updates: { triggerIntervalSeconds: seconds },
+      });
+      return { workerType, seconds };
+    },
+    onSuccess: ({ workerType, seconds }) => {
+      setIntervalDrafts((current) => ({
+        ...current,
+        [workerType]: String(seconds),
+      }));
+      queryClient.invalidateQueries({ queryKey: ["worker-status"] });
+    },
+    onError: (error) => {
+      alert(
+        error instanceof Error ? error.message : "Failed to save interval",
+      );
+    },
   });
 
   const setWorkerConcurrencyMutation = useMutation({
@@ -1662,41 +1748,158 @@ export default function JobsPage() {
     },
   });
 
-  const saveActiveProfileMutation = useMutation({
+  const setLlmRouteEnabledMutation = useMutation({
+    mutationFn: async ({ profileId, enabled }: {
+      profileId: string;
+      enabled: boolean;
+    }) => {
+      const config = await api.callResource("config", {
+        action: "get",
+      }) as InferenceRoutingConfig;
+      const llmProfiles = config.llmProfiles;
+      if (!llmProfiles?.profiles?.length) {
+        throw new Error("No LLM provider profiles are configured");
+      }
+      if (profileId === "environment") {
+        await api.callResource("config", {
+          action: "patch",
+          updates: {
+            llmProfiles: { ...llmProfiles, includeEnvironment: enabled },
+          },
+        });
+      } else {
+        if (!llmProfiles.profiles.some((profile) => profile.id === profileId)) {
+          throw new Error("LLM route no longer exists");
+        }
+        await api.callResource("config", {
+          action: "patch",
+          updates: {
+            llmProfiles: {
+              ...llmProfiles,
+              profiles: llmProfiles.profiles.map((profile) =>
+                profile.id === profileId ? { ...profile, enabled } : profile
+              ),
+            },
+          },
+        });
+      }
+      return enabled
+        ? await api.callResource("jobs", {
+          action: "pipeline_health",
+          force: true,
+        }) as PipelineHealth
+        : null;
+    },
+    onSuccess: (health, { profileId, enabled }) => {
+      queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
+      if (health) {
+        queryClient.setQueryData(["pipeline-health"], health);
+      } else {
+        queryClient.setQueryData<PipelineHealth | undefined>(
+          ["pipeline-health"],
+          (current) =>
+            current
+              ? {
+                ...current,
+                services: current.services.map((service) =>
+                  service.id !== "llm" || !service.routes ? service : {
+                    ...service,
+                    routes: service.routes.map((route) =>
+                      route.providerProfileId === profileId
+                        ? {
+                          ...route,
+                          enabled,
+                          status: "disabled",
+                          message:
+                            "Disabled for new LLM requests; no health probe was sent.",
+                        }
+                        : route
+                    ),
+                  }
+                ),
+              }
+              : current,
+        );
+      }
+    },
+    onError: (error) => {
+      setServiceTestResults((current) => ({
+        ...current,
+        llm: error instanceof Error
+          ? error.message
+          : "Failed to update LLM route",
+      }));
+    },
+  });
+
+  const makeLlmPrimaryMutation = useMutation({
     mutationFn: async (profileId: string) => {
-      const profiles = inferenceRoutingConfig?.llmProfiles?.profiles || [];
-      const profile = profiles.find((candidate) => candidate.id === profileId);
-      if (!profile) throw new Error("Choose a valid LLM preset");
-      const model = profile.aliases[profile.defaultAlias];
-      return await api.callResource("config", {
-        action: "patch",
-        updates: {
-          llmProfiles: { activeProfileId: profile.id },
-          llm: {
-            baseUrl: profile.baseUrl,
-            apiKey: profile.apiKey,
-            model,
+      const config = await api.callResource("config", {
+        action: "get",
+      }) as InferenceRoutingConfig;
+      const llmProfiles = config.llmProfiles;
+      if (!llmProfiles?.profiles?.length) {
+        throw new Error("No LLM provider profiles are configured");
+      }
+      const otherPriorities = [
+        ...llmProfiles.profiles
+          .filter((profile) => profile.id !== profileId)
+          .map((profile) => profile.priority ?? 50),
+        ...(profileId !== "environment" && llmProfiles.includeEnvironment
+          ? [llmProfiles.environmentPriority ?? 50]
+          : []),
+      ];
+      const topPriority = Math.max(
+        1,
+        Math.min(50, ...otherPriorities) - 1,
+      );
+      if (profileId === "environment") {
+        await api.callResource("config", {
+          action: "patch",
+          updates: {
+            llmProfiles: {
+              ...llmProfiles,
+              includeEnvironment: true,
+              environmentPriority: topPriority,
+            },
           },
-          inference: {
-            baseUrl: profile.baseUrl,
-            apiKey: profile.apiKey,
-            model,
+        });
+      } else {
+        const profile = llmProfiles.profiles.find((candidate) =>
+          candidate.id === profileId
+        );
+        if (!profile) throw new Error("LLM route no longer exists");
+        await api.callResource("config", {
+          action: "patch",
+          updates: {
+            llmProfiles: {
+              ...llmProfiles,
+              // Deprecated but kept in sync for older builds during rollback.
+              activeProfileId: profileId,
+              profiles: llmProfiles.profiles.map((candidate) =>
+                candidate.id === profileId
+                  ? { ...candidate, enabled: true, priority: topPriority }
+                  : candidate
+              ),
+            },
           },
-        },
-      });
+        });
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
       refetchPipelineHealth();
       setServiceTestResults((current) => ({
         ...current,
-        llm: "Preset saved. Test LLM to refresh the effective route.",
+        llm: "Route promoted. New LLM requests prefer it.",
       }));
     },
     onError: (error) => {
       setServiceTestResults((current) => ({
         ...current,
-        llm: error instanceof Error ? error.message : "Failed to save preset",
+        llm: error instanceof Error
+          ? error.message
+          : "Failed to promote LLM route",
       }));
     },
   });
@@ -2643,44 +2846,93 @@ export default function JobsPage() {
 
                       {service.id === "llm" && (
                         <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                          <Label className="text-xs">Preset for LLM jobs</Label>
-                          <div className="flex flex-wrap gap-2">
-                            <Select
-                              value={selectedProfileId}
-                              onValueChange={setSelectedProfileId}
-                              disabled={!inferenceRoutingConfig?.llmProfiles
-                                ?.profiles?.length}
-                            >
-                              <SelectTrigger className="min-w-52 flex-1">
-                                <SelectValue placeholder="Choose LLM preset" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {inferenceRoutingConfig?.llmProfiles?.profiles
-                                  ?.map((profile) => (
-                                    <SelectItem
-                                      key={profile.id}
-                                      value={profile.id}
+                          {service.routes?.length
+                            ? (
+                              <>
+                                <Label className="text-xs">
+                                  Provider-aware LLM routes
+                                </Label>
+                                <p className="text-xs text-muted-foreground">
+                                  Requests use the highest-priority enabled
+                                  route and fail over down the list on errors.
+                                </p>
+                                <div className="space-y-1">
+                                  {service.routes.map((route) => (
+                                    <div
+                                      key={route.providerProfileId}
+                                      className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
                                     >
-                                      {profile.name}
-                                    </SelectItem>
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <Switch
+                                          checked={route.enabled}
+                                          disabled={setLlmRouteEnabledMutation
+                                            .isPending}
+                                          onCheckedChange={(enabled) =>
+                                            setLlmRouteEnabledMutation.mutate({
+                                              profileId:
+                                                route.providerProfileId,
+                                              enabled,
+                                            })}
+                                          aria-label={`Enable ${route.providerProfileName} LLM route`}
+                                        />
+                                        <div className="min-w-0">
+                                          <div className="truncate font-medium">
+                                            {route.providerProfileName}
+                                          </div>
+                                          <div className="text-muted-foreground">
+                                            {route.enabled
+                                              ? "Enabled for new requests"
+                                              : "Disabled for new requests"}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <span className="font-mono text-muted-foreground">
+                                        P{route.priority} ·{" "}
+                                        {route.model || "unknown"}
+                                        {typeof route.concurrency === "number"
+                                          ? ` · ${route.concurrency} req${
+                                            route.concurrency === 1 ? "" : "s"
+                                          }`
+                                          : ""}
+                                      </span>
+                                      <div className="flex items-center gap-2">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() =>
+                                            makeLlmPrimaryMutation.mutate(
+                                              route.providerProfileId,
+                                            )}
+                                          disabled={makeLlmPrimaryMutation
+                                            .isPending}
+                                          title="Give this route the highest priority"
+                                        >
+                                          Make primary
+                                        </Button>
+                                        <Badge
+                                          variant="secondary"
+                                          className={route.status === "disabled"
+                                            ? "bg-muted text-muted-foreground"
+                                            : undefined}
+                                        >
+                                          {route.status}
+                                        </Badge>
+                                      </div>
+                                    </div>
                                   ))}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              size="sm"
-                              onClick={() =>
-                                saveActiveProfileMutation.mutate(
-                                  selectedProfileId,
-                                )}
-                              disabled={!selectedProfileId ||
-                                saveActiveProfileMutation.isPending ||
-                                service.source === "llm_env"}
-                              title={service.source === "llm_env"
-                                ? "OPENAI_BASE_URL environment variables override saved presets"
-                                : undefined}
-                            >
-                              <Save className="mr-2 h-3.5 w-3.5" />
-                              Save preset
+                                </div>
+                              </>
+                            )
+                            : (
+                              <p className="text-xs text-muted-foreground">
+                                No LLM provider routes are configured yet.
+                              </p>
+                            )}
+                          <div className="flex flex-wrap gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <Link to="/settings/inference">
+                                Configure LLM providers
+                              </Link>
                             </Button>
                             <Button
                               variant="outline"
@@ -2699,22 +2951,6 @@ export default function JobsPage() {
                               Test LLM
                             </Button>
                           </div>
-                          {(() => {
-                            const profile = inferenceRoutingConfig?.llmProfiles
-                              ?.profiles?.find((candidate) =>
-                                candidate.id === selectedProfileId
-                              );
-                            if (!profile) return null;
-                            return (
-                              <p className="break-all font-mono text-xs text-muted-foreground">
-                                default {profile.defaultAlias} →{" "}
-                                {profile.aliases[profile.defaultAlias]}
-                                · small → {profile.aliases.small}
-                                · medium → {profile.aliases.medium}
-                                · large → {profile.aliases.large}
-                              </p>
-                            );
-                          })()}
                         </div>
                       )}
 
@@ -3070,7 +3306,7 @@ export default function JobsPage() {
                     <TableHead className="text-center w-[50px]">
                       Empty
                     </TableHead>
-                    <TableHead className="w-[80px]">Freq</TableHead>
+                    <TableHead className="w-[120px]">Schedule</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -3419,8 +3655,73 @@ export default function JobsPage() {
                         <TableCell className="text-center py-1 text-sm text-muted-foreground">
                           {stats && stats.emptyRuns > 0 ? stats.emptyRuns : "-"}
                         </TableCell>
-                        <TableCell className="py-1 text-sm text-muted-foreground">
-                          {stats?.avgFrequency ?? "-"}
+                        <TableCell className="py-1">
+                          {typeof runtime?.defaultTriggerIntervalSeconds ===
+                              "number"
+                            ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    max={86400}
+                                    value={intervalDrafts[worker.type] ??
+                                      String(
+                                        runtime?.triggerIntervalSeconds ?? "",
+                                      )}
+                                    onChange={(event) =>
+                                      setIntervalDrafts((current) => ({
+                                        ...current,
+                                        [worker.type]: event.target.value,
+                                      }))}
+                                    className="h-7 w-16 px-2 text-center"
+                                    aria-label={`${worker.type} scheduled-run interval in seconds`}
+                                    title="Scheduled-run interval in seconds; 0 disables scheduled runs (event triggers still fire)"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    disabled={setWorkerIntervalMutation
+                                      .isPending ||
+                                      Number(
+                                          intervalDrafts[worker.type] ??
+                                            runtime?.triggerIntervalSeconds ??
+                                            NaN,
+                                        ) ===
+                                        (runtime?.triggerIntervalSeconds ??
+                                          NaN)}
+                                    onClick={() =>
+                                      setWorkerIntervalMutation.mutate({
+                                        workerType: worker.type,
+                                        seconds: Number(
+                                          intervalDrafts[worker.type],
+                                        ),
+                                      })}
+                                    title="Save schedule interval"
+                                  >
+                                    <Save className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  {Number(
+                                        intervalDrafts[worker.type] ??
+                                          runtime?.triggerIntervalSeconds ?? 1,
+                                      ) === 0
+                                    ? "schedule off"
+                                    : `every ${
+                                      intervalDrafts[worker.type] ??
+                                        runtime?.triggerIntervalSeconds
+                                    }s`}
+                                  {` · runs ${stats?.avgFrequency ?? "-"}`}
+                                </div>
+                              </>
+                            )
+                            : (
+                              <span className="text-sm text-muted-foreground">
+                                {stats?.avgFrequency ?? "-"}
+                              </span>
+                            )}
                         </TableCell>
                       </TableRow>
                     );
@@ -3724,9 +4025,16 @@ export default function JobsPage() {
                       >
                         <div>
                           {job.type === "summarization" &&
-                              Array.isArray(job.result?.summaries) &&
-                              job.result.summaries.length > 0
-                            ? `Batch summarization · ${job.result.summaries.length}`
+                              (Array.isArray(job.result?.summaries) &&
+                                  job.result.summaries.length > 0 ||
+                                (job.result?.skipped ?? 0) > 0)
+                            ? `Batch summarization · ${
+                              job.result?.summaries?.length ?? 0
+                            }${
+                              (job.result?.skipped ?? 0) > 0
+                                ? ` (+${job.result.skipped} skipped)`
+                                : ""
+                            }`
                             : job.type}
                         </div>
                         {job.type === "transcription" &&
@@ -3746,6 +4054,103 @@ export default function JobsPage() {
                               : ""}
                           </div>
                         )}
+                        {LLM_JOB_TYPES.has(job.type) && (() => {
+                          // Completed jobs report the provider and model that
+                          // actually served them; queued jobs show the route
+                          // expected to serve the requested alias or model.
+                          // Chunk-creator jobs make no LLM calls themselves —
+                          // they only snapshot the model for extraction.
+                          const isSnapshotOnly =
+                            job.type === "conversation_chunk_creator";
+                          const inference = job.result?.inference as
+                            | JobInferenceUsage
+                            | undefined;
+                          if (
+                            inference?.resolvedModel ||
+                            inference?.providerProfileName
+                          ) {
+                            const requested = inference.requestedModel;
+                            const resolved = inference.resolvedModel;
+                            const served = inference.responseModel;
+                            let modelLabel =
+                              requested && resolved && requested !== resolved
+                                ? `${requested} → ${resolved}`
+                                : resolved || requested;
+                            // A provider that silently substitutes its loaded
+                            // model is surfaced explicitly.
+                            if (
+                              served && resolved && served !== resolved
+                            ) {
+                              modelLabel = `${modelLabel} (served ${served})`;
+                            }
+                            return (
+                              <div
+                                className="text-[10px] font-normal text-muted-foreground"
+                                title="LLM provider and model that served this job"
+                              >
+                                {inference.providerProfileName ||
+                                  inference.providerProfileId}
+                                {modelLabel ? ` · ${modelLabel}` : ""}
+                                {inference.fallbackUsed ? " · fallback" : ""}
+                                {inference.failoverUsed ? " · failover" : ""}
+                              </div>
+                            );
+                          }
+                          const context = job.routingContext;
+                          const requested =
+                            (typeof job.data?.model === "string" &&
+                              job.data.model) ||
+                            context?.model;
+                          if (!context?.providerProfileName && !requested) {
+                            return null;
+                          }
+                          // Pick the route expected to serve this model:
+                          // providers advertising an explicit model outrank
+                          // blind candidates; aliases go to the first provider
+                          // mapping them.
+                          const isAlias = requested === "small" ||
+                            requested === "medium" || requested === "large";
+                          const planned = requested
+                            ? (isAlias
+                              ? llmRoutingProfiles.find((profile) =>
+                                profile.aliases[requested as ModelAlias]
+                              )
+                              : llmRoutingProfiles.find((profile) =>
+                                Object.values(profile.aliases).includes(
+                                  requested,
+                                ) || profile.chatModel === requested
+                              ) ?? llmRoutingProfiles[0])
+                            : llmRoutingProfiles.find((profile) =>
+                              profile.id === context?.providerProfileId
+                            );
+                          const resolved = requested && isAlias
+                            ? planned?.aliases[requested as ModelAlias]
+                            : undefined;
+                          const modelLabel = resolved
+                            ? `${requested} → ${resolved}`
+                            : requested;
+                          if (isSnapshotOnly) {
+                            return (
+                              <div
+                                className="text-[10px] font-normal text-muted-foreground"
+                                title="Model snapshotted for later conversation extraction; this job makes no LLM calls"
+                              >
+                                extraction model
+                                {modelLabel ? ` · ${modelLabel}` : ""}
+                              </div>
+                            );
+                          }
+                          return (
+                            <div
+                              className="text-[10px] font-normal text-muted-foreground"
+                              title="Planned LLM route; requests may fail over by priority"
+                            >
+                              {planned?.name ||
+                                context?.providerProfileName || "LLM route"}
+                              {modelLabel ? ` · ${modelLabel}` : ""}
+                            </div>
+                          );
+                        })()}
                         {job.restartedFromJobId && (
                           <Link
                             to={`/jobs/${job.restartedFromJobId}`}
