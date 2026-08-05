@@ -788,7 +788,6 @@ export default function ChatPage() {
                 <ModelSelector
                   value={selectedModel}
                   onChange={() => {}}
-                  groupByProvider
                   providerValue={selectedProviderId}
                   onSelectWithProvider={(model, providerProfileId) =>
                     void handleModelChange(model, providerProfileId)}

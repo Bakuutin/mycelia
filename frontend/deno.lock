@@ -5,7 +5,7 @@
     "jsr:@std/path@^1.0.8": "1.1.3",
     "npm:@ai-sdk/openai@^3.0.0-beta.78": "3.0.0-beta.78_zod@4.1.13",
     "npm:@ai-sdk/react@^3.0.0-beta.129": "3.0.0-beta.129_react@18.3.1_zod@4.1.13",
-    "npm:@deno/vite-plugin@^1.0.5": "1.0.5_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2",
+    "npm:@deno/vite-plugin@2.0.3": "2.0.3_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2",
     "npm:@eslint/js@^9.37.0": "9.39.1",
     "npm:@hookform/resolvers@^5.2.2": "5.2.2_react-hook-form@7.67.0__react@18.3.1_react@18.3.1",
     "npm:@langchain/core@^1.0.1": "1.1.1_zod@4.1.13",
@@ -385,9 +385,11 @@
     "@date-fns/tz@1.4.1": {
       "integrity": "sha512-P5LUNhtbj6YfI3iJjw5EL9eUAG6OitD0W3fWQcpQjDRc/QIsL0tRNuO1PcDvPccWL1fSTXXdE1ds+l95DV/OFA=="
     },
-    "@deno/vite-plugin@1.0.5_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2": {
-      "integrity": "sha512-tLja5n4dyMhcze1NzvSs2iiriBymfBlDCZIrjMTxb9O2ru0gvmV6mn5oBD2teNw5Sd92cj3YJzKwsAs8tMJXlg==",
+    "@deno/vite-plugin@2.0.3_vite@6.4.1__jiti@2.6.1__yaml@2.8.2__picomatch@4.0.3_jiti@2.6.1_yaml@2.8.2": {
+      "integrity": "sha512-TbIawVRFqIfshSa4CYEPMgLbEIKHg+WXymWvvwlsyct1X8tG4O1OrQldvU/faw6bw7NBCyxVYdT4iIv93jQSig==",
       "dependencies": [
+        "@deno/loader@npm:@jsr/deno__loader@0.5.0",
+        "@std/jsonc@npm:@jsr/std__jsonc@1.0.2",
         "vite"
       ]
     },
@@ -673,6 +675,35 @@
         "@jridgewell/resolve-uri",
         "@jridgewell/sourcemap-codec"
       ]
+    },
+    "@jsr/deno__loader@0.5.0": {
+      "integrity": "sha512-sf/YBwnyAsbyeYYB71Zdj2Ca2Q9tt25EZpAiZdDA9W7Mm3GcpjA2WMeqj19xPIurZK12G3OAsa5yrtPB7E+gvA==",
+      "tarball": "https://npm.jsr.io/~/11/@jsr/deno__loader/0.5.0.tgz"
+    },
+    "@jsr/std__bytes@1.0.6": {
+      "integrity": "sha512-St6yKggjFGhxS52IFLJWvkchRFbAKg2Xh8UxA4S1EGz7GJ2Ui+ssDDldj/w2c8vCxvl6qgR0HaYbKeFJNqujmA==",
+      "tarball": "https://npm.jsr.io/~/11/@jsr/std__bytes/1.0.6.tgz"
+    },
+    "@jsr/std__json@1.1.0": {
+      "integrity": "sha512-a9Eylh7ox33tFn5RxhESnvI4akpefQP5Qn+ePz3Ih4IJ/EPA8p0SKq0aztRfN1sGDhfyWMPWwlUcwNxONt+Ncg==",
+      "dependencies": [
+        "@jsr/std__streams"
+      ],
+      "tarball": "https://npm.jsr.io/~/11/@jsr/std__json/1.1.0.tgz"
+    },
+    "@jsr/std__jsonc@1.0.2": {
+      "integrity": "sha512-Lva9lY0UPvvgmS8INUHU8Tqijq2SPfdlnSAvofOYUBiB6ALPxo0rTMznRlY5Wt30nMW+rhMTha1x5RGpMBKUoQ==",
+      "dependencies": [
+        "@jsr/std__json"
+      ],
+      "tarball": "https://npm.jsr.io/~/11/@jsr/std__jsonc/1.0.2.tgz"
+    },
+    "@jsr/std__streams@1.1.2": {
+      "integrity": "sha512-TNg+Mr/vE2Wg+JDdZpVj9umEyzcmSAOtcp0ildlyVCjHy0/fJ2BJZgO8PQXA/SwJOchvKLaMafZzfFkm9PO13A==",
+      "dependencies": [
+        "@jsr/std__bytes"
+      ],
+      "tarball": "https://npm.jsr.io/~/11/@jsr/std__streams/1.1.2.tgz"
     },
     "@langchain/core@1.1.1_openai@6.9.1__zod@4.1.13_zod@4.1.13": {
       "integrity": "sha512-vdUoj2CVbb+0Qszi8llP34vdUCfP7bfA9VoFr4Se1pFGu7VAPnk8lBnRat9IvqSxMfTvOHJSd7Rn6TUPjzKsnA==",
@@ -6685,7 +6716,7 @@
       "dependencies": [
         "npm:@ai-sdk/openai@^3.0.0-beta.78",
         "npm:@ai-sdk/react@^3.0.0-beta.129",
-        "npm:@deno/vite-plugin@^1.0.5",
+        "npm:@deno/vite-plugin@2.0.3",
         "npm:@eslint/js@^9.37.0",
         "npm:@hookform/resolvers@^5.2.2",
         "npm:@langchain/core@^1.0.1",

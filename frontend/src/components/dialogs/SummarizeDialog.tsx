@@ -53,6 +53,11 @@ export function SummarizeDialog({
   const [summarizePrompt, setSummarizePrompt] = useState("");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(defaultModel);
+  // Set when the model was picked from a specific provider's group; the job
+  // then routes to that provider only.
+  const [selectedProviderId, setSelectedProviderId] = useState<
+    string | undefined
+  >(undefined);
   const [configuredDefaultModel, setConfiguredDefaultModel] = useState(
     defaultModel,
   );
@@ -71,6 +76,7 @@ export function SummarizeDialog({
         setLoadingDefaults(true);
         // Prompt selection never changes the model route.
         setSelectedModel(defaultModel);
+        setSelectedProviderId(undefined);
 
         try {
           const [configData, promptsData, workerDefaultsData] = await Promise
@@ -154,12 +160,14 @@ export function SummarizeDialog({
       setSummarizePrompt("");
       // Reset model to default when switching to custom prompt
       setSelectedModel(configuredDefaultModel);
+      setSelectedProviderId(undefined);
       setModelSource(configuredModelSource);
     } else {
       const prompt = prompts.find((p) => p._id.toString() === promptId);
       if (prompt) {
         setSummarizePrompt(prompt.text);
         setSelectedModel(configuredDefaultModel);
+        setSelectedProviderId(undefined);
         setModelSource(configuredModelSource);
       }
     }
@@ -187,6 +195,10 @@ export function SummarizeDialog({
           prompt: summarizePrompt || undefined,
           promptName: promptName,
           model: selectedModel || undefined,
+          // Omit rather than pass undefined: EJSON turns undefined into null.
+          ...(selectedProviderId
+            ? { providerProfileId: selectedProviderId }
+            : {}),
           objectId: objectId || undefined,
         },
         trigger: {
@@ -264,6 +276,9 @@ export function SummarizeDialog({
                 setSelectedModel(model);
                 setModelSource("Selected for this job");
               }}
+              providerValue={selectedProviderId}
+              onSelectWithProvider={(_model, providerProfileId) =>
+                setSelectedProviderId(providerProfileId)}
               disabled={loadingDefaults || isJobInProgress || isJobComplete}
               placeholder="Select model..."
               prefetch={open}

@@ -16,7 +16,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^3.0.0-beta.78",
     "@ai-sdk/react": "^3.0.0-beta.129",
-    "@deno/vite-plugin": "^1.0.5",
+    "@deno/vite-plugin": "2.0.3",
     "@hookform/resolvers": "^5.2.2",
     "@langchain/core": "^1.0.1",
     "@langchain/openai": "^1.0.0",

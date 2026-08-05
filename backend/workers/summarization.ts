@@ -17,6 +17,10 @@ import {
   summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { getChatCompletionText } from "@/lib/llm/completion-response.ts";
+import {
+  buildJsonSchemaResponseFormat,
+  resolveWorkerFallbackModel,
+} from "./conversationExtractor.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
 /** Job type name */
@@ -41,10 +45,13 @@ export const schema = z.object({
     .describe(
       "LLM model alias to use for summarization (e.g., 'small', 'large', 'gpt-4o')",
     ),
-  fallbackModel: z.string()
-    .default(Deno.env.get("SUMMARIZATION_FALLBACK_MODEL") ?? "")
+  fallbackModel: z.string().optional()
     .describe(
-      "Optional model retried once after a primary LLM error; empty means stop with error",
+      "Optional model retried once after a primary LLM error; leave empty to use the provider route's configured fallback",
+    ),
+  providerProfileId: z.string().optional()
+    .describe(
+      "Pin the LLM call to one provider profile (no cross-provider failover)",
     ),
   objectId: zObjectId().nullish(),
   allowExisting: z.boolean().default(false)
@@ -266,7 +273,10 @@ function createLLMSummaryEntry(
   const provenance = getInferenceProvenance(
     completion,
     jobData.model || "small",
-    jobData.fallbackModel,
+    resolveWorkerFallbackModel(
+      jobData.fallbackModel,
+      "SUMMARIZATION_FALLBACK_MODEL",
+    ),
   );
   return {
     text: summary,
@@ -368,46 +378,34 @@ async function createConversationWithSummary(
   return resultObject.insertedId.toString();
 }
 
-async function generateTitle(
-  modelAlias: string,
-  fallbackModel: string,
-  summaryText: string,
-  jwt: string,
-  myceliaUrl: string,
-): Promise<
-  { title: string; provenance: ReturnType<typeof getInferenceProvenance> }
-> {
-  const titleResponse = await callResource<any, any>("llm", {
-    action: "completions",
-    model: modelAlias,
-    fallbackModel,
-    session_id: createPromptCacheSessionId("summarization-title", {
-      system: "Generate a short title for this conversation, no formatting",
-      responseFormat: getSummaryCompletionOptions(modelAlias),
-    }),
-    ...getSummaryCompletionOptions(modelAlias),
-    messages: [
-      {
-        role: "system",
-        content: "Generate a short title for this conversation, no formatting",
-      },
-      { role: "user", content: summaryText },
-    ],
-  }, { jwt, myceliaUrl });
-
-  return {
-    title: getChatCompletionText(titleResponse, {
-      requestedModel: modelAlias,
-      resolvedModel: titleResponse?.mycelia_routing?.resolvedModel ??
-        titleResponse?.model,
-      purpose: "summary title",
-    }),
-    provenance: getInferenceProvenance(
-      titleResponse,
-      modelAlias,
-      fallbackModel,
-    ),
-  };
+/**
+ * Parse the combined {summary, title} response. Returns null when the model
+ * ignored the JSON contract, in which case the caller treats the whole text
+ * as the summary and derives a title locally.
+ */
+export function parseSummaryTitleResponse(
+  content: string,
+): { summary: string; title: string } | null {
+  let cleaned = content.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/```\s*$/, "");
+  }
+  const jsonStart = cleaned.indexOf("{");
+  const jsonEnd = cleaned.lastIndexOf("}");
+  if (jsonStart === -1 || jsonEnd <= jsonStart) return null;
+  try {
+    const parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
+    const summary = typeof parsed.summary === "string"
+      ? parsed.summary.trim()
+      : "";
+    const title = typeof parsed.title === "string"
+      ? parsed.title.trim().replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 200)
+      : "";
+    if (!summary || !title) return null;
+    return { summary, title };
+  } catch {
+    return null;
+  }
 }
 
 function deriveTitleFromPrompt(promptText: string): string {
@@ -681,30 +679,61 @@ async function summarizeConversationRange(
     `[summarization] Job ${job.id}: using system prompt from ${promptSource}`,
   );
 
+  // A new conversation also needs a title. It is produced in the SAME call
+  // as the summary (structured {summary, title} response) — a separate title
+  // call would re-send tokens and re-run the failover chain for no benefit.
+  const wantsTitle = !existingObjectId;
+  const combinedSystemPrompt = wantsTitle
+    ? `${systemPrompt}\n\nReturn JSON with exactly two fields: "summary" (the summary as described above) and "title" (a short plain-text title for the conversation, no formatting).`
+    : systemPrompt;
+  const responseFormat = wantsTitle
+    ? buildJsonSchemaResponseFormat(
+      "summary_with_title",
+      z.object({ summary: z.string(), title: z.string() })
+        .toJSONSchema() as Record<string, unknown>,
+    )
+    : undefined;
+
   console.log(
-    `[summarization] Job ${job.id}: calling LLM for summary (prompt ${promptText.length} chars, model=${modelAlias})`,
+    `[summarization] Job ${job.id}: calling LLM for summary${
+      wantsTitle ? "+title" : ""
+    } (prompt ${promptText.length} chars, model=${modelAlias})`,
+  );
+  const summaryFallbackModel = resolveWorkerFallbackModel(
+    jobData.fallbackModel,
+    "SUMMARIZATION_FALLBACK_MODEL",
   );
   const completion = await callResource<any, any>("llm", {
     action: "completions",
     model: modelAlias,
-    fallbackModel: jobData.fallbackModel,
+    // Omit rather than pass undefined: EJSON turns undefined into null.
+    ...(summaryFallbackModel ? { fallbackModel: summaryFallbackModel } : {}),
+    ...(jobData.providerProfileId
+      ? { provider_profile_id: jobData.providerProfileId }
+      : {}),
     session_id: createPromptCacheSessionId("summarization-body", {
-      system: systemPrompt,
-      responseFormat: getSummaryCompletionOptions(modelAlias),
+      system: combinedSystemPrompt,
+      responseFormat: {
+        ...getSummaryCompletionOptions(modelAlias),
+        ...(responseFormat ?? {}),
+      },
     }),
     ...getSummaryCompletionOptions(modelAlias),
+    ...(responseFormat ? { response_format: responseFormat } : {}),
     messages: [
-      { role: "system", content: systemPrompt },
+      { role: "system", content: combinedSystemPrompt },
       { role: "user", content: promptText },
     ],
   }, { jwt, myceliaUrl });
 
-  const summary = getChatCompletionText(completion, {
+  const rawContent = getChatCompletionText(completion, {
     requestedModel: modelAlias,
     resolvedModel: completion?.mycelia_routing?.resolvedModel ??
       completion?.model,
     purpose: "conversation summary",
   });
+  const combined = wantsTitle ? parseSummaryTitleResponse(rawContent) : null;
+  const summary = combined?.summary ?? rawContent;
   const truncatedSummary = summary.length > 200
     ? summary.slice(0, 200) + "..."
     : summary;
@@ -715,7 +744,7 @@ async function summarizeConversationRange(
   const summaryEntry = createLLMSummaryEntry(
     summary,
     completion,
-    systemPrompt,
+    combinedSystemPrompt,
     jobData,
     jobId,
     sourceRefs,
@@ -749,22 +778,19 @@ async function summarizeConversationRange(
     };
   }
 
-  console.log(
-    `[summarization] Job ${job.id}: calling LLM for title generation`,
-  );
-  const titleCompletion = await generateTitle(
-    modelAlias,
-    jobData.fallbackModel,
-    summaryEntry.text,
-    jwt,
-    myceliaUrl,
-  );
-  const title = titleCompletion.title;
+  // Title comes from the combined call above; a model that ignored the JSON
+  // contract falls back to a locally derived title.
+  const title = combined?.title ?? deriveTitleFromPrompt(summary);
   (summaryEntry as any).titleProvenance = {
+    ...summaryEntry.provenance,
     task: "summary_title",
-    ...titleCompletion.provenance,
+    ...(combined ? {} : { derived: true }),
   };
-  console.log(`[summarization] Job ${job.id}: LLM generated title: "${title}"`);
+  console.log(
+    `[summarization] Job ${job.id}: title ${
+      combined ? "from combined call" : "derived locally"
+    }: "${title}"`,
+  );
 
   const objectId = await createConversationWithSummary(
     title,

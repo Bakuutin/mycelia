@@ -111,6 +111,13 @@ const MODEL_ROUTES = [
     label: "Automatic tagging",
     description: "Tag selection and assignment for conversation objects.",
   },
+  {
+    workerType: "entity_typing",
+    fallbackWorkerType: "entity_typing",
+    label: "Entity typing backfill",
+    description:
+      "Batch classification of untyped objects into person, place, organization, product, or project.",
+  },
 ] as const;
 
 const ROUTING_WORKER_TYPES = [
@@ -141,6 +148,11 @@ const InferenceSettingsPage = () => {
     Record<string, Record<string, unknown>>
   >({});
   const [taskModels, setTaskModels] = useState<Record<string, string>>({});
+  // Provider pin per task route: set when the task model was picked from a
+  // specific provider's group, so those jobs skip cross-provider failover.
+  const [taskProviders, setTaskProviders] = useState<Record<string, string>>(
+    {},
+  );
   const [taskFallbackModels, setTaskFallbackModels] = useState<
     Record<string, string>
   >({});
@@ -186,6 +198,7 @@ const InferenceSettingsPage = () => {
 
         const defaultsByWorker: Record<string, Record<string, unknown>> = {};
         const modelsByWorker: Record<string, string> = {};
+        const providersByWorker: Record<string, string> = {};
         const fallbackModelsByWorker: Record<string, string> = {};
         ROUTING_WORKER_TYPES.forEach((workerType, index) => {
           defaultsByWorker[workerType] = defaultsResults[index]?.defaults || {};
@@ -197,6 +210,12 @@ const InferenceSettingsPage = () => {
           if (typeof defaults.model === "string" && defaults.model) {
             modelsByWorker[route.workerType] = defaults.model;
           }
+          if (
+            typeof defaults.providerProfileId === "string" &&
+            defaults.providerProfileId
+          ) {
+            providersByWorker[route.workerType] = defaults.providerProfileId;
+          }
           if (typeof fallbackDefaults.fallbackModel === "string") {
             fallbackModelsByWorker[route.workerType] =
               fallbackDefaults.fallbackModel;
@@ -204,6 +223,7 @@ const InferenceSettingsPage = () => {
         });
         setWorkerDefaults(defaultsByWorker);
         setTaskModels(modelsByWorker);
+        setTaskProviders(providersByWorker);
         setTaskFallbackModels(fallbackModelsByWorker);
 
         const legacy = config?.llm || config?.inference || {};
@@ -433,18 +453,42 @@ const InferenceSettingsPage = () => {
       // route on both workers so a newly queued extractor also overrides any
       // stale model snapshot on an older, still-ready chunk. Aliases stay
       // aliases so provider failover can re-resolve them per route.
+      // A pin only accompanies an explicit task override; the global default
+      // keeps normal provider failover.
+      const taskProvider = taskModel
+        ? taskProviders[route.workerType]?.trim()
+        : undefined;
       if (route.workerType === "conversation_chunk_creator") {
         const effectiveModel = taskModel || globalAlias;
         defaults.model = effectiveModel;
         fallbackDefaults.model = effectiveModel;
+        if (taskProvider) {
+          defaults.providerProfileId = taskProvider;
+          fallbackDefaults.providerProfileId = taskProvider;
+        } else {
+          delete defaults.providerProfileId;
+          delete fallbackDefaults.providerProfileId;
+        }
       } else if (taskModel) {
         defaults.model = taskModel;
+        if (taskProvider) {
+          defaults.providerProfileId = taskProvider;
+        } else {
+          delete defaults.providerProfileId;
+        }
       } else {
         delete defaults.model;
+        delete defaults.providerProfileId;
       }
 
-      fallbackDefaults.fallbackModel =
-        taskFallbackModels[route.workerType]?.trim() || "";
+      // An explicit fallback overrides; an empty one is removed so jobs use
+      // the provider route's configured fallback (unified default).
+      const taskFallback = taskFallbackModels[route.workerType]?.trim();
+      if (taskFallback) {
+        fallbackDefaults.fallbackModel = taskFallback;
+      } else {
+        delete fallbackDefaults.fallbackModel;
+      }
     });
 
     setSaving(true);
@@ -832,26 +876,24 @@ const InferenceSettingsPage = () => {
                     {draft.aliases[alias] ? "Mapped" : "None"}
                   </Badge>
                 </div>
-                <Input
-                  id={`alias-${alias}`}
-                  list="llm-provider-models"
+                <ModelSelector
                   value={draft.aliases[alias] || ""}
-                  placeholder="None — alias not served"
-                  onChange={(event) =>
+                  onChange={(model) =>
                     setDraft((current) => ({
                       ...current,
                       aliases: {
                         ...current.aliases,
-                        [alias]: event.target.value,
+                        [alias]: model,
                       },
                     }))}
+                  staticModels={draftModels}
+                  staticHeading={`${draft.name || "Provider"} models`}
+                  allowCustomValue
+                  placeholder="None — alias not served"
                 />
               </div>
             ))}
           </div>
-          <datalist id="llm-provider-models">
-            {draftModels.map((model) => <option key={model} value={model} />)}
-          </datalist>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -880,16 +922,17 @@ const InferenceSettingsPage = () => {
           </div>
           <div className="space-y-2">
             <Label htmlFor="llmChatModel">Default chat model (optional)</Label>
-            <Input
-              id="llmChatModel"
-              list="llm-provider-models"
+            <ModelSelector
               value={draft.chatModel || ""}
-              placeholder="Falls back to the default alias model"
-              onChange={(event) =>
+              onChange={(model) =>
                 setDraft((current) => ({
                   ...current,
-                  chatModel: event.target.value,
+                  chatModel: model,
                 }))}
+              staticModels={draftModels}
+              staticHeading={`${draft.name || "Provider"} models`}
+              allowCustomValue
+              placeholder="Falls back to the default alias model"
             />
           </div>
         </div>
@@ -954,6 +997,13 @@ const InferenceSettingsPage = () => {
             const override = taskModels[route.workerType] || "";
             const effectiveModel = override || globalAlias;
             const fallback = taskFallbackModels[route.workerType] || "";
+            const pinnedProviderId = override
+              ? taskProviders[route.workerType] || ""
+              : "";
+            const pinnedProviderName = pinnedProviderId
+              ? profiles.find((profile) => profile.id === pinnedProviderId)
+                ?.name ?? pinnedProviderId
+              : "";
             return (
               <div
                 key={route.workerType}
@@ -975,9 +1025,10 @@ const InferenceSettingsPage = () => {
                     <p className="text-muted-foreground">Effective primary</p>
                     <p className="max-w-md break-all font-mono">
                       {effectiveModel}
+                      {pinnedProviderName ? ` @ ${pinnedProviderName}` : ""}
                     </p>
                     <p className="mt-1 text-muted-foreground">
-                      On error: {fallback || "Stop with error"}
+                      On error: {fallback || "provider route fallback"}
                     </p>
                   </div>
                 </div>
@@ -988,6 +1039,12 @@ const InferenceSettingsPage = () => {
                       setTaskModels((current) => ({
                         ...current,
                         [route.workerType]: model,
+                      }))}
+                    providerValue={pinnedProviderId || undefined}
+                    onSelectWithProvider={(_model, providerProfileId) =>
+                      setTaskProviders((current) => ({
+                        ...current,
+                        [route.workerType]: providerProfileId || "",
                       }))}
                     placeholder={`Use default: ${globalAlias}${
                       globalModel ? ` → ${globalModel}` : ""
@@ -1000,11 +1057,16 @@ const InferenceSettingsPage = () => {
                     variant="outline"
                     size="icon"
                     disabled={!override}
-                    onClick={() =>
+                    onClick={() => {
                       setTaskModels((current) => ({
                         ...current,
                         [route.workerType]: "",
-                      }))}
+                      }));
+                      setTaskProviders((current) => ({
+                        ...current,
+                        [route.workerType]: "",
+                      }));
+                    }}
                     title="Use global default"
                   >
                     <RotateCcw className="h-4 w-4" />
@@ -1014,7 +1076,7 @@ const InferenceSettingsPage = () => {
                   <div className="flex items-center justify-between gap-2">
                     <Label>Fallback after a primary error</Label>
                     <Badge variant={fallback ? "default" : "outline"}>
-                      {fallback ? "Retry once" : "Stop with error"}
+                      {fallback ? "Task override" : "Route default"}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1025,7 +1087,7 @@ const InferenceSettingsPage = () => {
                           ...current,
                           [route.workerType]: model,
                         }))}
-                      placeholder="No fallback — stop with error"
+                      placeholder="Use the provider route's configured fallback"
                       className="flex-1"
                       prefetch
                     />
@@ -1039,7 +1101,7 @@ const InferenceSettingsPage = () => {
                           ...current,
                           [route.workerType]: "",
                         }))}
-                      title="Stop with error; do not retry another model"
+                      title="Clear the task override; use the provider route's configured fallback"
                     >
                       <XCircle className="h-4 w-4" />
                     </Button>

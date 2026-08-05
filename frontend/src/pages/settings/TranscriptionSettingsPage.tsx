@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { callResource } from "@/lib/api";
+import { ModelSelector } from "@/components/ModelSelector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -684,27 +685,18 @@ const TranscriptionSettingsPage = () => {
           </div>
           <div className="space-y-2 md:col-span-3">
             <Label htmlFor="sttModel">Model</Label>
-            <Input
-              id="sttModel"
-              list="stt-models"
+            <ModelSelector
               value={draft.model}
-              onChange={(event) =>
+              onChange={(model) =>
                 setDraft((current) => ({
                   ...current,
-                  model: event.target.value,
+                  model,
                 }))}
+              staticModels={modelOptions}
+              staticHeading="STT models"
+              allowCustomValue
+              placeholder="Select model..."
             />
-            <datalist id="stt-models">
-              {modelOptions.map((model) => (
-                <option
-                  key={model}
-                  value={model}
-                  label={model === "large-v3-v20240930_turbo"
-                    ? "Argmax full Turbo (1.64 GB)"
-                    : undefined}
-                />
-              ))}
-            </datalist>
           </div>
         </div>
 

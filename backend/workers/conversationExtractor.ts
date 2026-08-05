@@ -58,8 +58,9 @@ interface Segment {
 
 interface ConversationMetadata {
   agreed_upon_something: boolean;
-  entities: string[];
+  entities: ExtractedEntity[];
   emoji: string | undefined;
+  tags: string[];
 }
 
 interface EntityRelationshipResult {
@@ -68,7 +69,7 @@ interface EntityRelationshipResult {
   failed: number;
 }
 
-interface ConversationError {
+export interface ConversationError {
   type: string;
   message: string;
   conversationId?: string;
@@ -80,6 +81,7 @@ interface ExtractedConversationArtifact {
   title: string;
   emoji: string;
   entities: string[];
+  tags: string[];
   agreementDetected: boolean;
   relationshipsAttempted: number;
   relationshipsCreated: number;
@@ -96,6 +98,7 @@ interface ChunkProcessingResult {
   relationshipsAttempted: number;
   relationshipsCreated: number;
   relationshipErrors: number;
+  tagsApplied: number;
   artifacts: ExtractedConversationArtifact[];
   // LLM routing provenance for every call made while processing this chunk.
   inferenceRuns?: InferenceProvenance[];
@@ -112,6 +115,7 @@ function emptyChunkResult(claimed: boolean): ChunkProcessingResult {
     relationshipsAttempted: 0,
     relationshipsCreated: 0,
     relationshipErrors: 0,
+    tagsApplied: 0,
     artifacts: [],
   };
 }
@@ -142,7 +146,7 @@ type StructuredLLMResult<T> = {
   attempts: InferenceProvenance[];
 };
 
-interface ConversationChunk {
+export interface ConversationChunk {
   _id: ObjectId;
   chunkKey: string;
   start: Date;
@@ -177,10 +181,13 @@ export const schema = z.object({
     .describe(
       "Replace existing artifacts for the explicitly selected chunkId; force requires chunkId",
     ),
-  fallbackModel: z.string()
-    .default(Deno.env.get("CONVERSATION_EXTRACTION_FALLBACK_MODEL") ?? "")
+  fallbackModel: z.string().optional()
     .describe(
-      "Optional model retried once after a primary LLM error; empty means stop with error",
+      "Optional model retried once after a primary LLM error; leave empty to use the provider route's configured fallback",
+    ),
+  providerProfileId: z.string().optional()
+    .describe(
+      "Pin the LLM calls to one provider profile (no cross-provider failover)",
     ),
   retryNow: z.boolean().default(false)
     .describe(
@@ -206,7 +213,7 @@ export const schema = z.object({
 
 Return all fields required by the response schema:
 - agreed_upon_something: true only when the speakers made a concrete agreement, commitment, or decision; otherwise false.
-- entities: deduplicated names of people, organizations, places, projects, products, or other stable named things explicitly mentioned in the transcript. Use concise canonical names. Do not include pronouns, unnamed people, generic common nouns, or conversation topics. Return [] when there are no qualifying entities.
+- entities: deduplicated named things explicitly mentioned in the transcript, each as an object {"name": string, "type": string}. type is exactly one of "person", "place", "organization", "product", "project", "event", "animal", "concept", "media", "other". Use "person" for individual people, "place" for physical locations (cities, countries, venues), "organization" for companies, institutions, teams, or groups, "product" for products, apps, services, or software, "project" for named projects or initiatives, "event" for named events, gatherings, conferences, or festivals, "animal" for animals and pets, "concept" for abstract concepts, topics, technologies, or languages, "media" for creative works (books, films, series, songs, games, articles) and fictional characters, and "other" for anything else or when you are not reasonably confident. Use concise canonical names. Do not include pronouns, unnamed people, generic common nouns, or conversation topics. Return [] when there are no qualifying entities.
 - emoji: exactly one emoji that best represents the main subject of the conversation. Always return one emoji, even when the subject is broad.
 
 Do not summarize the transcript and do not add fields outside the schema.`,
@@ -409,10 +416,42 @@ function generateExtractionKey(
 // LLM Operations
 // ============================================================================
 
+/**
+ * OpenAI-compatible json_schema response format. Strict providers (vLLM,
+ * OpenRouter passthrough) require the {name, schema} envelope — a bare JSON
+ * schema is rejected with a validation error.
+ */
+/**
+ * Unified fallback policy for LLM workers: an explicit non-empty job value
+ * wins, then the worker's env override; otherwise undefined so the LLM
+ * resource applies the provider route's configured fallback (the common
+ * per-route fallback managed in Settings → Inference).
+ */
+export function resolveWorkerFallbackModel(
+  requested: string | undefined,
+  envVar: string,
+): string | undefined {
+  const explicit = requested?.trim();
+  if (explicit) return explicit;
+  const env = Deno.env.get(envVar)?.trim();
+  return env || undefined;
+}
+
+export function buildJsonSchemaResponseFormat(
+  name: string,
+  schema: Record<string, unknown>,
+): {
+  type: "json_schema";
+  json_schema: { name: string; schema: Record<string, unknown> };
+} {
+  return { type: "json_schema", json_schema: { name, schema } };
+}
+
 async function callLLMStructured<T>(
   llm: (input: any) => Promise<any>,
   model: string,
-  fallbackModel: string,
+  fallbackModel: string | undefined,
+  providerProfileId: string | undefined,
   cacheTask: string,
   messages: Array<{ role: string; content: string }>,
   responseFormat: { type: "json_object" } | {
@@ -443,10 +482,13 @@ async function callLLMStructured<T>(
   const response = await llm({
     action: "completions",
     model,
-    fallbackModel,
+    // Omit rather than pass undefined: EJSON turns undefined into null,
+    // which the llm request schema rejects.
+    ...(fallbackModel ? { fallbackModel } : {}),
+    ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
     session_id: sessionId,
     messages: adjustedMessages,
-    response_format: { type: "json_object" },
+    response_format: responseFormat,
   });
 
   const content = response.choices[0]?.message?.content;
@@ -484,12 +526,13 @@ async function callLLMStructured<T>(
     const retryResponse = await llm({
       action: "completions",
       model,
-      fallbackModel,
+      ...(fallbackModel ? { fallbackModel } : {}),
+      ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
       session_id: sessionId,
       messages: [
         { role: "user", content: `Fix this JSON to be valid:\n${content}` },
       ],
-      response_format: { type: "json_object" },
+      response_format: responseFormat,
     });
 
     const retryContent = retryResponse.choices[0]?.message?.content;
@@ -530,13 +573,34 @@ function buildSegmentationMessages(
   return messages;
 }
 
+export interface ExtractionTag {
+  _id: ObjectId;
+  name: string;
+  details?: string;
+}
+
+/**
+ * Tag selection happens inside the metadata call: the transcript is already
+ * being sent for entities/emoji, so the tag list is the only extra cost.
+ * The tagger worker remains as a manual/backfill pass for tags added later.
+ */
+export function buildTagListPrompt(tags: ExtractionTag[]): string {
+  if (tags.length === 0) return "";
+  const lines = tags.map((tag) =>
+    tag.details ? `- ${tag.name}: ${tag.details}` : `- ${tag.name}`
+  );
+  return `\n\nAvailable tags:\n${lines.join("\n")}\n- tags: array of tag names from the list above that clearly apply to this conversation. Use exact names, be conservative, and return [] when none apply.`;
+}
+
 function buildMetadataMessages(
   input: ConversationExtractorJobData,
   prompt: string,
+  tags: ExtractionTag[] = [],
 ) {
-  const systemPrompt = input.extraction_guidance_prompt
+  const basePrompt = input.extraction_guidance_prompt
     ? `${input.extraction_system_prompt}\n\nOutput guidance:\n${input.extraction_guidance_prompt}`
     : input.extraction_system_prompt;
+  const systemPrompt = basePrompt + buildTagListPrompt(tags);
   const messages: Array<{ role: string; content: string }> = [
     { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
@@ -563,7 +627,7 @@ function stripMarkdownCodeBlock(content: string): string {
  * Robustly extract and parse JSON from LLM response that may contain extra text.
  * Handles cases where LLM adds explanatory text before or after the JSON.
  */
-function extractJsonFromText(content: string): any {
+export function extractJsonFromText(content: string): any {
   const cleaned = stripMarkdownCodeBlock(content);
 
   // First, try to parse as-is (for clean JSON responses)
@@ -799,7 +863,10 @@ export function createSegmentParser(
   };
 }
 
-export function parseMetadataResponse(content: string): ConversationMetadata {
+export function parseMetadataResponse(
+  content: string,
+  validTagNames?: Set<string>,
+): ConversationMetadata {
   const parsed = extractJsonFromText(content);
 
   const emoji = normalizeEmoji(parsed.emoji);
@@ -807,16 +874,49 @@ export function parseMetadataResponse(content: string): ConversationMetadata {
     throw new Error("Metadata response did not contain a valid emoji");
   }
 
-  const entities: string[] = [];
+  // Tags are optional in the response (legacy prompt overrides do not ask
+  // for them) and are filtered to exact known tag names.
+  const tags: string[] = [];
+  if (Array.isArray(parsed.tags) && validTagNames?.size) {
+    const seenTags = new Set<string>();
+    for (const value of parsed.tags) {
+      if (typeof value !== "string") continue;
+      const name = value.trim();
+      if (!name || !validTagNames.has(name) || seenTags.has(name)) continue;
+      seenTags.add(name);
+      tags.push(name);
+    }
+  }
+
+  // Accepts both the current {name, type} shape and legacy plain-string
+  // entries (older prompt overrides or weaker models) — those become "other".
+  const entities: ExtractedEntity[] = [];
   const seenEntities = new Set<string>();
   if (Array.isArray(parsed.entities)) {
     for (const value of parsed.entities) {
-      if (typeof value !== "string") continue;
-      const name = value.trim();
+      let name: string;
+      let type: EntityType = "other";
+      if (typeof value === "string") {
+        name = value.trim();
+      } else if (
+        value && typeof value === "object" &&
+        typeof (value as { name?: unknown }).name === "string"
+      ) {
+        name = (value as { name: string }).name.trim();
+        const rawType = (value as { type?: unknown }).type;
+        if (
+          typeof rawType === "string" &&
+          (ENTITY_TYPES as readonly string[]).includes(rawType)
+        ) {
+          type = rawType as EntityType;
+        }
+      } else {
+        continue;
+      }
       const key = name.toLocaleLowerCase();
       if (!name || seenEntities.has(key)) continue;
       seenEntities.add(key);
-      entities.push(name);
+      entities.push({ name, type });
     }
   }
 
@@ -824,6 +924,7 @@ export function parseMetadataResponse(content: string): ConversationMetadata {
     agreed_upon_something: Boolean(parsed.agreed_upon_something),
     entities,
     emoji,
+    tags,
   };
 }
 
@@ -842,10 +943,69 @@ export function normalizeEmoji(value: unknown): string | undefined {
   return undefined;
 }
 
+export const ENTITY_TYPES = [
+  "person",
+  "place",
+  "organization",
+  "product",
+  "project",
+  "event",
+  "animal",
+  "concept",
+  "media",
+  "other",
+] as const;
+export type EntityType = typeof ENTITY_TYPES[number];
+
+export interface ExtractedEntity {
+  name: string;
+  type: EntityType;
+}
+
+export const ENTITY_TYPE_FLAG: Partial<Record<EntityType, string>> = {
+  person: "isPerson",
+  place: "isPlace",
+  organization: "isOrganization",
+  product: "isProduct",
+  project: "isProject",
+  event: "isEvent",
+  animal: "isAnimal",
+  concept: "isConcept",
+  media: "isMedia",
+};
+
+// Every type flag on objects. A key that exists — even with value false —
+// means someone (user or job) already made a typing decision.
+export const TYPE_FLAG_FIELDS = [
+  "isPerson",
+  "isEvent",
+  "isRelationship",
+  "isPromise",
+  "isConversation",
+  "isTag",
+  "isPlace",
+  "isOrganization",
+  "isProduct",
+  "isProject",
+  "isAnimal",
+  "isConcept",
+  "isMedia",
+];
+
+export function hasAnyTypeFlagKey(obj: Record<string, unknown>): boolean {
+  return TYPE_FLAG_FIELDS.some((field) =>
+    field in obj && obj[field] !== undefined
+  );
+}
+
 export const metadataResponseSchema = z.object({
   agreed_upon_something: z.boolean(),
-  entities: z.array(z.string()),
+  entities: z.array(z.object({
+    name: z.string(),
+    type: z.enum(ENTITY_TYPES),
+  })),
   emoji: z.string(),
+  tags: z.array(z.string()),
 });
 
 // ============================================================================
@@ -857,11 +1017,14 @@ const entityCache = new Map<string, ObjectId>();
 async function findOrCreateEntity(
   objects: (input: any) => Promise<any>,
   name: string,
+  type: EntityType,
   generatedWith: Record<string, unknown>,
 ): Promise<ObjectId> {
   // Check cache first
   const cached = entityCache.get(name);
   if (cached) return cached;
+
+  const flagField = ENTITY_TYPE_FLAG[type];
 
   // Check DB
   const existing = await objects({
@@ -871,9 +1034,24 @@ async function findOrCreateEntity(
   });
 
   if (existing && existing.length > 0) {
-    const id = existing[0]._id;
-    entityCache.set(name, id);
-    return id;
+    const doc = existing[0];
+    // Backfill-on-touch: type an existing untyped entity, but only when no
+    // type-flag key exists at all — an explicit false is a manual decision.
+    if (flagField && !hasAnyTypeFlagKey(doc)) {
+      try {
+        await objects({
+          action: "update",
+          id: doc._id.toString(),
+          version: doc.version ?? 0,
+          field: flagField,
+          value: true,
+        });
+      } catch {
+        // Concurrent edit — keep whatever the other writer decided.
+      }
+    }
+    entityCache.set(name, doc._id);
+    return doc._id;
   }
 
   // Create new
@@ -881,7 +1059,8 @@ async function findOrCreateEntity(
     action: "create",
     object: {
       name,
-      metadata: { generatedWith },
+      ...(flagField ? { [flagField]: true } : {}),
+      metadata: { generatedWith: { ...generatedWith, entityType: type } },
     },
   });
 
@@ -889,24 +1068,25 @@ async function findOrCreateEntity(
   return result.insertedId;
 }
 
-async function createEntityRelationships(
+export async function createEntityRelationships(
   objects: (input: any) => Promise<any>,
   conversationId: ObjectId,
-  entityNames: string[],
+  entities: ExtractedEntity[],
   errors: ConversationError[],
   generatedWith: Record<string, unknown>,
 ): Promise<EntityRelationshipResult> {
   const result: EntityRelationshipResult = {
-    attempted: entityNames.length,
+    attempted: entities.length,
     created: 0,
     failed: 0,
   };
 
-  for (const entityName of entityNames) {
+  for (const entity of entities) {
     try {
       const entityId = await findOrCreateEntity(
         objects,
-        entityName,
+        entity.name,
+        entity.type,
         generatedWith,
       );
       await objects({
@@ -926,14 +1106,14 @@ async function createEntityRelationships(
     } catch (error) {
       result.failed++;
       console.error(
-        `Failed to create entity relationship for "${entityName}":`,
+        `Failed to create entity relationship for "${entity.name}":`,
         error,
       );
       errors.push({
         type: "entity_relationship",
         message: error instanceof Error ? error.message : String(error),
         conversationId: conversationId.toString(),
-        entity: entityName,
+        entity: entity.name,
       });
     }
   }
@@ -941,11 +1121,51 @@ async function createEntityRelationships(
   return result;
 }
 
+export async function createTagRelationships(
+  objects: (input: any) => Promise<any>,
+  conversationId: ObjectId,
+  tagNames: string[],
+  tagsByName: Map<string, ObjectId>,
+  errors: ConversationError[],
+  generatedWith: Record<string, unknown>,
+): Promise<{ created: number; failed: number }> {
+  const result = { created: 0, failed: 0 };
+  for (const tagName of tagNames) {
+    const tagId = tagsByName.get(tagName);
+    if (!tagId) continue;
+    try {
+      await objects({
+        action: "create",
+        object: {
+          isRelationship: true,
+          name: "tagged",
+          relationship: {
+            subject: conversationId,
+            object: tagId,
+            symmetrical: false,
+          },
+          metadata: { generatedWith },
+        },
+      });
+      result.created++;
+    } catch (error) {
+      result.failed++;
+      errors.push({
+        type: "tag_relationship",
+        message: error instanceof Error ? error.message : String(error),
+        conversationId: conversationId.toString(),
+        entity: tagName,
+      });
+    }
+  }
+  return result;
+}
+
 // ============================================================================
 // Idempotency Operations
 // ============================================================================
 
-async function deleteConversationsForChunk(
+export async function deleteConversationsForChunk(
   objects: (input: any) => Promise<any>,
   chunkId: ObjectId,
 ): Promise<number> {
@@ -1001,6 +1221,7 @@ async function processChunk(params: {
   processingTimeoutMs: number;
   chunksProcessed: number;
   errors: ConversationError[];
+  tags: ExtractionTag[];
 }): Promise<ChunkProcessingResult> {
   const {
     chunk,
@@ -1013,6 +1234,7 @@ async function processChunk(params: {
     processingTimeoutMs,
     chunksProcessed,
     errors,
+    tags,
   } = params;
   const model = input.model?.trim() || chunk.params.model;
 
@@ -1154,19 +1376,23 @@ async function processChunk(params: {
     const segmentationRun = await callLLMStructured(
       llm,
       model,
-      input.fallbackModel,
+      resolveWorkerFallbackModel(
+        input.fallbackModel,
+        "CONVERSATION_EXTRACTION_FALLBACK_MODEL",
+      ),
+      input.providerProfileId,
       "conversation-extractor-segmentation",
       segmentationMessages,
-      {
-        type: "json_schema",
-        json_schema: z.object({
+      buildJsonSchemaResponseFormat(
+        "conversation_segments",
+        z.object({
           segments: z.array(z.object({
             title: z.string(),
             start: z.string(),
             end: z.string(),
           })),
-        }).toJSONSchema(),
-      },
+        }).toJSONSchema() as Record<string, unknown>,
+      ),
       createSegmentParser(promptLines, chunkStart, chunkEnd),
       `Chunk ${chunk._id} segmentation`,
     );
@@ -1233,6 +1459,10 @@ async function processChunk(params: {
     let relationshipsAttempted = 0;
     let relationshipsCreated = 0;
     let relationshipErrors = 0;
+    let tagsApplied = 0;
+    const tagsByName = new Map<string, ObjectId>(
+      tags.map((tag) => [tag.name, tag._id]),
+    );
     const artifacts: ExtractedConversationArtifact[] = [];
     const metadataRuns: Array<Record<string, unknown>> = [];
     const metadataProvenances: InferenceProvenance[] = [];
@@ -1250,20 +1480,25 @@ async function processChunk(params: {
       // Format segment prompt
       const { prompt: segPrompt } = formatChunkAsPrompt(segUtterances);
 
-      // LLM Call #2: Metadata extraction (entities, emoji, agreed_upon_something)
-      const messages = buildMetadataMessages(input, segPrompt);
+      // LLM Call #2: Metadata extraction (entities, emoji, agreement, tags)
+      const messages = buildMetadataMessages(input, segPrompt, tags);
+      const validTagNames = new Set(tags.map((tag) => tag.name));
 
       const metadataRun = await callLLMStructured(
         llm,
         model,
-        input.fallbackModel,
+        resolveWorkerFallbackModel(
+          input.fallbackModel,
+          "CONVERSATION_EXTRACTION_FALLBACK_MODEL",
+        ),
+        input.providerProfileId,
         "conversation-extractor-metadata",
         messages,
-        {
-          type: "json_schema",
-          json_schema: metadataResponseSchema.toJSONSchema(),
-        },
-        parseMetadataResponse,
+        buildJsonSchemaResponseFormat(
+          "conversation_metadata",
+          metadataResponseSchema.toJSONSchema() as Record<string, unknown>,
+        ),
+        (content) => parseMetadataResponse(content, validTagNames),
         `Chunk ${chunk._id} segment ${
           i + 1
         }/${segmentsWithUtterances.length} metadata`,
@@ -1272,7 +1507,7 @@ async function processChunk(params: {
       console.log(
         `[ConvExtractor] Chunk ${chunk._id} segment ${
           i + 1
-        }: metadata extracted - entities=${metadata.entities.length}, emoji=${
+        }: metadata extracted - entities=${metadata.entities.length}, tags=${metadata.tags.length}, emoji=${
           metadata.emoji ?? "none"
         }, agreed=${metadata.agreed_upon_something}`,
       );
@@ -1344,7 +1579,7 @@ async function processChunk(params: {
               metadata: extractionProvenance.metadata,
             },
             result: {
-              schemaVersion: "v2",
+              schemaVersion: "v3",
               status: "metadata_extracted",
               emojiPresent: true,
               entityCount: metadata.entities.length,
@@ -1384,17 +1619,32 @@ async function processChunk(params: {
         },
       );
 
+      const tagResult = await createTagRelationships(
+        objects,
+        conversationId,
+        metadata.tags,
+        tagsByName,
+        errors,
+        {
+          ...extractionProvenance,
+          task: "tagging",
+          subjectId: conversationId.toString(),
+        },
+      );
+
       emojiCount += metadata.emoji ? 1 : 0;
       entityCount += metadata.entities.length;
       agreementCount += metadata.agreed_upon_something ? 1 : 0;
       relationshipsAttempted += relationshipResult.attempted;
       relationshipsCreated += relationshipResult.created;
       relationshipErrors += relationshipResult.failed;
+      tagsApplied += tagResult.created;
       artifacts.push({
         conversationId: conversationId.toString(),
         title: segment.title.trim(),
         emoji: metadata.emoji ?? "",
-        entities: metadata.entities,
+        entities: metadata.entities.map((entity) => entity.name),
+        tags: metadata.tags,
         agreementDetected: metadata.agreed_upon_something,
         relationshipsAttempted: relationshipResult.attempted,
         relationshipsCreated: relationshipResult.created,
@@ -1426,7 +1676,7 @@ async function processChunk(params: {
           version: latestConversation.version ?? 0,
           field: "metadata.extractedWith.result",
           value: {
-            schemaVersion: "v2",
+            schemaVersion: "v3",
             status: relationshipResult.failed === 0
               ? "completed"
               : "completed_with_relationship_errors",
@@ -1435,8 +1685,34 @@ async function processChunk(params: {
             relationshipsAttempted: relationshipResult.attempted,
             relationshipsCreated: relationshipResult.created,
             relationshipErrors: relationshipResult.failed,
+            tagsApplied: tagResult.created,
           },
         });
+
+        // Record the tagging run so the tagger backfill skips this
+        // conversation. Only when a tag list existed — with no tags defined
+        // yet, a later tagger run should still get a chance.
+        if (tags.length > 0) {
+          const freshConversation = await objects({
+            action: "get",
+            id: conversationId.toString(),
+          });
+          await objects({
+            action: "update",
+            id: conversationId.toString(),
+            version: freshConversation.version ?? 0,
+            field: "metadata.aiProvenance.taggingRuns",
+            value: [{
+              task: "tagging",
+              ...metadataRun.provenance,
+              selectedTags: metadata.tags,
+              selectedTagCount: metadata.tags.length,
+              jobId: job.id,
+              generatedAt,
+              source: "conversation_extraction",
+            }],
+          });
+        }
       } catch (error) {
         console.error(
           `Failed to persist extraction result for conversation ${conversationId}:`,
@@ -1499,6 +1775,7 @@ async function processChunk(params: {
       relationshipsAttempted,
       relationshipsCreated,
       relationshipErrors,
+      tagsApplied,
       artifacts,
       inferenceRuns: [
         segmentationRun.provenance,
@@ -1556,11 +1833,13 @@ const capability: JobCapability = {
     relationshipsAttempted: z.number(),
     relationshipsCreated: z.number(),
     relationshipErrors: z.number(),
+    tagsApplied: z.number(),
     artifacts: z.array(z.object({
       conversationId: z.string(),
       title: z.string(),
       emoji: z.string(),
       entities: z.array(z.string()),
+      tags: z.array(z.string()),
       agreementDetected: z.boolean(),
       relationshipsAttempted: z.number(),
       relationshipsCreated: z.number(),
@@ -1660,9 +1939,37 @@ const capability: JobCapability = {
     let relationshipsAttempted = 0;
     let relationshipsCreated = 0;
     let relationshipErrors = 0;
+    let tagsApplied = 0;
     const artifacts: ExtractedConversationArtifact[] = [];
     const errors: ConversationError[] = [];
     const inferenceRuns: InferenceProvenance[] = [];
+
+    // Tag selection happens inside the metadata call; fetch the tag list once
+    // per job run. A failure here degrades to extraction without tagging.
+    let extractionTags: ExtractionTag[] = [];
+    if (chunksToProcess.length > 0) {
+      try {
+        const tagDocs = await objects({
+          action: "list",
+          filters: { isTag: true },
+        }) as Array<{ _id: ObjectId; name?: string; details?: string }>;
+        extractionTags = (tagDocs ?? [])
+          .filter((tag) => typeof tag.name === "string" && tag.name.trim())
+          .map((tag) => ({
+            _id: tag._id,
+            name: tag.name as string,
+            details: tag.details,
+          }));
+        console.log(
+          `[ConvExtractor] Job ${job.id}: tagging with ${extractionTags.length} tags`,
+        );
+      } catch (error) {
+        console.error(
+          `[ConvExtractor] Job ${job.id}: failed to load tags, continuing without tagging:`,
+          error,
+        );
+      }
+    }
 
     // Compute prompt version for idempotency (based on prompts that affect output)
     const promptVersion = createHash("sha256")
@@ -1685,6 +1992,7 @@ const capability: JobCapability = {
         processingTimeoutMs,
         chunksProcessed,
         errors,
+        tags: extractionTags,
       });
 
       if (!result.claimed) {
@@ -1700,6 +2008,7 @@ const capability: JobCapability = {
       relationshipsAttempted += result.relationshipsAttempted;
       relationshipsCreated += result.relationshipsCreated;
       relationshipErrors += result.relationshipErrors;
+      tagsApplied += result.tagsApplied;
       artifacts.push(...result.artifacts);
       inferenceRuns.push(...(result.inferenceRuns ?? []));
       if (result.inferenceRuns?.length) {
@@ -1743,6 +2052,7 @@ const capability: JobCapability = {
       relationshipsAttempted,
       relationshipsCreated,
       relationshipErrors,
+      tagsApplied,
       artifacts,
       hasMore,
       // Compact routing summary so the jobs list can show the provider and

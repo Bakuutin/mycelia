@@ -237,6 +237,8 @@ const ReprocessModelArtifactsSchema = z.object({
   artifactType: z.literal("summary"),
   sourceModel: z.string().min(1),
   targetModel: z.string().min(1),
+  // Pin rerun jobs to one provider profile (no cross-provider failover).
+  targetProviderProfileId: z.string().min(1).optional(),
   artifactIds: z.array(z.string()).max(100).optional(),
   limit: z.number().int().min(1).max(100).default(25),
 });
@@ -1427,6 +1429,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         type: "summarization",
         objectId,
         model: input.targetModel,
+        ...(input.targetProviderProfileId
+          ? { providerProfileId: input.targetProviderProfileId }
+          : {}),
         allowExisting: true,
       }, {
         trigger: {
@@ -2242,6 +2247,17 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       },
     }) as number;
 
+    // One Redis round trip per worker; issue them together rather than paying
+    // the wait once per worker down the loop.
+    const pauseStates = new Map(
+      await Promise.all(types.map(async (workerType) =>
+        [
+          workerType,
+          await workerPauseManager.getEffectivePauseState(workerType),
+        ] as const
+      )),
+    );
+
     const status: Record<string, any> = {};
     for (const workerType of types) {
       const workerJobs = liveJobs.filter((job) => job.type === workerType);
@@ -2255,7 +2271,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         entry.manifest.name === workerType
       )?.manifest.triggers?.interval;
       status[workerType] = {
-        paused: await workerPauseManager.getEffectivePauseState(workerType),
+        paused: pauseStates.get(workerType) ?? false,
         desiredConcurrency: config?.workers?.[workerType]?.concurrency ?? 1,
         effectiveConcurrency: runtime.effectiveConcurrency,
         minConcurrency: runtime.minConcurrency,
@@ -2441,7 +2457,11 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                             },
                           ],
                         },
-                        // Generic: processed=0 and total=0 for other types
+                        // Generic: processed=0 for other types. Most workers
+                        // report no `total`; when one does, a run with work
+                        // queued but none processed is stalled, not empty.
+                        // Keep in sync with isEmptyJobResult in
+                        // frontend/src/lib/jobEmptyResult.ts.
                         {
                           $and: [
                             {
@@ -2452,7 +2472,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                                   "conversation_extractor",
                                   "transcription_sequence_creator",
                                   "transcription",
-                                  "summarization",
                                 ]],
                               },
                             },
@@ -2464,11 +2483,11 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                               }, 0],
                             },
                             {
-                              $eq: [{
+                              $in: [{
                                 $ifNull: ["$result.total", {
-                                  $ifNull: ["$progress.total", -1],
+                                  $ifNull: ["$progress.total", null],
                                 }],
-                              }, 0],
+                              }, [null, 0]],
                             },
                           ],
                         },

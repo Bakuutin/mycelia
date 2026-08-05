@@ -510,6 +510,11 @@ export default function SummaryHistoryPage() {
   const [to, setTo] = useState("");
   const [limit, setLimit] = useState("100");
   const [rerunTargetModel, setRerunTargetModel] = useState("");
+  // Set when the target model was picked from a specific provider's group;
+  // rerun jobs then route to that provider only.
+  const [rerunTargetProviderId, setRerunTargetProviderId] = useState<
+    string | undefined
+  >(undefined);
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunResult, setRerunResult] = useState<string | null>(null);
 
@@ -656,6 +661,10 @@ export default function SummaryHistoryPage() {
         artifactType: "summary",
         sourceModel: model,
         targetModel: rerunTargetModel,
+        // Omit rather than pass undefined: EJSON turns undefined into null.
+        ...(rerunTargetProviderId
+          ? { targetProviderProfileId: rerunTargetProviderId }
+          : {}),
         limit: Math.min(Number(limit), 100),
       }) as {
         queued?: Array<unknown>;
@@ -1098,6 +1107,9 @@ export default function SummaryHistoryPage() {
                     <ModelSelector
                       value={rerunTargetModel}
                       onChange={setRerunTargetModel}
+                      providerValue={rerunTargetProviderId}
+                      onSelectWithProvider={(_model, providerProfileId) =>
+                        setRerunTargetProviderId(providerProfileId)}
                       placeholder="Choose target model"
                       prefetch
                     />

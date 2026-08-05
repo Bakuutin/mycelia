@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend-dev",
+      "runtimeExecutable": "deno",
+      "runtimeArgs": ["task", "dev"],
+      "cwd": "frontend",
+      "port": 3001
+    }
+  ]
+}

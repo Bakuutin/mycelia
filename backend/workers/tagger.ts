@@ -9,6 +9,7 @@ import {
   summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
+import { resolveWorkerFallbackModel } from "./conversationExtractor.ts";
 
 /**
  * Tagger Worker
@@ -130,10 +131,13 @@ export const schema = z.object({
     .describe("Optional exact conversation IDs for targeted re-tagging"),
   limit: z.number().default(1),
   model: z.string().default("small"),
-  fallbackModel: z.string()
-    .default(Deno.env.get("TAGGER_FALLBACK_MODEL") ?? "")
+  fallbackModel: z.string().optional()
     .describe(
-      "Optional model retried once after a primary LLM error; empty means stop with error",
+      "Optional model retried once after a primary LLM error; leave empty to use the provider route's configured fallback",
+    ),
+  providerProfileId: z.string().optional()
+    .describe(
+      "Pin the LLM call to one provider profile (no cross-provider failover)",
     ),
   force: z.boolean().default(false),
   minTags: z.number().default(0),
@@ -296,21 +300,31 @@ function parseTagsResponse(
 async function callLLMForTags(
   llm: (input: any) => Promise<any>,
   model: string,
-  fallbackModel: string,
+  fallbackModel: string | undefined,
+  providerProfileId: string | undefined,
   systemPrompt: string,
   tagsPrompt: string,
   conversationPrompt: string,
   validTagNames: Set<string>,
   logContext: string,
 ): Promise<TaggingLLMResult> {
+  // Strict providers require the {name, schema} envelope around the schema.
   const responseFormat = {
     type: "json_schema" as const,
-    json_schema: z.object({ tags: z.array(z.string()) }).toJSONSchema(),
+    json_schema: {
+      name: "conversation_tags",
+      schema: z.object({ tags: z.array(z.string()) }).toJSONSchema() as Record<
+        string,
+        unknown
+      >,
+    },
   };
   const response = await llm({
     action: "completions",
     model,
-    fallbackModel,
+    // Omit rather than pass undefined: EJSON turns undefined into null.
+    ...(fallbackModel ? { fallbackModel } : {}),
+    ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
     session_id: createPromptCacheSessionId("tagger", {
       system: systemPrompt,
       tags: tagsPrompt,
@@ -370,6 +384,14 @@ const capability: JobCapability = {
     processed: z.number(),
     tagsApplied: z.number(),
     hasMore: z.boolean(),
+    artifacts: z.array(z.object({
+      conversationId: z.string(),
+      title: z.string(),
+      tags: z.array(z.string()),
+      parseStatus: z.string(),
+    })).optional().describe(
+      "Per-conversation tagging outcomes for review on the job details page",
+    ),
     errors: z.array(z.object({
       type: z.string(),
       message: z.string(),
@@ -396,6 +418,12 @@ const capability: JobCapability = {
     let conversationsProcessed = 0;
     let tagsApplied = 0;
     const inferenceRuns: InferenceProvenance[] = [];
+    const artifacts: Array<{
+      conversationId: string;
+      title: string;
+      tags: string[];
+      parseStatus: string;
+    }> = [];
 
     // Step 1: Fetch all tags
     console.log(`[Tagger] Job ${job.id}: fetching tags...`);
@@ -550,7 +578,11 @@ const capability: JobCapability = {
         const taggingResult = await callLLMForTags(
           llm,
           input.model,
-          input.fallbackModel,
+          resolveWorkerFallbackModel(
+            input.fallbackModel,
+            "TAGGER_FALLBACK_MODEL",
+          ),
+          input.providerProfileId,
           input.system_prompt,
           tagsPrompt,
           conversationPrompt,
@@ -635,6 +667,12 @@ const capability: JobCapability = {
         });
 
         conversationsProcessed++;
+        artifacts.push({
+          conversationId: conversation._id.toString(),
+          title: conversation.name || "Untitled conversation",
+          tags: tagsToApply,
+          parseStatus: taggingResult.parseStatus,
+        });
       } catch (error) {
         console.error(
           `[Tagger] Failed to process conversation ${conversation._id}:`,
@@ -660,6 +698,7 @@ const capability: JobCapability = {
       processed: conversationsProcessed,
       tagsApplied,
       hasMore,
+      ...(artifacts.length > 0 ? { artifacts } : {}),
       // Compact routing summary so the jobs list can show the provider and
       // model that actually served this job.
       ...(inference ? { inference } : {}),
