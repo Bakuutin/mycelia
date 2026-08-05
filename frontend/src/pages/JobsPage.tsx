@@ -198,6 +198,7 @@ const LLM_JOB_TYPES = new Set([
   "conversation_chunk_creator",
   "conversation_extractor",
   "tagger",
+  "entity_typing",
 ]);
 
 type JobInferenceUsage = {
@@ -246,6 +247,17 @@ function getJobInferenceFacets(job: JobInfo): {
   const aliases = new Set<string>();
   const isAlias = (value: string) =>
     value === "small" || value === "medium" || value === "large";
+
+  // Transcription jobs route through STT providers; their facets come from
+  // the executed route (result) with the enqueue snapshot as fallback, so
+  // the same provider/model filter covers STT alongside LLM inference.
+  if (job.type === "transcription") {
+    const sttProvider = (job.result?.providerProfileName as string) ||
+      job.routingContext?.providerProfileName;
+    if (sttProvider) providers.add(sttProvider);
+    if (job.routingContext?.model) models.add(job.routingContext.model);
+    return { providers, models, aliases };
+  }
 
   // Jobs that already ran report what actually served them; facets must
   // reflect the executed route only, so filtering by a model never matches
@@ -1286,6 +1298,7 @@ export default function JobsPage() {
   const [concurrencyDrafts, setConcurrencyDrafts] = useState<
     Record<string, string>
   >({});
+  const [batchDrafts, setBatchDrafts] = useState<Record<string, string>>({});
 
   const toggleHideEmpty = () => {
     const newParams = new URLSearchParams(searchParams);
@@ -1568,6 +1581,111 @@ export default function JobsPage() {
     onError: (error) =>
       alert(
         error instanceof Error ? error.message : "Failed to set concurrency",
+      ),
+  });
+
+  // Workers whose input schema declares a batchSize (items per LLM/STT call).
+  const batchCapableWorkers = useMemo(() => {
+    const result: Record<
+      string,
+      { min: number; max: number; schemaDefault?: number }
+    > = {};
+    for (const [type, schema] of Object.entries(schemas ?? {})) {
+      const prop = (schema as any)?.input?.properties?.batchSize;
+      if (!prop || (prop.type !== "number" && prop.type !== "integer")) {
+        continue;
+      }
+      result[type] = {
+        min: prop.minimum ?? 1,
+        max: prop.maximum ?? 100,
+        schemaDefault: prop.default,
+      };
+    }
+    return result;
+  }, [schemas]);
+
+  // Current per-worker batch overrides. Transcription stores its batch in
+  // config.transcription; everything else uses workers.<type>.defaultOverrides.
+  const { data: workerBatchSizes } = useQuery({
+    queryKey: ["worker-batch-sizes", Object.keys(batchCapableWorkers).sort().join(",")],
+    enabled: Object.keys(batchCapableWorkers).length > 0,
+    queryFn: async () => {
+      const result: Record<string, number | undefined> = {};
+      await Promise.all(
+        Object.keys(batchCapableWorkers).map(async (workerType) => {
+          if (workerType === "transcription") return;
+          const response = await api.callResource("jobs", {
+            action: "get_worker_defaults",
+            workerType,
+          }) as { defaults?: Record<string, unknown> };
+          const value = Number(response?.defaults?.batchSize);
+          result[workerType] = Number.isFinite(value) ? value : undefined;
+        }),
+      );
+      return result;
+    },
+  });
+
+  const getEffectiveBatchSize = (workerType: string): number | undefined => {
+    if (workerType === "transcription") {
+      return pipelineHealth?.transcriptionRuntime.configuredBatchSize ??
+        batchCapableWorkers[workerType]?.schemaDefault;
+    }
+    return workerBatchSizes?.[workerType] ??
+      batchCapableWorkers[workerType]?.schemaDefault;
+  };
+
+  const setWorkerBatchMutation = useMutation({
+    mutationFn: async ({
+      workerType,
+      batchSize,
+    }: {
+      workerType: string;
+      batchSize: number;
+    }) => {
+      const bounds = batchCapableWorkers[workerType];
+      if (
+        bounds &&
+        (batchSize < bounds.min || batchSize > bounds.max ||
+          !Number.isInteger(batchSize))
+      ) {
+        throw new Error(
+          `Batch size for ${workerType} must be an integer between ${bounds.min} and ${bounds.max}`,
+        );
+      }
+      if (workerType === "transcription") {
+        await api.callResource("config", {
+          action: "patch",
+          updates: { transcription: { batchSize } },
+        });
+      } else {
+        // update_worker_defaults replaces the whole overrides object, so we
+        // merge with the current defaults instead of clobbering them.
+        const current = await api.callResource("jobs", {
+          action: "get_worker_defaults",
+          workerType,
+        }) as { defaults?: Record<string, unknown> };
+        await api.callResource("jobs", {
+          action: "update_worker_defaults",
+          workerType,
+          defaults: { ...(current?.defaults ?? {}), batchSize },
+        });
+      }
+      return { workerType, batchSize };
+    },
+    onSuccess: (result) => {
+      setBatchDrafts((current) => ({
+        ...current,
+        [result.workerType]: String(result.batchSize),
+      }));
+      queryClient.invalidateQueries({ queryKey: ["worker-batch-sizes"] });
+      if (result.workerType === "transcription") {
+        refetchPipelineHealth();
+      }
+    },
+    onError: (error) =>
+      alert(
+        error instanceof Error ? error.message : "Failed to set batch size",
       ),
   });
 
@@ -3460,7 +3578,7 @@ export default function JobsPage() {
                     <TableHead className="w-[105px]">Actions</TableHead>
                     <TableHead>Worker</TableHead>
                     <TableHead className="text-center w-[145px]">
-                      Concurrency
+                      Concurrency · Batch
                     </TableHead>
                     <TableHead className="text-center w-[50px]">
                       Active
@@ -3730,14 +3848,68 @@ export default function JobsPage() {
                             {runtime && runtime.desiredConcurrency !==
                                 runtime.effectiveConcurrency &&
                               ` · desired ${runtime.desiredConcurrency}`}
-                            {worker.type === "transcription" &&
-                              ` · batch ${
-                                pipelineHealth?.transcriptionRuntime
-                                  .configuredBatchSize ?? "—"
-                              }`}
                             {runtime &&
                               ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
                           </div>
+                          {batchCapableWorkers[worker.type] && (
+                            <>
+                              <div className="mt-1 flex items-center justify-center gap-1">
+                                <Input
+                                  type="number"
+                                  min={batchCapableWorkers[worker.type].min}
+                                  max={batchCapableWorkers[worker.type].max}
+                                  value={batchDrafts[worker.type] ??
+                                    String(
+                                      getEffectiveBatchSize(worker.type) ?? "",
+                                    )}
+                                  onChange={(event) =>
+                                    setBatchDrafts((current) => ({
+                                      ...current,
+                                      [worker.type]: event.target.value,
+                                    }))}
+                                  className="h-7 w-14 px-2 text-center"
+                                  aria-label={`${worker.type} batch size`}
+                                  title={worker.type === "transcription"
+                                    ? "Audio sequences per STT request"
+                                    : "Items per LLM call"}
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  disabled={setWorkerBatchMutation.isPending ||
+                                    Number(
+                                        batchDrafts[worker.type] ??
+                                          getEffectiveBatchSize(worker.type),
+                                      ) ===
+                                      getEffectiveBatchSize(worker.type)}
+                                  onClick={() =>
+                                    setWorkerBatchMutation.mutate({
+                                      workerType: worker.type,
+                                      batchSize: Number(
+                                        batchDrafts[worker.type] ??
+                                          getEffectiveBatchSize(worker.type),
+                                      ),
+                                    })}
+                                  title="Save batch size (applies to newly enqueued jobs)"
+                                >
+                                  <Save className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                              <div className="text-center text-[10px] text-muted-foreground">
+                                {setWorkerBatchMutation.isPending &&
+                                    setWorkerBatchMutation.variables
+                                        ?.workerType === worker.type
+                                  ? "applying…"
+                                  : `batch ${
+                                    getEffectiveBatchSize(worker.type) ?? "—"
+                                  }`}
+                                {` · allowed ${
+                                  batchCapableWorkers[worker.type].min
+                                }–${batchCapableWorkers[worker.type].max}`}
+                              </div>
+                            </>
+                          )}
                         </TableCell>
                         <TableCell className="text-center py-1">
                           {(stats?.active ?? 0) > 0
@@ -4314,18 +4486,25 @@ export default function JobsPage() {
                         {job.type === "transcription" &&
                           job.routingContext?.providerProfileName && (
                           <div className="text-[10px] font-normal text-muted-foreground">
-                            {job.routingContext.providerProfileName}
-                            {job.routingContext.model ||
-                              transcriptionModelByProfileId.get(
-                                job.routingContext.providerProfileId || "",
-                              )
-                              ? ` · ${
-                                job.routingContext.model ||
-                                  transcriptionModelByProfileId.get(
-                                    job.routingContext.providerProfileId || "",
-                                  )
-                              }`
-                              : ""}
+                            {inferenceChip(
+                              "provider",
+                              (job.result?.providerProfileName as string) ||
+                                job.routingContext.providerProfileName,
+                            )}
+                            {(() => {
+                              const sttModel = job.routingContext.model ||
+                                transcriptionModelByProfileId.get(
+                                  job.routingContext.providerProfileId || "",
+                                );
+                              return sttModel
+                                ? (
+                                  <>
+                                    {" · "}
+                                    {inferenceChip("model", sttModel)}
+                                  </>
+                                )
+                                : null;
+                            })()}
                           </div>
                         )}
                         {LLM_JOB_TYPES.has(job.type) && (() => {
