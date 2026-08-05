@@ -347,48 +347,70 @@ type VadJobFormData = {
 const WORKER_PIPELINE = [
   {
     type: "ingestion",
-    order: 1,
-    description: "Processes audio files into chunks",
+    description: "Imports audio files and splits them into audio chunks",
   },
   {
     type: "vad",
-    order: 2,
-    description: "Voice Activity Detection on audio chunks",
+    description:
+      "Voice activity detection — marks which audio chunks contain speech",
   },
   {
     type: "transcription_sequence_creator",
-    order: 3,
-    description: "Groups speech chunks into sequences",
+    description: "Groups speech chunks into sequences for STT batching",
   },
   {
     type: "transcription",
-    order: 4,
-    description: "Transcribes sequences through configured STT providers",
-  },
-  {
-    type: "conversation_chunk_creator",
-    order: 5,
-    description: "Groups transcriptions into conversation chunks",
-  },
-  {
-    type: "conversation_extractor",
-    order: 6,
-    description: "Extracts conversations and entities using LLM",
-  },
-  {
-    type: "summarization",
-    order: 7,
-    description: "Generates summaries for conversations",
+    description: "Transcribes sequences through the configured STT routes",
   },
   {
     type: "diarization",
-    order: 8,
-    description: "Speaker identification/diarization",
+    description: "Splits transcribed speech into per-speaker segments",
+  },
+  {
+    type: "speakerMatching",
+    description: "Matches diarized speakers against known voice profiles",
+  },
+  {
+    type: "enrollment",
+    description: "Builds speaker voice profiles from enrollment samples",
+  },
+  {
+    type: "conversation_chunk_creator",
+    description:
+      "Groups transcriptions into conversation chunks and snapshots the LLM model — makes no LLM calls itself",
+  },
+  {
+    type: "conversation_extractor",
+    description:
+      "2 LLM calls per chunk: №1 segments the transcript into conversations, №2 per segment extracts typed entities, tags, emoji and agreements",
+  },
+  {
+    type: "conversation_extractor_merged",
+    description:
+      "EXPERIMENT: merges both conversation_extractor calls (segmentation + per-segment entities/tags/emoji/agreements) into ONE LLM call per chunk. Run only one extractor at a time — they compete for the same chunks",
+  },
+  {
+    type: "summarization",
+    description:
+      "One LLM call per conversation writes the summary and its title",
+  },
+  {
+    type: "tagger",
+    description:
+      "Backfill only: tags conversations that extraction did not tag (e.g. re-tagging after adding a new tag) — new conversations are tagged during extraction",
+  },
+  {
+    type: "entity_typing",
+    description:
+      "Backfill only: batch-classifies untyped objects into person / place / organization / product / project / event / animal / concept / media",
   },
   {
     type: "histRecalculation",
-    order: 9,
     description: "Recalculates timeline histograms",
+  },
+  {
+    type: "testPythonIntegration",
+    description: "Health-check worker for the Python service bridge",
   },
 ] as const;
 
@@ -3605,6 +3627,14 @@ export default function JobsPage() {
                   {sortedWorkers.map((worker) => {
                     const isPaused =
                       workerStatus?.workers[worker.type]?.paused ?? false;
+                    // Extractor exclusivity: the regular and the merged
+                    // extractor claim the same ready chunks, so running both
+                    // at once deserves an inline warning with a one-click fix.
+                    const extractorPaused = workerStatus
+                      ?.workers["conversation_extractor"]?.paused ?? false;
+                    const mergedPaused = workerStatus
+                      ?.workers["conversation_extractor_merged"]?.paused ??
+                      true;
                     // Only the row being toggled waits; a slow pause request
                     // must not freeze the other workers' checkboxes.
                     const isMutating =
@@ -3781,7 +3811,7 @@ export default function JobsPage() {
                         <TableCell className="py-1">
                           <button
                             type="button"
-                            className="flex items-center gap-1.5 text-left hover:text-primary"
+                            className="flex items-start gap-1.5 text-left hover:text-primary"
                             onClick={() => toggleOnlyType(worker.type)}
                             title={!allTypesSelected &&
                                 filterTypes.size === 1 &&
@@ -3789,20 +3819,67 @@ export default function JobsPage() {
                               ? "Show all workers"
                               : `Show only ${worker.type} jobs`}
                           >
-                            <span className="text-xs text-muted-foreground w-4">
-                              {worker.order < 999 ? worker.order : ""}
+                            <span className="text-xs text-muted-foreground w-4 pt-0.5">
+                              {worker.order < 999 ? worker.order + 1 : ""}
                             </span>
-                            <span
-                              className={`text-sm ${
-                                isPaused ? "text-muted-foreground" : ""
-                              }`}
-                            >
-                              {worker.type}
-                            </span>
-                            <span className="text-xs text-muted-foreground hidden lg:inline">
-                              — {worker.description}
+                            <span className="min-w-0">
+                              <span
+                                className={`block text-sm ${
+                                  isPaused ? "text-muted-foreground" : ""
+                                }`}
+                              >
+                                {worker.type}
+                              </span>
+                              <span
+                                className="block text-xs text-muted-foreground max-w-[42rem]"
+                                title={worker.description}
+                              >
+                                {worker.description}
+                              </span>
                             </span>
                           </button>
+                          {worker.type === "conversation_extractor_merged" &&
+                            !isPaused && !extractorPaused && (
+                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-amber-500">
+                              <span>
+                                conversation_extractor is also on — both
+                                compete for the same chunks
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                disabled={pauseWorkerMutation.isPending}
+                                onClick={() =>
+                                  pauseWorkerMutation.mutate(
+                                    "conversation_extractor",
+                                  )}
+                              >
+                                Pause conversation_extractor
+                              </Button>
+                            </div>
+                          )}
+                          {worker.type === "conversation_extractor" &&
+                            !isPaused && !mergedPaused && (
+                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-amber-500">
+                              <span>
+                                the merged extractor is also on — both compete
+                                for the same chunks
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                disabled={pauseWorkerMutation.isPending}
+                                onClick={() =>
+                                  pauseWorkerMutation.mutate(
+                                    "conversation_extractor_merged",
+                                  )}
+                              >
+                                Pause conversation_extractor_merged
+                              </Button>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="py-1">
                           <div className="flex items-center justify-center gap-1">
