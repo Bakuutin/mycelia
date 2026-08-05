@@ -42,6 +42,27 @@ const zObjectInput = z.object({
   isPromise: z.boolean().optional().describe(
     "True if this object represents a promise or commitment"
   ),
+  isPlace: z.boolean().optional().describe(
+    "True if this object represents a physical place or location (city, country, venue)"
+  ),
+  isOrganization: z.boolean().optional().describe(
+    "True if this object represents an organization, company, institution, or group"
+  ),
+  isProduct: z.boolean().optional().describe(
+    "True if this object represents a product, app, service, or piece of software"
+  ),
+  isProject: z.boolean().optional().describe(
+    "True if this object represents a named project or initiative"
+  ),
+  isAnimal: z.boolean().optional().describe(
+    "True if this object represents an animal or pet"
+  ),
+  isConcept: z.boolean().optional().describe(
+    "True if this object represents an abstract concept, topic, technology, language, or idea"
+  ),
+  isMedia: z.boolean().optional().describe(
+    "True if this object represents a creative work: book, film, series, song, game, article, or fictional character"
+  ),
   starred: z.boolean().optional().describe(
     "True if the user has starred/favorited this object"
   ),
@@ -203,6 +224,56 @@ const getCountsSchema = z.object({
   ),
 });
 
+const mergeObjectsSchema = z.object({
+  action: z.literal("merge").describe(
+    "Merge duplicate objects into one. Loser names/aliases become winner aliases, all relationship edges are re-pointed to the winner, losers are deleted."
+  ),
+  winnerId: z.string().describe("MongoDB ObjectId string of the object that survives"),
+  loserIds: z.array(z.string()).min(1).max(20).describe(
+    "Ids of objects merged into the winner; they are deleted afterwards"
+  ),
+  canonicalName: z.string().min(1).optional().describe(
+    "Final name for the winner (default: winner's current name). The displaced winner name becomes an alias."
+  ),
+  version: z.number().optional().describe(
+    "Winner's expected version for optimistic locking; omit to skip the check"
+  ),
+});
+
+const splitObjectSchema = z.object({
+  action: z.literal("split").describe(
+    "Split one object into two: create a new object and move selected relationship edges and aliases to it. Used when one object wrongly mixes two real-world entities."
+  ),
+  sourceId: z.string().describe("MongoDB ObjectId string of the object to split"),
+  newObject: z.object({
+    name: z.string().min(1).describe("Name for the new object"),
+    details: z.string().nullish().describe("Optional details for the new object"),
+    icon: zIcon.optional().describe("Optional icon; defaults to the source's icon"),
+    color: z.string().optional().describe("Optional color; defaults to the source's color"),
+  }).describe("Fields for the new object; type flags are copied from the source"),
+  edgeIdsToMove: z.array(z.string()).default([]).describe(
+    "Ids of relationship objects to re-point from the source to the new object"
+  ),
+  aliasesToMove: z.array(z.string()).default([]).describe(
+    "Aliases removed from the source and added to the new object"
+  ),
+  version: z.number().optional().describe(
+    "Source's expected version for optimistic locking; omit to skip the check"
+  ),
+});
+
+const findDuplicatesSchema = z.object({
+  action: z.literal("findDuplicates").describe(
+    "Find potential duplicate objects by case-insensitive name/alias collision. With objectId: candidates matching that object. Without: all collision groups."
+  ),
+  objectId: z.string().optional().describe(
+    "Find duplicates of this specific object; omit to scan the whole collection"
+  ),
+  limit: z.number().min(1).max(200).default(50).describe(
+    "Max candidates (objectId mode) or collision groups (scan mode) to return"
+  ),
+});
+
 const objectsRequestSchema = z.discriminatedUnion("action", [
   createObjectSchema,
   updateObjectSchema,
@@ -214,6 +285,9 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   exploreTimeRangeSchema,
   getTimeRangeSchema,
   getCountsSchema,
+  mergeObjectsSchema,
+  splitObjectSchema,
+  findDuplicatesSchema,
 ]);
 
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
@@ -249,6 +323,13 @@ export class ObjectsResource
     promise: number;
     conversation: number;
     tag: number;
+    place: number;
+    organization: number;
+    product: number;
+    project: number;
+    animal: number;
+    concept: number;
+    media: number;
     other: number;
     total: number;
   }> {
@@ -278,6 +359,13 @@ export class ObjectsResource
             },
           },
           conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
+          place: { $sum: { $cond: [{ $eq: ["$isPlace", true] }, 1, 0] } },
+          organization: { $sum: { $cond: [{ $eq: ["$isOrganization", true] }, 1, 0] } },
+          product: { $sum: { $cond: [{ $eq: ["$isProduct", true] }, 1, 0] } },
+          project: { $sum: { $cond: [{ $eq: ["$isProject", true] }, 1, 0] } },
+          animal: { $sum: { $cond: [{ $eq: ["$isAnimal", true] }, 1, 0] } },
+          concept: { $sum: { $cond: [{ $eq: ["$isConcept", true] }, 1, 0] } },
+          media: { $sum: { $cond: [{ $eq: ["$isMedia", true] }, 1, 0] } },
           other: {
             $sum: {
               $cond: [
@@ -289,6 +377,13 @@ export class ObjectsResource
                     { $ne: ["$isPromise", true] },
                     { $ne: ["$isConversation", true] },
                     { $ne: ["$isTag", true] },
+                    { $ne: ["$isPlace", true] },
+                    { $ne: ["$isOrganization", true] },
+                    { $ne: ["$isProduct", true] },
+                    { $ne: ["$isProject", true] },
+                    { $ne: ["$isAnimal", true] },
+                    { $ne: ["$isConcept", true] },
+                    { $ne: ["$isMedia", true] },
                   ],
                 },
                 1,
@@ -313,6 +408,13 @@ export class ObjectsResource
       promise: number;
       conversation: number;
       tag: number;
+      place: number;
+      organization: number;
+      product: number;
+      project: number;
+      animal: number;
+      concept: number;
+      media: number;
       other: number;
       total: number;
     } | undefined;
@@ -324,6 +426,13 @@ export class ObjectsResource
       promise: 0,
       conversation: 0,
       tag: 0,
+      place: 0,
+      organization: 0,
+      product: 0,
+      project: 0,
+      animal: 0,
+      concept: 0,
+      media: 0,
       other: 0,
       total: 0,
     };
@@ -384,6 +493,13 @@ export class ObjectsResource
     promise: number;
     conversation: number;
     tag: number;
+    place: number;
+    organization: number;
+    product: number;
+    project: number;
+    animal: number;
+    concept: number;
+    media: number;
     other: number;
     orphaned: number;
     total: number;
@@ -404,6 +520,13 @@ export class ObjectsResource
       promise: typeCounts.promise,
       conversation: typeCounts.conversation,
       tag: typeCounts.tag,
+      place: typeCounts.place,
+      organization: typeCounts.organization,
+      product: typeCounts.product,
+      project: typeCounts.project,
+      animal: typeCounts.animal,
+      concept: typeCounts.concept,
+      media: typeCounts.media,
       other: typeCounts.other,
       orphaned: orphanedCount,
       total: typeCounts.total,
@@ -430,6 +553,13 @@ export class ObjectsResource
     promise: number;
     conversation: number;
     tag: number;
+    place: number;
+    organization: number;
+    product: number;
+    project: number;
+    animal: number;
+    concept: number;
+    media: number;
     other: number;
     orphaned: number | null;
     total: number;
@@ -456,6 +586,13 @@ export class ObjectsResource
       promise: typeCounts.promise,
       conversation: typeCounts.conversation,
       tag: typeCounts.tag,
+      place: typeCounts.place,
+      organization: typeCounts.organization,
+      product: typeCounts.product,
+      project: typeCounts.project,
+      animal: typeCounts.animal,
+      concept: typeCounts.concept,
+      media: typeCounts.media,
       other: typeCounts.other,
       orphaned: existingOrphaned,
       total: typeCounts.total,
@@ -476,6 +613,13 @@ export class ObjectsResource
           promise: stats.promise,
           conversation: stats.conversation,
           tag: stats.tag,
+          place: stats.place,
+          organization: stats.organization,
+          product: stats.product,
+          project: stats.project,
+          animal: stats.animal,
+          concept: stats.concept,
+          media: stats.media,
           other: stats.other,
           total: stats.total,
           updatedAt: stats.updatedAt,
@@ -507,6 +651,13 @@ export class ObjectsResource
     promise: number;
     conversation: number;
     tag: number;
+    place: number;
+    organization: number;
+    product: number;
+    project: number;
+    animal: number;
+    concept: number;
+    media: number;
     other: number;
     orphaned: number;
     total: number;
@@ -527,6 +678,13 @@ export class ObjectsResource
       promise: cached.promise,
       conversation: cached.conversation,
       tag: cached.tag || 0,
+      place: cached.place || 0,
+      organization: cached.organization || 0,
+      product: cached.product || 0,
+      project: cached.project || 0,
+      animal: cached.animal || 0,
+      concept: cached.concept || 0,
+      media: cached.media || 0,
       other: cached.other,
       orphaned: cached.orphaned,
       total: cached.total,
@@ -551,7 +709,7 @@ export class ObjectsResource
   private async recordHistory(
     auth: Auth,
     objectId: ObjectId,
-    action: "create" | "update" | "delete",
+    action: "create" | "update" | "delete" | "merge" | "split",
     userId: string,
     version: number,
     field: string | null,
@@ -703,7 +861,7 @@ export class ObjectsResource
         );
 
         // Invalidate counts cache if type-related fields changed
-        const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation", "isTag"];
+        const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation", "isTag", "isPlace", "isOrganization", "isProduct", "isProject", "isAnimal", "isConcept", "isMedia"];
         if (typeFields.includes(input.field) || input.field.startsWith("relationship")) {
           await this.invalidateCountsCache(auth);
         }
@@ -744,6 +902,647 @@ export class ObjectsResource
         await this.invalidateCountsCache(auth);
 
         return { deletedCount: result.deletedCount };
+      }
+
+      case "merge": {
+        const winnerId = new ObjectId(input.winnerId);
+        const loserIds = [...new Set(input.loserIds)];
+        if (loserIds.includes(input.winnerId)) {
+          throw new Error("Winner cannot be one of the merged objects");
+        }
+        const loserObjectIds = loserIds.map((id) => new ObjectId(id));
+
+        const docs = await mongo({
+          action: "find",
+          collection: "objects",
+          query: { _id: { $in: [winnerId, ...loserObjectIds] } },
+        });
+        const byId = new Map<string, any>(
+          docs.map((doc: any) => [doc._id.toString(), doc]),
+        );
+        const winner = byId.get(input.winnerId);
+        if (!winner) {
+          throw new Error("Winner object not found");
+        }
+        const missing = loserIds.filter((id) => !byId.has(id));
+        if (missing.length > 0) {
+          throw new Error(`Objects not found: ${missing.join(", ")}`);
+        }
+        const losers = loserIds.map((id) => byId.get(id));
+        for (const doc of [winner, ...losers]) {
+          if (doc.isRelationship || doc.isConversation) {
+            throw new Error(
+              "Merging relationship or conversation objects is not supported",
+            );
+          }
+        }
+        if (
+          input.version !== undefined &&
+          (winner.version ?? 0) !== input.version
+        ) {
+          const error: any = new Error("Object was modified by another user");
+          error.code = 409;
+          error.current = winner.version ?? 0;
+          error.expected = input.version;
+          error.latestObject = { ...winner, version: winner.version ?? 0 };
+          throw error;
+        }
+
+        // No transactions available: steps are ordered so that a crash at any
+        // point loses no data, and re-running the same merge completes it.
+
+        // M1: merge fields into the winner.
+        const canonical = input.canonicalName ?? winner.name;
+        const aliasMap = new Map<string, string>();
+        const aliasCandidates = [
+          ...(winner.aliases ?? []),
+          ...(canonical !== winner.name && winner.name ? [winner.name] : []),
+          ...losers.flatMap((l: any) => [l.name, ...(l.aliases ?? [])]),
+        ];
+        for (const alias of aliasCandidates) {
+          if (!alias || typeof alias !== "string") continue;
+          const key = alias.toLowerCase();
+          if (key === String(canonical).toLowerCase()) continue;
+          if (!aliasMap.has(key)) aliasMap.set(key, alias);
+        }
+
+        const detailParts = [winner.details, ...losers.map((l: any) => l.details)]
+          .filter((d, i, arr) => d && arr.indexOf(d) === i);
+
+        const rangeKey = (r: any) =>
+          JSON.stringify([
+            new Date(r.start).toISOString(),
+            r.end ? new Date(r.end).toISOString() : null,
+            r.name ?? null,
+          ]);
+        const timeRanges = [
+          ...(winner.timeRanges ?? []),
+          ...losers.flatMap((l: any) => l.timeRanges ?? []),
+        ].filter((r, i, arr) =>
+          arr.findIndex((x) => rangeKey(x) === rangeKey(r)) === i
+        );
+
+        // Winner's platform identities win on conflict.
+        const messenger = {
+          ...losers.reduce(
+            (acc: any, l: any) => ({ ...acc, ...(l.messenger ?? {}) }),
+            {},
+          ),
+          ...(winner.messenger ?? {}),
+        };
+
+        const priorMergedFrom: any[] = winner.metadata?.mergedFrom ?? [];
+        const priorMergedIds = new Set(
+          priorMergedFrom.map((entry: any) => String(entry.id)),
+        );
+        const $set: any = {
+          name: canonical,
+          aliases: [...aliasMap.values()],
+          starred: Boolean(
+            winner.starred || losers.some((l: any) => l.starred),
+          ),
+          version: (winner.version ?? 0) + 1,
+          "metadata.mergedFrom": [
+            ...priorMergedFrom,
+            ...losers
+              .filter((l: any) => !priorMergedIds.has(l._id.toString()))
+              .map((l: any) => ({
+                id: l._id,
+                name: l.name,
+                mergedAt: new Date(),
+                by: auth.principal,
+              })),
+          ],
+        };
+        const mergeableFlags = [
+          "isPerson",
+          "isEvent",
+          "isTag",
+          "isPlace",
+          "isOrganization",
+          "isProduct",
+          "isProject",
+          "isAnimal",
+          "isConcept",
+          "isMedia",
+        ];
+        for (const flag of mergeableFlags) {
+          if (winner[flag] || losers.some((l: any) => l[flag])) {
+            $set[flag] = true;
+          }
+        }
+        if (detailParts.length) $set.details = detailParts.join("\n\n---\n\n");
+        if (timeRanges.length) $set.timeRanges = timeRanges;
+        if (Object.keys(messenger).length) $set.messenger = messenger;
+        if (!winner.icon) {
+          const withIcon = losers.find((l: any) => l.icon);
+          if (withIcon) $set.icon = withIcon.icon;
+        }
+        if (!winner.color) {
+          const withColor = losers.find((l: any) => l.color);
+          if (withColor) $set.color = withColor.color;
+        }
+        if (!winner.location) {
+          const withLocation = losers.find((l: any) => l.location);
+          if (withLocation) $set.location = withLocation.location;
+        }
+        const mergedSummaries = [
+          ...(winner.summaries ?? []),
+          ...losers.flatMap((l: any) => l.summaries ?? []),
+        ];
+        if (mergedSummaries.length) $set.summaries = mergedSummaries;
+
+        await mongo({
+          action: "updateOne",
+          collection: "objects",
+          query: { _id: winnerId },
+          update: { $set },
+        });
+
+        // M2: re-point all relationship edges from losers to the winner.
+        const subjectResult = await mongo({
+          action: "updateMany",
+          collection: "objects",
+          query: {
+            isRelationship: true,
+            "relationship.subject": { $in: loserObjectIds },
+          },
+          update: { $set: { "relationship.subject": winnerId } },
+        });
+        const objectResult = await mongo({
+          action: "updateMany",
+          collection: "objects",
+          query: {
+            isRelationship: true,
+            "relationship.object": { $in: loserObjectIds },
+          },
+          update: { $set: { "relationship.object": winnerId } },
+        });
+
+        // M3: drop self-edges, then collapse duplicate edges (same name +
+        // endpoints) that re-pointing may have produced. Oldest edge wins.
+        await mongo({
+          action: "deleteMany",
+          collection: "objects",
+          query: {
+            isRelationship: true,
+            "relationship.subject": winnerId,
+            "relationship.object": winnerId,
+          },
+        });
+        const dupGroups = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline: [
+            {
+              $match: {
+                isRelationship: true,
+                $or: [
+                  { "relationship.subject": winnerId },
+                  { "relationship.object": winnerId },
+                ],
+              },
+            },
+            { $sort: { createdAt: 1, _id: 1 } },
+            {
+              $group: {
+                _id: {
+                  name: "$name",
+                  subject: "$relationship.subject",
+                  object: "$relationship.object",
+                },
+                ids: { $push: "$_id" },
+                count: { $sum: 1 },
+              },
+            },
+            { $match: { count: { $gt: 1 } } },
+          ],
+        });
+        const duplicateEdgeIds = dupGroups.flatMap((group: any) =>
+          group.ids.slice(1)
+        );
+        if (duplicateEdgeIds.length > 0) {
+          await mongo({
+            action: "deleteMany",
+            collection: "objects",
+            query: { _id: { $in: duplicateEdgeIds } },
+          });
+        }
+
+        // M4: re-point message senders (person merges).
+        const messagesResult = await mongo({
+          action: "updateMany",
+          collection: "messages",
+          query: { senderId: { $in: loserObjectIds } },
+          update: { $set: { senderId: winnerId } },
+        });
+
+        // M5: history — full loser docs are preserved here before deletion.
+        await this.recordHistory(
+          auth,
+          winnerId,
+          "merge",
+          auth.principal,
+          (winner.version ?? 0) + 1,
+          null,
+          winner,
+          { mergedFrom: loserIds, canonicalName: canonical },
+        );
+        for (const loser of losers) {
+          await this.recordHistory(
+            auth,
+            loser._id,
+            "merge",
+            auth.principal,
+            loser.version ?? 0,
+            "mergedInto",
+            loser,
+            winnerId,
+          );
+        }
+
+        // M6: delete the losers.
+        await mongo({
+          action: "deleteMany",
+          collection: "objects",
+          query: { _id: { $in: loserObjectIds } },
+        });
+
+        // M7: refresh counts and return the merged winner.
+        await this.invalidateCountsCache(auth);
+        const mergedWinner = await mongo({
+          action: "findOne",
+          collection: "objects",
+          query: { _id: winnerId },
+        });
+        return {
+          winner: mergedWinner,
+          mergedIds: loserIds,
+          edgesRepointed: (subjectResult.modifiedCount ?? 0) +
+            (objectResult.modifiedCount ?? 0),
+          edgesDeduped: duplicateEdgeIds.length,
+          messagesUpdated: messagesResult.modifiedCount ?? 0,
+        };
+      }
+
+      case "split": {
+        const sourceId = new ObjectId(input.sourceId);
+        const source = await mongo({
+          action: "findOne",
+          collection: "objects",
+          query: { _id: sourceId },
+        });
+        if (!source) {
+          throw new Error("Source object not found");
+        }
+        if (source.isRelationship || source.isConversation) {
+          throw new Error(
+            "Splitting relationship or conversation objects is not supported",
+          );
+        }
+        if (
+          input.version !== undefined &&
+          (source.version ?? 0) !== input.version
+        ) {
+          const error: any = new Error("Object was modified by another user");
+          error.code = 409;
+          error.current = source.version ?? 0;
+          error.expected = input.version;
+          error.latestObject = { ...source, version: source.version ?? 0 };
+          throw error;
+        }
+
+        const edgeObjectIds = input.edgeIdsToMove.map((id) => new ObjectId(id));
+        const edges = edgeObjectIds.length > 0
+          ? await mongo({
+            action: "find",
+            collection: "objects",
+            query: { _id: { $in: edgeObjectIds } },
+          })
+          : [];
+        const edgeById = new Map<string, any>(
+          edges.map((edge: any) => [edge._id.toString(), edge]),
+        );
+        for (const id of input.edgeIdsToMove) {
+          const edge = edgeById.get(id);
+          if (!edge) {
+            throw new Error(`Relationship ${id} not found`);
+          }
+          if (!edge.isRelationship || !edge.relationship) {
+            throw new Error(`Object ${id} is not a relationship`);
+          }
+          const touchesSource =
+            String(edge.relationship.subject) === input.sourceId ||
+            String(edge.relationship.object) === input.sourceId;
+          if (!touchesSource) {
+            throw new Error(
+              `Relationship ${id} does not involve the source object`,
+            );
+          }
+        }
+
+        const sourceAliases: string[] = source.aliases ?? [];
+        const aliasesToMove = input.aliasesToMove.filter((alias) =>
+          sourceAliases.includes(alias)
+        );
+
+        const splitFlags = [
+          "isPerson",
+          "isEvent",
+          "isTag",
+          "isPlace",
+          "isOrganization",
+          "isProduct",
+          "isProject",
+          "isAnimal",
+          "isConcept",
+          "isMedia",
+        ];
+        const newDoc: any = {
+          name: input.newObject.name,
+          ...(input.newObject.details ? { details: input.newObject.details } : {}),
+          ...(input.newObject.icon
+            ? { icon: input.newObject.icon }
+            : source.icon
+            ? { icon: source.icon }
+            : {}),
+          ...(input.newObject.color
+            ? { color: input.newObject.color }
+            : source.color
+            ? { color: source.color }
+            : {}),
+          ...(aliasesToMove.length ? { aliases: aliasesToMove } : {}),
+          ...Object.fromEntries(
+            splitFlags.filter((flag) => source[flag]).map((flag) => [flag, true]),
+          ),
+          metadata: {
+            splitFrom: {
+              id: sourceId,
+              name: source.name,
+              at: new Date(),
+              by: auth.principal,
+            },
+          },
+          version: 1,
+          createdAt: new Date(),
+        };
+
+        const insertResult = await mongo({
+          action: "insertOne",
+          collection: "objects",
+          doc: newDoc,
+        });
+        const newId = insertResult.insertedId;
+
+        await this.recordHistory(
+          auth,
+          newId,
+          "split",
+          auth.principal,
+          1,
+          null,
+          undefined,
+          newDoc,
+        );
+
+        // Re-point the selected edges — whichever side(s) reference the source.
+        const operations = input.edgeIdsToMove.map((id) => {
+          const edge = edgeById.get(id);
+          const edgeSet: any = {};
+          if (String(edge.relationship.subject) === input.sourceId) {
+            edgeSet["relationship.subject"] = newId;
+          }
+          if (String(edge.relationship.object) === input.sourceId) {
+            edgeSet["relationship.object"] = newId;
+          }
+          return {
+            updateOne: {
+              filter: { _id: edge._id },
+              update: { $set: edgeSet },
+            },
+          };
+        });
+        if (operations.length > 0) {
+          await mongo({
+            action: "bulkWrite",
+            collection: "objects",
+            operations,
+          });
+        }
+
+        // Remove moved aliases from the source and bump its version.
+        const sourceUpdate: any = {
+          $set: { version: (source.version ?? 0) + 1 },
+        };
+        if (aliasesToMove.length > 0) {
+          sourceUpdate.$pull = { aliases: { $in: aliasesToMove } };
+        }
+        await mongo({
+          action: "updateOne",
+          collection: "objects",
+          query: { _id: sourceId },
+          update: sourceUpdate,
+        });
+
+        await this.recordHistory(
+          auth,
+          sourceId,
+          "split",
+          auth.principal,
+          (source.version ?? 0) + 1,
+          "splitInto",
+          undefined,
+          {
+            newId,
+            movedEdgeIds: input.edgeIdsToMove,
+            movedAliases: aliasesToMove,
+          },
+        );
+
+        await this.invalidateCountsCache(auth);
+        const updatedSource = await mongo({
+          action: "findOne",
+          collection: "objects",
+          query: { _id: sourceId },
+        });
+        return {
+          newId,
+          movedEdges: operations.length,
+          movedAliases: aliasesToMove,
+          source: updatedSource,
+        };
+      }
+
+      case "findDuplicates": {
+        const limit = input.limit ?? 50;
+
+        if (input.objectId) {
+          const targetId = new ObjectId(input.objectId);
+          const target = await mongo({
+            action: "findOne",
+            collection: "objects",
+            query: { _id: targetId },
+          });
+          if (!target) {
+            throw new Error("Object not found");
+          }
+          const keys = [target.name, ...(target.aliases ?? [])]
+            .filter((value: unknown): value is string =>
+              typeof value === "string" && value.trim().length > 0
+            )
+            .map((value) => value.trim().toLowerCase());
+          if (keys.length === 0) {
+            return { candidates: [] };
+          }
+
+          const candidates = await mongo({
+            action: "aggregate",
+            collection: "objects",
+            pipeline: [
+              {
+                $match: {
+                  _id: { $ne: targetId },
+                  isRelationship: { $ne: true },
+                  isConversation: { $ne: true },
+                },
+              },
+              {
+                $addFields: {
+                  _nameKeys: {
+                    $map: {
+                      input: {
+                        $concatArrays: [
+                          [{ $ifNull: ["$name", ""] }],
+                          { $ifNull: ["$aliases", []] },
+                        ],
+                      },
+                      as: "value",
+                      in: { $toLower: { $trim: { input: "$$value" } } },
+                    },
+                  },
+                },
+              },
+              {
+                $match: {
+                  _nameKeys: { $in: keys },
+                },
+              },
+              {
+                $project: {
+                  name: 1,
+                  aliases: 1,
+                  details: 1,
+                  icon: 1,
+                  version: 1,
+                  isPerson: 1,
+                  isEvent: 1,
+                  isPromise: 1,
+                  isTag: 1,
+                  isPlace: 1,
+                  isOrganization: 1,
+                  isProduct: 1,
+                  isProject: 1,
+                  isAnimal: 1,
+                  isConcept: 1,
+                  isMedia: 1,
+                },
+              },
+              { $limit: limit },
+            ],
+          });
+          return { candidates };
+        }
+
+        // Scan mode: group all non-edge objects by lowercase name/alias keys.
+        const groups = await mongo({
+          action: "aggregate",
+          collection: "objects",
+          pipeline: [
+            {
+              $match: {
+                isRelationship: { $ne: true },
+                isConversation: { $ne: true },
+                name: { $exists: true, $ne: "" },
+              },
+            },
+            {
+              $project: {
+                name: 1,
+                aliases: 1,
+                icon: 1,
+                version: 1,
+                isPerson: 1,
+                isEvent: 1,
+                isPromise: 1,
+                isTag: 1,
+                isPlace: 1,
+                isOrganization: 1,
+                isProduct: 1,
+                isProject: 1,
+                isAnimal: 1,
+                isConcept: 1,
+                isMedia: 1,
+                _nameKeys: {
+                  $setUnion: [
+                    {
+                      $map: {
+                        input: {
+                          $concatArrays: [
+                            ["$name"],
+                            { $ifNull: ["$aliases", []] },
+                          ],
+                        },
+                        as: "value",
+                        in: { $toLower: { $trim: { input: "$$value" } } },
+                      },
+                    },
+                    [],
+                  ],
+                },
+              },
+            },
+            { $unwind: "$_nameKeys" },
+            { $match: { _nameKeys: { $ne: "" } } },
+            {
+              $group: {
+                _id: "$_nameKeys",
+                objects: {
+                  $push: {
+                    _id: "$_id",
+                    name: "$name",
+                    aliases: "$aliases",
+                    icon: "$icon",
+                    version: "$version",
+                    isPerson: "$isPerson",
+                    isEvent: "$isEvent",
+                    isPromise: "$isPromise",
+                    isTag: "$isTag",
+                    isPlace: "$isPlace",
+                    isOrganization: "$isOrganization",
+                    isProduct: "$isProduct",
+                    isProject: "$isProject",
+                    isAnimal: "$isAnimal",
+                    isConcept: "$isConcept",
+                    isMedia: "$isMedia",
+                  },
+                },
+                count: { $sum: 1 },
+              },
+            },
+            { $match: { count: { $gt: 1 } } },
+            { $sort: { count: -1, _id: 1 } },
+            { $limit: limit },
+            {
+              $project: {
+                _id: 0,
+                key: "$_id",
+                count: 1,
+                objects: 1,
+              },
+            },
+          ],
+        });
+        return { groups };
       }
 
       case "list": {
@@ -1256,6 +2055,9 @@ export class ObjectsResource
       exploreTimeRange: ["read"],
       getTimeRange: ["read"],
       getCounts: ["read"],
+      merge: ["update", "delete"],
+      split: ["create", "update"],
+      findDuplicates: ["read"],
     };
 
     return [

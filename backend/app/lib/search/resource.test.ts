@@ -328,6 +328,50 @@ Deno.test(
   }),
 );
 
+Deno.test(
+  "searchObjects filters and derives the new entity types",
+  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
+    const resource = await getSearchResource(admin, db);
+
+    await insertObject(db, { name: "Berlin office", isPlace: true });
+    await insertObject(db, { name: "Berlin GmbH", isOrganization: true });
+    await insertObject(db, { name: "Berlin App", isProduct: true });
+    await insertObject(db, { name: "Berlin Launch", isProject: true });
+    await insertObject(db, { name: "Berlin Trip" });
+
+    const places = await resource({
+      action: "searchObjects",
+      query: "Berlin",
+      types: ["place"],
+      limit: 20,
+    });
+    expect(places.count).toBe(1);
+    expect(places.results[0].type).toBe("place");
+
+    const orgsAndProducts = await resource({
+      action: "searchObjects",
+      query: "Berlin",
+      types: ["organization", "product"],
+      limit: 20,
+    });
+    expect(orgsAndProducts.count).toBe(2);
+
+    const all = await resource({
+      action: "searchObjects",
+      query: "Berlin",
+      types: ["any"],
+      limit: 20,
+    });
+    const typesByName = new Map(
+      all.results.map((r: any) => [r.name, r.type]),
+    );
+    expect(typesByName.get("Berlin GmbH")).toBe("organization");
+    expect(typesByName.get("Berlin App")).toBe("product");
+    expect(typesByName.get("Berlin Launch")).toBe("project");
+    expect(typesByName.get("Berlin Trip")).toBe("object");
+  }),
+);
+
 // ============================================================================
 // Time parsing tests
 // ============================================================================

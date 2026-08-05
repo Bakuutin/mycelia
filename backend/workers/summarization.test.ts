@@ -3,7 +3,25 @@ import {
   buildSummarySourceRefs,
   getSummarizationRetryDelayMs,
   isTerminalSummarizationResponseError,
+  parseSummaryTitleResponse,
 } from "./summarization.ts";
+
+Deno.test("combined summary+title response parses JSON and fenced JSON", () => {
+  expect(parseSummaryTitleResponse(
+    JSON.stringify({ summary: "We talked about cats.", title: " \"Cats\" " }),
+  )).toEqual({ summary: "We talked about cats.", title: "Cats" });
+
+  expect(parseSummaryTitleResponse(
+    '```json\n{"summary": "S", "title": "T"}\n```',
+  )).toEqual({ summary: "S", title: "T" });
+});
+
+Deno.test("combined summary+title response falls back on plain text", () => {
+  // Model ignored the JSON contract → caller uses the whole text as summary.
+  expect(parseSummaryTitleResponse("Just a plain summary.")).toBeNull();
+  expect(parseSummaryTitleResponse('{"summary": "only summary"}')).toBeNull();
+  expect(parseSummaryTitleResponse('{"title": "only title"}')).toBeNull();
+});
 
 Deno.test("summarization retries back off and remain bounded", () => {
   expect(getSummarizationRetryDelayMs(1)).toBe(15 * 60 * 1000);

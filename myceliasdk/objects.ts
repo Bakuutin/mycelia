@@ -29,6 +29,13 @@ const zObjectBase = z.object({
   isPromise: z.boolean().optional(),
   isConversation: z.boolean().optional(),
   isTag: z.boolean().optional(),
+  isPlace: z.boolean().optional(),
+  isOrganization: z.boolean().optional(),
+  isProduct: z.boolean().optional(),
+  isProject: z.boolean().optional(),
+  isAnimal: z.boolean().optional(),
+  isConcept: z.boolean().optional(),
+  isMedia: z.boolean().optional(),
 
   // User flags
   starred: z.boolean().optional(),

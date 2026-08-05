@@ -594,9 +594,19 @@ export default function JobDetailPage() {
                     <CardContent className="space-y-4">
                         <div>
                             <div className="text-sm text-muted-foreground mb-1">State</div>
-                            <Badge className={getStatusColor(job.state)}>
-                                {job.state}
-                            </Badge>
+                            {job.state === "completed" &&
+                                    (job.result?.success === false ||
+                                        (Array.isArray(job.result?.errors) && job.result.errors.length > 0))
+                                ? (
+                                    <Badge className="bg-amber-500/15 text-amber-500 border-amber-500/30">
+                                        completed · {Array.isArray(job.result?.errors) ? job.result.errors.length : ""} error{Array.isArray(job.result?.errors) && job.result.errors.length === 1 ? "" : "s"}
+                                    </Badge>
+                                )
+                                : (
+                                    <Badge className={getStatusColor(job.state)}>
+                                        {job.state}
+                                    </Badge>
+                                )}
                         </div>
                         <div>
                             <div className="text-sm text-muted-foreground mb-1">Queue state</div>
@@ -634,7 +644,8 @@ export default function JobDetailPage() {
                             job.result && (
                                 <>
                                     {typeof job.result === "object" ? (
-                                        <FieldDisplay fields={flattenNestedFields(job.result)} />
+                                        // Artifacts have their own structured section below.
+                                        <FieldDisplay fields={flattenNestedFields(job.result).filter(([key]) => key !== "artifacts")} />
                                     ) : (
                                         <div className="font-medium">{String(job.result)}</div>
                                     )}
@@ -848,6 +859,7 @@ export default function JobDetailPage() {
                             { icon: Hash, label: "Segments Found", value: r.segmentsFound ?? (r.artifacts ? 0 : "Legacy: unavailable") },
                             { icon: MessageSquare, label: "Emoji Extracted", value: r.emojiCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
                             { icon: Users, label: "Entities Extracted", value: r.entityCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
+                            ...(r.tagsApplied != null ? [{ icon: Tag as LucideIcon, label: "Tags Applied", value: r.tagsApplied }] : []),
                             { icon: ExternalLink, label: "Entity Links", value: r.relationshipsCreated != null ? `${r.relationshipsCreated} / ${r.relationshipsAttempted ?? 0}` : "Legacy: unavailable" },
                             { icon: AlertTriangle, label: "Link Errors", value: r.relationshipErrors ?? (r.artifacts ? 0 : "Legacy: unavailable") },
                             { icon: Check, label: "Agreements Detected", value: r.agreementCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
@@ -869,6 +881,32 @@ export default function JobDetailPage() {
                             { icon: Clock, label: "Processing Time", value: processingTime },
                             { icon: MessageSquare, label: "Conversations Processed", value: r.conversationsProcessed ?? 0 },
                             { icon: Tag, label: "Tags Applied", value: r.tagsApplied ?? 0 },
+                            { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                        ],
+                        errors: r.errors,
+                    },
+                    conversation_extractor_merged: {
+                        icon: Users, title: "Merged Extractor Details (experimental single-call)",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Layers, label: "Chunks Processed", value: r.chunksProcessed ?? 0 },
+                            { icon: MessageSquare, label: "Conversations Created", value: r.conversationsCreated ?? 0 },
+                            { icon: Hash, label: "Segments Found", value: r.segmentsFound ?? 0 },
+                            { icon: Users, label: "Entities Extracted", value: r.entityCount ?? 0 },
+                            { icon: Tag, label: "Tags Applied", value: r.tagsApplied ?? 0 },
+                            { icon: Hash, label: "LLM Calls", value: r.inference?.calls ?? (r.chunksProcessed ?? 0) },
+                            { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                        ],
+                        errors: r.errors,
+                    },
+                    entity_typing: {
+                        icon: Tag, title: "Entity Typing Details",
+                        metrics: [
+                            { icon: Clock, label: "Processing Time", value: processingTime },
+                            { icon: Hash, label: "Processed", value: r.processed ?? 0 },
+                            { icon: Tag, label: "Flags Set", value: r.flagsSet ?? 0 },
+                            { icon: Hash, label: "Marked Other", value: r.markedOther ?? 0 },
+                            ...(r.skipped ? [{ icon: AlertTriangle as LucideIcon, label: "Skipped", value: r.skipped }] : []),
                             { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
                         ],
                         errors: r.errors,
@@ -1061,11 +1099,167 @@ export default function JobDetailPage() {
                                                         ) : artifact.entities.map((entity: string) => (
                                                             <Badge key={entity} variant="secondary">{entity}</Badge>
                                                         ))}
+                                                        {(artifact.tags ?? []).map((tag: string) => (
+                                                            <Badge key={`tag-${tag}`} variant="outline" className="border-pink-300 text-pink-600">
+                                                                #{tag}
+                                                            </Badge>
+                                                        ))}
                                                     </div>
                                                 </div>
                                             ))}
                                         </div>
                                     )}
+                                </div>
+                            )}
+                            {job.type === "tagger" && Array.isArray(r.artifacts) && r.artifacts.length > 0 && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-2">
+                                        Tagged Conversations ({r.artifacts.length})
+                                    </div>
+                                    <div className="space-y-2 max-h-[32rem] overflow-y-auto pr-1">
+                                        {r.artifacts.map((artifact: any) => (
+                                            <div key={artifact.conversationId} className="rounded-lg border p-3 text-sm">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <Link className="font-medium hover:underline" to={`/objects/${artifact.conversationId}`}>
+                                                        {artifact.title}
+                                                    </Link>
+                                                    {artifact.parseStatus && artifact.parseStatus !== "ok" && (
+                                                        <Badge variant="destructive">{artifact.parseStatus}</Badge>
+                                                    )}
+                                                </div>
+                                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                    {(artifact.tags ?? []).length === 0 ? (
+                                                        <Badge variant="outline">no tags applied</Badge>
+                                                    ) : artifact.tags.map((tag: string) => (
+                                                        <Badge key={tag} variant="outline" className="border-pink-300 text-pink-600">
+                                                            #{tag}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {job.type === "conversation_extractor_merged" && Array.isArray(r.artifacts) && r.artifacts.length > 0 && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-2">
+                                        Per-chunk diagnostics ({r.artifacts.length})
+                                    </div>
+                                    <div className="space-y-3 max-h-[40rem] overflow-y-auto pr-1">
+                                        {r.artifacts.map((chunk: any) => (
+                                            <div key={chunk.chunkId} className={`rounded-lg border p-3 text-sm ${chunk.outcome === "error" ? "border-red-400 bg-red-500/5" : chunk.outcome === "not_claimed" ? "border-border bg-muted/30" : "border-emerald-500/40 bg-emerald-500/5"}`}>
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <code className="text-xs">{chunk.chunkId}</code>
+                                                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                                        <Badge variant={chunk.outcome === "completed" ? "secondary" : chunk.outcome === "error" ? "destructive" : "outline"}>
+                                                            {chunk.outcome}
+                                                        </Badge>
+                                                        {chunk.promptChars != null && <span>{chunk.promptChars} prompt chars</span>}
+                                                        {chunk.responseChars != null && <span>{chunk.responseChars} response chars</span>}
+                                                        {chunk.utterances != null && <span>{chunk.utterances} utterances</span>}
+                                                        {chunk.deletedPreviousConversations != null && <span>replaced {chunk.deletedPreviousConversations} previous</span>}
+                                                    </div>
+                                                </div>
+                                                {chunk.error && (
+                                                    <div className="mt-2 text-xs text-red-400">{chunk.error}</div>
+                                                )}
+                                                {Array.isArray(chunk.segments) && chunk.segments.length === 0 && chunk.outcome === "completed" && (
+                                                    <div className="mt-2 text-xs text-muted-foreground">Model returned 0 segments (no usable conversation).</div>
+                                                )}
+                                                {Array.isArray(chunk.segments) && chunk.segments.map((seg: any, idx: number) => (
+                                                    <div key={idx} className="mt-2 rounded-md border bg-background p-2">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                            {seg.conversationId ? (
+                                                                <Link className="font-medium hover:underline" to={`/objects/${seg.conversationId}`}>
+                                                                    {seg.emoji || "◻︎"} {seg.title}
+                                                                </Link>
+                                                            ) : (
+                                                                <span className="font-medium text-red-400">{seg.emoji || "◻︎"} {seg.title} (not created)</span>
+                                                            )}
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                <Badge variant={seg.boundaryResolved ? "secondary" : "destructive"}>
+                                                                    {seg.boundaryResolved ? "boundaries ok" : "boundary fallback"}
+                                                                </Badge>
+                                                                <Badge variant={seg.emojiValid ? "secondary" : "destructive"}>
+                                                                    {seg.emojiValid ? "emoji ok" : `emoji invalid: "${seg.rawEmoji}"`}
+                                                                </Badge>
+                                                                {seg.agreementDetected && <Badge variant="outline">agreement</Badge>}
+                                                            </div>
+                                                        </div>
+                                                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                                            {seg.resolvedStart && seg.resolvedEnd && (
+                                                                <span>{format(new Date(seg.resolvedStart), "PPp")} — {format(new Date(seg.resolvedEnd), "p")}</span>
+                                                            )}
+                                                            <span>{seg.entityLinksCreated ?? 0}/{(seg.entities ?? []).length} entity links</span>
+                                                            <span>{seg.tagLinksCreated ?? 0}/{(seg.tags ?? []).length} tag links</span>
+                                                            {(seg.droppedEntities > 0) && <span className="text-amber-500">{seg.droppedEntities} entities dropped</span>}
+                                                            {(seg.droppedTags > 0) && <span className="text-amber-500">{seg.droppedTags} tags dropped</span>}
+                                                        </div>
+                                                        {(seg.rawStart || seg.rawEnd) && (
+                                                            <div className="mt-1 text-[11px] text-muted-foreground/80 font-mono truncate" title={`start: ${seg.rawStart}\nend: ${seg.rawEnd}`}>
+                                                                ⇤ "{seg.rawStart}" ⇥ "{seg.rawEnd}"
+                                                            </div>
+                                                        )}
+                                                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                            {(seg.entities ?? []).map((entity: any) => (
+                                                                <Badge key={entity.name} variant="secondary">{entity.name} · {entity.type}</Badge>
+                                                            ))}
+                                                            {(seg.tags ?? []).map((tag: string) => (
+                                                                <Badge key={`tag-${tag}`} variant="outline" className="border-pink-300 text-pink-600">#{tag}</Badge>
+                                                            ))}
+                                                        </div>
+                                                        {seg.error && <div className="mt-1 text-xs text-red-400">{seg.error}</div>}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {job.type === "entity_typing" && Array.isArray(r.artifacts) && r.artifacts.length > 0 && (
+                                <div>
+                                    <div className="text-sm text-muted-foreground mb-2">
+                                        Classified Entities ({r.artifacts.length})
+                                    </div>
+                                    <div className="space-y-4 max-h-[36rem] overflow-y-auto pr-1">
+                                        {(["person", "place", "organization", "product", "project", "event", "animal", "concept", "media", "other"] as const)
+                                            .map((entityType) => {
+                                                const group = r.artifacts.filter((a: any) => a.type === entityType);
+                                                if (group.length === 0) return null;
+                                                const typeStyles: Record<string, string> = {
+                                                    person: "bg-blue-100 text-blue-800 border-blue-200",
+                                                    place: "bg-teal-100 text-teal-800 border-teal-200",
+                                                    organization: "bg-indigo-100 text-indigo-800 border-indigo-200",
+                                                    product: "bg-amber-100 text-amber-800 border-amber-200",
+                                                    project: "bg-violet-100 text-violet-800 border-violet-200",
+                                                    event: "bg-green-100 text-green-800 border-green-200",
+                                                    animal: "bg-lime-100 text-lime-800 border-lime-200",
+                                                    concept: "bg-sky-100 text-sky-800 border-sky-200",
+                                                    media: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+                                                    other: "bg-gray-100 text-gray-800 border-gray-200",
+                                                };
+                                                return (
+                                                    <div key={entityType}>
+                                                        <div className="flex items-center gap-2 mb-1.5">
+                                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-xs font-medium ${typeStyles[entityType]}`}>
+                                                                {entityType}
+                                                            </span>
+                                                            <span className="text-xs text-muted-foreground">{group.length}</span>
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {group.map((artifact: any) => (
+                                                                <Link key={artifact.objectId} to={`/objects/${artifact.objectId}`}>
+                                                                    <Badge variant="secondary" className="hover:bg-primary/20 cursor-pointer">
+                                                                        {artifact.name}
+                                                                    </Badge>
+                                                                </Link>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                    </div>
                                 </div>
                             )}
                             {job.type === "conversation_extractor" && extractedChunks.length > 0 && (

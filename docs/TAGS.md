@@ -20,8 +20,18 @@ You can make any object a tag by setting `isTag: true`.
 
 Default tags are seeded via migration `0016_seed_default_tags.ts`:
 
-## Tagger Worker
+## How conversations get tagged
 
-The `tagger` worker automatically applies tags to conversations.
+**Primary path — extraction time.** The `conversation_extractor` selects tags
+inside the same metadata LLM call that extracts entities and emoji: the
+transcript is already being sent, so the tag list is the only extra prompt
+cost. Matching tags become `tagged` relationships and a tagging run is
+recorded in `metadata.aiProvenance.taggingRuns` (including valid zero-tag
+outcomes) so the tagger does not re-process the conversation.
 
-Select a range on the timeline and run the tagger worker to apply tags to conversations in that range (that don't have any tags yet).
+**Backfill path — the `tagger` worker.** The tagger remains for conversations
+that were extracted before a tag existed: after adding a new tag, run the
+tagger (optionally over a timeline range) with `force: true` to re-evaluate,
+or without it to process only conversations that have no tagging run yet.
+Unlike extraction-time tagging, it works from the conversation title and
+summary rather than the full transcript.

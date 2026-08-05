@@ -5,11 +5,18 @@ import { Button } from "@/components/ui/button";
 import type { Object } from "@/types/objects";
 import { formatTime } from "@/lib/formatTime";
 import {
+  Box,
+  Building2,
   Calendar,
+  Film,
+  Lightbulb,
+  PawPrint,
   CalendarClock,
   Clock,
+  FolderKanban,
   Handshake,
   LineChart,
+  MapPin,
   MessageSquare,
   Package,
   Pencil,
@@ -106,6 +113,55 @@ function getObjectType(object: Object): {
       type: "Event",
       icon: Calendar,
       color: "bg-green-100 text-green-800 border-green-200",
+    };
+  }
+  if (object.isPlace) {
+    return {
+      type: "Place",
+      icon: MapPin,
+      color: "bg-teal-100 text-teal-800 border-teal-200",
+    };
+  }
+  if (object.isOrganization) {
+    return {
+      type: "Organization",
+      icon: Building2,
+      color: "bg-indigo-100 text-indigo-800 border-indigo-200",
+    };
+  }
+  if (object.isProduct) {
+    return {
+      type: "Product",
+      icon: Box,
+      color: "bg-amber-100 text-amber-800 border-amber-200",
+    };
+  }
+  if (object.isProject) {
+    return {
+      type: "Project",
+      icon: FolderKanban,
+      color: "bg-violet-100 text-violet-800 border-violet-200",
+    };
+  }
+  if (object.isAnimal) {
+    return {
+      type: "Animal",
+      icon: PawPrint,
+      color: "bg-lime-100 text-lime-800 border-lime-200",
+    };
+  }
+  if (object.isConcept) {
+    return {
+      type: "Concept",
+      icon: Lightbulb,
+      color: "bg-sky-100 text-sky-800 border-sky-200",
+    };
+  }
+  if (object.isMedia) {
+    return {
+      type: "Media",
+      icon: Film,
+      color: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
     };
   }
   return {

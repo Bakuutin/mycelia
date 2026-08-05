@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { 
-  History, 
-  Trash2, 
-  Pencil, 
-  Check, 
-  X, 
-  Tag, 
+import {
+  History,
+  Trash2,
+  Pencil,
+  Check,
+  X,
+  Tag,
   Handshake,
   Users,
   MessageSquare,
@@ -21,16 +21,28 @@ import {
   Save,
   Clock,
   Star,
+  Box,
+  Building2,
+  Combine,
+  Film,
+  FolderKanban,
+  Lightbulb,
+  MapPin,
+  PawPrint,
+  Scissors,
 } from "lucide-react";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SmartBackButton } from "@/components/SmartBackButton";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useDeleteObject,
+  useDuplicateCandidates,
   useObject,
   useUpdateObject,
   objectKeys,
 } from "@/hooks/useObjectQueries";
+import { MergeObjectDialog } from "@/components/dialogs/MergeObjectDialog";
+import { SplitObjectDialog } from "@/components/dialogs/SplitObjectDialog";
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
 import { MetadataDisplay } from "@/components/MetadataDisplay";
@@ -51,7 +63,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmojiPickerButton } from "@/components/ui/emoji-picker";
 
 // Helper to get object type info
-function getObjectType(object: { isPromise?: boolean; isRelationship?: boolean; isConversation?: boolean; isPerson?: boolean; isEvent?: boolean }): {
+function getObjectType(object: { isPromise?: boolean; isRelationship?: boolean; isConversation?: boolean; isPerson?: boolean; isEvent?: boolean; isPlace?: boolean; isOrganization?: boolean; isProduct?: boolean; isProject?: boolean; isAnimal?: boolean; isConcept?: boolean; isMedia?: boolean }): {
   type: string;
   icon: React.ComponentType<{ className?: string }>;
   color: string;
@@ -61,6 +73,13 @@ function getObjectType(object: { isPromise?: boolean; isRelationship?: boolean; 
   if (object.isConversation) return { type: "Conversation", icon: MessageSquare, color: "bg-cyan-100 text-cyan-800 border border-cyan-200" };
   if (object.isPerson) return { type: "Person", icon: User, color: "bg-blue-100 text-blue-800 border border-blue-200" };
   if (object.isEvent) return { type: "Event", icon: Calendar, color: "bg-green-100 text-green-800 border border-green-200" };
+  if (object.isPlace) return { type: "Place", icon: MapPin, color: "bg-teal-100 text-teal-800 border border-teal-200" };
+  if (object.isOrganization) return { type: "Organization", icon: Building2, color: "bg-indigo-100 text-indigo-800 border border-indigo-200" };
+  if (object.isProduct) return { type: "Product", icon: Box, color: "bg-amber-100 text-amber-800 border border-amber-200" };
+  if (object.isProject) return { type: "Project", icon: FolderKanban, color: "bg-violet-100 text-violet-800 border border-violet-200" };
+  if (object.isAnimal) return { type: "Animal", icon: PawPrint, color: "bg-lime-100 text-lime-800 border border-lime-200" };
+  if (object.isConcept) return { type: "Concept", icon: Lightbulb, color: "bg-sky-100 text-sky-800 border border-sky-200" };
+  if (object.isMedia) return { type: "Media", icon: Film, color: "bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-200" };
   return { type: "Object", icon: Package, color: "bg-gray-100 text-gray-800 border border-gray-200" };
 }
 
@@ -222,6 +241,15 @@ const ObjectDetailPage = () => {
   
   // State for time range editing from metadata display
   const [editingTimeRangeIndex, setEditingTimeRangeIndex] = useState<number | null>(null);
+
+  // Merge / split dialogs
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeInitialOtherId, setMergeInitialOtherId] = useState<string | undefined>(undefined);
+  const [splitDialogOpen, setSplitDialogOpen] = useState(false);
+  const canMergeSplit = !!object && !object.isRelationship && !object.isConversation;
+  const { data: duplicateCandidates = [] } = useDuplicateCandidates(
+    canMergeSplit ? id : undefined,
+  );
   
   // State for summary details dialog
   const [selectedSummary, setSelectedSummary] = useState<any | null>(null);
@@ -493,6 +521,35 @@ const ObjectDetailPage = () => {
             </Button>
           )}
           
+          {canMergeSplit && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                title="Merge with a duplicate object"
+                onClick={() => {
+                  if (hasPendingChanges) handleManualSave();
+                  setMergeInitialOtherId(undefined);
+                  setMergeDialogOpen(true);
+                }}
+              >
+                <Combine className="w-4 h-4 mr-1" />
+                Merge
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                title="Split into two objects"
+                onClick={() => {
+                  if (hasPendingChanges) handleManualSave();
+                  setSplitDialogOpen(true);
+                }}
+              >
+                <Scissors className="w-4 h-4 mr-1" />
+                Split
+              </Button>
+            </>
+          )}
           <Button variant="outline" size="sm" asChild>
             <Link to={`/objects/${id}/history`}>
               <History className="w-4 h-4 mr-1" />
@@ -598,6 +655,59 @@ const ObjectDetailPage = () => {
           />
         </div>
       </div>
+
+      {/* Possible duplicates (case-insensitive name/alias collisions) */}
+      {canMergeSplit && duplicateCandidates.length > 0 && (
+        <div className="border border-amber-300 bg-amber-50/50 rounded-lg p-3 space-y-2">
+          <h3 className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+            <Combine className="w-3.5 h-3.5" />
+            Possible duplicates
+          </h3>
+          <div className="space-y-1">
+            {duplicateCandidates.map((candidate: any) => {
+              const candidateId = candidate._id.toString();
+              const candidateType = getObjectType(candidate);
+              return (
+                <div
+                  key={candidateId}
+                  className="flex items-center justify-between gap-2 text-sm"
+                >
+                  <Link
+                    to={`/objects/${candidateId}`}
+                    className="flex items-center gap-2 min-w-0 hover:underline"
+                  >
+                    <span className="truncate font-medium">
+                      {candidate.icon?.text ? `${candidate.icon.text} ` : ""}
+                      {candidate.name ?? "Unnamed"}
+                    </span>
+                    {candidate.aliases?.length > 0 && (
+                      <span className="text-xs text-muted-foreground truncate">
+                        ({candidate.aliases.join(", ")})
+                      </span>
+                    )}
+                    <span className={`inline-flex items-center gap-1 px-1.5 py-0 rounded text-[10px] font-medium ${candidateType.color}`}>
+                      {candidateType.type}
+                    </span>
+                  </Link>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-2 text-xs flex-shrink-0"
+                    onClick={() => {
+                      if (hasPendingChanges) handleManualSave();
+                      setMergeInitialOtherId(candidateId);
+                      setMergeDialogOpen(true);
+                    }}
+                  >
+                    <Combine className="w-3 h-3 mr-1" />
+                    Merge…
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Row 3: Time Info + Metadata + Details (3 columns) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -706,6 +816,23 @@ const ObjectDetailPage = () => {
           )}
         </div>
       </div>
+
+      {/* Merge / Split dialogs */}
+      {canMergeSplit && (
+        <>
+          <MergeObjectDialog
+            open={mergeDialogOpen}
+            onOpenChange={setMergeDialogOpen}
+            currentObject={object}
+            initialOtherId={mergeInitialOtherId}
+          />
+          <SplitObjectDialog
+            open={splitDialogOpen}
+            onOpenChange={setSplitDialogOpen}
+            sourceObject={object}
+          />
+        </>
+      )}
 
       {/* Time Range Edit Dialog triggered from MetadataDisplay */}
       {editingTimeRangeIndex !== null && object.timeRanges && object.timeRanges[editingTimeRangeIndex] && (

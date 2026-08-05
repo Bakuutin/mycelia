@@ -57,7 +57,7 @@ const searchObjectsSchema = z.object({
   query: z.string().describe(
     "Search text to find in object names, aliases, details, and summaries. Uses full-text search with relevance ranking."
   ),
-  types: z.array(z.enum(["person", "event", "relationship", "promise", "place", "any"])).default(["any"]).describe(
+  types: z.array(z.enum(["person", "event", "relationship", "promise", "place", "organization", "product", "project", "animal", "concept", "media", "any"])).default(["any"]).describe(
     "Filter by object types. Use 'any' to search all types."
   ),
   startDate: zDateOrRelativeTime(
@@ -215,6 +215,13 @@ Available actions:
           if (input.types.includes("event")) typeFilters.push({ isEvent: true });
           if (input.types.includes("relationship")) typeFilters.push({ isRelationship: true });
           if (input.types.includes("promise")) typeFilters.push({ isPromise: true });
+          if (input.types.includes("place")) typeFilters.push({ isPlace: true });
+          if (input.types.includes("organization")) typeFilters.push({ isOrganization: true });
+          if (input.types.includes("product")) typeFilters.push({ isProduct: true });
+          if (input.types.includes("project")) typeFilters.push({ isProject: true });
+          if (input.types.includes("animal")) typeFilters.push({ isAnimal: true });
+          if (input.types.includes("concept")) typeFilters.push({ isConcept: true });
+          if (input.types.includes("media")) typeFilters.push({ isMedia: true });
           if (typeFilters.length > 0) {
             additionalFilters.push({ $or: typeFilters });
           }
@@ -253,6 +260,13 @@ Available actions:
               isEvent: 1,
               isRelationship: 1,
               isPromise: 1,
+              isPlace: 1,
+              isOrganization: 1,
+              isProduct: 1,
+              isProject: 1,
+              isAnimal: 1,
+              isConcept: 1,
+              isMedia: 1,
               timeRanges: 1,
               score: { $meta: "textScore" },
             },
@@ -267,7 +281,7 @@ Available actions:
             name: r.name,
             details: r.details,
             icon: r.icon,
-            type: r.isPerson ? "person" : r.isEvent ? "event" : r.isRelationship ? "relationship" : r.isPromise ? "promise" : "object",
+            type: r.isPerson ? "person" : r.isEvent ? "event" : r.isRelationship ? "relationship" : r.isPromise ? "promise" : r.isPlace ? "place" : r.isOrganization ? "organization" : r.isProduct ? "product" : r.isProject ? "project" : r.isAnimal ? "animal" : r.isConcept ? "concept" : r.isMedia ? "media" : "object",
             timeRanges: r.timeRanges,
             score: r.score, // Text search relevance score
           })),

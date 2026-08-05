@@ -19,6 +19,8 @@ export const objectKeys = {
   selection: () => [...objectKeys.all, "selection"] as const,
   history: (id: string) => [...objectKeys.all, "history", id] as const,
   referenceCounts: (id: string) => [...objectKeys.all, "referenceCounts", id] as const,
+  duplicates: (id: string) => [...objectKeys.all, "duplicates", id] as const,
+  duplicateGroups: () => [...objectKeys.all, "duplicateGroups"] as const,
 };
 
 // Fetch a single object by ID
@@ -181,6 +183,105 @@ export function useDeleteObject() {
       // Invalidate all object queries
       queryClient.invalidateQueries({ queryKey: objectKeys.all });
     },
+  });
+}
+
+// Mutation for merging duplicate objects into one
+export function useMergeObjects() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      winnerId,
+      loserIds,
+      canonicalName,
+      version,
+    }: {
+      winnerId: string;
+      loserIds: string[];
+      canonicalName?: string;
+      version?: number;
+    }) => {
+      return await callResource("objects", {
+        action: "merge",
+        winnerId,
+        loserIds,
+        ...(canonicalName ? { canonicalName } : {}),
+        ...(version !== undefined ? { version } : {}),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: objectKeys.all });
+    },
+  });
+}
+
+// Mutation for splitting one object into two
+export function useSplitObject() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      sourceId,
+      newObject,
+      edgeIdsToMove,
+      aliasesToMove,
+      version,
+    }: {
+      sourceId: string;
+      newObject: { name: string; details?: string | null };
+      edgeIdsToMove: string[];
+      aliasesToMove: string[];
+      version?: number;
+    }) => {
+      return await callResource("objects", {
+        action: "split",
+        sourceId,
+        newObject,
+        edgeIdsToMove,
+        aliasesToMove,
+        ...(version !== undefined ? { version } : {}),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: objectKeys.all });
+    },
+  });
+}
+
+// Possible duplicates of one object (case-insensitive name/alias collision)
+export function useDuplicateCandidates(
+  objectId: string | ObjectId | undefined,
+): UseQueryResult<Object[], Error> {
+  const idString = objectId?.toString();
+
+  return useQuery({
+    queryKey: objectKeys.duplicates(idString!),
+    queryFn: async () => {
+      if (!idString) throw new Error("Object ID is required");
+      const result = await callResource("objects", {
+        action: "findDuplicates",
+        objectId: idString,
+      });
+      return result?.candidates ?? [];
+    },
+    enabled: !!idString,
+    staleTime: 30 * 1000,
+  });
+}
+
+// All duplicate groups across the collection
+export function useDuplicateGroups(enabled: boolean) {
+  return useQuery({
+    queryKey: objectKeys.duplicateGroups(),
+    queryFn: async () => {
+      const result = await callResource("objects", {
+        action: "findDuplicates",
+      });
+      return result?.groups ?? [];
+    },
+    enabled,
+    staleTime: 30 * 1000,
   });
 }
 

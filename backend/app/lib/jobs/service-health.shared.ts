@@ -42,8 +42,10 @@ export interface ExternalServiceHealth {
 export const JOB_SERVICE_DEPENDENCIES: Record<string, ExternalServiceId[]> = {
   transcription: ["stt"],
   conversation_extractor: ["llm"],
+  conversation_extractor_merged: ["llm"],
   summarization: ["llm"],
   tagger: ["llm"],
+  entity_typing: ["llm"],
 };
 
 export function getJobServiceDependencies(

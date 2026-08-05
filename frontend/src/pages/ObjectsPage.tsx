@@ -3,6 +3,8 @@ import { Link, useSearchParams, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import type { Object as ObjectModel } from "@/types/objects";
+import { useDuplicateGroups } from "@/hooks/useObjectQueries";
+import { MergeObjectDialog } from "@/components/dialogs/MergeObjectDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,11 +13,19 @@ import {
   ArrowRight,
   Calendar,
   CalendarClock,
+  Box,
+  Building2,
   ChevronDown,
   ChevronRight,
+  Combine,
+  FolderKanban,
   Handshake,
+  Film,
+  Lightbulb,
   Link2,
   Link2Off,
+  MapPin,
+  PawPrint,
   MessageSquare,
   Package,
   Plus,
@@ -129,13 +139,20 @@ function formatDuration(startDate: Date | string, endDate?: Date | string | null
 
 function getObjectType(
   object: ObjectModel,
-): "person" | "event" | "relationship" | "promise" | "conversation" | "tag" | "other" {
+): "person" | "event" | "relationship" | "promise" | "conversation" | "tag" | "place" | "organization" | "product" | "project" | "animal" | "concept" | "media" | "other" {
   if (object.isPromise) return "promise";
   if (object.isTag) return "tag";
   if (object.isRelationship) return "relationship";
   if (object.isConversation) return "conversation";
   if (object.isPerson) return "person";
   if (object.isEvent) return "event";
+  if (object.isPlace) return "place";
+  if (object.isOrganization) return "organization";
+  if (object.isProduct) return "product";
+  if (object.isProject) return "project";
+  if (object.isAnimal) return "animal";
+  if (object.isConcept) return "concept";
+  if (object.isMedia) return "media";
   return "other";
 }
 
@@ -174,6 +191,48 @@ const TYPE_CONFIG = {
     label: "Tags",
     icon: Tag,
     color: "bg-pink-100 text-pink-800 border-pink-200",
+    badgeVariant: "secondary" as const,
+  },
+  place: {
+    label: "Places",
+    icon: MapPin,
+    color: "bg-teal-100 text-teal-800 border-teal-200",
+    badgeVariant: "secondary" as const,
+  },
+  organization: {
+    label: "Organizations",
+    icon: Building2,
+    color: "bg-indigo-100 text-indigo-800 border-indigo-200",
+    badgeVariant: "secondary" as const,
+  },
+  product: {
+    label: "Products",
+    icon: Box,
+    color: "bg-amber-100 text-amber-800 border-amber-200",
+    badgeVariant: "secondary" as const,
+  },
+  project: {
+    label: "Projects",
+    icon: FolderKanban,
+    color: "bg-violet-100 text-violet-800 border-violet-200",
+    badgeVariant: "secondary" as const,
+  },
+  animal: {
+    label: "Animals",
+    icon: PawPrint,
+    color: "bg-lime-100 text-lime-800 border-lime-200",
+    badgeVariant: "secondary" as const,
+  },
+  concept: {
+    label: "Concepts",
+    icon: Lightbulb,
+    color: "bg-sky-100 text-sky-800 border-sky-200",
+    badgeVariant: "secondary" as const,
+  },
+  media: {
+    label: "Media",
+    icon: Film,
+    color: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
     badgeVariant: "secondary" as const,
   },
   other: {
@@ -346,7 +405,7 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
   );
 }
 
-type ObjectType = "person" | "event" | "relationship" | "promise" | "conversation" | "tag" | "other";
+type ObjectType = "person" | "event" | "relationship" | "promise" | "conversation" | "tag" | "place" | "organization" | "product" | "project" | "animal" | "concept" | "media" | "other";
 type SortOption = "name" | "updatedAt" | "createdAt";
 
 interface TypeFilterButtonProps {
@@ -403,6 +462,13 @@ const ObjectsPage = () => {
     promise: [],
     conversation: [],
     tag: [],
+    place: [],
+    organization: [],
+    product: [],
+    project: [],
+    animal: [],
+    concept: [],
+    media: [],
     other: [],
   });
   const [loadingTypes, setLoadingTypes] = useState<Set<ObjectType>>(new Set());
@@ -420,6 +486,13 @@ const ObjectsPage = () => {
     promise: ITEMS_PER_TYPE,
     conversation: ITEMS_PER_TYPE,
     tag: ITEMS_PER_TYPE,
+    place: ITEMS_PER_TYPE,
+    organization: ITEMS_PER_TYPE,
+    product: ITEMS_PER_TYPE,
+    project: ITEMS_PER_TYPE,
+    animal: ITEMS_PER_TYPE,
+    concept: ITEMS_PER_TYPE,
+    media: ITEMS_PER_TYPE,
     other: ITEMS_PER_TYPE,
   });
 
@@ -431,6 +504,13 @@ const ObjectsPage = () => {
     promise: false,
     conversation: false,
     tag: false,
+    place: false,
+    organization: false,
+    product: false,
+    project: false,
+    animal: false,
+    concept: false,
+    media: false,
     other: false,
   });
 
@@ -443,6 +523,13 @@ const ObjectsPage = () => {
     promise: "default",
     conversation: "chronological-desc", // Default to newest first for conversations
     tag: "default",
+    place: "default",
+    organization: "default",
+    product: "default",
+    project: "default",
+    animal: "default",
+    concept: "default",
+    media: "default",
     other: "default",
   });
 
@@ -454,6 +541,13 @@ const ObjectsPage = () => {
     promise: 0,
     conversation: 0,
     tag: 0,
+    place: 0,
+    organization: 0,
+    product: 0,
+    project: 0,
+    animal: 0,
+    concept: 0,
+    media: 0,
     other: 0,
   });
   const [countsLoading, setCountsLoading] = useState(true);
@@ -467,12 +561,27 @@ const ObjectsPage = () => {
     promise: false,
     conversation: false,
     tag: false,
+    place: false,
+    organization: false,
+    product: false,
+    project: false,
+    animal: false,
+    concept: false,
+    media: false,
     other: false,
   });
   
   // Starred objects section
   const [starredObjects, setStarredObjects] = useState<ObjectWithRelations[]>([]);
   const [starredCollapsed, setStarredCollapsed] = useState(false);
+
+  // Duplicates scan
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const { data: duplicateGroups = [], isLoading: duplicateGroupsLoading } =
+    useDuplicateGroups(showDuplicates);
+  const [mergePair, setMergePair] = useState<
+    { current: ObjectModel; otherId: string } | null
+  >(null);
 
   const q = searchParams.get("q") || "";
   const sortBy = (searchParams.get("sort") as SortOption) || "updatedAt";
@@ -518,6 +627,20 @@ const ObjectsPage = () => {
         return { isConversation: true };
       case "tag":
         return { isTag: true };
+      case "place":
+        return { isPlace: true };
+      case "organization":
+        return { isOrganization: true };
+      case "product":
+        return { isProduct: true };
+      case "project":
+        return { isProject: true };
+      case "animal":
+        return { isAnimal: true };
+      case "concept":
+        return { isConcept: true };
+      case "media":
+        return { isMedia: true };
       case "other":
         return {
           isPerson: { $ne: true },
@@ -526,6 +649,13 @@ const ObjectsPage = () => {
           isPromise: { $ne: true },
           isConversation: { $ne: true },
           isTag: { $ne: true },
+          isPlace: { $ne: true },
+          isOrganization: { $ne: true },
+          isProduct: { $ne: true },
+          isProject: { $ne: true },
+          isAnimal: { $ne: true },
+          isConcept: { $ne: true },
+          isMedia: { $ne: true },
         };
     }
   }, []);
@@ -819,6 +949,13 @@ const ObjectsPage = () => {
           promise: result.promise || 0,
           conversation: result.conversation || 0,
           tag: result.tag || 0,
+          place: result.place || 0,
+          organization: result.organization || 0,
+          product: result.product || 0,
+          project: result.project || 0,
+          animal: result.animal || 0,
+          concept: result.concept || 0,
+          media: result.media || 0,
           other: result.other || 0,
         });
         // Orphaned might be null if calculating in background
@@ -848,6 +985,13 @@ const ObjectsPage = () => {
           promise: 0,
           conversation: 0,
           tag: 0,
+          place: 0,
+          organization: 0,
+          product: 0,
+          project: 0,
+          animal: 0,
+          concept: 0,
+          media: 0,
           other: 0,
         });
         setOrphanedCount(null);
@@ -915,9 +1059,16 @@ const ObjectsPage = () => {
       promise: ITEMS_PER_TYPE,
       conversation: ITEMS_PER_TYPE,
       tag: ITEMS_PER_TYPE,
+      place: ITEMS_PER_TYPE,
+      organization: ITEMS_PER_TYPE,
+      product: ITEMS_PER_TYPE,
+      project: ITEMS_PER_TYPE,
+      animal: ITEMS_PER_TYPE,
+      concept: ITEMS_PER_TYPE,
+      media: ITEMS_PER_TYPE,
       other: ITEMS_PER_TYPE,
     });
-    
+
     // Reset mightHaveMore
     setMightHaveMore({
       person: false,
@@ -926,12 +1077,19 @@ const ObjectsPage = () => {
       promise: false,
       conversation: false,
       tag: false,
+      place: false,
+      organization: false,
+      product: false,
+      project: false,
+      animal: false,
+      concept: false,
+      media: false,
       other: false,
     });
-    
+
     // Clear fetched types to trigger refetch when expanded
     setFetchedTypes(new Set());
-    
+
     // Clear current objects
     setObjectsByType({
       person: [],
@@ -940,6 +1098,13 @@ const ObjectsPage = () => {
       promise: [],
       conversation: [],
       tag: [],
+      place: [],
+      organization: [],
+      product: [],
+      project: [],
+      animal: [],
+      concept: [],
+      media: [],
       other: [],
     });
   }, [q, sortBy, activeTypesParam, showOrphanedOnly]);
@@ -1280,7 +1445,7 @@ const ObjectsPage = () => {
   // Determine which types to show based on filters
   // Order: conversations first, then people, events, relationships, promises, tags, other
   const visibleTypes = useMemo(() => {
-    const typeOrder: ObjectType[] = ["conversation", "person", "event", "relationship", "promise", "tag", "other"];
+    const typeOrder: ObjectType[] = ["conversation", "person", "event", "place", "organization", "product", "project", "animal", "concept", "media", "relationship", "promise", "tag", "other"];
     
     if (activeTypes.size === 0) {
       // Show all types that have items (in database)
@@ -1377,6 +1542,22 @@ const ObjectsPage = () => {
           </Badge>
         </Button>
 
+        {/* Duplicates scan */}
+        <Button
+          variant={showDuplicates ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => setShowDuplicates((prev) => !prev)}
+          className="flex items-center gap-2"
+        >
+          <Combine className="w-4 h-4" />
+          Duplicates
+          {showDuplicates && (
+            <Badge variant="secondary" className="text-xs ml-1">
+              {duplicateGroupsLoading ? "..." : duplicateGroups.length}
+            </Badge>
+          )}
+        </Button>
+
         {/* Refresh counts button */}
         <Button
           variant="ghost"
@@ -1456,6 +1637,79 @@ const ObjectsPage = () => {
             </Button>
           )}
         </Card>
+      )}
+
+      {/* Duplicate groups panel */}
+      {showDuplicates && (
+        <div className="border border-amber-300 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-900/10 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Combine className="w-5 h-5 text-amber-700" />
+            <h2 className="text-lg font-semibold">Possible duplicates</h2>
+            <Badge variant="outline" className="font-semibold">
+              {duplicateGroupsLoading ? "..." : duplicateGroups.length}
+            </Badge>
+          </div>
+          {duplicateGroupsLoading && (
+            <p className="text-sm text-muted-foreground">Scanning for name collisions...</p>
+          )}
+          {!duplicateGroupsLoading && duplicateGroups.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No objects share a name or alias. 🎉
+            </p>
+          )}
+          <div className="space-y-2">
+            {duplicateGroups.map((group: any) => (
+              <div
+                key={group.key}
+                className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2"
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                  <span className="text-xs font-mono text-muted-foreground flex-shrink-0">
+                    "{group.key}"
+                  </span>
+                  {group.objects.map((obj: any, index: number) => (
+                    <span key={obj._id.toString()} className="flex items-center gap-2 min-w-0">
+                      {index > 0 && <span className="text-muted-foreground">·</span>}
+                      <Link
+                        to={`/objects/${obj._id.toString()}`}
+                        className="text-sm font-medium hover:underline truncate"
+                      >
+                        {obj.icon?.text ? `${obj.icon.text} ` : ""}
+                        {obj.name ?? "Unnamed"}
+                      </Link>
+                    </span>
+                  ))}
+                </div>
+                {group.objects.length === 2 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs flex-shrink-0"
+                    onClick={() =>
+                      setMergePair({
+                        current: group.objects[0],
+                        otherId: group.objects[1]._id.toString(),
+                      })}
+                  >
+                    <Combine className="w-3 h-3 mr-1" />
+                    Merge…
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mergePair && (
+        <MergeObjectDialog
+          open={!!mergePair}
+          onOpenChange={(open) => {
+            if (!open) setMergePair(null);
+          }}
+          currentObject={mergePair.current}
+          initialOtherId={mergePair.otherId}
+        />
       )}
 
       {(grandTotal > 0 || countsLoading) && (

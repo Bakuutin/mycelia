@@ -10,7 +10,19 @@ export type TrackId =
   | "objects";
 
 // Object categories for timeline grouping
-export type ObjectCategory = "person" | "event" | "relationship" | "promise" | "other";
+export type ObjectCategory =
+  | "person"
+  | "event"
+  | "relationship"
+  | "promise"
+  | "place"
+  | "organization"
+  | "product"
+  | "project"
+  | "animal"
+  | "concept"
+  | "media"
+  | "other";
 
 export type ObjectsLayoutMode = "mixed" | "by-category";
 
@@ -26,6 +38,13 @@ export const OBJECT_CATEGORIES: ObjectCategoryConfig[] = [
   { id: "person", label: "People", color: "#3b82f6", icon: "👤" },
   { id: "relationship", label: "Relationships", color: "#ec4899", icon: "🔗" },
   { id: "promise", label: "Promises", color: "#f97316", icon: "🤝" },
+  { id: "place", label: "Places", color: "#14b8a6", icon: "📍" },
+  { id: "organization", label: "Organizations", color: "#6366f1", icon: "🏢" },
+  { id: "product", label: "Products", color: "#f59e0b", icon: "📱" },
+  { id: "project", label: "Projects", color: "#a855f7", icon: "📁" },
+  { id: "animal", label: "Animals", color: "#84cc16", icon: "🐾" },
+  { id: "concept", label: "Concepts", color: "#0ea5e9", icon: "💡" },
+  { id: "media", label: "Media", color: "#d946ef", icon: "🎬" },
   { id: "other", label: "Other", color: "#6b7280", icon: "📦" },
 ];
 

@@ -8,11 +8,18 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   ArrowRight,
+  Box,
+  Building2,
   Calendar,
   Edit3,
   ExternalLink,
   Eye,
+  Film,
+  FolderKanban,
   Handshake,
+  Lightbulb,
+  MapPin,
+  PawPrint,
   MessageSquare,
   MoveHorizontal,
   Plus,
@@ -607,7 +614,7 @@ export function ObjectForm(
       {/* Object Type Toggle Buttons */}
       <div className={compact ? "space-y-1" : "space-y-2"}>
         <Label className={`text-muted-foreground ${compact ? 'text-xs' : 'text-sm'}`}>Object Type</Label>
-        <div className={`flex flex-nowrap ${compact ? 'gap-1' : 'gap-2'}`}>
+        <div className={`flex flex-wrap ${compact ? 'gap-1' : 'gap-2'}`}>
           <button
             type="button"
             onClick={() => updateField("isPerson", !object.isPerson)}
@@ -638,6 +645,118 @@ export function ObjectForm(
           >
             <Calendar className={compact ? "w-3 h-3" : "w-4 h-4"} />
             <span>Event</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isPlace", !object.isPlace)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isPlace
+                ? "bg-teal-500 text-white border-teal-600 shadow-sm"
+                : "bg-background border-border hover:bg-teal-50 hover:border-teal-300"
+              }
+            `}
+          >
+            <MapPin className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Place</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isOrganization", !object.isOrganization)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isOrganization
+                ? "bg-indigo-500 text-white border-indigo-600 shadow-sm"
+                : "bg-background border-border hover:bg-indigo-50 hover:border-indigo-300"
+              }
+            `}
+          >
+            <Building2 className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Organization</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isProduct", !object.isProduct)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isProduct
+                ? "bg-amber-500 text-white border-amber-600 shadow-sm"
+                : "bg-background border-border hover:bg-amber-50 hover:border-amber-300"
+              }
+            `}
+          >
+            <Box className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Product</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isProject", !object.isProject)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isProject
+                ? "bg-violet-500 text-white border-violet-600 shadow-sm"
+                : "bg-background border-border hover:bg-violet-50 hover:border-violet-300"
+              }
+            `}
+          >
+            <FolderKanban className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Project</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isAnimal", !object.isAnimal)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isAnimal
+                ? "bg-lime-500 text-white border-lime-600 shadow-sm"
+                : "bg-background border-border hover:bg-lime-50 hover:border-lime-300"
+              }
+            `}
+          >
+            <PawPrint className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Animal</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isConcept", !object.isConcept)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isConcept
+                ? "bg-sky-500 text-white border-sky-600 shadow-sm"
+                : "bg-background border-border hover:bg-sky-50 hover:border-sky-300"
+              }
+            `}
+          >
+            <Lightbulb className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Concept</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateField("isMedia", !object.isMedia)}
+            className={`
+              flex items-center rounded-md border transition-all font-medium whitespace-nowrap
+              ${compact ? 'gap-1 px-1.5 py-0.5 text-[10px]' : 'gap-2 px-3 py-2 text-sm border-2'}
+              ${object.isMedia
+                ? "bg-fuchsia-500 text-white border-fuchsia-600 shadow-sm"
+                : "bg-background border-border hover:bg-fuchsia-50 hover:border-fuchsia-300"
+              }
+            `}
+          >
+            <Film className={compact ? "w-3 h-3" : "w-4 h-4"} />
+            <span>Media</span>
           </button>
 
           <button

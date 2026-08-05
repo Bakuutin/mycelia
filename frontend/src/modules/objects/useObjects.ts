@@ -4,7 +4,7 @@ import { Object } from "@/types/objects.ts";
 import { callResource } from "@/lib/api";
 import { useTimelineRange } from "@/stores/timelineRange";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
-import type { ObjectCategory } from "@/types/tracks";
+import { OBJECT_CATEGORIES, type ObjectCategory } from "@/types/tracks";
 
 type ObjectsState = {
   objects: Object[];
@@ -109,6 +109,13 @@ export function getObjectCategory(object: Object): ObjectCategory {
   if (object.isEvent) return "event";
   if (object.isPromise) return "promise";
   if (object.isRelationship) return "relationship";
+  if (object.isPlace) return "place";
+  if (object.isOrganization) return "organization";
+  if (object.isProduct) return "product";
+  if (object.isProject) return "project";
+  if (object.isAnimal) return "animal";
+  if (object.isConcept) return "concept";
+  if (object.isMedia) return "media";
   return "other";
 }
 
@@ -122,6 +129,13 @@ export function useObjectCategoryCounts(): Record<ObjectCategory, number> {
       event: 0,
       relationship: 0,
       promise: 0,
+      place: 0,
+      organization: 0,
+      product: 0,
+      project: 0,
+      animal: 0,
+      concept: 0,
+      media: 0,
       other: 0,
     };
 
@@ -146,7 +160,7 @@ export function useFilteredObjects() {
 
   const filtered = useMemo(() => {
     // Fast path: all categories visible
-    if (visibleCategories.length === 5) return objects;
+    if (visibleCategories.length === OBJECT_CATEGORIES.length) return objects;
     return objects.filter((obj) => visibleCategories.includes(getObjectCategory(obj)));
   }, [objects, visibleCategories]);
 

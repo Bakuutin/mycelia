@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import {
+  buildJsonSchemaResponseFormat,
   createSegmentParser,
   describeExtractionResult,
   formatChunkAsPrompt,
@@ -125,21 +126,111 @@ Deno.test("metadata schema requires every extraction field", () => {
       agreed_upon_something: false,
       entities: [],
       emoji: "🗣️",
+      tags: [],
     }).success,
   ).toBe(true);
+  expect(
+    metadataResponseSchema.safeParse({
+      agreed_upon_something: false,
+      entities: [{ name: "Mycelia", type: "product" }],
+      emoji: "🗣️",
+      tags: ["work"],
+    }).success,
+  ).toBe(true);
+  // Bare strings are tolerated by the parser but not by the strict schema
+  // that is advertised to the provider.
+  expect(
+    metadataResponseSchema.safeParse({
+      agreed_upon_something: false,
+      entities: ["Mycelia"],
+      emoji: "🗣️",
+      tags: [],
+    }).success,
+  ).toBe(false);
 });
 
-Deno.test("metadata parser normalizes emoji and deduplicates entities", () => {
+Deno.test("metadata parser normalizes emoji and deduplicates typed entities", () => {
   expect(parseMetadataResponse(JSON.stringify({
     agreed_upon_something: true,
-    entities: ["Mycelia", " mycelia ", "OpenAI", ""],
+    entities: [
+      { name: "Mycelia", type: "product" },
+      { name: " mycelia ", type: "organization" },
+      { name: "OpenAI", type: "organization" },
+      { name: "", type: "person" },
+    ],
     emoji: "🧠 Knowledge",
   }))).toEqual({
     agreed_upon_something: true,
-    entities: ["Mycelia", "OpenAI"],
+    entities: [
+      { name: "Mycelia", type: "product" },
+      { name: "OpenAI", type: "organization" },
+    ],
     emoji: "🧠",
+    tags: [],
   });
   expect(normalizeEmoji("🇬🇧")).toBe("🇬🇧");
+});
+
+Deno.test("metadata parser filters tags to known names", () => {
+  const result = parseMetadataResponse(
+    JSON.stringify({
+      agreed_upon_something: false,
+      entities: [],
+      emoji: "🧠",
+      tags: ["work", "Work", "hallucinated", "work", "family"],
+    }),
+    new Set(["work", "family", "health"]),
+  );
+  expect(result.tags).toEqual(["work", "family"]);
+
+  // Without a tag list, tags are ignored entirely.
+  expect(parseMetadataResponse(JSON.stringify({
+    agreed_upon_something: false,
+    entities: [],
+    emoji: "🧠",
+    tags: ["work"],
+  })).tags).toEqual([]);
+});
+
+Deno.test("metadata parser accepts legacy string entities as untyped", () => {
+  expect(parseMetadataResponse(JSON.stringify({
+    agreed_upon_something: false,
+    entities: ["Mycelia", " mycelia ", "OpenAI", ""],
+    emoji: "🧠",
+  })).entities).toEqual([
+    { name: "Mycelia", type: "other" },
+    { name: "OpenAI", type: "other" },
+  ]);
+});
+
+Deno.test("metadata parser downgrades unknown entity types to other", () => {
+  expect(parseMetadataResponse(JSON.stringify({
+    agreed_upon_something: false,
+    entities: [
+      { name: "Шуши", type: "cat" },
+      { name: "Amsterdam", type: "place" },
+      { name: 42, type: "person" },
+    ],
+    emoji: "🧠",
+  })).entities).toEqual([
+    { name: "Шуши", type: "other" },
+    { name: "Amsterdam", type: "place" },
+  ]);
+});
+
+Deno.test("json_schema response format wraps the schema in the required envelope", () => {
+  const format = buildJsonSchemaResponseFormat("conversation_metadata", {
+    type: "object",
+  });
+  // Strict providers (vLLM, OpenRouter passthrough) reject a bare schema:
+  // the {name, schema} envelope is mandatory.
+  expect(format).toEqual({
+    type: "json_schema",
+    json_schema: {
+      name: "conversation_metadata",
+      schema: { type: "object" },
+    },
+  });
 });
 
 Deno.test("metadata parser rejects a response without an emoji", () => {

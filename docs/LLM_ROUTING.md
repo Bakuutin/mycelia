@@ -20,8 +20,14 @@ health — all in **Settings → Inference**.
   priority (ties break on name, then id). The request goes to the first
   provider; on a network error or a non-OK HTTP response it automatically
   retries on the next one down the chain.
-- **Model-level fallback** — a task's configured `fallbackModel` is retried
-  *within the same provider* before the chain advances to the next route.
+- **Model-level fallback** — a fallback model is retried *within the same
+  provider* before the chain advances to the next route. Resolution order,
+  unified across all LLM workers (summarization, conversation extraction,
+  tagging, entity typing): an explicit per-task `fallbackModel` (job input or
+  worker defaults) → the worker's `*_FALLBACK_MODEL` env var → the provider
+  route's own configured fallback (`fallbackEnabled`/`fallbackModel` on the
+  profile). Leaving the per-task fallback empty therefore means "use the
+  route's fallback", not "stop with error".
 - **Environment route** — when `OPENAI_BASE_URL` / `OPENAI_API_KEY` are set in
   the backend environment, they appear as a read-only "Environment LLM" route.
   It participates in routing only when `llmProfiles.includeEnvironment` is on,

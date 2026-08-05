@@ -607,3 +607,454 @@ Deno.test(
     expect(deleteEntry.field).toBeNull();
   }),
 );
+
+// ============================================================================
+// Type counts: new place/organization/product/project flags
+// ============================================================================
+
+Deno.test(
+  "counts include new type flags and exclude them from other",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    await objectsResource({
+      action: "create",
+      object: { name: "Amsterdam", isPlace: true },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Anthropic", isOrganization: true },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Mycelia", isProduct: true },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Rebrand", isProject: true },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Untyped thing" },
+    });
+
+    const counts = await objectsResource({
+      action: "getCounts",
+      forceRefresh: true,
+    });
+
+    expect(counts.place).toBe(1);
+    expect(counts.organization).toBe(1);
+    expect(counts.product).toBe(1);
+    expect(counts.project).toBe(1);
+    expect(counts.other).toBe(1);
+  }),
+);
+
+// ============================================================================
+// Merge
+// ============================================================================
+
+Deno.test(
+  "merge unions fields and aliases into the winner",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const a = await objectsResource({
+      action: "create",
+      object: { name: "Igor", aliases: ["Gosha"], isPerson: true },
+    });
+    const b = await objectsResource({
+      action: "create",
+      object: {
+        name: "igor",
+        aliases: ["Igor K."],
+        starred: true,
+        details: "From work",
+      },
+    });
+
+    const result = await objectsResource({
+      action: "merge",
+      winnerId: a.insertedId.toString(),
+      loserIds: [b.insertedId.toString()],
+      canonicalName: "Igor",
+      version: 1,
+    });
+
+    expect(result.mergedIds).toEqual([b.insertedId.toString()]);
+    const winner = result.winner;
+    expect(winner.name).toBe("Igor");
+    expect(winner.aliases).toContain("Gosha");
+    expect(winner.aliases).toContain("Igor K.");
+    // Case-insensitive duplicate of the canonical name is not an alias
+    expect(winner.aliases).not.toContain("igor");
+    expect(winner.starred).toBe(true);
+    expect(winner.isPerson).toBe(true);
+    expect(winner.details).toBe("From work");
+    expect(winner.version).toBe(2);
+    expect(winner.metadata.mergedFrom).toHaveLength(1);
+    expect(winner.metadata.mergedFrom[0].name).toBe("igor");
+
+    await expect(objectsResource({
+      action: "get",
+      id: b.insertedId.toString(),
+    })).rejects.toThrow("Object not found");
+  }),
+);
+
+Deno.test(
+  "merge re-points edges, drops self-edges and dedupes",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const a = await objectsResource({
+      action: "create",
+      object: { name: "A", isPerson: true },
+    });
+    const b = await objectsResource({
+      action: "create",
+      object: { name: "B", isPerson: true },
+    });
+    const c = await objectsResource({
+      action: "create",
+      object: { name: "C", isPerson: true },
+    });
+
+    const edge = (subject: ObjectId, object: ObjectId, name: string) =>
+      objectsResource({
+        action: "create",
+        object: {
+          name,
+          isRelationship: true,
+          relationship: { subject, object, symmetrical: false },
+        },
+      });
+
+    await edge(a.insertedId, c.insertedId, "knows"); // duplicate after merge
+    await edge(b.insertedId, c.insertedId, "knows");
+    await edge(a.insertedId, b.insertedId, "knows"); // becomes self-edge
+
+    const result = await objectsResource({
+      action: "merge",
+      winnerId: a.insertedId.toString(),
+      loserIds: [b.insertedId.toString()],
+    });
+
+    expect(result.edgesRepointed).toBeGreaterThanOrEqual(2);
+    expect(result.edgesDeduped).toBe(1);
+
+    const relationships = await objectsResource({
+      action: "getRelationships",
+      id: a.insertedId.toString(),
+    });
+    // Only one edge should remain: A -knows-> C
+    expect(relationships).toHaveLength(1);
+    expect(relationships[0].other._id.toString()).toBe(
+      c.insertedId.toString(),
+    );
+  }),
+);
+
+Deno.test(
+  "merge validations reject bad input",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const a = await objectsResource({
+      action: "create",
+      object: { name: "A" },
+    });
+    const rel = await objectsResource({
+      action: "create",
+      object: {
+        name: "edge",
+        isRelationship: true,
+        relationship: {
+          subject: a.insertedId,
+          object: a.insertedId,
+          symmetrical: false,
+        },
+      },
+    });
+
+    await expect(objectsResource({
+      action: "merge",
+      winnerId: a.insertedId.toString(),
+      loserIds: [a.insertedId.toString()],
+    })).rejects.toThrow("Winner cannot be one of the merged objects");
+
+    await expect(objectsResource({
+      action: "merge",
+      winnerId: a.insertedId.toString(),
+      loserIds: [rel.insertedId.toString()],
+    })).rejects.toThrow("not supported");
+
+    await expect(objectsResource({
+      action: "merge",
+      winnerId: a.insertedId.toString(),
+      loserIds: [new ObjectId().toString()],
+    })).rejects.toThrow("Objects not found");
+
+    const b = await objectsResource({
+      action: "create",
+      object: { name: "B" },
+    });
+    let conflict: any;
+    try {
+      await objectsResource({
+        action: "merge",
+        winnerId: a.insertedId.toString(),
+        loserIds: [b.insertedId.toString()],
+        version: 99,
+      });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(conflict?.code).toBe(409);
+  }),
+);
+
+Deno.test(
+  "merge preserves loser document in history",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const a = await objectsResource({
+      action: "create",
+      object: { name: "Keeper" },
+    });
+    const b = await objectsResource({
+      action: "create",
+      object: { name: "Loser", details: "precious data" },
+    });
+
+    await objectsResource({
+      action: "merge",
+      winnerId: a.insertedId.toString(),
+      loserIds: [b.insertedId.toString()],
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const loserHistory = await objectsResource({
+      action: "getHistory",
+      id: b.insertedId.toString(),
+    });
+    const mergeEntry = loserHistory.find((h: any) => h.action === "merge");
+    expect(mergeEntry).toBeDefined();
+    expect(mergeEntry.field).toBe("mergedInto");
+    expect(mergeEntry.oldValue.details).toBe("precious data");
+
+    const winnerHistory = await objectsResource({
+      action: "getHistory",
+      id: a.insertedId.toString(),
+    });
+    expect(winnerHistory.some((h: any) => h.action === "merge")).toBe(true);
+  }),
+);
+
+// ============================================================================
+// Split
+// ============================================================================
+
+Deno.test(
+  "split moves selected edges and aliases to a new object",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const source = await objectsResource({
+      action: "create",
+      object: {
+        name: "Igor",
+        aliases: ["Gosha", "Igor W."],
+        isPerson: true,
+      },
+    });
+    const c = await objectsResource({
+      action: "create",
+      object: { name: "C" },
+    });
+    const d = await objectsResource({
+      action: "create",
+      object: { name: "D" },
+    });
+
+    await objectsResource({
+      action: "create",
+      object: {
+        name: "knows",
+        isRelationship: true,
+        relationship: {
+          subject: source.insertedId,
+          object: c.insertedId,
+          symmetrical: false,
+        },
+      },
+    });
+    const edgeToMove = await objectsResource({
+      action: "create",
+      object: {
+        name: "works with",
+        isRelationship: true,
+        relationship: {
+          subject: source.insertedId,
+          object: d.insertedId,
+          symmetrical: false,
+        },
+      },
+    });
+
+    const result = await objectsResource({
+      action: "split",
+      sourceId: source.insertedId.toString(),
+      newObject: { name: "Igor (work)" },
+      edgeIdsToMove: [edgeToMove.insertedId.toString()],
+      aliasesToMove: ["Igor W."],
+      version: 1,
+    });
+
+    expect(result.movedEdges).toBe(1);
+    expect(result.movedAliases).toEqual(["Igor W."]);
+    expect(result.source.aliases).toEqual(["Gosha"]);
+    expect(result.source.version).toBe(2);
+
+    const newObject = await objectsResource({
+      action: "get",
+      id: result.newId.toString(),
+    });
+    expect(newObject.name).toBe("Igor (work)");
+    expect(newObject.isPerson).toBe(true);
+    expect(newObject.aliases).toEqual(["Igor W."]);
+    expect(newObject.metadata.splitFrom.name).toBe("Igor");
+
+    const newRelationships = await objectsResource({
+      action: "getRelationships",
+      id: result.newId.toString(),
+    });
+    expect(newRelationships).toHaveLength(1);
+    expect(newRelationships[0].other._id.toString()).toBe(
+      d.insertedId.toString(),
+    );
+
+    const sourceRelationships = await objectsResource({
+      action: "getRelationships",
+      id: source.insertedId.toString(),
+    });
+    expect(sourceRelationships).toHaveLength(1);
+    expect(sourceRelationships[0].other._id.toString()).toBe(
+      c.insertedId.toString(),
+    );
+  }),
+);
+
+Deno.test(
+  "split validations reject foreign edges and relationship sources",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const a = await objectsResource({
+      action: "create",
+      object: { name: "A" },
+    });
+    const b = await objectsResource({
+      action: "create",
+      object: { name: "B" },
+    });
+    const c = await objectsResource({
+      action: "create",
+      object: { name: "C" },
+    });
+    const foreignEdge = await objectsResource({
+      action: "create",
+      object: {
+        name: "knows",
+        isRelationship: true,
+        relationship: {
+          subject: b.insertedId,
+          object: c.insertedId,
+          symmetrical: false,
+        },
+      },
+    });
+
+    await expect(objectsResource({
+      action: "split",
+      sourceId: a.insertedId.toString(),
+      newObject: { name: "A2" },
+      edgeIdsToMove: [foreignEdge.insertedId.toString()],
+      aliasesToMove: [],
+    })).rejects.toThrow("does not involve the source object");
+
+    await expect(objectsResource({
+      action: "split",
+      sourceId: foreignEdge.insertedId.toString(),
+      newObject: { name: "X" },
+      edgeIdsToMove: [],
+      aliasesToMove: [],
+    })).rejects.toThrow("not supported");
+  }),
+);
+
+// ============================================================================
+// findDuplicates
+// ============================================================================
+
+Deno.test(
+  "findDuplicates matches case-insensitive names and aliases for one object",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    const target = await objectsResource({
+      action: "create",
+      object: { name: "Igor", aliases: ["Gosha"] },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "igor" },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Somebody", aliases: ["GOSHA"] },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Unrelated" },
+    });
+
+    const result = await objectsResource({
+      action: "findDuplicates",
+      objectId: target.insertedId.toString(),
+    });
+
+    const names = result.candidates.map((c: any) => c.name).sort();
+    expect(names).toEqual(["Somebody", "igor"]);
+  }),
+);
+
+Deno.test(
+  "findDuplicates scan groups collisions across the collection",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+
+    await objectsResource({
+      action: "create",
+      object: { name: "Shushi" },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "shushi" },
+    });
+    await objectsResource({
+      action: "create",
+      object: { name: "Solo" },
+    });
+
+    const result = await objectsResource({ action: "findDuplicates" });
+
+    const group = result.groups.find((g: any) => g.key === "shushi");
+    expect(group).toBeDefined();
+    expect(group.count).toBe(2);
+    expect(result.groups.some((g: any) => g.key === "solo")).toBe(false);
+  }),
+);

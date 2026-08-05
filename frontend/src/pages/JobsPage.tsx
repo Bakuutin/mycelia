@@ -78,6 +78,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
 import { getToggledWorkerFilter } from "@/lib/jobFilters";
+import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
 
@@ -197,6 +198,7 @@ const LLM_JOB_TYPES = new Set([
   "summarization",
   "conversation_chunk_creator",
   "conversation_extractor",
+  "conversation_extractor_merged",
   "tagger",
   "entity_typing",
 ]);
@@ -407,50 +409,6 @@ const STATUS_PRIORITY: Record<string, number> = {
   delayed: 3,
   completed: 4,
 };
-
-/**
- * Determines if a completed job produced no meaningful output.
- * Different job types have different "empty" indicators.
- */
-function isEmptyJobResult(job: JobInfo): boolean {
-  if (job.state !== "completed") return false;
-
-  const progress = job.progress || {};
-  const result = job.result || {};
-
-  switch (job.type) {
-    case "vad":
-      return (
-        (progress.hasSpeech === 0 || result.hasSpeech === 0) &&
-        (progress.processed === 0 || result.processed === 0)
-      );
-    case "conversation_chunk_creator":
-      return (
-        (result.finalized ?? 0) === 0 &&
-        (result.streamed ?? 0) === 0 &&
-        (result.chunksCreated ?? 0) === 0
-      );
-    case "conversation_extractor":
-      return (
-        (result.conversationsCreated ?? 0) === 0 &&
-        (result.chunksProcessed ?? 0) === 0
-      );
-    case "transcription_sequence_creator":
-      return (result.processed ?? 0) === 0;
-    case "transcription":
-      if (result.result === "empty") return true;
-      if (result.wordCount != null && result.wordCount === 0) return true;
-      // No sequence was processed (processed: 0 with no transcriptionId)
-      if (result.processed === 0 && !result.transcriptionId) return true;
-      if (result.wordCount != null && result.wordCount > 0) return false;
-      return false;
-    default: {
-      const processed = progress.processed ?? result.processed ?? -1;
-      const total = progress.total ?? result.total ?? -1;
-      return processed === 0 && total === 0;
-    }
-  }
-}
 
 /**
  * Renders a date range link to the timeline from job data start/end fields.
@@ -1228,6 +1186,18 @@ function JobProgressCell({ job }: { job: JobInfo }) {
     }
   }
 
+  // --- Runs that touched nothing, for types without a dedicated cell above ---
+  if (isEmptyJobResult(job)) {
+    return (
+      <Badge
+        variant="secondary"
+        className="bg-amber-500/10 text-amber-500 text-xs"
+      >
+        Empty
+      </Badge>
+    );
+  }
+
   // --- Generic fallback for any job with progress ---
   if (job.progress && typeof job.progress === "object") {
     const percentage = (() => {
@@ -1478,6 +1448,25 @@ export default function JobsPage() {
     queryClient.invalidateQueries({ queryKey: ["job-stats"] });
   };
 
+  // Pausing a queue and re-reading worker status together take several seconds.
+  // Show the new state right away so the toggle does not look unresponsive, and
+  // restore the previous one if the request fails.
+  const applyOptimisticPause = (workerType: string, paused: boolean) => {
+    queryClient.setQueryData<WorkerStatus>(
+      ["worker-status"],
+      (current) =>
+        current?.workers?.[workerType]
+          ? {
+            ...current,
+            workers: {
+              ...current.workers,
+              [workerType]: { ...current.workers[workerType], paused },
+            },
+          }
+          : current,
+    );
+  };
+
   const pauseWorkerMutation = useMutation({
     mutationFn: async (workerType: string) => {
       await api.callResource("jobs", {
@@ -1485,9 +1474,15 @@ export default function JobsPage() {
         workerType,
       });
     },
+    onMutate: (workerType: string) => {
+      queryClient.cancelQueries({ queryKey: ["worker-status"] });
+      applyOptimisticPause(workerType, true);
+    },
     onSettled: refreshWorkerViews,
-    onError: (error) =>
-      alert(error instanceof Error ? error.message : "Failed to pause worker"),
+    onError: (error, workerType) => {
+      applyOptimisticPause(workerType, false);
+      alert(error instanceof Error ? error.message : "Failed to pause worker");
+    },
   });
 
   const resumeWorkerMutation = useMutation({
@@ -1497,9 +1492,15 @@ export default function JobsPage() {
         workerType,
       });
     },
+    onMutate: (workerType: string) => {
+      queryClient.cancelQueries({ queryKey: ["worker-status"] });
+      applyOptimisticPause(workerType, false);
+    },
     onSettled: refreshWorkerViews,
-    onError: (error) =>
-      alert(error instanceof Error ? error.message : "Failed to resume worker"),
+    onError: (error, workerType) => {
+      applyOptimisticPause(workerType, true);
+      alert(error instanceof Error ? error.message : "Failed to resume worker");
+    },
   });
 
   const pauseAllMutation = useMutation({
@@ -3604,8 +3605,13 @@ export default function JobsPage() {
                   {sortedWorkers.map((worker) => {
                     const isPaused =
                       workerStatus?.workers[worker.type]?.paused ?? false;
-                    const isMutating = pauseWorkerMutation.isPending ||
-                      resumeWorkerMutation.isPending;
+                    // Only the row being toggled waits; a slow pause request
+                    // must not freeze the other workers' checkboxes.
+                    const isMutating =
+                      (pauseWorkerMutation.isPending &&
+                        pauseWorkerMutation.variables === worker.type) ||
+                      (resumeWorkerMutation.isPending &&
+                        resumeWorkerMutation.variables === worker.type);
                     const stats = jobTypeStats.find((s) =>
                       s.type === worker.type
                     );
