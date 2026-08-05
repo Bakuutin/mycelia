@@ -1,6 +1,6 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Volume2, Calendar } from "lucide-react";
+import { Calendar, Pause, Play, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -10,7 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PlayPauseButton } from "@/modules/audio/PlayPauseButton";
 import { useAudioPlayer } from "@/modules/audio/player";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatTime } from "@/lib/formatTime";
@@ -31,6 +30,13 @@ const SPEED_OPTIONS = [
   { value: 3, label: "3x" },
 ];
 
+// The audio player is a single global engine; several ObjectAudioPlayer
+// instances can be mounted at once (e.g. one per transcription on a job
+// page). Each instance therefore only acts on the shared state while the
+// playhead is inside its own time range, instead of stomping on whichever
+// range another instance is playing.
+const OWNERSHIP_GRACE_MS = 5000;
+
 export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
   const { currentDate, resetDate, isPlaying, setIsPlaying } = useAudioPlayer();
   const { volume, setVolume, playbackRate, setPlaybackRate, timeFormat } = useSettingsStore();
@@ -44,22 +50,48 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
     ? (typeof timeRange.end === "string" ? new Date(timeRange.end) : timeRange.end)
     : null;
 
-  // Initialize player to start of time range when mounted or when startDate changes
-  // This fixes the issue where navigating between objects with cached data
-  // wouldn't reset the player because the component stayed mounted
+  // Whether the shared playhead currently belongs to this instance's range.
+  const ownsPlayhead = (date: Date | null): boolean => {
+    if (!date) return false;
+    const t = date.getTime();
+    if (t < startDate.getTime()) return false;
+    if (!endDate) return true;
+    return t <= endDate.getTime() + OWNERSHIP_GRACE_MS;
+  };
+  const isActiveHere = ownsPlayhead(currentDate);
+  const isPlayingHere = isPlaying && isActiveHere;
+
+  // Position the idle player at the start of this range on mount. Never
+  // reposition while audio is playing — another instance may own playback.
   useEffect(() => {
     const startTime = startDate.getTime();
     if (prevStartTimeRef.current !== startTime) {
-      resetDate(startDate);
+      if (!useAudioPlayer.getState().isPlaying) {
+        resetDate(startDate);
+      }
       prevStartTimeRef.current = startTime;
     }
   }, [startDate, resetDate]);
 
-  // Stop playback when currentDate exceeds endDate
+  // Play from this range: if the playhead is elsewhere, pull it here first.
+  const handleTogglePlay = () => {
+    if (isPlayingHere) {
+      setIsPlaying(false);
+      return;
+    }
+    if (!isActiveHere || !currentDate || (endDate && currentDate.getTime() >= endDate.getTime())) {
+      resetDate(startDate);
+    }
+    setIsPlaying(true);
+  };
+
+  // Stop playback when the playhead this instance owns crosses its end.
   useEffect(() => {
     if (!isPlaying || !currentDate || !endDate) return;
-
-    if (currentDate.getTime() >= endDate.getTime()) {
+    const t = currentDate.getTime();
+    if (
+      t >= endDate.getTime() && ownsPlayhead(currentDate)
+    ) {
       setIsPlaying(false);
       // Reset to end position so progress bar shows 100%
       resetDate(endDate);
@@ -76,7 +108,7 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
 
   // Calculate progress within the time range
   const getProgress = () => {
-    if (!currentDate || !startDate) return 0;
+    if (!currentDate || !startDate || !isActiveHere) return 0;
     const current = currentDate.getTime();
     const start = startDate.getTime();
     const end = endDate ? endDate.getTime() : start + 60 * 60 * 1000; // Default to 1 hour if no end
@@ -86,7 +118,7 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
 
   // Format elapsed time
   const getElapsedTime = () => {
-    if (!currentDate || !startDate) return "0:00";
+    if (!currentDate || !startDate || !isActiveHere) return "0:00";
     const elapsedMs = currentDate.getTime() - startDate.getTime();
     if (elapsedMs < 0) return "0:00";
     const totalSeconds = Math.floor(elapsedMs / 1000);
@@ -126,8 +158,10 @@ export function ObjectAudioPlayer({ timeRange }: ObjectAudioPlayerProps) {
   return (
     <div className="border rounded-lg p-4 bg-gradient-to-r from-muted/50 to-muted/30">
       <div className="flex flex-wrap items-center gap-4">
-        {/* Play button */}
-        <PlayPauseButton />
+        {/* Play button (scoped to this time range) */}
+        <Button onClick={handleTogglePlay}>
+          {isPlayingHere ? <Pause /> : <Play />}
+        </Button>
 
         {/* Progress bar section */}
         <div className="flex-1 min-w-[200px]">
