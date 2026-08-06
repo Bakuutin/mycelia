@@ -155,9 +155,15 @@ type PipelineBacklog = {
 type PipelineHealth = {
   checkedAt: string;
   services: ExternalServiceHealth[];
-  backlogs: Record<
-    "transcription" | "conversation_extractor" | "summarization",
-    PipelineBacklog
+  backlogs: Partial<
+    Record<
+      | "transcription"
+      | "conversation_extractor"
+      | "summarization"
+      | "tagger"
+      | "entity_typing",
+      PipelineBacklog
+    >
   >;
   recovery: {
     startupChecks: boolean;
@@ -387,7 +393,7 @@ const WORKER_PIPELINE = [
   {
     type: "conversation_extractor_merged",
     description:
-      "EXPERIMENT: merges both conversation_extractor calls (segmentation + per-segment entities/tags/emoji/agreements) into ONE LLM call per chunk. Run only one extractor at a time — they compete for the same chunks",
+      "EXPERIMENT: one LLM call per chunk does segmentation + typed entities + tags + emoji + agreements",
   },
   {
     type: "summarization",
@@ -3457,8 +3463,11 @@ export default function JobsPage() {
                     "llm",
                   ],
                   ["summarization", "Summary candidates", "llm"],
+                  ["tagger", "Untagged conversations", "llm"],
+                  ["entity_typing", "Untyped objects", "llm"],
                 ] as const).map(([workerType, label, serviceId]) => {
                   const backlog = pipelineHealth.backlogs[workerType];
+                  if (!backlog) return null;
                   const service = pipelineHealth.services.find((item) =>
                     item.id === serviceId
                   );
@@ -3840,6 +3849,20 @@ export default function JobsPage() {
                               </span>
                             </span>
                           </button>
+                          {worker.type === "conversation_extractor_merged" && (
+                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                              <span>replaces:</span>
+                              <Badge variant="outline" className="px-1.5 py-0">
+                                conversation_extractor
+                              </Badge>
+                              <span>(both its LLM calls)</span>
+                              <span>+</span>
+                              <Badge variant="outline" className="px-1.5 py-0">
+                                tagger
+                              </Badge>
+                              <span>(for new conversations)</span>
+                            </div>
+                          )}
                           {worker.type === "conversation_extractor_merged" &&
                             !isPaused && !extractorPaused && (
                             <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-amber-500">

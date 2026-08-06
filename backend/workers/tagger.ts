@@ -129,7 +129,10 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   objectIds: z.array(zObjectId()).max(100).optional()
     .describe("Optional exact conversation IDs for targeted re-tagging"),
-  limit: z.number().default(1),
+  limit: z.number().default(10)
+    .describe(
+      "Conversations tagged per run; large backlogs self-continue via hasMore",
+    ),
   model: z.string().default("small"),
   fallbackModel: z.string().optional()
     .describe(

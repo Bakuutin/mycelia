@@ -10,6 +10,7 @@ import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
 import { getJobTimeoutMinutes } from "@/lib/jobs/job-timeouts.ts";
 import { env } from "#/env.ts";
+import { buildUntypedScanFilters } from "../../../workers/entityTyping.ts";
 import {
   assertJobServicesHealthy,
   getExternalServicesHealth,
@@ -1469,6 +1470,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       extractionRetryable,
       extractionProcessing,
       summariesMissing,
+      untaggedConversations,
+      untypedObjects,
       failedByWorker,
       activeTranscriptionJobs,
       recentTranscriptionBatches,
@@ -1513,6 +1516,23 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           "summaries.0": { $exists: false },
         },
       }),
+      // Conversations no tagging pass has touched yet (extraction-time
+      // tagging and the tagger both record aiProvenance.taggingRuns).
+      mongo({
+        action: "count",
+        collection: "objects",
+        query: {
+          isConversation: true,
+          "metadata.aiProvenance.taggingRuns.0": { $exists: false },
+        },
+      }),
+      // Objects with no type flag and no entity_typing attempt marker —
+      // exactly what one entity_typing run would pick up.
+      mongo({
+        action: "count",
+        collection: "objects",
+        query: buildUntypedScanFilters(false),
+      }),
       mongo({
         action: "aggregate",
         collection: "jobs",
@@ -1527,6 +1547,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                   "transcription",
                   "conversation_extractor",
                   "summarization",
+                  "tagger",
+                  "entity_typing",
                 ],
               },
             },
@@ -1608,6 +1630,14 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           ready: Number(summariesMissing),
           missingTotal: Number(summariesMissing),
           failedJobsUnretried: Number(failedCounts.summarization ?? 0),
+        },
+        tagger: {
+          ready: Number(untaggedConversations),
+          failedJobsUnretried: Number(failedCounts.tagger ?? 0),
+        },
+        entity_typing: {
+          ready: Number(untypedObjects),
+          failedJobsUnretried: Number(failedCounts.entity_typing ?? 0),
         },
       },
       recovery: {
