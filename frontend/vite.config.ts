@@ -2,12 +2,19 @@ import deno from "@deno/vite-plugin";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // In Docker build, myceliasdk is copied to ./myceliasdk
 // In local dev, myceliasdk is at ../myceliasdk
 const interfacesPath = existsSync("../myceliasdk")
   ? "../myceliasdk/"
   : "./myceliasdk/";
+
+// In local dev myceliasdk sits outside this package, so its bare `zod` imports
+// walk up to the repo-root node_modules (zod 3) while src/ gets our zod 4.
+// Two zods in one bundle break the v4-only `_zod` internals the SDK writes to,
+// so pin every zod import to this package's copy.
+const zodPath = fileURLToPath(new URL("./node_modules/zod", import.meta.url));
 
 export default defineConfig({
   plugins: [
@@ -37,7 +44,9 @@ export default defineConfig({
     alias: {
       "@": "./src",
       "@myceliasdk/": interfacesPath,
+      "zod": zodPath,
     },
+    dedupe: ["zod"],
   },
   server: {
     watch: {
