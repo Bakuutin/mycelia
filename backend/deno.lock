@@ -9,6 +9,7 @@
     "jsr:@cliffy/prompt@^1.0.0-rc.7": "1.0.0-rc.8",
     "jsr:@cliffy/table@1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@needle-di/core@1": "1.1.0",
+    "jsr:@std/assert@*": "1.0.15",
     "jsr:@std/assert@^1.0.14": "1.0.15",
     "jsr:@std/assert@^1.0.15": "1.0.15",
     "jsr:@std/assert@~1.0.6": "1.0.15",

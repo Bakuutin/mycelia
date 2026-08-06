@@ -41,6 +41,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
+import { dbMessageToUIMessage } from "@/lib/chatMessages";
+import { formatToolName } from "@/lib/toolPresentation";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
 import type { Message as MessengerMessage } from "@myceliasdk/messengers";
 import type { Chat } from "@myceliasdk/messengers.ts";
@@ -100,44 +102,10 @@ async function fetchMessages(chatId: string) {
     },
   });
 
-  return messages.map((msg: any) => ({
-    id: msg._id.toString(),
-    role: msg.raw?.role || msg.role,
-    content: msg.raw?.content || msg.content,
-    parts: Array.isArray(msg.raw?.content)
-      ? msg.raw.content
-      : typeof msg.raw?.content === "string"
-      ? [{ type: "text", text: msg.raw.content }]
-      : [],
-    metadata: {
-      requestedModel: msg.raw?.requestedModel,
-      model: msg.raw?.model,
-      requestId: msg.raw?.requestId,
-      finishReason: msg.raw?.finishReason,
-      error: msg.raw?.error,
-    },
-    createdAt: new Date(msg.createdAt),
-    toolInvocations: msg.toolCalls?.map((call: any) => {
-      const result = msg.toolResults?.find(
-        (r: any) => r.toolCallId === call.toolCallId,
-      );
-      if (result) {
-        return {
-          state: "result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          args: call.args,
-          result: result.result,
-        };
-      }
-      return {
-        state: "call",
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        args: call.args,
-      };
-    }),
-  }));
+  // Convert every stored message (legacy or new format) into a valid
+  // UIMessage — useChat resubmits this history to the backend, which
+  // validates it with validateUIMessages.
+  return messages.map(dbMessageToUIMessage);
 }
 
 function isValidObjectId(id: string): boolean {
@@ -145,24 +113,11 @@ function isValidObjectId(id: string): boolean {
 }
 
 function toMessengerMessage(message: any): MessengerMessage {
-  const content = message.content;
-  const parts = message.parts;
-
-  let normalizedContent: string | Array<{ type: string; text: string }>;
-
-  if (typeof content === "string") {
-    normalizedContent = content;
-  } else if (Array.isArray(content)) {
-    normalizedContent = content;
-  } else if (Array.isArray(parts)) {
-    normalizedContent = parts
-      .filter((p: any) =>
-        typeof p === "string" || (p?.type === "text" && p?.text)
-      )
-      .map((p: any) => typeof p === "string" ? { type: "text", text: p } : p);
-  } else {
-    normalizedContent = "";
-  }
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  const textContent = parts
+    .filter((p: any) => p?.type === "text" && p?.text)
+    .map((p: any) => p.text)
+    .join("\n\n");
 
   const messageId = isValidObjectId(message.id)
     ? new ObjectId(message.id)
@@ -179,7 +134,10 @@ function toMessengerMessage(message: any): MessengerMessage {
     updatedAt: message.createdAt || new Date(),
     raw: {
       role: message.role,
-      content: normalizedContent,
+      content: textContent,
+      // The full UIMessage: the renderer reads text AND tool parts from it,
+      // so tool calls are visible live during streaming.
+      uiMessage: { id: message.id, role: message.role, parts },
       requestedModel: message.metadata?.requestedModel,
       model: message.metadata?.model,
       requestId: message.metadata?.requestId,
@@ -187,13 +145,6 @@ function toMessengerMessage(message: any): MessengerMessage {
       error: message.metadata?.error,
     },
   };
-}
-
-// Format tool name for display (e.g., "objects_create" -> "Create Object")
-function formatToolName(toolName: string): string {
-  return toolName
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // Update chat name in database
@@ -322,7 +273,11 @@ function ToolApprovalRequest({
   onApprove: () => void;
   onDeny: () => void;
 }) {
-  const toolName = part.toolName || "Unknown Tool";
+  // UIMessage tool parts encode the tool name in the part type ("tool-<name>")
+  const toolName = part.toolName ||
+    (typeof part.type === "string" && part.type.startsWith("tool-")
+      ? part.type.slice(5)
+      : "Unknown Tool");
   const input = part.input || {};
 
   return (
@@ -381,34 +336,19 @@ function ChatMessage({
   ]);
   const MessageComponent = myceliaPlatform.MessageComponent;
 
-  const isStreaming = message.parts?.some((p: any) => p?.type === "start-step");
-
-  // Check for tool approval requests in parts
+  // Pending tool approval requests (rendered after the message content)
   const approvalRequests = message.parts?.filter(
     (p: any) => p?.state === "approval-requested" && p?.approval?.id,
   ) || [];
 
-  if (approvalRequests.length > 0 && addToolApprovalResponse) {
-    return (
-      <>
-        {approvalRequests.map((part: any) => (
-          <ToolApprovalRequest
-            key={part.toolCallId || part.approval.id}
-            part={part}
-            onApprove={() =>
-              addToolApprovalResponse({ id: part.approval.id, approved: true })}
-            onDeny={() =>
-              addToolApprovalResponse({
-                id: part.approval.id,
-                approved: false,
-              })}
-          />
-        ))}
-      </>
-    );
-  }
-
-  if (isStreaming) {
+  // Assistant message with nothing renderable yet (streaming just started):
+  // show a loader instead of an empty bubble. Persisted empty responses carry
+  // metadata.error and render the error fallback instead.
+  if (
+    message.role === "assistant" &&
+    !hasRenderableAssistantOutput(message) &&
+    !message.metadata?.error
+  ) {
     return (
       <div className="flex w-full py-2">
         <div className="flex gap-3">
@@ -425,7 +365,26 @@ function ChatMessage({
     );
   }
 
-  return <MessageComponent message={messengerMessage} />;
+  // Render the message itself (text + live tool calls), then any approval
+  // prompts — streamed text before the approval request stays visible.
+  return (
+    <>
+      <MessageComponent message={messengerMessage} />
+      {addToolApprovalResponse && approvalRequests.map((part: any) => (
+        <ToolApprovalRequest
+          key={part.toolCallId || part.approval.id}
+          part={part}
+          onApprove={() =>
+            addToolApprovalResponse({ id: part.approval.id, approved: true })}
+          onDeny={() =>
+            addToolApprovalResponse({
+              id: part.approval.id,
+              approved: false,
+            })}
+        />
+      ))}
+    </>
+  );
 }
 
 export default function ChatPage() {
@@ -568,7 +527,9 @@ export default function ChatPage() {
       fetch: async (input, init) => {
         const path = input.toString();
 
-        const response = await apiClient.fetch(path, init);
+        // fetchRaw does not throw on HTTP errors, so the error-payload
+        // parsing below actually runs and surfaces the server's message.
+        const response = await apiClient.fetchRaw(path, init);
 
         const serverChatId = response.headers.get("X-Mycelia-Chat-Id");
         const responseModel = response.headers.get("X-Mycelia-Model") ||
@@ -826,8 +787,9 @@ export default function ChatPage() {
                     {/* Show pending message immediately (optimistic UI) */}
                     {pendingMessage && !chat.messages.some((m) =>
                       m.role === "user" &&
-                      (typeof m.content === "string" ? m.content : "") ===
-                        pendingMessage
+                      m.parts?.some((p: any) =>
+                        p?.type === "text" && p?.text === pendingMessage
+                      )
                     ) && (
                       <div className="flex w-full py-2 justify-end">
                         <div className="flex gap-3 max-w-[80%]">

@@ -32,6 +32,12 @@ Events represent things that happened with specific time ranges.
 - For specific times: Use ISO 8601 `"2024-03-15T09:00:00Z"`
 - For ongoing: Omit `end` field
 
+## After Creating
+
+The create result includes `id`, `name`, `type`, and `url`. Confirm to the
+user with a relative markdown link built from it, e.g.
+`[Team Offsite 2024](/objects/<id>)`.
+
 ## Linking Events to People
 
 After creating an event, create relationships:

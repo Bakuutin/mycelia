@@ -43,12 +43,16 @@ export class ApiClient {
     return apiEndpoint.replace(/\/$/, "");
   }
 
-  async fetch(path: string, options: RequestInit = {}): Promise<Response> {
+  /**
+   * Authenticated fetch that returns the raw Response without throwing on
+   * HTTP errors — callers that need the server's error payload use this.
+   */
+  async fetchRaw(path: string, options: RequestInit = {}): Promise<Response> {
     const { apiEndpoint } = this.getConfig();
     const url = `${apiEndpoint}${path}`;
 
     const headers = new Headers()
-    
+
     for (const [key, value] of Object.entries(await this.getAuthHeaders())) {
       headers.set(key, value);
     }
@@ -62,10 +66,14 @@ export class ApiClient {
       headers.set("Content-Type", "application/json");
     }
 
-    const response = await fetch(url, {
+    return await fetch(url, {
       ...options,
       headers,
     });
+  }
+
+  async fetch(path: string, options: RequestInit = {}): Promise<Response> {
+    const response = await this.fetchRaw(path, options);
 
     if (!response.ok) {
       throw new Error(

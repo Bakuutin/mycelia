@@ -2,6 +2,7 @@ import type { Platform } from "../core/types.ts";
 import { defaultPlatform } from "./default.tsx";
 import { User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import type { ToolUIPart } from "ai";
 import { formatRelativeTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { Response } from "@/components/ai-elements/response";
@@ -12,6 +13,13 @@ import {
   ToolInput,
   ToolOutput,
 } from "@/components/ai-elements/tool";
+import { ActionCard } from "@/components/chat/ActionCard";
+import {
+  formatToolName,
+  parseToolOutput,
+  summarizeToolCall,
+  WRITE_TOOLS,
+} from "@/lib/toolPresentation";
 
 interface MyceliaMessageProps {
   message: import("@myceliasdk/messengers.ts").Message;
@@ -42,12 +50,38 @@ interface ParsedMessageContent {
     input: Record<string, unknown>;
     output?: unknown;
     error?: string;
-    state: "input-available" | "output-available" | "output-error";
+    state: ToolUIPart["state"];
   }>;
 }
 
 function parseMessageContent(raw: any): ParsedMessageContent {
   const role = raw?.role === "user" ? "user" : "assistant";
+
+  // Prefer UIMessage parts: live streaming messages and new-format persisted
+  // messages carry them, including tool state and approval info.
+  const uiParts = raw?.uiMessage?.parts;
+  if (Array.isArray(uiParts)) {
+    const textContent = uiParts
+      .filter((part: any) => part?.type === "text" && part?.text)
+      .map((part: any) => part.text)
+      .join("\n\n");
+    const toolCalls: ParsedMessageContent["toolCalls"] = uiParts
+      .filter((part: any) =>
+        typeof part?.type === "string" &&
+        (part.type.startsWith("tool-") || part.type === "dynamic-tool")
+      )
+      .map((part: any) => ({
+        toolCallId: part.toolCallId,
+        toolName: part.type === "dynamic-tool"
+          ? part.toolName
+          : part.type.slice(5),
+        input: part.input ?? {},
+        output: part.output,
+        error: part.errorText,
+        state: part.state ?? "input-available",
+      }));
+    return { role, content: textContent, toolCalls };
+  }
 
   const content = raw?.content;
   let textContent = "";
@@ -79,7 +113,7 @@ function parseMessageContent(raw: any): ParsedMessageContent {
         toolCallId: call.toolCallId,
         toolName: call.toolName,
         input: call.input || {},
-        output: result?.output?.value,
+        output: result?.output,
         error: result?.error,
         state: result?.error
           ? "output-error"
@@ -96,22 +130,48 @@ function parseMessageContent(raw: any): ParsedMessageContent {
 function ToolCallDisplay(
   { toolCall }: { toolCall: ParsedMessageContent["toolCalls"][0] },
 ) {
-  return (
+  const summary = summarizeToolCall(toolCall);
+  const displayOutput = toolCall.output === undefined
+    ? undefined
+    : parseToolOutput(toolCall.output);
+  const isFinishedWrite = WRITE_TOOLS.has(toolCall.toolName) &&
+    (toolCall.state === "output-available" ||
+      toolCall.state === "output-error");
+
+  const detail = (
     <Tool className="group">
       <ToolHeader
-        title={toolCall.toolName}
+        title={isFinishedWrite ? formatToolName(toolCall.toolName) : summary}
         type="tool-call"
         state={toolCall.state}
       />
       <ToolContent>
         <ToolInput input={toolCall.input} />
         <ToolOutput
-          output={toolCall.output}
+          output={displayOutput}
           errorText={toolCall.error}
         />
       </ToolContent>
     </Tool>
   );
+
+  // Completed writes get a prominent confirmation card with a link to the
+  // affected object; the raw JSON stays available in the collapsible below.
+  if (isFinishedWrite) {
+    return (
+      <div className="space-y-1">
+        <ActionCard
+          toolName={toolCall.toolName}
+          input={toolCall.input}
+          output={toolCall.output}
+          state={toolCall.state}
+        />
+        {detail}
+      </div>
+    );
+  }
+
+  return detail;
 }
 
 function MyceliaMessageBubble({ message }: MyceliaMessageProps) {
