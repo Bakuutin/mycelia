@@ -1243,11 +1243,13 @@ function JobProgressCell({ job }: { job: JobInfo }) {
       <div className="space-y-2">
         {percentage !== null && <Progress value={percentage} className="h-2" />}
         <div className="text-xs space-y-1">
-          {Object.entries(job.progress).slice(0, 3).map(([k, v]) => (
-            <div key={k}>
-              <span className="opacity-70">{k}:</span> {String(v)}
-            </div>
-          ))}
+          {Object.entries(job.progress)
+            .filter(([, v]) => typeof v !== "object" || v === null)
+            .slice(0, 3).map(([k, v]) => (
+              <div key={k}>
+                <span className="opacity-70">{k}:</span> {String(v)}
+              </div>
+            ))}
         </div>
       </div>
     );
