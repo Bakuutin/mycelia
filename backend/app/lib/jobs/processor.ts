@@ -53,11 +53,14 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
     { resource: `jobs/${job.id}`, action: "progressUpdate", effect: "allow" },
   ];
 
+  // Token must outlive the job: long batches (summarization, transcription)
+  // run past 15 minutes and still need to write results at the end.
+  const jwtMarginMs = 5 * 60 * 1000;
   const token = await signJWT(
     jobType,
     `job:${job.id}`,
     policies,
-    "15m",
+    `${Math.ceil((jobTimeoutMs + jwtMarginMs) / 60_000)}m`,
   );
 
   const sdkPath = Deno.cwd();

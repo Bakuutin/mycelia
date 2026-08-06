@@ -274,6 +274,31 @@ const findDuplicatesSchema = z.object({
   ),
 });
 
+const claimSummarizationSchema = z.object({
+  action: z.literal("claimSummarization").describe(
+    "Atomically claim conversations for a summarization job. Each candidate is claimed only if it still has no summaries and no fresh claim; returns the ids this job actually won.",
+  ),
+  ids: z.array(z.string()).max(200).describe(
+    "Candidate conversation ObjectId strings",
+  ),
+  jobId: z.string().describe("Claiming summarization job id"),
+  staleBefore: z.string().describe(
+    "ISO timestamp; existing claims started before this are stale and reclaimable",
+  ),
+});
+
+const releaseSummarizationSchema = z.object({
+  action: z.literal("releaseSummarization").describe(
+    "Release summarization claims held by a job on the given conversations",
+  ),
+  ids: z.array(z.string()).max(200).describe(
+    "Conversation ObjectId strings to release",
+  ),
+  jobId: z.string().describe(
+    "Only claims held by this job id are released",
+  ),
+});
+
 const objectsRequestSchema = z.discriminatedUnion("action", [
   createObjectSchema,
   updateObjectSchema,
@@ -288,6 +313,8 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   mergeObjectsSchema,
   splitObjectSchema,
   findDuplicatesSchema,
+  claimSummarizationSchema,
+  releaseSummarizationSchema,
 ]);
 
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
@@ -1543,6 +1570,56 @@ export class ObjectsResource
           ],
         });
         return { groups };
+      }
+
+      case "claimSummarization": {
+        const candidateIds = input.ids.map((id) => new ObjectId(id));
+        // Per-document atomicity of updateMany guarantees each conversation
+        // is won by exactly one concurrent job.
+        await mongo({
+          action: "updateMany",
+          collection: "objects",
+          query: {
+            _id: { $in: candidateIds },
+            "summaries.0": { $exists: false },
+            $or: [
+              { _summarizationClaim: { $exists: false } },
+              { _summarizationClaim: null },
+              { "_summarizationClaim.startedAt": { $lte: input.staleBefore } },
+            ],
+          },
+          update: {
+            $set: {
+              _summarizationClaim: {
+                jobId: input.jobId,
+                startedAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+        const won = await mongo({
+          action: "find",
+          collection: "objects",
+          query: {
+            _id: { $in: candidateIds },
+            "_summarizationClaim.jobId": input.jobId,
+          },
+        });
+        return { claimed: (won ?? []).map((d: any) => String(d._id)) };
+      }
+
+      case "releaseSummarization": {
+        const releaseIds = input.ids.map((id) => new ObjectId(id));
+        const result = await mongo({
+          action: "updateMany",
+          collection: "objects",
+          query: {
+            _id: { $in: releaseIds },
+            "_summarizationClaim.jobId": input.jobId,
+          },
+          update: { $unset: { _summarizationClaim: "" } },
+        });
+        return { released: result?.modifiedCount ?? 0 };
       }
 
       case "list": {

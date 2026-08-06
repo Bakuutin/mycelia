@@ -1,10 +1,32 @@
 import { expect } from "@std/expect";
+import { z } from "zod";
 import {
   buildSummarySourceRefs,
   getSummarizationRetryDelayMs,
   isTerminalSummarizationResponseError,
   parseSummaryTitleResponse,
+  schema,
 } from "./summarization.ts";
+
+Deno.test("summarization schema defaults and bounds batchSize", () => {
+  const parsed = schema.parse({ type: "summarization" });
+  expect(parsed.batchSize).toBe(25);
+
+  expect(schema.safeParse({ type: "summarization", batchSize: 0 }).success)
+    .toBe(false);
+  expect(schema.safeParse({ type: "summarization", batchSize: 101 }).success)
+    .toBe(false);
+
+  // The Jobs page batch column auto-detects workers by these JSON schema
+  // properties — guard the contract.
+  const json = z.toJSONSchema(schema) as {
+    properties: Record<string, Record<string, unknown>>;
+  };
+  expect(json.properties.batchSize.type).toBe("integer");
+  expect(json.properties.batchSize.minimum).toBe(1);
+  expect(json.properties.batchSize.maximum).toBe(100);
+  expect(json.properties.batchSize.default).toBe(25);
+});
 
 Deno.test("combined summary+title response parses JSON and fenced JSON", () => {
   expect(parseSummaryTitleResponse(

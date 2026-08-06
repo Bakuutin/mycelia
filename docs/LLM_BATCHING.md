@@ -15,6 +15,13 @@ Workers that are *not* batched at the request level (`summarization`,
 their "batch" settings (`limit`) only control how many items one job run
 processes, which affects job-chaining granularity, not token usage.
 
+`summarization` exposes this as `batchSize`
+(`workers.summarization.defaultOverrides.batchSize`, default 25, max 100):
+conversations per automatic batch job, processed sequentially. The job
+timeout scales with it (5 min base + 90 s per conversation, 15 min minimum),
+so larger batches get proportionally more time instead of dying at a flat
+limit.
+
 ## What batch size actually trades off
 
 **Why batching saves tokens.** The system prompt (and for the tagger the tag

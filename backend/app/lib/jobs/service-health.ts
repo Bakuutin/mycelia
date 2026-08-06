@@ -20,11 +20,23 @@ export * from "./service-health.shared.ts";
 // Worker enqueue decisions still need a recent provider status, but the Jobs
 // page must not repeatedly wake otherwise-idle local STT servers.
 const CACHE_MS = 5 * 60_000;
+// Unhealthy verdicts expire quickly so blocked workers resume within
+// seconds of a provider recovering, instead of waiting out the full cache.
+const UNHEALTHY_CACHE_MS = 30_000;
 let cached: {
   checkedAt: number;
   fingerprint: string;
   services: ExternalServiceHealth[];
 } | null = null;
+
+/**
+ * Drop the cached verdict so the next check re-probes providers. Called when
+ * a running job fails with a provider-shaped error: the cached "healthy" is
+ * evidently stale and trusting it would start more jobs doomed to fail.
+ */
+export function invalidateExternalServicesHealthCache(): void {
+  cached = null;
+}
 
 function extractModels(body: string): string[] {
   try {
@@ -231,11 +243,13 @@ export async function getExternalServicesHealth(
     })),
   });
   const now = Date.now();
-  if (
-    !force && cached && cached.fingerprint === fingerprint &&
-    now - cached.checkedAt < CACHE_MS
-  ) {
-    return cached.services;
+  if (!force && cached && cached.fingerprint === fingerprint) {
+    const cacheTtlMs = cached.services.some((s) => s.status !== "healthy")
+      ? UNHEALTHY_CACHE_MS
+      : CACHE_MS;
+    if (now - cached.checkedAt < cacheTtlMs) {
+      return cached.services;
+    }
   }
 
   const enabledSttProviders = sttProviders.filter((provider) =>

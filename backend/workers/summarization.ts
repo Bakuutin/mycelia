@@ -1,6 +1,7 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
 import type { JobData, JobResult } from "@/lib/jobs/types.ts";
+import { getJobTimeoutMs } from "@/lib/jobs/job-timeouts.ts";
 import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
 import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
@@ -66,6 +67,10 @@ export const schema = z.object({
     .default(10)
     .describe(
       "Minimum duration in seconds to use LLM. Shorter periods use transcript directly.",
+    ),
+  batchSize: z.number().int().min(1).max(100).default(25)
+    .describe(
+      "Conversations processed per automatic batch job. Ignored for manual (single-conversation) jobs.",
     ),
 }).superRefine((value, ctx) => {
   const hasStart = value.start != null;
@@ -420,8 +425,6 @@ function deriveTitleFromPrompt(promptText: string): string {
 // Claim Mechanism (prevents duplicate LLM work in auto mode)
 // ============================================================================
 
-// Matches JOB_TIMEOUT_MS in processor.ts / maintenance-manager.ts
-const JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const SUMMARIZATION_RETRY_BASE_MS = 15 * 60 * 1000;
 const SUMMARIZATION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 
@@ -485,52 +488,6 @@ async function setSummarizationFailure(
       `[summarization] Failed to update failure status for ${objectId}:`,
       error,
     );
-  }
-}
-
-async function claimConversation(
-  objectId: string,
-  jobId: string,
-  jwt: string,
-  myceliaUrl: string,
-): Promise<boolean> {
-  const obj = await callResource<ObjectsRequest, ObjectsResponse>("objects", {
-    action: "get",
-    id: objectId,
-  }, { jwt, myceliaUrl }) as any;
-
-  if (!obj) return false;
-  if (!hasNoSummaries(obj)) return false;
-
-  // Check if already claimed by another (non-timed-out) job
-  const claim = obj._summarizationClaim;
-  if (claim?.startedAt) {
-    const claimAge = Date.now() - new Date(claim.startedAt).getTime();
-    if (claimAge < JOB_TIMEOUT_MS) {
-      console.log(
-        `[summarization] Object ${objectId} already claimed by job ${claim.jobId}, skipping`,
-      );
-      return false;
-    }
-    console.log(
-      `[summarization] Object ${objectId} has stale claim from job ${claim.jobId}, reclaiming`,
-    );
-  }
-
-  try {
-    await callResource<ObjectsRequest, ObjectsResponse>("objects", {
-      action: "update",
-      id: objectId,
-      version: obj.version ?? 0,
-      field: "_summarizationClaim",
-      value: { jobId, startedAt: new Date().toISOString() },
-    }, { jwt, myceliaUrl });
-    return true;
-  } catch {
-    console.log(
-      `[summarization] Failed to claim ${objectId} (version conflict), skipping`,
-    );
-    return false;
   }
 }
 
@@ -826,6 +783,7 @@ type SummaryTarget = {
 
 async function resolveTargets(
   jobData: SummarizationJobData,
+  jobId: string,
   jwt: string,
   myceliaUrl: string,
 ): Promise<
@@ -916,7 +874,13 @@ async function resolveTargets(
     };
   }
 
-  const BATCH_LIMIT = 25;
+  const BATCH_LIMIT = jobData.batchSize ?? 25;
+  // Fetch extra candidates: concurrent jobs list the same top of the queue
+  // (same sort), so without the surplus the whole batch could already be
+  // claimed by siblings. x8 covers the maximum worker concurrency the UI
+  // allows.
+  const FETCH_LIMIT = Math.min(BATCH_LIMIT * 8, 200);
+  const claimStaleMs = getJobTimeoutMs(name, jobData);
   const conversations = await callResource<ObjectsRequest, ObjectsResponse>(
     "objects",
     {
@@ -932,7 +896,7 @@ async function resolveTargets(
             { _summarizationClaim: null },
             {
               "_summarizationClaim.startedAt": {
-                $lte: new Date(Date.now() - JOB_TIMEOUT_MS).toISOString(),
+                $lte: new Date(Date.now() - claimStaleMs).toISOString(),
               },
             },
           ],
@@ -950,7 +914,7 @@ async function resolveTargets(
         ],
       },
       options: {
-        limit: BATCH_LIMIT + 1,
+        limit: FETCH_LIMIT + 1,
         sort: { updatedAt: -1 },
       },
     },
@@ -958,7 +922,7 @@ async function resolveTargets(
   ) as any[];
 
   const hasMore = (conversations || []).length > BATCH_LIMIT;
-  const targets = (conversations || []).slice(0, BATCH_LIMIT)
+  const targets = (conversations || []).slice(0, FETCH_LIMIT)
     .map((conversation) => {
       const range = getConversationRange(conversation);
       if (!range) return null;
@@ -971,7 +935,38 @@ async function resolveTargets(
     })
     .filter(Boolean) as SummaryTarget[];
 
-  return { targets, mode: "auto", hasMore };
+  // Claim the batch upfront in chunks until the quota is met. The bulk
+  // claim is atomic per document, so each conversation is won by exactly
+  // one concurrent job and batch slots are never burned on claim races.
+  const staleBefore = new Date(Date.now() - claimStaleMs).toISOString();
+  const claimedTargets: SummaryTarget[] = [];
+  let cursor = 0;
+  while (claimedTargets.length < BATCH_LIMIT && cursor < targets.length) {
+    const chunk = targets.slice(
+      cursor,
+      cursor + (BATCH_LIMIT - claimedTargets.length),
+    );
+    cursor += chunk.length;
+    const res = await callResource<ObjectsRequest, ObjectsResponse>(
+      "objects",
+      {
+        action: "claimSummarization",
+        ids: chunk.map((t) => t.objectId).filter(Boolean) as string[],
+        jobId,
+        staleBefore,
+      },
+      { jwt, myceliaUrl },
+    ) as { claimed?: string[] };
+    const won = new Set(res?.claimed ?? []);
+    claimedTargets.push(
+      ...chunk.filter((t) => t.objectId && won.has(t.objectId)),
+    );
+  }
+  console.log(
+    `[summarization] Job ${jobId}: claimed ${claimedTargets.length}/${BATCH_LIMIT} conversation(s) from a window of ${targets.length}`,
+  );
+
+  return { targets: claimedTargets, mode: "auto", hasMore };
 }
 
 async function processConversation(
@@ -1001,6 +996,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
   const { targets, failure, mode, hasMore } = await resolveTargets(
     jobData,
+    job.id ?? "unknown",
     jwt,
     myceliaUrl,
   );
@@ -1081,27 +1077,32 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   const inferenceRuns: InferenceProvenance[] = [];
   const skips: string[] = [];
   const jobId = job.id ?? "unknown";
+  const batchLimit = jobData.batchSize ?? 25;
+  // Targets were claimed upfront in resolveTargets; if this job dies before
+  // reaching some of them, release those claims instead of leaving them to
+  // expire by staleness.
+  const unprocessed = new Set(
+    targets.map((t) => t.objectId).filter(Boolean) as string[],
+  );
+  const releaseRemainingClaims = async () => {
+    if (unprocessed.size === 0) return;
+    try {
+      await callResource<ObjectsRequest, ObjectsResponse>("objects", {
+        action: "releaseSummarization",
+        ids: [...unprocessed],
+        jobId,
+      }, { jwt, myceliaUrl });
+    } catch (releaseError) {
+      console.warn(
+        `[summarization] Job ${jobId}: failed to release ${unprocessed.size} claim(s):`,
+        releaseError,
+      );
+    }
+  };
 
   for (const target of targets) {
-    // Claim before processing to prevent duplicate LLM work
-    if (target.objectId) {
-      const claimed = await claimConversation(
-        target.objectId,
-        jobId,
-        jwt,
-        myceliaUrl,
-      );
-      if (!claimed) {
-        console.log(
-          `[summarization] Job ${job.id}: skipping ${target.objectId} (already claimed or has summaries)`,
-        );
-        skipped++;
-        skips.push(
-          `Conversation ${target.objectId} was already summarized or claimed by another job`,
-        );
-        continue;
-      }
-    }
+    if (processed >= batchLimit) break;
+    if (target.objectId) unprocessed.delete(target.objectId);
 
     try {
       const result = await processConversation(
@@ -1196,12 +1197,15 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
         continue;
       }
       if (isProviderSummarizationResponseError(errorMessage)) {
+        await releaseRemainingClaims();
         throw error;
       }
       skipped++;
       errors.push(errorMessage);
     }
   }
+
+  await releaseRemainingClaims();
 
   if (processed === 0) {
     if (errors.length === 0 && skipped > 0) {

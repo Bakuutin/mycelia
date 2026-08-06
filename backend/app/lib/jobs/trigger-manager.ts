@@ -26,6 +26,7 @@ export class TriggerManager {
   private subscribers = new Map<string, any>();
   private debouncers = new Map<string, any>();
   private intervals = new Map<string, ReturnType<typeof setInterval>>();
+  private healthRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private registry: typeof jobRegistry) {}
 
@@ -291,6 +292,20 @@ export class TriggerManager {
         reason,
         error: errorMsg,
       });
+      // A health-blocked enqueue retries on a short timer instead of waiting
+      // out the full trigger interval, so work resumes shortly after the
+      // provider recovers. One pending retry per job.
+      if (
+        errorMsg.includes("health check") && this.isRunning &&
+        !this.healthRetryTimers.has(jobName)
+      ) {
+        const timer = setTimeout(() => {
+          this.healthRetryTimers.delete(jobName);
+          if (!this.isRunning) return;
+          this.checkAndTrigger(cap, `${reason} (health retry)`).catch(() => {});
+        }, 60_000);
+        this.healthRetryTimers.set(jobName, timer);
+      }
     }
   }
 
@@ -311,6 +326,11 @@ export class TriggerManager {
       clearInterval(intervalId);
     }
     this.intervals.clear();
+
+    for (const [, timer] of this.healthRetryTimers) {
+      clearTimeout(timer);
+    }
+    this.healthRetryTimers.clear();
 
     for (const [channel, subscriber] of this.subscribers) {
       try {

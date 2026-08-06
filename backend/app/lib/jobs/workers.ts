@@ -14,8 +14,15 @@ import {
   getWorkerConcurrencyRange,
   normalizeWorkerConcurrency,
 } from "./worker-concurrency.ts";
+import {
+  getJobServiceDependencies,
+  invalidateExternalServicesHealthCache,
+} from "./service-health.ts";
 
 const workers = new Map<string, Worker>();
+
+const PROVIDER_FAILURE_PATTERN =
+  /LLM API error|Failed to call resource llm|LLM_EMPTY_RESPONSE|LLM_INVALID_RESPONSE|No healthy (LLM|STT|provider)|error sending request|Connection refused|ECONNREFUSED|fetch failed/i;
 
 export async function startWorkers() {
   console.log("Starting job workers...");
@@ -130,6 +137,15 @@ export async function startWorkers() {
 
     events.on("failed", async ({ jobId, failedReason }) => {
       console.error(`[${jobType}] Job ${jobId} failed globally:`, failedReason);
+      // A provider-shaped failure means the cached "healthy" verdict is
+      // stale: drop it so the next enqueue re-probes and blocks instead of
+      // starting more jobs doomed to fail the same way.
+      if (
+        getJobServiceDependencies(jobType).length > 0 &&
+        PROVIDER_FAILURE_PATTERN.test(failedReason ?? "")
+      ) {
+        invalidateExternalServicesHealthCache();
+      }
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const existingJobs = await mongo({
