@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "jsr:@std/assert";
 import { z } from "zod";
-import { convertToModelMessages, jsonSchema, tool } from "ai";
+import { convertToModelMessages, jsonSchema, tool, validateUIMessages } from "ai";
 import {
   resourceToTools,
   zodSchemaToJsonSchema,
@@ -94,7 +94,7 @@ Deno.test("chat tool filter keeps mongo read-only and hides internal actions", (
   assert(!objectNames.includes("objects_releaseSummarization"));
 });
 
-Deno.test("sanitizeUIMessages strips null providerMetadata from parts", () => {
+Deno.test("sanitizeUIMessages strips null-valued fields from parts", () => {
   const [message] = sanitizeUIMessages([
     {
       id: "m1",
@@ -102,14 +102,73 @@ Deno.test("sanitizeUIMessages strips null providerMetadata from parts", () => {
       parts: [
         { type: "step-start" },
         { type: "text", text: "hi", providerMetadata: null, state: "done" },
-        { type: "tool-objects_get", toolCallId: "c1", callProviderMetadata: null },
+        {
+          type: "tool-objects_create",
+          toolCallId: "c1",
+          state: "approval-responded",
+          input: { object: { name: "X" } },
+          title: null,
+          output: null,
+          rawInput: null,
+          errorText: null,
+          preliminary: null,
+          approval: { id: "a1", approved: true },
+        },
       ],
     },
   ]) as any[];
 
   assertEquals("providerMetadata" in message.parts[1], false);
   assertEquals(message.parts[1].text, "hi");
-  assertEquals("callProviderMetadata" in message.parts[2], false);
+  const toolPart = message.parts[2];
+  for (const field of ["title", "output", "rawInput", "errorText", "preliminary"]) {
+    assertEquals(field in toolPart, false, `${field} should be stripped`);
+  }
+  assertEquals(toolPart.approval, { id: "a1", approved: true });
+  assertEquals(toolPart.input, { object: { name: "X" } });
+});
+
+Deno.test("stream-shaped messages with null fields pass validation after sanitizing", async () => {
+  // Regression: the exact shape useChat resubmits after an approval — the
+  // stream serializes absent optional fields as nulls, which raw
+  // validateUIMessages rejects.
+  const raw = [
+    {
+      id: "m1",
+      role: "user",
+      parts: [{ type: "text", text: "Создай событие" }],
+      metadata: {},
+    },
+    {
+      id: "m2",
+      role: "assistant",
+      metadata: { model: "test" },
+      parts: [
+        { type: "step-start" },
+        { type: "text", text: "Создам событие.", providerMetadata: null, state: "done" },
+        {
+          type: "tool-objects_create",
+          toolCallId: "c1",
+          state: "approval-responded",
+          title: null,
+          input: { object: { name: "Дантист", isEvent: true } },
+          output: null,
+          rawInput: null,
+          errorText: null,
+          preliminary: null,
+          approval: { id: "a1", approved: true },
+        },
+      ],
+    },
+  ];
+
+  const validated = await validateUIMessages({
+    messages: sanitizeUIMessages(raw),
+  });
+  assertEquals(validated.length, 2);
+  const toolPart = validated[1].parts[2] as any;
+  assertEquals(toolPart.state, "approval-responded");
+  assertEquals(toolPart.approval.approved, true);
 });
 
 Deno.test("approval-responded UI parts survive conversion to model messages", async () => {
