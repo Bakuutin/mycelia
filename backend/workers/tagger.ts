@@ -465,7 +465,10 @@ const capability: JobCapability = {
       conversationQuery["timeRanges.start"] = dateFilter;
     }
 
-    // Step 3: Fetch conversations
+    // Step 3: Fetch conversations. The untagged exclusion must live in the
+    // query itself: the list action caps results, so an unfiltered fetch only
+    // ever sees the newest ~1000 conversations — all long tagged — and a
+    // 27k-deep backlog would never be reached.
     console.log(`[Tagger] Job ${job.id}: fetching conversations...`);
     const conversationFilters = input.objectIds?.length
       ? {
@@ -476,12 +479,20 @@ const capability: JobCapability = {
         },
         isConversation: true,
       }
-      : conversationQuery;
+      : input.force
+      ? conversationQuery
+      : {
+        ...conversationQuery,
+        "metadata.aiProvenance.taggingRuns.0": { $exists: false },
+      };
 
+    // Small buffer over the limit: a few candidates may still be dropped by
+    // the edge check below (tagged edges without a taggingRuns marker).
+    const fetchLimit = input.limit * 2 + 10;
     const allConversations = await objects({
       action: "list",
       filters: conversationFilters,
-      options: { sort: { "timeRanges.start": -1 } },
+      options: { sort: { "timeRanges.start": -1 }, limit: fetchLimit },
     }) as Conversation[];
 
     if (!allConversations || allConversations.length === 0) {
@@ -507,15 +518,19 @@ const capability: JobCapability = {
       // Force mode: process all conversations (delete existing tag relationships first)
       conversationsToProcess = allConversations.slice(0, input.limit + 1);
     } else {
-      // Normal mode: only process untagged conversations
+      // Normal mode: only process untagged conversations. Scope the edge
+      // lookup to the fetched candidates — an unscoped list is capped and
+      // would silently miss edges.
       const taggedConversationIds = new Set<string>();
 
-      // Find all "tagged" relationships where subject is a conversation
       const tagRelationships = await objects({
         action: "list",
         filters: {
           isRelationship: true,
           name: "tagged",
+          "relationship.subject": {
+            $in: allConversations.map((c) => c._id),
+          },
           "relationship.object": { $in: tags.map((t) => t._id) },
         },
       }) as Array<{ relationship: { subject: ObjectId } }>;

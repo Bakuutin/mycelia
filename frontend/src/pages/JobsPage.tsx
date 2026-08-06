@@ -1797,12 +1797,15 @@ export default function JobsPage() {
 
   const runBacklogMutation = useMutation({
     mutationFn: async (workerType: string) => {
+      // retryNow only exists on some worker schemas; strict validation
+      // rejects the key on the others (tagger, entity_typing).
+      const supportsRetryNow = workerType === "conversation_extractor" ||
+        workerType === "summarization";
       return await api.callResource("jobs", {
         action: "enqueue",
         data: {
           type: workerType,
-          retryNow: workerType === "conversation_extractor" ||
-            workerType === "summarization",
+          ...(supportsRetryNow ? { retryNow: true } : {}),
         },
         trigger: {
           type: "manual",

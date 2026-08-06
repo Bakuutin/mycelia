@@ -22,6 +22,12 @@ import {
 // process, so a single instance enforces the per-provider request budgets.
 const llmProviderLimiter = new LlmProviderLimiter();
 
+// Providers whose last request hit the transport timeout are skipped for a
+// short cooldown, so one black-holed host does not tax every call in a
+// batch with a full timeout before failover.
+const providerTimeoutCooldownUntil = new Map<string, number>();
+const PROVIDER_TIMEOUT_COOLDOWN_MS = 60_000;
+
 /**
  * In-flight chat-completion requests per provider profile id. Health checks
  * use this to recognize a saturated route as alive: a provider that is busy
@@ -502,7 +508,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           while (!succeeded) {
             const remaining = selectLlmProviders(
               allProviders.filter((provider) =>
-                !failedProviderIds.has(provider.id)
+                !failedProviderIds.has(provider.id) &&
+                (providerTimeoutCooldownUntil.get(provider.id) ?? 0) <=
+                  Date.now()
               ),
               input.model,
               llmProviderLimiter.load(),
@@ -583,6 +591,13 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                 "llm.provider_profile_id": candidate.id,
               });
 
+              // Without a deadline a black-holed provider (host up, port
+              // dropping packets) hangs the fetch until the JOB times out —
+              // failover never gets a chance. The budget must still cover
+              // slow local-model generation.
+              const requestTimeoutMs = Number(
+                Deno.env.get("LLM_REQUEST_TIMEOUT_MS") ?? "240000",
+              );
               const sendRequest = (model: string) =>
                 fetch(`${baseUrl}/chat/completions`, {
                   method: "POST",
@@ -595,6 +610,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                     model,
                     ...(sessionId ? { session_id: sessionId } : {}),
                   }),
+                  signal: AbortSignal.timeout(requestTimeoutMs),
                 });
 
               let response: Response;
@@ -613,6 +629,14 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                 attemptError = error instanceof Error
                   ? error.message
                   : String(error);
+                if (error instanceof Error && error.name === "TimeoutError") {
+                  attemptError =
+                    `request timed out after ${requestTimeoutMs}ms`;
+                  providerTimeoutCooldownUntil.set(
+                    candidate.id,
+                    Date.now() + PROVIDER_TIMEOUT_COOLDOWN_MS,
+                  );
+                }
                 response = new Response(null, { status: 502 });
               }
 
@@ -640,6 +664,14 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                   attemptError = `${attemptError} Fallback error: ${
                     error instanceof Error ? error.message : String(error)
                   }`;
+                  if (
+                    error instanceof Error && error.name === "TimeoutError"
+                  ) {
+                    providerTimeoutCooldownUntil.set(
+                      candidate.id,
+                      Date.now() + PROVIDER_TIMEOUT_COOLDOWN_MS,
+                    );
+                  }
                   response = new Response(null, { status: 502 });
                 }
               }
