@@ -136,16 +136,12 @@ export const chatToolFilter = (name: string): boolean =>
   !CHAT_EXCLUDED_TOOLS.has(name) &&
   (!name.startsWith("mongo_") || MONGO_READONLY_TOOLS.has(name));
 
-// Fields the stream serializes as explicit nulls but validateUIMessages only
-// accepts as objects-or-absent. Stripping them keeps round-tripped client
-// state valid.
-const NULLABLE_PART_FIELDS = [
-  "providerMetadata",
-  "callProviderMetadata",
-  "providerExecuted",
-];
-
-/** Removes null-valued metadata fields that fail UIMessage validation. */
+/**
+ * The UI message stream serializes absent optional part fields as explicit
+ * nulls (title, output, rawInput, errorText, preliminary, providerMetadata…),
+ * but validateUIMessages only accepts them as present-or-absent. Strip every
+ * null-valued field from parts so round-tripped client state validates.
+ */
 export function sanitizeUIMessages(messages: unknown[]): unknown[] {
   return messages.map((message) => {
     if (!message || typeof message !== "object") return message;
@@ -155,9 +151,9 @@ export function sanitizeUIMessages(messages: unknown[]): unknown[] {
       ...msg,
       parts: msg.parts.map((part) => {
         if (!part || typeof part !== "object") return part;
-        const cleaned = { ...(part as Record<string, unknown>) };
-        for (const field of NULLABLE_PART_FIELDS) {
-          if (cleaned[field] === null) delete cleaned[field];
+        const cleaned: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(part)) {
+          if (value !== null) cleaned[key] = value;
         }
         return cleaned;
       }),
