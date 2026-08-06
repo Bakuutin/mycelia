@@ -1,5 +1,11 @@
 import type { Request, Response } from "express";
-import { stepCountIs, streamText } from "ai";
+import {
+  convertToModelMessages,
+  stepCountIs,
+  streamText,
+  type UIMessage,
+  validateUIMessages,
+} from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { type Auth, authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
@@ -57,16 +63,6 @@ function getClientChatError(
     "Check backend logs for [apiChatHandler] and this request ID.";
 }
 
-function hasAssistantOutput(content: unknown): boolean {
-  if (typeof content === "string") return content.trim().length > 0;
-  if (!Array.isArray(content)) return false;
-  return content.some((part) => {
-    if (!part || typeof part !== "object") return false;
-    if (part.type === "text") return Boolean(part.text?.trim());
-    return part.type === "tool-call" || part.type === "tool-result";
-  });
-}
-
 async function generateChatTitle(
   mongo: any,
   chatId: string,
@@ -113,7 +109,32 @@ const TOOLS_REQUIRING_APPROVAL = [
   "objects_create", // Can create arbitrary objects
   "objects_update", // Can modify existing data
   "objects_delete", // Can permanently delete data
+  "objects_merge", // Deletes the losing duplicates and re-points edges
+  "objects_split", // Moves relationships/aliases into a new object
 ];
+
+// The chat assistant only gets read access to raw mongo — all writes must go
+// through the approval-gated objects_* tools. (The MCP server keeps full
+// access; this filter applies to /api/chat only.)
+const MONGO_READONLY_TOOLS = new Set([
+  "mongo_find",
+  "mongo_findOne",
+  "mongo_aggregate",
+  "mongo_count",
+  "mongo_listIndexes",
+  "mongo_getFirstBatch",
+  "mongo_getMore",
+]);
+
+// Internal job-coordination actions that must not be exposed to the chat LLM
+const CHAT_EXCLUDED_TOOLS = new Set([
+  "objects_claimSummarization",
+  "objects_releaseSummarization",
+]);
+
+export const chatToolFilter = (name: string): boolean =>
+  !CHAT_EXCLUDED_TOOLS.has(name) &&
+  (!name.startsWith("mongo_") || MONGO_READONLY_TOOLS.has(name));
 
 export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);
@@ -144,119 +165,55 @@ export async function apiChatHandler(req: Request, res: Response) {
     return;
   }
 
-  // Normalize messages for AI SDK v6 compatibility
-  // Claude requires that each tool_result has a matching tool_use in the previous message
-  if (Array.isArray(messages)) {
-    const normalizedMessages: any[] = [];
-
-    for (const msg of messages) {
-      // Map 'parts' to 'content' if needed
-      const content = msg.content ?? msg.parts;
-
-      if (msg.role === "assistant" && Array.isArray(content)) {
-        // Extract tool-call and tool-result/tool-error parts
-        const toolCalls: any[] = [];
-        const toolResults: any[] = [];
-        const otherContent: any[] = [];
-
-        for (const part of content) {
-          if (part.type === "tool-result") {
-            toolResults.push({
-              type: "tool-result",
-              toolCallId: part.toolCallId,
-              toolName: part.toolName,
-              output: part.output,
-            });
-          } else if (part.type === "tool-error") {
-            // Handle tool errors the same as tool results - they are responses to tool calls
-            // Use 'error-text' output type for AI SDK compatibility
-            const errorMessage = part.error?.errmsg || part.error?.message ||
-              JSON.stringify(part.error) || "Tool execution failed";
-            toolResults.push({
-              type: "tool-result",
-              toolCallId: part.toolCallId,
-              toolName: part.toolName,
-              output: { type: "error-text", value: errorMessage },
-            });
-          } else if (part.type === "tool-call") {
-            toolCalls.push({
-              type: "tool-call",
-              toolCallId: part.toolCallId,
-              toolName: part.toolName,
-              input: part.input,
-            });
-          } else if (part.type === "text") {
-            otherContent.push({ type: "text", text: part.text });
-          }
-          // Skip internal SDK markers like "step-start" - they shouldn't be sent back
-        }
-
-        // Build cleaned content: text + tool-calls only
-        const cleanedContent = [...otherContent, ...toolCalls];
-
-        // Get the set of tool-call IDs in this message
-        const toolCallIds = new Set(toolCalls.map((tc) => tc.toolCallId));
-
-        // Only include tool-results that have matching tool-calls in THIS message
-        const matchingToolResults = toolResults.filter((tr) =>
-          toolCallIds.has(tr.toolCallId)
-        );
-        const orphanedToolResults = toolResults.filter((tr) =>
-          !toolCallIds.has(tr.toolCallId)
-        );
-
-        if (orphanedToolResults.length > 0) {
-          console.warn(
-            `[apiChatHandler] Dropping ${orphanedToolResults.length} orphaned tool-results without matching tool-calls:`,
-            orphanedToolResults.map((tr) => tr.toolCallId),
-          );
-        }
-
-        // Add assistant message with cleaned content (only if it has content)
-        if (cleanedContent.length > 0) {
-          normalizedMessages.push({
-            role: "assistant",
-            content: cleanedContent,
-          });
-
-          // Only add tool message if we have matching tool-results
-          if (matchingToolResults.length > 0) {
-            normalizedMessages.push({
-              role: "tool",
-              content: matchingToolResults,
-            });
-          }
-        }
-      } else if (msg.role === "tool" && Array.isArray(content)) {
-        // Skip tool messages coming from the client - they should be reconstructed from assistant messages
-        // This prevents orphaned tool-result messages
-        console.warn(
-          "[apiChatHandler] Skipping orphaned tool message from client",
-        );
-        continue;
-      } else if (msg.role === "user" && Array.isArray(content)) {
-        // Clean user message content parts
-        const cleanedContent = content.map((part: any) => {
-          if (part.type === "text") {
-            return { type: "text", text: part.text };
-          }
-          return part;
-        });
-        normalizedMessages.push({ role: "user", content: cleanedContent });
-      } else {
-        // Pass through other messages
-        normalizedMessages.push({ role: msg.role, content });
-      }
-    }
-
-    messages = normalizedMessages;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({
+      error: "Request body must include a non-empty messages array",
+      requestId,
+    });
+    return;
   }
 
-  // Debug: Log normalized messages
-  console.log(
-    "[apiChatHandler] Normalized messages:",
-    JSON.stringify(messages, null, 2),
+  // Setup tools with approval requirements for destructive operations.
+  // Built before message conversion because convertToModelMessages needs the
+  // tool set to map tool parts (incl. approval responses) correctly.
+  const resources = defaultResourceManager.listResources().filter((resource) =>
+    RESOURCES_FOR_AI.includes(resource.code)
   );
+  const tools = createAiSdkToolsFromResources(resources, auth, {
+    toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
+    toolFilter: chatToolFilter,
+  });
+
+  // Validate and convert UIMessages (useChat wire format) into ModelMessages.
+  // This preserves tool-approval requests/responses so streamText can execute
+  // approved tools; the previous hand-rolled normalizer silently dropped them.
+  let uiMessages: UIMessage[];
+  let modelMessages;
+  try {
+    uiMessages = await validateUIMessages({ messages });
+    modelMessages = await convertToModelMessages(uiMessages, {
+      tools,
+      ignoreIncompleteToolCalls: true,
+    });
+  } catch (error) {
+    console.warn("[apiChatHandler] Failed to convert chat messages", {
+      requestId,
+      error: getErrorMessage(error),
+    });
+    res.status(400).json({
+      error: `Invalid chat message format: ${
+        getErrorMessage(error)
+      }. Reloading the chat usually fixes this.`,
+      requestId,
+    });
+    return;
+  }
+
+  console.debug("[apiChatHandler] Converted messages", {
+    requestId,
+    uiRoles: uiMessages.map((m) => m.role),
+    modelRoles: modelMessages.map((m) => m.role),
+  });
 
   let activeChatId: string | undefined = chatId;
   let chatModel = selectedChatModel;
@@ -333,49 +290,49 @@ export async function apiChatHandler(req: Request, res: Response) {
     }
   }
 
-  // Save user message
-  const lastMessage = messages[messages.length - 1];
-  const userMessageId = new ObjectId();
+  // Save user message. Approval auto-resubmits end with an assistant message
+  // (the user only approved/denied a tool call) — skip persistence then, so
+  // the previous user message is not duplicated.
+  const lastUiMessage = uiMessages[uiMessages.length - 1];
+  if (lastUiMessage.role === "user") {
+    const userMessageId = new ObjectId();
 
-  // Get or create Person for the user
-  // Use auth.principal as the external ID for mycelia platform
-  const userPersonResult = await getOrCreatePersonByMessengerId({
-    platform: "mycelia",
-    externalId: auth.principal,
-    name: "User",
-    auth,
-  });
-  const userPersonId = userPersonResult._id;
-
-  await mongo({
-    action: "insertOne",
-    collection: "messages",
-    doc: {
-      _id: userMessageId,
-      chatId: new ObjectId(activeChatId),
-      senderId: userPersonId,
-      text: typeof lastMessage.content === "string"
-        ? lastMessage.content
-        : JSON.stringify(lastMessage.content),
+    // Get or create Person for the user
+    // Use auth.principal as the external ID for mycelia platform
+    const userPersonResult = await getOrCreatePersonByMessengerId({
       platform: "mycelia",
-      externalId: userMessageId.toString(),
-      timestamp: new Date(),
-      createdAt: new Date(),
-      raw: { role: "user", content: lastMessage.content },
-    },
-  });
+      externalId: auth.principal,
+      name: "User",
+      auth,
+    });
+    const userPersonId = userPersonResult._id;
 
-  // Setup tools with approval requirements for destructive operations
-  const resources = defaultResourceManager.listResources().filter((resource) =>
-    RESOURCES_FOR_AI.includes(resource.code)
-  );
-  const tools = createAiSdkToolsFromResources(resources, auth, {
-    toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
-  });
+    const userText = lastUiMessage.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+
+    await mongo({
+      action: "insertOne",
+      collection: "messages",
+      doc: {
+        _id: userMessageId,
+        chatId: new ObjectId(activeChatId),
+        senderId: userPersonId,
+        text: userText,
+        platform: "mycelia",
+        externalId: userMessageId.toString(),
+        timestamp: new Date(),
+        createdAt: new Date(),
+        raw: { role: "user", content: userText, uiMessage: lastUiMessage },
+      },
+    });
+  }
 
   // Fetch System Prompt
   let systemPrompt =
-    "You are Mycelia, an intelligent AI assistant. You have access to various tools to help the user. Use them when necessary.";
+    "You are Mycelia, an intelligent AI assistant with access to the user's personal knowledge base. Use your tools to search, create, and edit data when asked. " +
+    "Always reference objects you find or change as markdown links with relative paths, e.g. [Name](/objects/<id>), using ids from tool results.";
 
   const config = await getServerConfig();
   try {
@@ -500,45 +457,68 @@ export async function apiChatHandler(req: Request, res: Response) {
     return assistantPersonIdPromise;
   };
 
-  const persistAssistantMessage = async (
-    content: unknown,
-    usage: unknown,
+  // A UIMessage renders something when it has non-empty text or a tool part.
+  const hasRenderableParts = (message: UIMessage): boolean =>
+    message.parts.some((part) =>
+      (part.type === "text" && Boolean(part.text?.trim())) ||
+      part.type.startsWith("tool-") || part.type === "dynamic-tool"
+    );
+
+  // Usage is only reported by streamText's onFinish; the UI-stream onFinish
+  // (which persists the message) runs when the stream closes, after it.
+  let totalUsage: unknown;
+
+  // Persist the assistant response as a UIMessage, upserted by its id: a
+  // post-approval continuation extends the SAME message, so the approval
+  // request and response stay together in one stored document.
+  const persistAssistantUIMessage = async (
+    responseMessage: UIMessage,
     extraRaw: Record<string, unknown> = {},
   ) => {
-    const assistantMessageId = new ObjectId();
     const assistantPersonId = await getAssistantPersonId();
+    const messageId = ObjectId.isValid(responseMessage.id)
+      ? new ObjectId(responseMessage.id)
+      : new ObjectId();
+    const text = responseMessage.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    const now = new Date();
 
     await mongo({
-      action: "insertOne",
+      action: "updateOne",
       collection: "messages",
-      doc: {
-        _id: assistantMessageId,
-        chatId: new ObjectId(activeChatId),
-        senderId: assistantPersonId,
-        text: typeof content === "string" ? content : JSON.stringify(content),
-        platform: "mycelia",
-        externalId: assistantMessageId.toString(),
-        timestamp: new Date(),
-        createdAt: new Date(),
-        raw: {
-          role: "assistant",
-          usage,
-          content,
-          requestedModel,
-          model: actualModel,
-          providerProfileId: chatProvider.id,
-          providerProfileName: chatProvider.name,
-          requestId,
-          ...extraRaw,
+      query: { _id: messageId },
+      update: {
+        $set: {
+          chatId: new ObjectId(activeChatId),
+          senderId: assistantPersonId,
+          text,
+          platform: "mycelia",
+          externalId: messageId.toString(),
+          timestamp: now,
+          raw: {
+            role: "assistant",
+            uiMessage: responseMessage,
+            usage: totalUsage,
+            requestedModel,
+            model: actualModel,
+            providerProfileId: chatProvider.id,
+            providerProfileName: chatProvider.name,
+            requestId,
+            ...extraRaw,
+          },
         },
+        $setOnInsert: { createdAt: now },
       },
+      options: { upsert: true },
     });
 
     await mongo({
       action: "updateOne",
       collection: "chats",
       query: { _id: new ObjectId(activeChatId) },
-      update: { $set: { lastMessageDate: new Date() } },
+      update: { $set: { lastMessageDate: now } },
     });
   };
 
@@ -552,8 +532,8 @@ export async function apiChatHandler(req: Request, res: Response) {
       stopWhen: stepCountIs(5),
       messages: [
         { role: "system", content: systemPrompt },
-        ...messages,
-      ] as any,
+        ...modelMessages,
+      ],
       onError: (errorEvent: any) => {
         const error = errorEvent?.error;
         console.error("[apiChatHandler] Chat stream failed", {
@@ -564,72 +544,63 @@ export async function apiChatHandler(req: Request, res: Response) {
           error: getErrorMessage(error),
         });
       },
-      async onStepFinish(result) {
-        const { content, usage, finishReason } = result as any;
-
-        // Some providers emit an empty terminal step. Do not persist it as a
-        // misleading "Empty message"; the final callback below records one
-        // explicit diagnostic only when the whole response is empty.
-        if (!hasAssistantOutput(content)) return;
-
-        await persistAssistantMessage(content, usage, { finishReason });
-
-        // Generate title for new chats after first assistant response
-        if (isNewChat) {
-          isNewChat = false; // Only generate once
-          const firstUserMessage = messages.find((m: any) => m.role === "user");
-          if (firstUserMessage) {
-            const userContent = typeof firstUserMessage.content === "string"
-              ? firstUserMessage.content
-              : Array.isArray(firstUserMessage.content)
-              ? firstUserMessage.content.map((p: any) => p.text || "").join(" ")
-              : "";
-            if (userContent.trim()) {
-              // Run title generation in background (don't await)
-              void generateChatTitle(
-                mongo,
-                activeChatId!,
-                userContent.trim(),
-                auth,
-              );
-            }
-          }
-        }
-      },
-      async onFinish(result) {
-        const hasOutput = result.steps.some((step) =>
-          hasAssistantOutput(step.content)
-        );
-        if (hasOutput) return;
-
-        const errorMessage =
-          `Model "${actualModel}" completed without text or a tool result`;
-        console.error("[apiChatHandler] Empty model response", {
-          requestId,
-          chatId: activeChatId,
-          requestedModel,
-          actualModel,
-          finishReason: result.finishReason,
-        });
-        await persistAssistantMessage([], result.totalUsage, {
-          finishReason: result.finishReason,
-          error: {
-            type: "empty_response",
-            message: errorMessage,
-          },
-        });
+      onFinish(result) {
+        totalUsage = result.totalUsage;
       },
     });
 
     // Pipe the stream to the Express response with Chat ID header
     res.setHeader("X-Mycelia-Chat-Id", activeChatId!);
     stream.pipeUIMessageStreamToResponse(res, {
+      originalMessages: uiMessages,
+      generateMessageId: () => new ObjectId().toString(),
       messageMetadata: () => ({
         requestedModel,
         model: actualModel,
         requestId,
       }),
       onError: (error) => getClientChatError(error, actualModel, requestId),
+      async onFinish({ responseMessage, isContinuation, finishReason }) {
+        const isEmpty = !hasRenderableParts(responseMessage);
+        if (isEmpty) {
+          console.error("[apiChatHandler] Empty model response", {
+            requestId,
+            chatId: activeChatId,
+            requestedModel,
+            actualModel,
+            finishReason,
+          });
+        }
+
+        await persistAssistantUIMessage(responseMessage, {
+          finishReason,
+          isContinuation,
+          ...(isEmpty
+            ? {
+              error: {
+                type: "empty_response",
+                message:
+                  `Model "${actualModel}" completed without text or a tool result`,
+              },
+            }
+            : {}),
+        });
+
+        // Generate title for new chats after the first assistant response
+        if (isNewChat && !isEmpty) {
+          isNewChat = false; // Only generate once
+          const firstUserMessage = uiMessages.find((m) => m.role === "user");
+          const userContent = firstUserMessage?.parts
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join(" ")
+            .trim();
+          if (userContent) {
+            // Run title generation in background (don't await)
+            void generateChatTitle(mongo, activeChatId!, userContent, auth);
+          }
+        }
+      },
     });
   } catch (error) {
     console.error("[apiChatHandler] Chat request failed", {

@@ -7,6 +7,9 @@ function withJsonSchema<T extends z.ZodType>(
   jsonSchema: Record<string, unknown>
 ): T {
   (schema as any)._zod.toJSONSchema = () => jsonSchema;
+  // Zod 4's .describe()/.meta() clone the instance (new _zod) but share the
+  // same def object, so the schema must also live on the def to survive them.
+  (schema as any)._zod.def.myceliaJsonSchema = jsonSchema;
   return schema;
 }
 

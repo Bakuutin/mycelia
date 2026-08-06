@@ -320,6 +320,41 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
 export type ObjectsRequest = z.infer<typeof objectsRequestSchema>;
 export type ObjectsResponse = any;
 
+const OBJECT_TYPE_FLAGS: Array<[flag: string, type: string]> = [
+  ["isPerson", "person"],
+  ["isEvent", "event"],
+  ["isRelationship", "relationship"],
+  ["isPromise", "promise"],
+  ["isConversation", "conversation"],
+  ["isTag", "tag"],
+  ["isPlace", "place"],
+  ["isOrganization", "organization"],
+  ["isProduct", "product"],
+  ["isProject", "project"],
+  ["isAnimal", "animal"],
+  ["isConcept", "concept"],
+  ["isMedia", "media"],
+];
+
+function objectType(doc: any): string {
+  for (const [flag, type] of OBJECT_TYPE_FLAGS) {
+    if (doc?.[flag]) return type;
+  }
+  return "object";
+}
+
+/**
+ * Compact reference to an object for tool results: enough for a consumer
+ * (e.g. the chat assistant / UI) to name and link to it without refetching.
+ * The url is a frontend-relative path.
+ */
+function objectRef(
+  doc: any,
+): { id: string; name: string; type: string; url: string } {
+  const id = String(doc._id);
+  return { id, name: doc.name, type: objectType(doc), url: `/objects/${id}` };
+}
+
 function getNestedValue(obj: any, path: string): any {
   const parts = path.split(".");
   let current = obj;
@@ -770,10 +805,12 @@ export class ObjectsResource
 
     switch (input.action) {
       case "create": {
+        const now = new Date();
         const doc = {
           ...input.object,
           version: 1,
-          createdAt: new Date(),
+          createdAt: now,
+          updatedAt: now,
         };
 
         const result = await mongo({
@@ -796,7 +833,19 @@ export class ObjectsResource
         // Invalidate counts cache
         await this.invalidateCountsCache(auth);
 
-        return { insertedId: result.insertedId };
+        return {
+          insertedId: result.insertedId,
+          ...objectRef({ ...doc, _id: result.insertedId }),
+          // Surfaced to tool consumers (e.g. the chat assistant) so an
+          // incomplete event gets fixed instead of silently missing from
+          // the timeline. The UI allows adding time ranges later.
+          ...(input.object.isEvent && !input.object.timeRanges?.length
+            ? {
+              warning:
+                "This event has no timeRanges, so it will not appear on the timeline. Add one with objects_update (field: timeRanges).",
+            }
+            : {}),
+        };
       }
 
       case "get": {
@@ -893,7 +942,9 @@ export class ObjectsResource
           await this.invalidateCountsCache(auth);
         }
 
-        return result;
+        // The updated document itself (cached as-is by the frontend), plus
+        // reference fields so tool consumers can link to it.
+        return { ...result, ...objectRef(result) };
       }
 
       case "delete": {
@@ -928,7 +979,12 @@ export class ObjectsResource
         // Invalidate counts cache
         await this.invalidateCountsCache(auth);
 
-        return { deletedCount: result.deletedCount };
+        return {
+          deletedCount: result.deletedCount,
+          id: input.id,
+          name: current.name,
+          type: objectType(current),
+        };
       }
 
       case "merge": {
@@ -1203,6 +1259,7 @@ export class ObjectsResource
           query: { _id: winnerId },
         });
         return {
+          ...objectRef(mergedWinner),
           winner: mergedWinner,
           mergedIds: loserIds,
           edgesRepointed: (subjectResult.modifiedCount ?? 0) +
@@ -1394,6 +1451,8 @@ export class ObjectsResource
         });
         return {
           newId,
+          newObjectRef: objectRef({ ...newDoc, _id: newId }),
+          sourceRef: objectRef(updatedSource),
           movedEdges: operations.length,
           movedAliases: aliasesToMove,
           source: updatedSource,

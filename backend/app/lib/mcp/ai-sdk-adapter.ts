@@ -18,26 +18,42 @@ function serializeResult(result: unknown): { type: "json" | "text"; value: unkno
 export interface ToolAdapterOptions {
   /** Tool names that require user approval before execution */
   toolsRequiringApproval?: string[];
+  /** When provided, only tools for which this returns true are exposed */
+  toolFilter?: (toolName: string) => boolean;
 }
 
-function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
-  // If the top-level schema has a custom toJSONSchema, use it directly
-  if ((schema as any)._zod?.toJSONSchema) {
-    return (schema as any)._zod.toJSONSchema();
+/**
+ * Custom JSON schema attached by withJsonSchema (myceliasdk/zod-json-schema.ts).
+ * Read from the instance first, then from the shared def — .describe()/.meta()
+ * clone the instance (losing _zod.toJSONSchema) but keep the same def.
+ * The instance description (added via .describe()) wins over the stashed one.
+ */
+function customJsonSchemaOf(zodSchema: any): Record<string, unknown> | undefined {
+  const custom = zodSchema?._zod?.toJSONSchema?.() ?? zodSchema?._zod?.def?.myceliaJsonSchema;
+  if (!custom) return undefined;
+  const description = zodSchema?.description;
+  return { ...custom, ...(description ? { description } : {}) };
+}
+
+export function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  // If the top-level schema has a custom JSON schema, use it directly
+  const topLevel = customJsonSchemaOf(schema);
+  if (topLevel) {
+    return topLevel;
   }
-  
+
   // Use override to handle nested custom types (like zObjectId, zDateOrString)
-  // that have their own toJSONSchema methods
   return z.toJSONSchema(schema, {
     unrepresentable: "any",
     override: (ctx) => {
-      const zodSchema = ctx.zodSchema as any;
-      // Check if this nested schema has a custom toJSONSchema method
-      if (zodSchema._zod?.toJSONSchema) {
-        return zodSchema._zod.toJSONSchema();
+      const custom = customJsonSchemaOf(ctx.zodSchema);
+      if (custom) {
+        // Zod 4 expects the override to mutate ctx.jsonSchema in place
+        for (const key of Object.keys(ctx.jsonSchema)) {
+          delete (ctx.jsonSchema as Record<string, unknown>)[key];
+        }
+        Object.assign(ctx.jsonSchema, custom);
       }
-      // Return undefined to use default behavior
-      return undefined;
     },
   }) as Record<string, unknown>;
 }
@@ -63,6 +79,7 @@ export function resourceToTools<Input, Output>(
   options?: ToolAdapterOptions
 ): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> {
   const toolsRequiringApproval = new Set(options?.toolsRequiringApproval ?? []);
+  const toolFilter = options?.toolFilter;
   const schema = resource.schemas.request;
   const def = schema.def as any;
   const tools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> = {};
@@ -70,7 +87,10 @@ export function resourceToTools<Input, Output>(
   if ((def?.type === "union")) {
     const discriminator = def.discriminator;
     const options = def.optionsMap ? Array.from(def.optionsMap.values()) : def.options;
-    
+    // Distinguish "no union actions recognized" (→ fallback below) from
+    // "actions recognized but excluded by toolFilter" (→ return what's left).
+    let recognizedAnyAction = false;
+
     for (const optionSchema of options as z.ZodObject<any>[]) {
       const shape = optionSchema.shape;
 
@@ -84,7 +104,11 @@ export function resourceToTools<Input, Output>(
         const actionValue = actionDef?.values?.[0];
 
         if (actionValue) {
+          recognizedAnyAction = true;
           const toolName = `${resource.code.replace(/\./g, "_")}_${actionValue}`;
+          if (toolFilter && !toolFilter(toolName)) {
+            continue;
+          }
           const actionDescription = extractActionDescription(optionSchema, actionValue);
           
           let inputSchema = optionSchema;
@@ -116,9 +140,13 @@ export function resourceToTools<Input, Output>(
       }
     }
 
-    if (Object.keys(tools).length > 0) {
+    if (recognizedAnyAction) {
       return tools;
     }
+  }
+
+  if (toolFilter && !toolFilter(resource.code)) {
+    return tools;
   }
 
   tools[resource.code] = {
