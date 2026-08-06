@@ -12,7 +12,7 @@ import {
 import { ObjectsResource } from "@/lib/objects/resource.server.ts";
 import { MongoResource } from "@/lib/mongo/core.server.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
-import { chatToolFilter } from "@/routes/api.chat.ts";
+import { chatToolFilter, sanitizeUIMessages } from "@/routes/api.chat.ts";
 
 function hasEmptySubschema(schema: unknown): boolean {
   if (Array.isArray(schema)) {
@@ -92,6 +92,24 @@ Deno.test("chat tool filter keeps mongo read-only and hides internal actions", (
   assert(objectNames.includes("objects_merge"));
   assert(!objectNames.includes("objects_claimSummarization"));
   assert(!objectNames.includes("objects_releaseSummarization"));
+});
+
+Deno.test("sanitizeUIMessages strips null providerMetadata from parts", () => {
+  const [message] = sanitizeUIMessages([
+    {
+      id: "m1",
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        { type: "text", text: "hi", providerMetadata: null, state: "done" },
+        { type: "tool-objects_get", toolCallId: "c1", callProviderMetadata: null },
+      ],
+    },
+  ]) as any[];
+
+  assertEquals("providerMetadata" in message.parts[1], false);
+  assertEquals(message.parts[1].text, "hi");
+  assertEquals("callProviderMetadata" in message.parts[2], false);
 });
 
 Deno.test("approval-responded UI parts survive conversion to model messages", async () => {

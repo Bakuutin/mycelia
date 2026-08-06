@@ -136,6 +136,35 @@ export const chatToolFilter = (name: string): boolean =>
   !CHAT_EXCLUDED_TOOLS.has(name) &&
   (!name.startsWith("mongo_") || MONGO_READONLY_TOOLS.has(name));
 
+// Fields the stream serializes as explicit nulls but validateUIMessages only
+// accepts as objects-or-absent. Stripping them keeps round-tripped client
+// state valid.
+const NULLABLE_PART_FIELDS = [
+  "providerMetadata",
+  "callProviderMetadata",
+  "providerExecuted",
+];
+
+/** Removes null-valued metadata fields that fail UIMessage validation. */
+export function sanitizeUIMessages(messages: unknown[]): unknown[] {
+  return messages.map((message) => {
+    if (!message || typeof message !== "object") return message;
+    const msg = message as Record<string, unknown>;
+    if (!Array.isArray(msg.parts)) return message;
+    return {
+      ...msg,
+      parts: msg.parts.map((part) => {
+        if (!part || typeof part !== "object") return part;
+        const cleaned = { ...(part as Record<string, unknown>) };
+        for (const field of NULLABLE_PART_FIELDS) {
+          if (cleaned[field] === null) delete cleaned[field];
+        }
+        return cleaned;
+      }),
+    };
+  });
+}
+
 export async function apiChatHandler(req: Request, res: Response) {
   const auth = await authenticateOr401(req, res);
   const requestId = crypto.randomUUID();
@@ -190,7 +219,9 @@ export async function apiChatHandler(req: Request, res: Response) {
   let uiMessages: UIMessage[];
   let modelMessages;
   try {
-    uiMessages = await validateUIMessages({ messages });
+    uiMessages = await validateUIMessages({
+      messages: sanitizeUIMessages(messages),
+    });
     modelMessages = await convertToModelMessages(uiMessages, {
       tools,
       ignoreIncompleteToolCalls: true,
@@ -531,7 +562,13 @@ export async function apiChatHandler(req: Request, res: Response) {
       tools,
       stopWhen: stepCountIs(5),
       messages: [
-        { role: "system", content: systemPrompt },
+        {
+          role: "system",
+          // Current time lets the model resolve "tomorrow"/"last week"
+          content: `${systemPrompt}\n\nCurrent date and time: ${
+            new Date().toISOString()
+          }`,
+        },
         ...modelMessages,
       ],
       onError: (errorEvent: any) => {
