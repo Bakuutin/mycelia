@@ -1,4 +1,7 @@
-import { LLMResource } from "@/lib/llm/resource.server.ts";
+import {
+  getLlmProviderInFlight,
+  LLMResource,
+} from "@/lib/llm/resource.server.ts";
 import {
   getEnabledLlmProviders,
   type ResolvedLlmProvider,
@@ -337,12 +340,33 @@ export async function getExternalServicesHealth(
   };
 
   // Probe every enabled LLM route in parallel; the aggregate mirrors STT.
+  // A route with requests in flight is alive by definition — single-slot
+  // GPU servers stop answering /models mid-generation, so probing a busy
+  // route would misreport it as down and block the very jobs feeding it.
   const enabledLlmProviders = getEnabledLlmProviders(llmProviders);
   const allLlmRoutesDisabled = llmProviders.length > 0 &&
     enabledLlmProviders.length === 0;
+  const llmInFlight = getLlmProviderInFlight();
   const llmRouteHealth = await Promise.all(
-    enabledLlmProviders.map((provider) =>
-      probeProvider({
+    enabledLlmProviders.map((provider) => {
+      const inFlight = llmInFlight[provider.id] ?? 0;
+      if (inFlight > 0) {
+        return Promise.resolve<ExternalServiceHealth>({
+          id: "llm",
+          label: provider.name,
+          status: "healthy",
+          configured: true,
+          baseUrl: provider.baseUrl,
+          source: provider.source,
+          providerProfileId: provider.id,
+          providerProfileName: provider.name,
+          model: provider.aliases[provider.defaultAlias],
+          message: `Busy: ${inFlight} request(s) in flight; probe skipped`,
+          checkedAt: new Date().toISOString(),
+          usedBy: [],
+        });
+      }
+      return probeProvider({
         id: "llm",
         label: provider.name,
         baseUrl: provider.baseUrl,
@@ -351,8 +375,8 @@ export async function getExternalServicesHealth(
         providerProfileId: provider.id,
         providerProfileName: provider.name,
         model: provider.aliases[provider.defaultAlias],
-      })
-    ),
+      });
+    }),
   );
   const healthyLlmRoutes = llmRouteHealth.filter((route) =>
     route.status === "healthy"

@@ -22,6 +22,16 @@ import {
 // process, so a single instance enforces the per-provider request budgets.
 const llmProviderLimiter = new LlmProviderLimiter();
 
+/**
+ * In-flight chat-completion requests per provider profile id. Health checks
+ * use this to recognize a saturated route as alive: a provider that is busy
+ * serving us cannot be probed (single-slot GPUs stop answering /models during
+ * generation) but is evidently not down.
+ */
+export function getLlmProviderInFlight(): Record<string, number> {
+  return llmProviderLimiter.load();
+}
+
 const llmRequestCounter = meter.createCounter("llm_requests_total", {
   description: "Total number of LLM requests",
 });
@@ -488,6 +498,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           // the next route when saturated, and wait for any release when
           // every eligible route is at capacity.
           const failedProviderIds = new Set<string>();
+          let queuedAt: number | null = null;
           while (!succeeded) {
             const remaining = selectLlmProviders(
               allProviders.filter((provider) =>
@@ -501,8 +512,27 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               llmProviderLimiter.tryAcquire(provider)
             );
             if (!candidate) {
+              if (queuedAt === null) {
+                queuedAt = Date.now();
+                const load = llmProviderLimiter.load();
+                console.log(
+                  `[llm] All routes at capacity for model "${input.model}" (${
+                    remaining.map((p) =>
+                      `${p.name} ${load[p.id] ?? 0}/${p.concurrency}`
+                    ).join(", ")
+                  }); queueing request`,
+                );
+              }
               await llmProviderLimiter.waitForRelease();
               continue;
+            }
+            if (queuedAt !== null) {
+              console.log(
+                `[llm] Slot on "${candidate.name}" acquired after ${
+                  Date.now() - queuedAt
+                }ms in queue`,
+              );
+              queuedAt = null;
             }
             let released = false;
             const releaseSlot = () => {
