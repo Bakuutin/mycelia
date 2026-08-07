@@ -1058,3 +1058,21 @@ Deno.test(
     expect(result.groups.some((g: any) => g.key === "solo")).toBe(false);
   }),
 );
+
+Deno.test("reviveTimeRangeDates converts ISO strings to Dates", async () => {
+  const { reviveTimeRangeDates } = await import("./resource.server.ts");
+  const revived = reviveTimeRangeDates([
+    { start: "2026-08-07T10:00:00Z", end: "2026-08-07T11:00:00Z" },
+  ]);
+  if (!(revived[0].start instanceof Date) || !(revived[0].end instanceof Date)) {
+    throw new Error("timeRanges dates were not revived to Date");
+  }
+  const bare = reviveTimeRangeDates("2026-08-07T10:00:00Z");
+  if (!(bare instanceof Date)) {
+    throw new Error("dotted-path string value was not revived to Date");
+  }
+  const untouched = reviveTimeRangeDates([{ start: new Date(0), note: "x" }]);
+  if (untouched[0].note !== "x" || !(untouched[0].start instanceof Date)) {
+    throw new Error("existing values must pass through");
+  }
+});

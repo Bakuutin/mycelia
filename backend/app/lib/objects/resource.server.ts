@@ -355,6 +355,32 @@ function objectRef(
   return { id, name: doc.name, type: objectType(doc), url: `/objects/${id}` };
 }
 
+/**
+ * Update values arrive as plain JSON (e.g. from the chat assistant), so date
+ * fields inside timeRanges come in as ISO strings. Stored strings crash every
+ * consumer that expects Date (frontend calls .getTime()). Revives start/end
+ * strings — and bare string values for dotted paths like "timeRanges.0.start"
+ * — into Date objects.
+ */
+export function reviveTimeRangeDates(value: any): any {
+  if (Array.isArray(value)) {
+    return value.map(reviveTimeRangeDates);
+  }
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    const out: Record<string, any> = { ...value };
+    for (const key of ["start", "end"]) {
+      if (typeof out[key] === "string" && !Number.isNaN(Date.parse(out[key]))) {
+        out[key] = new Date(out[key]);
+      }
+    }
+    return out;
+  }
+  if (typeof value === "string" && !Number.isNaN(Date.parse(value))) {
+    return new Date(value);
+  }
+  return value;
+}
+
 function getNestedValue(obj: any, path: string): any {
   const parts = path.split(".");
   let current = obj;
@@ -856,7 +882,37 @@ export class ObjectsResource
           query: { _id: objectId },
         });
         if (!object) {
-          throw new Error("Object not found");
+          // Tombstone: if history shows the object was deleted (directly or
+          // by a merge), report that instead of a bare error so consumers
+          // can say when/by whom it was deleted and link to the merge winner.
+          const history = await mongo({
+            action: "find",
+            collection: "object_history",
+            query: {
+              objectId,
+              $or: [{ action: "delete" }, { action: "merge", field: "mergedInto" }],
+            },
+            options: { sort: { timestamp: -1 }, limit: 1 },
+          });
+          const deletion = history?.[0];
+          if (deletion) {
+            const lastKnown = deletion.oldValue ?? {};
+            return {
+              _id: objectId,
+              deleted: true,
+              deletedAt: deletion.timestamp,
+              deletedBy: deletion.userId,
+              name: lastKnown.name,
+              type: objectType(lastKnown),
+              ...(deletion.field === "mergedInto" && deletion.newValue
+                ? { mergedInto: String(deletion.newValue) }
+                : {}),
+              lastKnown,
+            };
+          }
+          const error: any = new Error("Object not found");
+          error.code = 404;
+          throw error;
         }
         if (object.version === undefined) {
           object.version = 0;
@@ -888,6 +944,12 @@ export class ObjectsResource
         }
 
         const oldValue = getNestedValue(current, input.field);
+
+        // Date fields must be stored as Dates, not the ISO strings JSON
+        // callers send
+        if (input.field === "timeRanges" || input.field.startsWith("timeRanges")) {
+          input.value = reviveTimeRangeDates(input.value);
+        }
 
         // If value is null, use $unset to remove the field, otherwise use $set
         const updateDoc: any = {};

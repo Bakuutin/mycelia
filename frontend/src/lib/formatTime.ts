@@ -1,7 +1,12 @@
 import { type TimeFormat, useSettingsStore } from "@/stores/settingsStore";
 import { formatDuration } from "@/modules/time/formatters/si";
 
-export function formatTime(date: Date, format?: TimeFormat): string {
+export function formatTime(date: Date | string | number, format?: TimeFormat): string {
+  // Tolerate ISO strings / epoch numbers from malformed or serialized data —
+  // a bad value must not crash the whole page with "getTime is not a function"
+  if (!(date instanceof Date)) {
+    date = new Date(date);
+  }
   if (!date || isNaN(date.getTime())) {
     return "N/A";
   }
