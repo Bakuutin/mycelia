@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import {
+  assertCompletionNotTruncated,
   getChatCompletionText,
   normalizeChatCompletionResponse,
 } from "./completion-response.ts";
@@ -70,4 +71,46 @@ Deno.test("reports an explicit empty-response code", () => {
       { requestedModel: "medium", purpose: "summary" },
     )
   ).toThrow("LLM_EMPTY_RESPONSE:");
+});
+
+Deno.test("truncated completions fail with an explicit code", () => {
+  const truncated = {
+    choices: [{
+      message: { content: '{"partial": tru' },
+      finish_reason: "length",
+    }],
+    usage: { completion_tokens: 512 },
+  };
+
+  expect(() =>
+    assertCompletionNotTruncated(truncated, {
+      requestedModel: "small",
+      maxTokens: 512,
+      purpose: "tagging",
+    })
+  ).toThrow("LLM_TRUNCATED_RESPONSE:");
+  expect(() =>
+    assertCompletionNotTruncated(truncated, {
+      requestedModel: "small",
+      maxTokens: 512,
+    })
+  ).toThrow("max_tokens=512");
+
+  // Normal completions pass through untouched.
+  assertCompletionNotTruncated(
+    { choices: [{ message: { content: "ok" }, finish_reason: "stop" }] },
+    { requestedModel: "small" },
+  );
+});
+
+Deno.test("empty-but-truncated responses report truncation, not emptiness", () => {
+  expect(() =>
+    getChatCompletionText(
+      {
+        choices: [{ message: { content: "" }, finish_reason: "length" }],
+        usage: { completion_tokens: 300 },
+      },
+      { requestedModel: "small", maxTokens: 300 },
+    )
+  ).toThrow("LLM_TRUNCATED_RESPONSE:");
 });

@@ -111,7 +111,7 @@ Deno.test("merged response records invalid emoji and unknown types", () => {
   const seg = segments[0];
   expect(seg.title).toBe("Conversation 1"); // empty title fallback
   expect(seg.emoji).toBeUndefined();
-  expect(seg.emojiValid ?? Boolean(seg.emoji)).toBe(false);
+  expect(Boolean(seg.emoji)).toBe(false);
   expect(seg.rawEmoji).toBe("none");
   expect(seg.entities).toEqual([{ name: "Толя", type: "other" }]);
 });

@@ -11,7 +11,6 @@ import type {
   ObjectsRequest,
   ObjectsResponse,
 } from "@/lib/objects/resource.server.ts";
-import { getSummaryCompletionOptions } from "@/lib/llm/completion-options.ts";
 import {
   getInferenceProvenance,
   type InferenceProvenance,
@@ -49,6 +48,14 @@ export const schema = z.object({
   fallbackModel: z.string().optional()
     .describe(
       "Optional model retried once after a primary LLM error; leave empty to use the provider route's configured fallback",
+    ),
+  maxTokens: z.number().int().min(256).max(32768).default(8192)
+    .describe(
+      "Output-token cap per summary call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+    ),
+  reasoning: z.enum(["off", "default"]).optional()
+    .describe(
+      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
     ),
   providerProfileId: z.string().optional()
     .describe(
@@ -668,14 +675,15 @@ async function summarizeConversationRange(
     ...(jobData.providerProfileId
       ? { provider_profile_id: jobData.providerProfileId }
       : {}),
+    ...(jobData.maxTokens ? { max_tokens: jobData.maxTokens } : {}),
+    reasoning: jobData.reasoning ?? "off",
+    category: "summarization",
     session_id: createPromptCacheSessionId("summarization-body", {
       system: combinedSystemPrompt,
-      responseFormat: {
-        ...getSummaryCompletionOptions(modelAlias),
-        ...(responseFormat ?? {}),
-      },
+      responseFormat: responseFormat ?? {},
+      // A/B runs with different reasoning modes must not share sessions.
+      reasoning: jobData.reasoning ?? "off",
     }),
-    ...getSummaryCompletionOptions(modelAlias),
     ...(responseFormat ? { response_format: responseFormat } : {}),
     messages: [
       { role: "system", content: combinedSystemPrompt },
@@ -688,6 +696,7 @@ async function summarizeConversationRange(
     resolvedModel: completion?.mycelia_routing?.resolvedModel ??
       completion?.model,
     purpose: "conversation summary",
+    maxTokens: jobData.maxTokens,
   });
   const combined = wantsTitle ? parseSummaryTitleResponse(rawContent) : null;
   const summary = combined?.summary ?? rawContent;

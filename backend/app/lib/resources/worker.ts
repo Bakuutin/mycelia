@@ -1546,6 +1546,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                 $in: [
                   "transcription",
                   "conversation_extractor",
+                  "conversation_extractor_merged",
                   "summarization",
                   "tagger",
                   "entity_typing",
@@ -1615,13 +1616,16 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           processing: Number(transcriptionProcessing),
           failedJobsUnretried: Number(failedCounts.transcription ?? 0),
         },
-        conversation_extractor: {
+        // Chunks are shared between the legacy and the merged extractor;
+        // the card is keyed to the merged (primary) worker, failed counts
+        // cover both so legacy failures stay visible/retryable.
+        conversation_extractor_merged: {
           ready: Number(extractionReady),
           retryableErrors: Number(extractionRetryable),
           processing: Number(extractionProcessing),
           failedJobsUnretried: Number(
-            failedCounts.conversation_extractor ?? 0,
-          ),
+            failedCounts.conversation_extractor_merged ?? 0,
+          ) + Number(failedCounts.conversation_extractor ?? 0),
         },
         summarization: {
           // Conversation extraction already derives these objects from

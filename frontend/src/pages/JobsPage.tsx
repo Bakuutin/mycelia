@@ -158,7 +158,7 @@ type PipelineHealth = {
   backlogs: Partial<
     Record<
       | "transcription"
-      | "conversation_extractor"
+      | "conversation_extractor_merged"
       | "summarization"
       | "tagger"
       | "entity_typing",
@@ -386,14 +386,14 @@ const WORKER_PIPELINE = [
       "Groups transcriptions into conversation chunks and snapshots the LLM model — makes no LLM calls itself",
   },
   {
-    type: "conversation_extractor",
-    description:
-      "2 LLM calls per chunk: №1 segments the transcript into conversations, №2 per segment extracts typed entities, tags, emoji and agreements",
-  },
-  {
     type: "conversation_extractor_merged",
     description:
-      "EXPERIMENT: one LLM call per chunk does segmentation + typed entities + tags + emoji + agreements",
+      "PRIMARY extraction: one LLM call per chunk does segmentation + typed entities + tags + emoji + agreements",
+  },
+  {
+    type: "conversation_extractor",
+    description:
+      "DEPRECATED legacy extraction (2 LLM calls per chunk) — replaced by conversation_extractor_merged; keep paused, kept only for rollback",
   },
   {
     type: "summarization",
@@ -425,7 +425,7 @@ const CRITICAL_PIPELINE_WORKERS = new Set([
   "transcription_sequence_creator",
   "transcription",
   "conversation_chunk_creator",
-  "conversation_extractor",
+  "conversation_extractor_merged",
   "summarization",
 ]);
 
@@ -1800,6 +1800,7 @@ export default function JobsPage() {
       // retryNow only exists on some worker schemas; strict validation
       // rejects the key on the others (tagger, entity_typing).
       const supportsRetryNow = workerType === "conversation_extractor" ||
+        workerType === "conversation_extractor_merged" ||
         workerType === "summarization";
       return await api.callResource("jobs", {
         action: "enqueue",
@@ -3461,7 +3462,7 @@ export default function JobsPage() {
                 {([
                   ["transcription", "Ready for transcription", "stt"],
                   [
-                    "conversation_extractor",
+                    "conversation_extractor_merged",
                     "Ready for conversation extraction",
                     "llm",
                   ],
@@ -3648,7 +3649,7 @@ export default function JobsPage() {
                       ?.workers["conversation_extractor"]?.paused ?? false;
                     const mergedPaused = workerStatus
                       ?.workers["conversation_extractor_merged"]?.paused ??
-                      true;
+                      false;
                     // Only the row being toggled waits; a slow pause request
                     // must not freeze the other workers' checkboxes.
                     const isMutating =
@@ -3891,8 +3892,9 @@ export default function JobsPage() {
                             !isPaused && !mergedPaused && (
                             <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-amber-500">
                               <span>
-                                the merged extractor is also on — both compete
-                                for the same chunks
+                                the primary merged extractor is also on — both
+                                compete for the same chunks; this legacy worker
+                                should stay paused
                               </span>
                               <Button
                                 variant="outline"
@@ -3901,10 +3903,10 @@ export default function JobsPage() {
                                 disabled={pauseWorkerMutation.isPending}
                                 onClick={() =>
                                   pauseWorkerMutation.mutate(
-                                    "conversation_extractor_merged",
+                                    "conversation_extractor",
                                   )}
                               >
-                                Pause conversation_extractor_merged
+                                Pause conversation_extractor
                               </Button>
                             </div>
                           )}

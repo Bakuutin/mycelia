@@ -10,6 +10,7 @@ import {
   summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
+import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 
 /**
  * Conversation Extractor
@@ -192,6 +193,14 @@ export const schema = z.object({
   retryNow: z.boolean().default(false)
     .describe(
       "Manual recovery: retry errored chunks immediately instead of waiting for backoff",
+    ),
+  maxTokens: z.number().int().min(256).max(32768).default(4096)
+    .describe(
+      "Output-token cap per LLM call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+    ),
+  reasoning: z.enum(["off", "default"]).optional()
+    .describe(
+      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
     ),
 
   // Prompt overrides (migrated from config.prompts)
@@ -460,6 +469,11 @@ async function callLLMStructured<T>(
   },
   parseResponse: (content: string) => T,
   logContext?: string,
+  options?: {
+    maxTokens?: number;
+    reasoning?: "off" | "default";
+    category?: string;
+  },
 ): Promise<StructuredLLMResult<T>> {
   // OpenAI requires the word "json" in messages when using response_format: json_object
   // Ensure the first message (system prompt) includes it
@@ -477,18 +491,35 @@ async function callLLMStructured<T>(
   const sessionId = createPromptCacheSessionId(cacheTask, {
     messages: adjustedMessages.slice(0, -1),
     responseFormat,
+    // A/B runs with different reasoning modes must not share sticky sessions.
+    reasoning: options?.reasoning,
   });
+
+  // Omit rather than pass undefined: EJSON turns undefined into null,
+  // which the llm request schema rejects.
+  const requestExtras = {
+    ...(fallbackModel ? { fallbackModel } : {}),
+    ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
+    ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
+    ...(options?.reasoning ? { reasoning: options.reasoning } : {}),
+    ...(options?.category ? { category: options.category } : {}),
+  };
 
   const response = await llm({
     action: "completions",
     model,
-    // Omit rather than pass undefined: EJSON turns undefined into null,
-    // which the llm request schema rejects.
-    ...(fallbackModel ? { fallbackModel } : {}),
-    ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
+    ...requestExtras,
     session_id: sessionId,
     messages: adjustedMessages,
     response_format: responseFormat,
+  });
+
+  // Truncation must surface BEFORE parsing: a JSON cut off by max_tokens
+  // would otherwise trigger the fix-JSON retry, which truncates again.
+  assertCompletionNotTruncated(response, {
+    requestedModel: model,
+    maxTokens: options?.maxTokens,
+    purpose: logContext,
   });
 
   const content = response.choices[0]?.message?.content;
@@ -526,13 +557,18 @@ async function callLLMStructured<T>(
     const retryResponse = await llm({
       action: "completions",
       model,
-      ...(fallbackModel ? { fallbackModel } : {}),
-      ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
+      ...requestExtras,
       session_id: sessionId,
       messages: [
         { role: "user", content: `Fix this JSON to be valid:\n${content}` },
       ],
       response_format: responseFormat,
+    });
+
+    assertCompletionNotTruncated(retryResponse, {
+      requestedModel: model,
+      maxTokens: options?.maxTokens,
+      purpose: logContext,
     });
 
     const retryContent = retryResponse.choices[0]?.message?.content;
@@ -1395,6 +1431,11 @@ async function processChunk(params: {
       ),
       createSegmentParser(promptLines, chunkStart, chunkEnd),
       `Chunk ${chunk._id} segmentation`,
+      {
+        maxTokens: input.maxTokens,
+        reasoning: input.reasoning ?? "off",
+        category: "extraction",
+      },
     );
     const segments = segmentationRun.value;
     console.log(
@@ -1502,6 +1543,11 @@ async function processChunk(params: {
         `Chunk ${chunk._id} segment ${
           i + 1
         }/${segmentsWithUtterances.length} metadata`,
+        {
+          maxTokens: input.maxTokens,
+          reasoning: input.reasoning ?? "off",
+          category: "extraction",
+        },
       );
       const metadata = metadataRun.value;
       console.log(

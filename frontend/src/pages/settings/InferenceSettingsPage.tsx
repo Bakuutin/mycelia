@@ -100,7 +100,7 @@ const MODEL_ROUTES = [
   },
   {
     workerType: "conversation_chunk_creator",
-    fallbackWorkerType: "conversation_extractor",
+    fallbackWorkerType: "conversation_extractor_merged",
     label: "Conversation extraction",
     description:
       "Conversation segmentation and metadata extraction use the model stored on each new chunk.",

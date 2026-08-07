@@ -106,6 +106,14 @@ const chatCompletionRequestSchema = z.object({
   fallbackModel: z.string().optional(),
   reasoning_budget: z.number().int().min(-1).optional(),
   chat_template_kwargs: z.record(z.string(), z.unknown()).optional(),
+  // Normalized reasoning mode. "off" is translated per provider (OpenRouter:
+  // reasoning.enabled=false; OpenAI-compatible local servers: reasoning_budget
+  // 0 + enable_thinking false) and echoed back in mycelia_routing.reasoning.
+  reasoning: z.enum(["off", "default"]).optional(),
+  // Spend-attribution category. Sent to OpenRouter as the app title
+  // ("Mycelia <category>"), so the OpenRouter activity dashboard breaks the
+  // bill down per request kind (summarization, tagging, extraction, chat...).
+  category: z.string().trim().min(1).max(64).optional(),
   response_format: z
     .union([
       z.object({ type: z.literal("text") }),
@@ -441,6 +449,8 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
             fallbackModel: _fallbackModel,
             session_id: requestedSessionId,
             provider_profile_id: pinnedProviderProfileId,
+            reasoning: requestedReasoning,
+            category: requestCategory,
             ...body
           } = input;
 
@@ -598,15 +608,42 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               const requestTimeoutMs = Number(
                 Deno.env.get("LLM_REQUEST_TIMEOUT_MS") ?? "240000",
               );
+              // Reasoning "off" translated per candidate: failover can cross
+              // provider types, and each speaks a different dialect.
+              const reasoningParams = requestedReasoning === "off"
+                ? isOpenRouterBaseUrl(baseUrl)
+                  ? { reasoning: { enabled: false } }
+                  : {
+                    reasoning_budget: 0,
+                    chat_template_kwargs: {
+                      ...(body.chat_template_kwargs ?? {}),
+                      enable_thinking: false,
+                    },
+                  }
+                : {};
+              // OpenRouter groups activity/spend by app (HTTP-Referer +
+              // X-Title). A per-category title splits the dashboard into
+              // "Mycelia summarization", "Mycelia tagging", etc.
+              const attributionHeaders: Record<string, string> =
+                isOpenRouterBaseUrl(baseUrl)
+                  ? {
+                    "HTTP-Referer": "https://github.com/mycelia-tech/mycelia",
+                    "X-Title": requestCategory
+                      ? `Mycelia ${requestCategory}`
+                      : "Mycelia",
+                  }
+                  : {};
               const sendRequest = (model: string) =>
                 fetch(`${baseUrl}/chat/completions`, {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
                     "Authorization": `Bearer ${candidate.apiKey}`,
+                    ...attributionHeaders,
                   },
                   body: JSON.stringify({
                     ...body,
+                    ...reasoningParams,
                     model,
                     ...(sessionId ? { session_id: sessionId } : {}),
                   }),
@@ -793,6 +830,9 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               resolvedModel,
               fallbackModel: fallbackModel || undefined,
               fallbackUsed,
+              // Requested reasoning mode, so artifacts can be analyzed by the
+              // reasoning setting they were produced with.
+              reasoning: requestedReasoning ?? "default",
               // Persist only the normalized provider route, never credentials.
               providerBaseUrl: sanitizeProviderBaseUrl(baseUrl),
               providerProfileId: provider.id,

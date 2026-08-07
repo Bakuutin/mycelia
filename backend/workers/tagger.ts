@@ -10,6 +10,7 @@ import {
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { resolveWorkerFallbackModel } from "./conversationExtractor.ts";
+import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 
 /**
  * Tagger Worker
@@ -143,6 +144,14 @@ export const schema = z.object({
       "Pin the LLM call to one provider profile (no cross-provider failover)",
     ),
   force: z.boolean().default(false),
+  maxTokens: z.number().int().min(256).max(32768).default(512)
+    .describe(
+      "Output-token cap per tagging call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+    ),
+  reasoning: z.enum(["off", "default"]).optional()
+    .describe(
+      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
+    ),
   minTags: z.number().default(0),
   maxTags: z.number().default(5),
   minLength: z.number().default(10).describe(
@@ -310,6 +319,7 @@ async function callLLMForTags(
   conversationPrompt: string,
   validTagNames: Set<string>,
   logContext: string,
+  options?: { maxTokens?: number; reasoning?: "off" | "default" },
 ): Promise<TaggingLLMResult> {
   // Strict providers require the {name, schema} envelope around the schema.
   const responseFormat = {
@@ -328,10 +338,14 @@ async function callLLMForTags(
     // Omit rather than pass undefined: EJSON turns undefined into null.
     ...(fallbackModel ? { fallbackModel } : {}),
     ...(providerProfileId ? { provider_profile_id: providerProfileId } : {}),
+    ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
+    reasoning: options?.reasoning ?? "off",
+    category: "tagging",
     session_id: createPromptCacheSessionId("tagger", {
       system: systemPrompt,
       tags: tagsPrompt,
       responseFormat,
+      reasoning: options?.reasoning ?? "off",
     }),
     messages: [
       { role: "system", content: systemPrompt },
@@ -343,6 +357,14 @@ async function callLLMForTags(
     ],
     response_format: responseFormat,
   }) as any;
+
+  // A truncated tag list is a configuration error — fail loudly instead of
+  // silently applying a partial set.
+  assertCompletionNotTruncated(response, {
+    requestedModel: model,
+    maxTokens: options?.maxTokens,
+    purpose: logContext,
+  });
 
   const content = response.choices[0]?.message?.content;
   const provenance = getInferenceProvenance(response, model, fallbackModel);
@@ -606,6 +628,7 @@ const capability: JobCapability = {
           conversationPrompt,
           validTagNames,
           `Conv ${conversation._id}`,
+          { maxTokens: input.maxTokens, reasoning: input.reasoning ?? "off" },
         );
         const applicableTags = taggingResult.tags;
         inferenceRuns.push(taggingResult.provenance);

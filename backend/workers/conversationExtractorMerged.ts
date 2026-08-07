@@ -11,6 +11,7 @@ import {
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
+import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 import {
   buildJsonSchemaResponseFormat,
   buildTagListPrompt,
@@ -33,25 +34,19 @@ import {
 } from "./conversationExtractor.ts";
 
 /**
- * Merged Conversation Extractor (experimental)
+ * Merged Conversation Extractor — the PRIMARY extraction worker.
  *
  * One LLM call per chunk instead of 1 segmentation call + 1 metadata call per
  * segment: the model segments the transcript AND returns per-segment
  * metadata (emoji, agreement, typed entities, tags) in a single structured
  * response. The transcript is sent to the LLM once instead of ~twice —
- * the largest token saving available in the pipeline.
+ * the largest token saving in the pipeline.
  *
- * Trade-offs being evaluated:
- * - a composite response is harder for small models (quality risk);
- * - one failed call loses the whole chunk (larger retry blast radius).
- *
- * Rollout: the worker ships PAUSED (migration 0026). The On checkbox in the
- * Jobs page workers table is the toggle — enabling it makes this worker
- * compete with the regular conversation_extractor for ready chunks (chunk
- * claiming is atomic, so no chunk is processed twice; pause the regular
- * extractor to route everything through this one). Every run records
- * detailed per-segment diagnostics in the job result for review on the job
- * details page.
+ * The legacy two-call `conversation_extractor` is DEPRECATED (paused by
+ * migration 0029, kept for rollback). Both claim the same ready chunks
+ * atomically, so never run both at once — the Jobs page warns when both are
+ * enabled. Every run records detailed per-segment diagnostics in the job
+ * result for review on the job details page.
  */
 
 const MERGED_EXTRACTOR_VERSION = "merged-v1";
@@ -98,6 +93,14 @@ export const schema = z.object({
   retryNow: z.boolean().default(false)
     .describe(
       "Manual recovery: retry errored chunks immediately instead of waiting for backoff",
+    ),
+  maxTokens: z.number().int().min(256).max(32768).default(8192)
+    .describe(
+      "Output-token cap for the single composite call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+    ),
+  reasoning: z.enum(["off", "default"]).optional()
+    .describe(
+      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
     ),
   merged_system_prompt: z.string().default(DEFAULT_MERGED_PROMPT)
     .describe(
@@ -321,12 +324,12 @@ const capability: JobCapability = {
       const stateFilter = {
         $or: [
           { state: "ready" },
-          {
-            state: "error",
-            ...(input.retryNow
-              ? {}
-              : { extractionRetryAfter: { $lte: now } }),
-          },
+          // An error chunk with no retryAfter (e.g. after the 0029 repair
+          // migration cleared it) is immediately retryable.
+          ...(input.retryNow ? [{ state: "error" }] : [
+            { state: "error", extractionRetryAfter: { $lte: now } },
+            { state: "error", extractionRetryAfter: { $exists: false } },
+          ]),
           {
             state: "processing",
             processingStartedAt: {
@@ -474,9 +477,13 @@ const capability: JobCapability = {
           ...(input.providerProfileId
             ? { provider_profile_id: input.providerProfileId }
             : {}),
+          ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
+          reasoning: input.reasoning ?? "off",
+          category: "extraction",
           session_id: createPromptCacheSessionId("conversation-extractor-merged", {
             system: systemPrompt,
             responseFormat,
+            reasoning: input.reasoning ?? "off",
           }),
           messages: [
             { role: "system", content: systemPrompt },
@@ -484,6 +491,12 @@ const capability: JobCapability = {
           ],
           response_format: responseFormat,
         }) as any;
+        // Truncated composite JSON must fail loudly, not as a parse mystery.
+        assertCompletionNotTruncated(response, {
+          requestedModel: model,
+          maxTokens: input.maxTokens,
+          purpose: `merged extraction chunk ${chunk._id}`,
+        });
         const provenance = getInferenceProvenance(
           response,
           model,

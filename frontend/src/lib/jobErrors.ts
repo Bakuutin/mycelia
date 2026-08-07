@@ -28,8 +28,8 @@ export function parseJobError(
     return {
       label: "API credit limit",
       detail: match
-        ? `Requested ${match[1]} tokens, only ${match[2]} available`
-        : "Insufficient credits for request",
+        ? `Requested ${match[1]} tokens, only ${match[2]} available. Top up credits or lower the worker's maxTokens setting.`
+        : "Insufficient credits for request. Top up credits or lower the worker's maxTokens setting.",
     };
   }
   // Some providers use HTTP 429 for both temporary throttling and permanent
@@ -87,6 +87,15 @@ export function parseJobError(
       label: "Invalid LLM response",
       detail:
         "The LLM call returned data, but the first completion choice had no message content. Verify that the summary model and endpoint support OpenAI-compatible chat completions before retrying.",
+    };
+  }
+  if (r.includes("LLM_TRUNCATED_RESPONSE")) {
+    const cap = r.match(/max_tokens=(\d+)/)?.[1];
+    return {
+      label: "Output truncated",
+      detail: `The model hit the output-token cap${
+        cap ? ` (maxTokens=${cap})` : ""
+      } before finishing. Raise the worker's maxTokens (Launch Job form or the worker's defaults) or shorten the prompt, then retry.`,
     };
   }
   if (r.includes("LLM_EMPTY_RESPONSE")) {

@@ -830,6 +830,20 @@ export default function JobDetailPage() {
                         ? `from ${format(new Date(job.data.start), "PPp")}`
                         : null;
 
+                // "reasoning off · 123 reasoning tok" row for any LLM job
+                // whose result carries the inference usage summary.
+                const reasoningMetric = r.inference?.reasoning
+                    ? [{
+                        icon: BarChart3 as LucideIcon,
+                        label: "Reasoning",
+                        value: `${r.inference.reasoning}${
+                            typeof r.inference.reasoningTokens === "number"
+                                ? ` · ${r.inference.reasoningTokens} reasoning tok`
+                                : ""
+                        }`,
+                    }]
+                    : [];
+
                 const configs: Record<string, { icon: LucideIcon; title: string; metrics: Array<{ icon: LucideIcon; label: string; value: React.ReactNode }>; errors?: any[] }> = {
                     vad: {
                         icon: Volume2, title: "VAD Details",
@@ -864,6 +878,7 @@ export default function JobDetailPage() {
                             { icon: AlertTriangle, label: "Link Errors", value: r.relationshipErrors ?? (r.artifacts ? 0 : "Legacy: unavailable") },
                             { icon: Check, label: "Agreements Detected", value: r.agreementCount ?? (r.artifacts ? 0 : "Legacy: unavailable") },
                             { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                            ...reasoningMetric,
                         ],
                         errors: r.errors,
                     },
@@ -882,11 +897,12 @@ export default function JobDetailPage() {
                             { icon: MessageSquare, label: "Conversations Processed", value: r.conversationsProcessed ?? 0 },
                             { icon: Tag, label: "Tags Applied", value: r.tagsApplied ?? 0 },
                             { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                            ...reasoningMetric,
                         ],
                         errors: r.errors,
                     },
                     conversation_extractor_merged: {
-                        icon: Users, title: "Merged Extractor Details (experimental single-call)",
+                        icon: Users, title: "Merged Extractor Details (primary single-call)",
                         metrics: [
                             { icon: Clock, label: "Processing Time", value: processingTime },
                             { icon: Layers, label: "Chunks Processed", value: r.chunksProcessed ?? 0 },
@@ -896,6 +912,7 @@ export default function JobDetailPage() {
                             { icon: Tag, label: "Tags Applied", value: r.tagsApplied ?? 0 },
                             { icon: Hash, label: "LLM Calls", value: r.inference?.calls ?? (r.chunksProcessed ?? 0) },
                             { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                            ...reasoningMetric,
                         ],
                         errors: r.errors,
                     },
@@ -908,6 +925,7 @@ export default function JobDetailPage() {
                             { icon: Hash, label: "Marked Other", value: r.markedOther ?? 0 },
                             ...(r.skipped ? [{ icon: AlertTriangle as LucideIcon, label: "Skipped", value: r.skipped }] : []),
                             { icon: Hash, label: "Has More", value: r.hasMore ? "Yes" : "No" },
+                            ...reasoningMetric,
                         ],
                         errors: r.errors,
                     },
@@ -935,6 +953,7 @@ export default function JobDetailPage() {
                                     value: `${r.inference.providerProfileName}${r.inference.resolvedModel ? ` · ${r.inference.resolvedModel}` : ""}`,
                                 }]
                                 : []),
+                            ...reasoningMetric,
                         ],
                         errors: r.errors,
                     },

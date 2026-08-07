@@ -1,5 +1,6 @@
 export const LLM_INVALID_RESPONSE_CODE = "LLM_INVALID_RESPONSE";
 export const LLM_EMPTY_RESPONSE_CODE = "LLM_EMPTY_RESPONSE";
+export const LLM_TRUNCATED_RESPONSE_CODE = "LLM_TRUNCATED_RESPONSE";
 
 export interface CompletionResponseContext {
   requestedModel: string;
@@ -91,11 +92,44 @@ export function normalizeChatCompletionResponse<T>(
   );
 }
 
+/**
+ * Fail loudly when the provider stopped generating because the output-token
+ * budget ran out. A truncated response is a configuration error (the worker's
+ * maxTokens is too small for this prompt), and for structured calls the
+ * truncated JSON would otherwise surface as a confusing parse failure.
+ */
+export function assertCompletionNotTruncated(
+  response: unknown,
+  context: CompletionResponseContext & { maxTokens?: number },
+): void {
+  const record = response as Record<string, unknown> | null;
+  const choices = Array.isArray(record?.choices) ? record.choices : [];
+  const firstChoice = choices[0] as Record<string, unknown> | undefined;
+  if (!firstChoice || firstChoice.finish_reason !== "length") return;
+
+  const usage = record?.usage && typeof record.usage === "object"
+    ? record.usage as Record<string, unknown>
+    : undefined;
+  const outputTokens = typeof usage?.completion_tokens === "number"
+    ? usage.completion_tokens
+    : undefined;
+
+  throw new Error(
+    `${LLM_TRUNCATED_RESPONSE_CODE}: finish_reason "length"${
+      outputTokens != null ? ` after ${outputTokens} output tokens` : ""
+    } (max_tokens=${context.maxTokens ?? "unset"}; ${
+      getContextDescription(context)
+    }). Raise the worker's maxTokens setting or shorten the prompt.`,
+  );
+}
+
 export function getChatCompletionText(
   response: unknown,
-  context: CompletionResponseContext,
+  context: CompletionResponseContext & { maxTokens?: number },
 ): string {
   normalizeChatCompletionResponse(response, context);
+  // An empty-but-truncated response must report truncation, not emptiness.
+  assertCompletionNotTruncated(response, context);
 
   const content = (response as {
     choices: Array<{ message: { content?: unknown } }>;
@@ -120,6 +154,8 @@ export function getChatCompletionText(
   throw new Error(
     `${LLM_EMPTY_RESPONSE_CODE}: Provider returned a completion without assistant text (${
       getContextDescription(context)
+    }; ${
+      describeResponseShape(response)
     }). The model may have been blocked, exhausted its output budget, or returned only unsupported content.`,
   );
 }

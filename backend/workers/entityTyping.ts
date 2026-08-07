@@ -9,6 +9,7 @@ import {
   summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
+import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 import {
   buildJsonSchemaResponseFormat,
   ENTITY_TYPE_FLAG,
@@ -103,6 +104,14 @@ export const schema = z.object({
   force: z.boolean().default(false)
     .describe(
       "Re-classify objects already attempted by this worker; never overrides flags a user set manually",
+    ),
+  maxTokens: z.number().int().min(256).max(32768).default(4096)
+    .describe(
+      "Output-token cap per classification call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+    ),
+  reasoning: z.enum(["off", "default"]).optional()
+    .describe(
+      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
     ),
   typing_system_prompt: z.string().default(DEFAULT_TYPING_PROMPT)
     .describe("System prompt for the batch classification call"),
@@ -405,9 +414,13 @@ const capability: JobCapability = {
           ...(input.providerProfileId
             ? { provider_profile_id: input.providerProfileId }
             : {}),
+          ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
+          reasoning: input.reasoning ?? "off",
+          category: "entity-typing",
           session_id: createPromptCacheSessionId("entity-typing", {
             system: input.typing_system_prompt,
             responseFormat,
+            reasoning: input.reasoning ?? "off",
           }),
           messages: [
             { role: "system", content: input.typing_system_prompt },
@@ -415,6 +428,14 @@ const capability: JobCapability = {
           ],
           response_format: responseFormat,
         }) as any;
+
+        // A truncated batch response silently drops the tail entities —
+        // fail loudly so the batch size / cap can be fixed.
+        assertCompletionNotTruncated(response, {
+          requestedModel: input.model,
+          maxTokens: input.maxTokens,
+          purpose: `entity typing batch ${batchIndex + 1}`,
+        });
 
         provenance = getInferenceProvenance(
           response,

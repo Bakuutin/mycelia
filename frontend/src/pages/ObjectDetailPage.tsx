@@ -175,6 +175,8 @@ function AiGenerationInfo({ object }: { object: any }) {
         providerProfileName?: string;
         requestedModel?: string;
         resolvedModel?: string;
+        reasoning?: string;
+        reasoningTokens?: number;
     }): string | null => {
         if (!p) return null;
         const requested = p.requestedModel;
@@ -183,7 +185,15 @@ function AiGenerationInfo({ object }: { object: any }) {
             ? `${requested} → ${resolved}`
             : resolved || requested;
         if (!p.providerProfileName && !model) return null;
-        return [p.providerProfileName, model].filter(Boolean).join(" · ");
+        const reasoning = p.reasoning
+            ? `reasoning ${p.reasoning}${
+                typeof p.reasoningTokens === "number"
+                    ? ` (${p.reasoningTokens} tok)`
+                    : ""
+            }`
+            : null;
+        return [p.providerProfileName, model, reasoning].filter(Boolean)
+            .join(" · ");
     };
 
     const rows: Array<{ label: string; value: string }> = [];
@@ -201,6 +211,8 @@ function AiGenerationInfo({ object }: { object: any }) {
             providerProfileName: summary?.provenance?.providerProfileName,
             requestedModel: summary?.requestedModel ?? summary?.model,
             resolvedModel: summary?.resolvedModel ?? summary?.modelName,
+            reasoning: summary?.provenance?.reasoning,
+            reasoningTokens: summary?.provenance?.reasoningTokens,
         });
         if (label) {
             rows.push({

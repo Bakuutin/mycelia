@@ -1,3 +1,5 @@
+import { getReasoningTokens } from "./reasoning-usage.ts";
+
 export type InferenceProviderAttempt = {
   providerProfileId: string;
   providerProfileName?: string;
@@ -16,6 +18,10 @@ export type InferenceProvenance = {
   providerBaseUrl?: string;
   providerProfileId?: string;
   providerProfileName?: string;
+  // Reasoning mode this call was made with, and the reasoning tokens the
+  // provider reported billing — for quality/cost analysis per mode.
+  reasoning?: "off" | "default";
+  reasoningTokens?: number;
   // Every provider route tried for this request, in order. More than one
   // entry means provider-level failover happened.
   providerAttempts?: InferenceProviderAttempt[];
@@ -45,6 +51,10 @@ export type InferenceUsageSummary = {
   // True when at least one request was served by a non-primary route.
   failoverUsed?: boolean;
   calls: number;
+  // Reasoning mode across the job's calls ("mixed" when calls differ) and the
+  // total reasoning tokens billed, when reported.
+  reasoning?: "off" | "default" | "mixed";
+  reasoningTokens?: number;
   // True when calls in this job were served by more than one provider; the
   // top-level fields then describe the most-used provider and byProvider
   // carries the full breakdown.
@@ -120,12 +130,30 @@ export function summarizeInferenceUsage(
       (provenance.providerAttempts?.length ?? 0) > 1
     ),
     calls: relevant.length,
+    ...((() => {
+      const modes = new Set(
+        relevant.map((p) => p.reasoning).filter(Boolean),
+      );
+      if (modes.size === 0) return {};
+      return {
+        reasoning: modes.size === 1 ? [...modes][0]! : "mixed" as const,
+      };
+    })()),
+    ...(relevant.some((p) => p.reasoningTokens !== undefined)
+      ? {
+        reasoningTokens: relevant.reduce(
+          (sum, p) => sum + (p.reasoningTokens ?? 0),
+          0,
+        ),
+      }
+      : {}),
     ...(byProvider.length > 1 ? { mixed: true, byProvider } : {}),
   };
 }
 
 type CompletionLike = {
   model?: unknown;
+  usage?: unknown;
   mycelia_routing?: {
     requestedModel?: unknown;
     resolvedModel?: unknown;
@@ -134,6 +162,7 @@ type CompletionLike = {
     providerBaseUrl?: unknown;
     providerProfileId?: unknown;
     providerProfileName?: unknown;
+    reasoning?: unknown;
     providerAttempts?: unknown;
     promptCaching?: {
       enabled?: unknown;
@@ -158,6 +187,10 @@ export function getInferenceProvenance(
   const responseModel = optionalString(completion.model);
   const resolvedModel = optionalString(routing?.resolvedModel) ??
     responseModel ?? requestedModel;
+  const reasoning = routing?.reasoning === "off" || routing?.reasoning === "default"
+    ? routing.reasoning
+    : undefined;
+  const reasoningTokens = getReasoningTokens(completion.usage);
 
   return {
     requestedModel: optionalString(routing?.requestedModel) ?? requestedModel,
@@ -169,6 +202,8 @@ export function getInferenceProvenance(
     providerBaseUrl: optionalString(routing?.providerBaseUrl),
     providerProfileId: optionalString(routing?.providerProfileId),
     providerProfileName: optionalString(routing?.providerProfileName),
+    ...(reasoning ? { reasoning } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     ...(Array.isArray(routing?.providerAttempts) &&
         routing.providerAttempts.length > 0
       ? {
