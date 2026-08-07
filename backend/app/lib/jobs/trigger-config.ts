@@ -10,6 +10,9 @@ const DEFAULTS = {
   transcription: { debounceMs: 5000, interval: 300 },
   conversation_chunk_creator: { debounceMs: 2000, interval: 30 },
   conversation_extractor: { debounceMs: 5000, interval: 300 },
+  // Watchdog only: the backfill chain self-continues via hasMore, the
+  // interval just resumes it after a broken link (timeout/crash/restart).
+  tagger: { debounceMs: 5000, interval: 900 },
 } as const;
 
 // Fast mode values (for testing)
@@ -20,6 +23,7 @@ const FAST = {
   transcription: { debounceMs: 1000, interval: 0 },
   conversation_chunk_creator: { debounceMs: 500, interval: 30 }, // Needs polling to finalize stale chunks
   conversation_extractor: { debounceMs: 1000, interval: 0 },
+  tagger: { debounceMs: 1000, interval: 60 },
 } as const;
 
 type WorkerName = keyof typeof DEFAULTS;

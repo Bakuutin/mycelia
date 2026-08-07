@@ -11,6 +11,7 @@ import {
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { resolveWorkerFallbackModel } from "./conversationExtractor.ts";
 import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
+import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
 /**
  * Tagger Worker
@@ -428,6 +429,27 @@ const capability: JobCapability = {
     { resource: "llm/chat", action: "completions", effect: "allow" },
   ],
   maxConcurrency: 1,
+  // The backfill drains via hasMore self-chaining, but one broken link (job
+  // timeout, crash, backend restart) used to stop the whole chain silently —
+  // tagger had no trigger, so an untagged backlog could sit for hours until
+  // someone pressed Run now. The interval acts as a watchdog; the guard makes
+  // idle ticks free.
+  hasPendingWork: async ({ mongo }) => {
+    const untagged = await mongo({
+      action: "findOne",
+      collection: "objects",
+      query: {
+        isConversation: true,
+        "metadata.aiProvenance.taggingRuns.0": { $exists: false },
+      },
+      options: { projection: { _id: 1 } },
+    });
+    return Boolean(untagged);
+  },
+  triggers: {
+    sources: [],
+    ...getTriggerTiming("tagger"),
+  },
   use: async (job) => {
     const input = job.data as TaggerJobData;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
