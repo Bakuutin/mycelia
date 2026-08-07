@@ -484,6 +484,46 @@ export async function apiChatHandler(req: Request, res: Response) {
     return assistantPersonIdPromise;
   };
 
+  // Legacy mirror of the UIMessage for older frontends/consumers that read
+  // raw.content (ModelMessage-style text + tool-call/tool-result parts).
+  const uiMessageToLegacyContent = (message: UIMessage): unknown[] => {
+    const content: unknown[] = [];
+    for (const part of message.parts as any[]) {
+      if (part.type === "text" && part.text) {
+        content.push({ type: "text", text: part.text });
+      } else if (
+        typeof part.type === "string" &&
+        (part.type.startsWith("tool-") || part.type === "dynamic-tool")
+      ) {
+        const toolName = part.type === "dynamic-tool"
+          ? part.toolName
+          : part.type.slice(5);
+        content.push({
+          type: "tool-call",
+          toolCallId: part.toolCallId,
+          toolName,
+          input: part.input,
+        });
+        if (part.state === "output-available") {
+          content.push({
+            type: "tool-result",
+            toolCallId: part.toolCallId,
+            toolName,
+            output: part.output,
+          });
+        } else if (part.state === "output-error") {
+          content.push({
+            type: "tool-error",
+            toolCallId: part.toolCallId,
+            toolName,
+            error: { message: part.errorText },
+          });
+        }
+      }
+    }
+    return content;
+  };
+
   // A UIMessage renders something when it has non-empty text or a tool part.
   const hasRenderableParts = (message: UIMessage): boolean =>
     message.parts.some((part) =>
@@ -527,6 +567,9 @@ export async function apiChatHandler(req: Request, res: Response) {
           raw: {
             role: "assistant",
             uiMessage: responseMessage,
+            // Legacy mirror so clients on the old renderer still show text
+            // and tool calls
+            content: uiMessageToLegacyContent(responseMessage),
             usage: totalUsage,
             requestedModel,
             model: actualModel,
