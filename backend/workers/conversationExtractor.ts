@@ -198,7 +198,7 @@ export const schema = z.object({
     .describe(
       "Output-token cap per LLM call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
-  reasoning: z.enum(["off", "default"]).default("off")
+  reasoning: z.enum(["off", "default", "on"]).default("off")
     .describe(
       "Reasoning/thinking mode for the LLM call; recorded in provenance for later analysis",
     ),
@@ -471,7 +471,7 @@ async function callLLMStructured<T>(
   logContext?: string,
   options?: {
     maxTokens?: number;
-    reasoning?: "off" | "default";
+    reasoning?: "off" | "default" | "on";
     category?: string;
   },
 ): Promise<StructuredLLMResult<T>> {

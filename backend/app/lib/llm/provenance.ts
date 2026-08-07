@@ -20,7 +20,7 @@ export type InferenceProvenance = {
   providerProfileName?: string;
   // Reasoning mode this call was made with, and the reasoning tokens the
   // provider reported billing — for quality/cost analysis per mode.
-  reasoning?: "off" | "default";
+  reasoning?: "off" | "default" | "on";
   reasoningTokens?: number;
   // Every provider route tried for this request, in order. More than one
   // entry means provider-level failover happened.
@@ -53,7 +53,7 @@ export type InferenceUsageSummary = {
   calls: number;
   // Reasoning mode across the job's calls ("mixed" when calls differ) and the
   // total reasoning tokens billed, when reported.
-  reasoning?: "off" | "default" | "mixed";
+  reasoning?: "off" | "default" | "on" | "mixed";
   reasoningTokens?: number;
   // True when calls in this job were served by more than one provider; the
   // top-level fields then describe the most-used provider and byProvider
@@ -187,7 +187,8 @@ export function getInferenceProvenance(
   const responseModel = optionalString(completion.model);
   const resolvedModel = optionalString(routing?.resolvedModel) ??
     responseModel ?? requestedModel;
-  const reasoning = routing?.reasoning === "off" || routing?.reasoning === "default"
+  const reasoning = routing?.reasoning === "off" ||
+      routing?.reasoning === "default" || routing?.reasoning === "on"
     ? routing.reasoning
     : undefined;
   const reasoningTokens = getReasoningTokens(completion.usage);

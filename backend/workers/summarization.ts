@@ -53,7 +53,7 @@ export const schema = z.object({
     .describe(
       "Output-token cap per summary call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
-  reasoning: z.enum(["off", "default"]).default("off")
+  reasoning: z.enum(["off", "default", "on"]).default("off")
     .describe(
       "Reasoning/thinking mode for the LLM call; recorded in provenance for later analysis",
     ),

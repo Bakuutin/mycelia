@@ -154,7 +154,7 @@ export const schema = z.object({
     .describe(
       "Output-token cap per tagging call (covers a whole batch); a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
-  reasoning: z.enum(["off", "default"]).default("off")
+  reasoning: z.enum(["off", "default", "on"]).default("off")
     .describe(
       "Reasoning/thinking mode for the LLM call; recorded in provenance for later analysis",
     ),
@@ -343,7 +343,7 @@ async function callLLMForTagsBatch(
   batch: ReadonlyArray<{ id: string; prompt: string }>,
   validTagNames: Set<string>,
   logContext: string,
-  options?: { maxTokens?: number; reasoning?: "off" | "default" },
+  options?: { maxTokens?: number; reasoning?: "off" | "default" | "on" },
 ): Promise<BatchTaggingLLMResult> {
   // Strict providers require the {name, schema} envelope around the schema.
   const responseFormat = {

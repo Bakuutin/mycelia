@@ -109,7 +109,7 @@ const chatCompletionRequestSchema = z.object({
   // Normalized reasoning mode. "off" is translated per provider (OpenRouter:
   // reasoning.enabled=false; OpenAI-compatible local servers: reasoning_budget
   // 0 + enable_thinking false) and echoed back in mycelia_routing.reasoning.
-  reasoning: z.enum(["off", "default"]).optional(),
+  reasoning: z.enum(["off", "default", "on"]).optional(),
   // Spend-attribution category. Sent to OpenRouter as the app title
   // ("Mycelia <category>"), so the OpenRouter activity dashboard breaks the
   // bill down per request kind (summarization, tagging, extraction, chat...).
@@ -608,8 +608,11 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               const requestTimeoutMs = Number(
                 Deno.env.get("LLM_REQUEST_TIMEOUT_MS") ?? "240000",
               );
-              // Reasoning "off" translated per candidate: failover can cross
-              // provider types, and each speaks a different dialect.
+              // Reasoning mode translated per candidate: failover can cross
+              // provider types, and each speaks a different dialect. "off"
+              // disables thinking explicitly; "on" force-enables it (models
+              // like DeepSeek do not think unless asked); "default" sends
+              // nothing and lets the provider decide.
               const reasoningParams = requestedReasoning === "off"
                 ? isOpenRouterBaseUrl(baseUrl)
                   ? { reasoning: { enabled: false } }
@@ -618,6 +621,15 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                     chat_template_kwargs: {
                       ...(body.chat_template_kwargs ?? {}),
                       enable_thinking: false,
+                    },
+                  }
+                : requestedReasoning === "on"
+                ? isOpenRouterBaseUrl(baseUrl)
+                  ? { reasoning: { enabled: true } }
+                  : {
+                    chat_template_kwargs: {
+                      ...(body.chat_template_kwargs ?? {}),
+                      enable_thinking: true,
                     },
                   }
                 : {};
