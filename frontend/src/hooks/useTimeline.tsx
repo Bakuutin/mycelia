@@ -9,7 +9,7 @@ interface TimelineDimensions {
 }
 
 interface TimelineContextValue {
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   dimensions: TimelineDimensions;
   transform: d3.ZoomTransform;
   timeScale: d3.ScaleTime<number, number>;

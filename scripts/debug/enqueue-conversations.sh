@@ -7,27 +7,34 @@ API_URL="${API_URL:-https://localhost:4433}"
 
 MODEL="${MODEL:-small}"
 FALLBACK_MODEL="${FALLBACK_MODEL:-}"
-EXTRACTOR_VERSION="${EXTRACTOR_VERSION:-v2}"
-TRIGGER_REASON="${TRIGGER_REASON:-historical_v2_metadata_backfill}"
+JOB_TYPE="${JOB_TYPE:-conversation_extractor_merged}"
+TRIGGER_REASON="${TRIGGER_REASON:-historical_merged_backfill}"
 
 DELAY_SECONDS="${DELAY_SECONDS:-0}"
 DRY_RUN="${DRY_RUN:-false}"
+ASSUME_YES="${ASSUME_YES:-false}"
 
 usage() {
   cat <<'EOF'
 Usage: ./scripts/debug/enqueue-conversations.sh --input FILE [options]
 
-Enqueues selected conversation chunks for v2 extraction. The input JSONL file
-must be chosen explicitly; this script never discovers or creates one.
+Enqueues selected conversation chunks for re-extraction with the merged
+extractor (conversation_extractor_merged). The input JSONL file must be
+chosen explicitly; this script never discovers or creates one.
+
+DESTRUCTIVE: each job runs with force=true, which DELETES every existing
+conversation of the chunk (with its summaries, tags, stars, and manual
+edits) before re-extracting. The script asks for confirmation first.
 
 Options:
   -i, --input FILE         JSONL produced by find-conversations.sh (required).
   --dry-run                Print job payloads without enqueuing them.
+  -y, --yes                Skip the interactive force confirmation.
   -h, --help               Show this help.
 
 Environment:
-  ENV_FILE, API_URL, MODEL, FALLBACK_MODEL, EXTRACTOR_VERSION,
-  TRIGGER_REASON, DELAY_SECONDS, DRY_RUN
+  ENV_FILE, API_URL, MODEL, FALLBACK_MODEL, JOB_TYPE,
+  TRIGGER_REASON, DELAY_SECONDS, DRY_RUN, ASSUME_YES
 EOF
 }
 
@@ -40,6 +47,9 @@ while (( $# > 0 )); do
       ;;
     --dry-run)
       DRY_RUN="true"
+      ;;
+    -y|--yes)
+      ASSUME_YES="true"
       ;;
     -h|--help)
       usage
@@ -108,6 +118,36 @@ if [[ -z "$MYCELIA_ACCESS_TOKEN" ]]; then
   exit 1
 fi
 
+# Refuse to enqueue into a paused worker: the jobs would be accepted with
+# HTTP 200 and then sit invisibly in the paused BullMQ set forever.
+WORKER_STATUS="$(
+  curl -skS -X POST "${API_URL}/api/resource/jobs" \
+    -H "Authorization: Bearer ${MYCELIA_ACCESS_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    --data-binary '{"action":"get_worker_status"}'
+)"
+
+# NB: jq's // operator treats false as empty, so spell the fallback out.
+WORKER_PAUSED="$(
+  jq -r --arg t "$JOB_TYPE" \
+    'if (.workers[$t].paused? | type) == "boolean" then (.workers[$t].paused | tostring) else "unknown" end' \
+    <<<"$WORKER_STATUS"
+)"
+
+case "$WORKER_PAUSED" in
+  false) ;;
+  true)
+    echo "Worker '${JOB_TYPE}' is PAUSED — enqueued jobs would never run." >&2
+    echo "Resume it on the Jobs page (or via resume_worker) and retry." >&2
+    exit 1
+    ;;
+  *)
+    echo "Could not determine pause state for worker '${JOB_TYPE}':" >&2
+    jq . <<<"$WORKER_STATUS" >&2 2>/dev/null || printf '%s\n' "$WORKER_STATUS" >&2
+    exit 1
+    ;;
+esac
+
 TOTAL="$(
   jq -sc '
     map(
@@ -126,6 +166,19 @@ echo "Found ${TOTAL} unique chunks in ${INPUT_FILE}"
 if (( TOTAL == 0 )); then
   echo "Nothing to enqueue"
   exit 0
+fi
+
+if [[ "$DRY_RUN" != "true" && "$ASSUME_YES" != "true" ]]; then
+  echo
+  echo "WARNING: force=true re-extraction DELETES all existing conversations"
+  echo "of each of the ${TOTAL} chunk(s) — including their summaries, tags,"
+  echo "stars, and manual edits — before creating new ones."
+  printf 'Type "yes" to continue: '
+  read -r CONFIRM
+  if [[ "$CONFIRM" != "yes" ]]; then
+    echo "Aborted"
+    exit 1
+  fi
 fi
 
 SUCCESS=0
@@ -148,24 +201,26 @@ while IFS= read -r ROW; do
     "$REASONS" \
     "$NAME"
 
+  # The merged extractor's schema rejects unknown fields (e.g. the legacy
+  # extractorVersion), so the payload carries only fields it declares.
+  # fallbackModel is omitted when empty so the provider route's configured
+  # fallback applies.
   PAYLOAD="$(
     jq -n \
+      --arg jobType "$JOB_TYPE" \
       --arg chunkId "$CHUNK_ID" \
-      --arg extractorVersion "$EXTRACTOR_VERSION" \
       --arg model "$MODEL" \
       --arg fallbackModel "$FALLBACK_MODEL" \
       --arg reason "$TRIGGER_REASON" \
       '{
         action: "enqueue",
-        data: {
-          type: "conversation_extractor",
+        data: ({
+          type: $jobType,
           chunkId: $chunkId,
           force: true,
-          extractorVersion: $extractorVersion,
           model: $model,
-          fallbackModel: $fallbackModel,
           limit: 1
-        },
+        } + (if $fallbackModel != "" then { fallbackModel: $fallbackModel } else {} end)),
         trigger: {
           type: "manual",
           reason: $reason

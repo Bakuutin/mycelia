@@ -14,6 +14,7 @@ import { SearchResource } from "@/lib/search/resource.server.ts";
 import { DocsResource } from "@/lib/docs/resource.server.ts";
 import { ConfigResource } from "@/lib/config/resource.server.ts";
 import { TimelineTimeZonesResource } from "@/lib/timezones/resource.server.ts";
+import { LocationResource } from "@/lib/location/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -30,6 +31,7 @@ const resources = [
   DocsResource,
   ConfigResource,
   TimelineTimeZonesResource,
+  LocationResource,
 ];
 
 export async function setupResources(): Promise<void> {

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
+import { ObjectId } from "bson";
 import type { Object as ObjectModel } from "@/types/objects";
 import { useDuplicateGroups } from "@/hooks/useObjectQueries";
+import { useAllTags } from "@/hooks/useTagQueries";
 import { MergeObjectDialog } from "@/components/dialogs/MergeObjectDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +58,11 @@ import {
 
 function escapeRegex(source: string) {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Object icons are { text } | { base64 }; only text icons render as chips.
+function iconText(icon: ObjectModel["icon"]): string {
+  return icon && "text" in icon && icon.text ? icon.text : "";
 }
 
 function renderHighlightedText(text: string, query: string) {
@@ -594,11 +601,24 @@ const ObjectsPage = () => {
   // Get orphaned filter from URL
   const showOrphanedOnly = searchParams.get("orphaned") === "true";
 
+  // Tag filter: ?tag=<id>[,<id>...] with AND (default) or OR semantics.
+  const tagParam = searchParams.get("tag") || "";
+  const tagMode: "and" | "or" = searchParams.get("tagMode") === "or"
+    ? "or"
+    : "and";
+  const activeTagIds = useMemo(
+    () => tagParam.split(",").filter(Boolean),
+    [tagParam],
+  );
+  const { data: allTags = [] } = useAllTags();
+
   const [localQ, setLocalQ] = useState(q);
 
   // Get sort stage based on current sort option
-  const getSortStage = useCallback(() => {
-    if (q.trim()) {
+  // textScore sorting is only valid when the pipeline actually has a $text
+  // stage; the tag-filtered pipeline uses a regex match instead.
+  const getSortStage = useCallback((useTextScore = true) => {
+    if (q.trim() && useTextScore) {
       return { $sort: { score: { $meta: "textScore" }, _id: -1 } };
     }
     switch (sortBy) {
@@ -663,15 +683,62 @@ const ObjectsPage = () => {
   // Fetch objects for a specific type
   const fetchTypeObjects = useCallback(async (type: ObjectType, limit: number): Promise<ObjectWithRelations[]> => {
     const typeMatch = getTypeMatch(type);
-    const searchMatch: Record<string, unknown> = { ...typeMatch };
+    const pipeline: unknown[] = [];
 
-    if (q.trim()) {
-      searchMatch.$text = { $search: q.trim() };
+    if (activeTagIds.length > 0) {
+      // Tag filter: start from the indexed "tagged" edges
+      // (relationship.object = tag) and resolve to the tagged objects, so we
+      // never scan the whole objects collection.
+      const tagObjectIds = activeTagIds.map((id) => new ObjectId(id));
+      pipeline.push({
+        $match: {
+          isRelationship: true,
+          name: "tagged",
+          "relationship.object": { $in: tagObjectIds },
+        },
+      });
+      if (tagMode === "and" && tagObjectIds.length > 1) {
+        // AND: keep only subjects carrying every selected tag.
+        pipeline.push({
+          $group: {
+            _id: "$relationship.subject",
+            matchedTags: { $addToSet: "$relationship.object" },
+          },
+        });
+        pipeline.push({
+          $match: {
+            $expr: { $eq: [{ $size: "$matchedTags" }, tagObjectIds.length] },
+          },
+        });
+      } else {
+        pipeline.push({ $group: { _id: "$relationship.subject" } });
+      }
+      pipeline.push({
+        $lookup: {
+          from: "objects",
+          localField: "_id",
+          foreignField: "_id",
+          as: "taggedObject",
+        },
+      });
+      pipeline.push({ $unwind: "$taggedObject" });
+      pipeline.push({ $replaceRoot: { newRoot: "$taggedObject" } });
+
+      const match: Record<string, unknown> = { ...typeMatch };
+      if (q.trim()) {
+        // $text only works as the very first stage, so combined with the
+        // tag filter the text search degrades to a regex match.
+        const rx = { $regex: escapeRegex(q.trim()), $options: "i" };
+        match.$or = [{ name: rx }, { aliases: rx }, { details: rx }];
+      }
+      pipeline.push({ $match: match });
+    } else {
+      const searchMatch: Record<string, unknown> = { ...typeMatch };
+      if (q.trim()) {
+        searchMatch.$text = { $search: q.trim() };
+      }
+      pipeline.push({ $match: searchMatch });
     }
-
-    const pipeline: unknown[] = [
-      { $match: searchMatch },
-    ];
 
     // Only do expensive orphaned checks when the filter is active
     if (showOrphanedOnly) {
@@ -684,7 +751,7 @@ const ObjectsPage = () => {
       // OPTIMIZATION: Sort and limit BEFORE expensive lookups
       // We fetch more than needed (5x) since some will be filtered out as non-orphaned
       // This makes orphaned filter fast while still returning reasonable results
-      pipeline.push(getSortStage());
+      pipeline.push(getSortStage(activeTagIds.length === 0));
       pipeline.push({ $limit: limit * 5 });
 
       // Check if this object is referenced as subject in any relationship
@@ -737,7 +804,7 @@ const ObjectsPage = () => {
     } else {
       // OPTIMIZATION: Sort and limit BEFORE expensive lookups
       // This way we only do lookups on the limited set of documents
-      pipeline.push(getSortStage());
+      pipeline.push(getSortStage(activeTagIds.length === 0));
       pipeline.push({ $limit: limit });
 
       // Now add relationship lookups only on the limited documents
@@ -772,7 +839,9 @@ const ObjectsPage = () => {
         });
       }
       
-      // For tags, count how many objects are linked to this tag
+      // For tags, count how many objects are linked to this tag.
+      // Tag links are "tagged" relationship edges: subject = tagged object,
+      // object = the tag itself (see backend/workers/tagger.ts).
       if (type === "tag") {
         pipeline.push({
           $lookup: {
@@ -781,17 +850,24 @@ const ObjectsPage = () => {
             pipeline: [
               {
                 $match: {
-                  isTag: true,
+                  isRelationship: true,
+                  name: "tagged",
                   $expr: { $eq: ["$relationship.object", "$$tagId"] },
                 },
               },
+              { $count: "n" },
             ],
             as: "linkedTagRelationships",
           },
         });
         pipeline.push({
           $addFields: {
-            linkedObjectsCount: { $size: "$linkedTagRelationships" },
+            linkedObjectsCount: {
+              $ifNull: [
+                { $arrayElemAt: ["$linkedTagRelationships.n", 0] },
+                0,
+              ],
+            },
           },
         });
         // Clean up the array - we only need the count
@@ -802,7 +878,9 @@ const ObjectsPage = () => {
         });
       }
       
-      // Fetch tags for all non-relationship/non-tag objects
+      // Fetch tags for all non-relationship/non-tag objects. Follow "tagged"
+      // edges from this object (relationship.subject) to the tag object
+      // (relationship.object).
       if (type !== "relationship" && type !== "tag") {
         pipeline.push({
           $lookup: {
@@ -811,15 +889,16 @@ const ObjectsPage = () => {
             pipeline: [
               {
                 $match: {
-                  isTag: true,
-                  $expr: { $eq: ["$relationship.object", "$$objectId"] },
+                  isRelationship: true,
+                  name: "tagged",
+                  $expr: { $eq: ["$relationship.subject", "$$objectId"] },
                 },
               },
               { $limit: 5 }, // Limit to 5 tags per object
               {
                 $lookup: {
                   from: "objects",
-                  localField: "relationship.subject",
+                  localField: "relationship.object",
                   foreignField: "_id",
                   as: "tagObject",
                 },
@@ -847,7 +926,7 @@ const ObjectsPage = () => {
       collection: "objects",
       pipeline,
     });
-  }, [q, getSortStage, getTypeMatch, showOrphanedOnly]);
+  }, [q, getSortStage, getTypeMatch, showOrphanedOnly, activeTagIds, tagMode]);
 
   // Fetch starred objects - always fetch all starred regardless of search filter
   // Starred section acts as "favorites" that should always be visible
@@ -889,7 +968,7 @@ const ObjectsPage = () => {
           preserveNullAndEmptyArrays: true,
         },
       },
-      // Fetch tags for starred objects
+      // Fetch tags for starred objects via their "tagged" edges
       {
         $lookup: {
           from: "objects",
@@ -897,7 +976,8 @@ const ObjectsPage = () => {
           pipeline: [
             {
               $match: {
-                isTag: true,
+                isRelationship: true,
+                name: "tagged",
                 $expr: { $eq: ["$relationship.subject", "$$objectId"] },
               },
             },
@@ -1107,7 +1187,7 @@ const ObjectsPage = () => {
       media: [],
       other: [],
     });
-  }, [q, sortBy, activeTypesParam, showOrphanedOnly]);
+  }, [q, sortBy, activeTypesParam, showOrphanedOnly, tagParam, tagMode]);
 
   // Fetch objects for expanded types
   useEffect(() => {
@@ -1410,6 +1490,41 @@ const ObjectsPage = () => {
       newSearchParams.set("orphaned", "true");
     }
 
+    // Preserve the active tag filter
+    if (tagParam) {
+      newSearchParams.set("tag", tagParam);
+      if (tagMode === "or") {
+        newSearchParams.set("tagMode", "or");
+      }
+    }
+
+    setSearchParams(newSearchParams);
+  }
+
+  function toggleTagFilter(tagId: string) {
+    const next = new Set(activeTagIds);
+    if (next.has(tagId)) {
+      next.delete(tagId);
+    } else {
+      next.add(tagId);
+    }
+    const newSearchParams = new URLSearchParams(searchParams);
+    if (next.size > 0) {
+      newSearchParams.set("tag", Array.from(next).join(","));
+    } else {
+      newSearchParams.delete("tag");
+      newSearchParams.delete("tagMode");
+    }
+    setSearchParams(newSearchParams);
+  }
+
+  function setTagFilterMode(mode: "and" | "or") {
+    const newSearchParams = new URLSearchParams(searchParams);
+    if (mode === "or") {
+      newSearchParams.set("tagMode", "or");
+    } else {
+      newSearchParams.delete("tagMode");
+    }
     setSearchParams(newSearchParams);
   }
 
@@ -1457,7 +1572,8 @@ const ObjectsPage = () => {
     );
   }, [activeTypes, totalCounts]);
 
-  const hasActiveFilters = q.trim() || activeTypes.size > 0 || showOrphanedOnly;
+  const hasActiveFilters = q.trim() || activeTypes.size > 0 ||
+    showOrphanedOnly || activeTagIds.length > 0;
 
   if (error) {
     return (
@@ -1503,6 +1619,72 @@ const ObjectsPage = () => {
           Search
         </Button>
       </form>
+
+      {/* Tag filter: active tags + suggestions narrowed by the search input */}
+      {allTags.length > 0 && (() => {
+        const activeTagObjects = activeTagIds
+          .map((id) => ({
+            id,
+            tag: allTags.find((t) => t._id.toString() === id),
+          }));
+        const queryLower = localQ.trim().toLowerCase();
+        const suggestions = allTags.filter((tag) => {
+          const id = tag._id.toString();
+          if (activeTagIds.includes(id)) return false;
+          if (!queryLower) return true;
+          return (tag.name ?? "").toLowerCase().includes(queryLower);
+        });
+        const visibleSuggestions = suggestions.slice(0, 12);
+        const hiddenCount = suggestions.length - visibleSuggestions.length;
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Tag className="w-3.5 h-3.5 text-muted-foreground" />
+            {activeTagObjects.map(({ id, tag }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => toggleTagFilter(id)}
+                title="Remove tag from filter"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary text-primary-foreground hover:opacity-80"
+              >
+                {tag ? `${iconText(tag.icon)} ` : ""}
+                {tag?.name ?? id}
+                <X className="w-3 h-3" />
+              </button>
+            ))}
+            {activeTagIds.length >= 2 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setTagFilterMode(tagMode === "and" ? "or" : "and")}
+                title={tagMode === "and"
+                  ? "Objects must have ALL selected tags — click for ANY"
+                  : "Objects may have ANY selected tag — click for ALL"}
+                className="px-1.5 py-0.5 rounded border text-[10px] font-mono text-muted-foreground hover:bg-muted"
+              >
+                {tagMode === "and" ? "&&" : "||"}
+              </button>
+            )}
+            {visibleSuggestions.map((tag) => (
+              <button
+                key={tag._id.toString()}
+                type="button"
+                onClick={() => toggleTagFilter(tag._id.toString())}
+                title={`Filter by tag "${tag.name}"`}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {`${iconText(tag.icon)} `}
+                {tag.name}
+              </button>
+            ))}
+            {hiddenCount > 0 && (
+              <span className="text-xs text-muted-foreground">
+                +{hiddenCount} more
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Type filters and sort */}
       <div className="flex flex-wrap items-center gap-3">

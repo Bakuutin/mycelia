@@ -799,7 +799,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       mongo({
         action: "count",
         collection: "objects",
-        query: { isConversation: true, "summaries.0": { $exists: false } },
+        // Subfield predicate matches the conversation_missing_summary index.
+        query: { isConversation: true, "summaries.0.date": { $exists: false } },
       }),
       mongo({
         action: "aggregate",

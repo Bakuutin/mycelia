@@ -13,8 +13,10 @@ export {
   AUDIO_CHUNKS_CONFIG,
   DIARIZATIONS_CONFIG,
 } from "./HistogramTrack";
+export { LocationTrack, LOCATIONS_CONFIG } from "./LocationTrack";
 
 import type { Track } from "@/types/tracks";
+import { LocationTrack, LOCATIONS_CONFIG } from "./LocationTrack";
 import { VoiceDetectionTrack, VOICE_DETECTION_CONFIG } from "./VoiceDetectionTrack";
 import { DataPresenceTrack, DATA_PRESENCE_CONFIG } from "./DataPresenceTrack";
 import {
@@ -33,4 +35,5 @@ export const TRACK_REGISTRY: Track[] = [
   { config: TRANSCRIPTIONS_CONFIG, component: TranscriptionsTrack },
   { config: AUDIO_CHUNKS_CONFIG, component: AudioChunksTrack },
   { config: DIARIZATIONS_CONFIG, component: DiarizationsTrack },
+  { config: LOCATIONS_CONFIG, component: LocationTrack },
 ];

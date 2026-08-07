@@ -21,8 +21,12 @@ import {
 export * from "./service-health.shared.ts";
 
 // Worker enqueue decisions still need a recent provider status, but the Jobs
-// page must not repeatedly wake otherwise-idle local STT servers.
-const CACHE_MS = 5 * 60_000;
+// page must not repeatedly wake otherwise-idle local STT servers. Keep this
+// above the trigger intervals (up to ~10 min) so periodic ticks reuse the
+// cached verdict instead of live-probing providers every cycle; a stale
+// "healthy" self-corrects because provider-shaped job failures call
+// invalidateExternalServicesHealthCache() and unhealthy verdicts expire fast.
+const CACHE_MS = 15 * 60_000;
 // Unhealthy verdicts expire quickly so blocked workers resume within
 // seconds of a provider recovering, instead of waiting out the full cache.
 const UNHEALTHY_CACHE_MS = 30_000;

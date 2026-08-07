@@ -12,6 +12,7 @@ import { apiFilesIdHandler } from "@/routes/api.files.$id.ts";
 import { apiFilesUploadHandler } from "@/routes/api.files.upload.ts";
 import { apiAudioStreamHandler } from "@/routes/api.audio.stream.ts";
 import { apiAudioUploadHandler } from "@/routes/api.audio.upload.ts";
+import { apiLocationUploadHandler } from "@/routes/api.location.upload.ts";
 import { apiAudioWavHandler } from "@/routes/api.audio.wav.ts";
 import { mcpGetHandler, mcpPostHandler } from "@/routes/mcp.ts";
 import { llmChatCompletionsHandler } from "@/routes/llm.chat.completions.ts";
@@ -55,6 +56,10 @@ export function registerRoutes(app: Express): void {
     apiAudioUploadHandler,
   ));
   app.get("/api/audio/wav", apiAudioWavHandler);
+  app.post("/api/location/upload", withRateLimit(
+    { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
+    apiLocationUploadHandler,
+  ));
   app.get("/mcp", mcpGetHandler);
   app.post("/mcp", mcpPostHandler);
   app.post("/llm/chat/completions", llmChatCompletionsHandler);

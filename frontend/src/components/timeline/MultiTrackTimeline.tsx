@@ -19,6 +19,7 @@ import {
   VoiceDetectionTrack,
 } from "./tracks";
 import { TrackHeader } from "./tracks/TrackHeader";
+import { LOCATIONS_CONFIG, LocationTrack } from "./tracks/LocationTrack";
 import type { TrackId } from "@/types/tracks";
 import type { useTimeline } from "@/hooks/useTimeline";
 import { TimeZoneContextTrack } from "./TimeZoneContextTrack";
@@ -42,6 +43,7 @@ const TRACK_COMPONENTS: Record<TrackId, React.ComponentType<any>> = {
   "audio-chunks": AudioChunksTrack,
   "diarizations": DiarizationsTrack,
   "objects": () => null, // Handled separately
+  "locations": () => null, // Handled separately
 };
 
 const TRACK_CONFIGS: Record<TrackId, { label: string; color: string }> = {
@@ -51,6 +53,7 @@ const TRACK_CONFIGS: Record<TrackId, { label: string; color: string }> = {
   "audio-chunks": AUDIO_CHUNKS_CONFIG,
   "diarizations": DIARIZATIONS_CONFIG,
   "objects": { label: "Objects", color: "#6b7280" },
+  "locations": LOCATIONS_CONFIG,
 };
 
 // Stable list of histogram track IDs
@@ -84,6 +87,9 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
   );
 
   const showObjects = visibleTracks.includes("objects");
+  // Opt-in and fully lazy: when hidden, LocationTrack is not mounted and
+  // performs no location API requests at all.
+  const showLocations = visibleTracks.includes("locations");
 
   return (
     <div ref={containerRef} className={`relative ${className || ""}`}>
@@ -107,6 +113,19 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           transform={transform}
           width={width}
         />
+
+        {/* Locations track (opt-in, self-fetching) */}
+        {showLocations && (
+          <div className="relative border-b border-border/30">
+            <TrackHeader config={LOCATIONS_CONFIG} />
+            <LocationTrack
+              scale={timeScale}
+              transform={transform}
+              width={width}
+              height={trackHeights["locations"] ?? 28}
+            />
+          </div>
+        )}
 
         {/* Data tracks */}
         {visibleHistogramTracks.map((trackId) => {

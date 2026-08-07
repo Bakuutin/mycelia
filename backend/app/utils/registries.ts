@@ -27,6 +27,8 @@ export const zCapabilityManifest = z.object({
   policies: z.array(z.any()).optional(),
   maxConcurrency: z.number().optional(),
   triggers: zTriggers.optional(),
+  /** Extra `host:port` entries appended to the job subprocess --allow-net. */
+  allowedHosts: z.array(z.string()).optional(),
 });
 
 export type CapabilityManifest = z.infer<typeof zCapabilityManifest>;

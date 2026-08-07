@@ -1640,7 +1640,8 @@ export class ObjectsResource
           collection: "objects",
           query: {
             _id: { $in: candidateIds },
-            "summaries.0": { $exists: false },
+            // Same eligibility predicate as the worker's candidate query.
+            "summaries.0.date": { $exists: false },
             $or: [
               { _summarizationClaim: { $exists: false } },
               { _summarizationClaim: null },

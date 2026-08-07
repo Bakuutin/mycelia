@@ -1,0 +1,249 @@
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { MapContainer, Marker, TileLayer, useMapEvents } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { Loader2, MapPin, Search } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
+import {
+  useAssignManualLocation,
+  usePlaceSearch,
+} from "@/hooks/useLocationQueries";
+import type { GeonamesCity } from "@/types/location";
+
+const pinIcon = L.divIcon({
+  className: "",
+  iconSize: [24, 24],
+  iconAnchor: [12, 24],
+  html:
+    '<div style="font-size:24px;line-height:24px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));">📍</div>',
+});
+
+function PickPoint({
+  onPick,
+}: {
+  onPick: (lat: number, lng: number) => void;
+}) {
+  useMapEvents({
+    click: (e) => onPick(e.latlng.lat, e.latlng.lng),
+  });
+  return null;
+}
+
+interface AssignLocationDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialStart?: Date;
+  initialEnd?: Date;
+}
+
+export function AssignLocationDialog({
+  open,
+  onOpenChange,
+  initialStart,
+  initialEnd,
+}: AssignLocationDialogProps) {
+  const [start, setStart] = useState<Date | undefined>(initialStart);
+  const [end, setEnd] = useState<Date | undefined>(initialEnd);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [selectedCity, setSelectedCity] = useState<GeonamesCity | null>(null);
+  const [pickedPoint, setPickedPoint] = useState<
+    { lat: number; lng: number } | null
+  >(null);
+
+  useEffect(() => {
+    if (open) {
+      setStart(initialStart);
+      setEnd(initialEnd);
+      setSearch("");
+      setSelectedCity(null);
+      setPickedPoint(null);
+    }
+  }, [open, initialStart?.getTime(), initialEnd?.getTime()]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: cities, isFetching } = usePlaceSearch(debouncedSearch, open);
+  const assign = useAssignManualLocation();
+
+  const chosen = useMemo(() => {
+    if (selectedCity) {
+      return {
+        label: `${selectedCity.name}, ${selectedCity.country}`,
+        lat: selectedCity.loc.coordinates[1],
+        lng: selectedCity.loc.coordinates[0],
+      };
+    }
+    if (pickedPoint) {
+      return {
+        label: `${pickedPoint.lat.toFixed(4)}, ${pickedPoint.lng.toFixed(4)}`,
+        ...pickedPoint,
+      };
+    }
+    return null;
+  }, [selectedCity, pickedPoint]);
+
+  const canSubmit = !!chosen && !!start && !!end &&
+    end.getTime() > start.getTime() && !assign.isPending;
+
+  const submit = async () => {
+    if (!chosen || !start || !end) return;
+    try {
+      await assign.mutateAsync({
+        start,
+        end,
+        place: selectedCity
+          ? { geonameId: selectedCity.geonameId }
+          : {
+            latitude: pickedPoint!.lat,
+            longitude: pickedPoint!.lng,
+          },
+      });
+      toast.success(
+        `Location "${chosen.label}" assigned. The timeline timezone updates automatically.`,
+      );
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to assign location",
+      );
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Set location for a time range</DialogTitle>
+          <DialogDescription>
+            Tell Mycelia where you were when there is no GPS data. This also
+            sets the timezone for the range.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>From</Label>
+            <DateTimePicker
+              value={start}
+              onChange={(d) => setStart(d ?? undefined)}
+              placeholder="Start"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>To</Label>
+            <DateTimePicker
+              value={end}
+              onChange={(d) => setEnd(d ?? undefined)}
+              placeholder="End"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="place-search">City or place</Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              id="place-search"
+              className="pl-8"
+              placeholder="Start typing a city name…"
+              value={selectedCity
+                ? `${selectedCity.name}, ${selectedCity.country}`
+                : search}
+              onChange={(e) => {
+                setSelectedCity(null);
+                setSearch(e.target.value);
+              }}
+            />
+            {isFetching && (
+              <Loader2 className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </div>
+          {!selectedCity && (cities?.length ?? 0) > 0 && (
+            <div className="max-h-36 overflow-y-auto rounded-md border text-sm">
+              {cities!.map((city) => (
+                <button
+                  key={city.geonameId}
+                  type="button"
+                  className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-accent"
+                  onClick={() => {
+                    setSelectedCity(city);
+                    setPickedPoint(null);
+                  }}
+                >
+                  <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">
+                    {city.name}
+                    <span className="text-muted-foreground">
+                      , {city.admin1 ? `${city.admin1}, ` : ""}
+                      {city.country}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <Label>…or click the exact spot on the map</Label>
+          <div className="isolate h-44 overflow-hidden rounded-md border">
+            <MapContainer
+              center={chosen ? [chosen.lat, chosen.lng] : [30, 10]}
+              zoom={chosen ? 9 : 1}
+              className="h-full w-full"
+              scrollWheelZoom
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              />
+              <PickPoint
+                onPick={(lat, lng) => {
+                  setPickedPoint({ lat, lng });
+                  setSelectedCity(null);
+                }}
+              />
+              {chosen && (
+                <Marker position={[chosen.lat, chosen.lng]} icon={pinIcon} />
+              )}
+            </MapContainer>
+          </div>
+          {chosen && (
+            <p className="text-xs text-muted-foreground">
+              Selected: {chosen.label}
+            </p>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!canSubmit}>
+            {assign.isPending && (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            )}
+            Set location
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

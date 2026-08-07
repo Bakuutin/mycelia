@@ -4,6 +4,7 @@ import {
   Clock,
   FileText,
   Home,
+  Map as MapIcon,
   MessageSquare,
   Mic,
   Package,
@@ -55,6 +56,17 @@ const Layout = () => {
                   >
                     <Clock className="w-4 h-4" />
                     Timeline
+                  </Link>
+                  <Link
+                    to="/map"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/map"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                  >
+                    <MapIcon className="w-4 h-4" />
+                    Map
                   </Link>
                   <Link
                     to="/chat"

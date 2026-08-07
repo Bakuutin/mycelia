@@ -65,7 +65,7 @@ const getThemeColors = (isDark: boolean) => {
 
 export const AudioVisualizer = ({ recording }: AudioVisualizerProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationFrameRef = useRef<number>();
+  const animationFrameRef = useRef<number | undefined>(undefined);
   const { analyser, isRecording } = recording;
   const { theme } = useSettingsStore();
   const isDark = theme === "dark" ||

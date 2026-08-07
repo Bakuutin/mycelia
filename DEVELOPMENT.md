@@ -101,6 +101,107 @@ NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
 
 For more details on networking and SSL setup, see **[NETWORKING.md](docs/NETWORKING.md)**.
 
+## Parallel Development (Two Branches at Once)
+
+You can work on two branches simultaneously — one instance keeps running
+untouched while the other rebuilds. There are two setups, from cheapest to most
+isolated.
+
+### Option 1: Second frontend against the shared backend
+
+Best when the second branch only changes frontend code. The Docker stack keeps
+serving branch A; branch B runs as a plain local Vite dev server from a git
+worktree:
+
+```bash
+git worktree add ../mycelia-b my-feature-branch
+cd ../mycelia-b/frontend
+deno task dev
+```
+
+This works without any extra configuration:
+
+- The local Vite server listens on `5180`, which the backend already allows in
+  its CORS whitelist (`backend/server.ts`).
+- Point the app at the running backend on the `/setup` page — use
+  `http://localhost:3210` (the non-HTTPS nginx port).
+
+Limitation: the backend is shared, so backend changes in branch B cannot be
+tested this way.
+
+### Option 2: Second full stack (frontend + backend)
+
+Best when the second branch changes backend code. Bind mounts in
+`docker-compose.yml` are relative (`./frontend`, `./backend`), so a git
+worktree plus a separate Compose project name gives a fully independent stack:
+
+```bash
+git worktree add ../mycelia-b my-feature-branch
+cd ../mycelia-b
+cp ../mycelia/.env .env
+```
+
+Create an (uncommitted) `docker-compose.override.yml` in the worktree to remap
+the published ports and image tags — both are fixed in `docker-compose.yml`
+and would otherwise collide with the first stack:
+
+```yaml
+services:
+  nginx:
+    ports: !override
+      - "4434:4433"
+      - "3211:80"
+  mongo:
+    ports: !override
+      - "27018:27017"
+  frontend:
+    image: bakuutin/mycelia-frontend:dev-b
+  backend:
+    image: bakuutin/mycelia-backend:dev-b
+  python-worker:
+    image: bakuutin/mycelia-python:dev-b
+```
+
+The `!override` tag is required: without it Compose *merges* the port lists
+and the duplicated host ports conflict. The image overrides prevent a rebuild
+in stack B from overwriting the `:dev` tags that stack A's next
+`--force-recreate` would pick up.
+
+Start the second stack under its own project name:
+
+```bash
+docker compose -p mycelia-b up -d --build
+```
+
+Stack B is served at `https://localhost:4434` with its own containers,
+network, and volumes (`mycelia-b_mongo_data`, `mycelia-b_redis_data`), i.e. a
+fresh database — run first-time setup on it. To work with the same data,
+clone the primary database into the second stack's volume with
+`mongodump`/`mongorestore` rather than sharing the live one.
+
+### Do not share one database between two backends
+
+Running two backends from different branches against the same MongoDB
+database (same `DATABASE_NAME`) is unsafe:
+
+- Both run BullMQ workers and periodic triggers (extraction and summarization
+  every 5 minutes) and will race to process the same jobs with different
+  branch code.
+- With separate Redis instances, each backend's watchdog cancels the other's
+  Mongo job records as `queue_record_missing`.
+- Branches may be at different migration levels, so one backend writes schema
+  the other does not know about.
+
+If the stacks must share one `mongod` instance, give each backend its own
+`DATABASE_NAME` (e.g. `mycelia_b`). Sharing the Redis instance is not
+supported at all — the second stack should always run its own.
+
+### Resource note
+
+Each backend, mongo, and python-worker container is limited to 2 CPUs / 4 GB,
+so two full stacks are a significant memory load. If the second branch only
+touches frontend code, prefer Option 1.
+
 ## Frontend Development
 
 ```bash

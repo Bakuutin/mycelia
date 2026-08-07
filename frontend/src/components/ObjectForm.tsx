@@ -302,7 +302,7 @@ function useDebouncedUpdate(
   fieldName: keyof ObjectFormData,
 ) {
   const [localValue, setLocalValue] = useState(value);
-  const timeoutRef = useRef<number>();
+  const timeoutRef = useRef<number | undefined>(undefined);
 
   // Update local value when prop changes (e.g., from server)
   useEffect(() => {

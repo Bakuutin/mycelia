@@ -45,7 +45,9 @@ import { MergeObjectDialog } from "@/components/dialogs/MergeObjectDialog";
 import { SplitObjectDialog } from "@/components/dialogs/SplitObjectDialog";
 import { ObjectForm } from "@/components/ObjectForm";
 import { RelationshipsPanel } from "@/components/RelationshipsPanel";
+import { TagChips } from "@/components/tags/TagChips";
 import { MetadataDisplay } from "@/components/MetadataDisplay";
+import { ObjectLocationSection } from "@/components/location/ObjectLocationSection";
 import { ObjectPlayerTranscript } from "@/components/ObjectPlayerTranscript";
 import { TimeRangeEditDialog } from "@/components/TimeRangeEditDialog";
 import { SummarySection } from "@/components/SummarySection";
@@ -562,6 +564,14 @@ const ObjectDetailPage = () => {
               </Button>
             </>
           )}
+          {object.isTag && (
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/objects?tag=${id}`}>
+                <Tag className="w-4 h-4 mr-1" />
+                Tagged objects
+              </Link>
+            </Button>
+          )}
           <Button variant="outline" size="sm" asChild>
             <Link to={`/objects/${id}/history`}>
               <History className="w-4 h-4 mr-1" />
@@ -610,7 +620,7 @@ const ObjectDetailPage = () => {
             </div>
           )}
           
-          {/* Aliases as tags */}
+          {/* Aliases */}
           {object.aliases && object.aliases.length > 0 && (
             <div className="flex items-center gap-1">
               <Tag className="w-3 h-3 text-muted-foreground" />
@@ -627,6 +637,11 @@ const ObjectDetailPage = () => {
         </div>
       </div>
 
+      {/* Tags on their own line so a long title never hides them */}
+      <div className="text-xs -mt-3">
+        <TagChips object={object} />
+      </div>
+
       {/* Row 1: Summary (left) + Player/Transcript (right) - flexible height */}
       {hasTimeRanges && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -641,6 +656,15 @@ const ObjectDetailPage = () => {
           {/* Player + Transcript - flexible height, expands for long content */}
           <ObjectPlayerTranscript timeRange={object.timeRanges[0]} minHeight={400} maxHeight={800} />
         </div>
+      )}
+
+      {/* Where this happened, from imported GPS tracks (hidden without data) */}
+      {object && (
+        <ObjectLocationSection
+          object={object}
+          onApplyLocation={(latitude, longitude) =>
+            handleFieldUpdate("location", { latitude, longitude })}
+        />
       )}
 
       {/* Row 2: Relationships (left) | Object Type (right) - equal height */}

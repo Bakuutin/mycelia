@@ -47,7 +47,12 @@ const renderIcon = (icon: any) => {
 };
 
 export function RelationshipsPanel({ object, compact = false }: RelationshipsPanelProps) {
-  const { data: relationships = [] } = getRelationships(object._id);
+  const { data: allRelationships = [] } = getRelationships(object._id);
+  // Tag edges are rendered as chips in the page header (TagChips), not as
+  // relationship rows.
+  const relationships = allRelationships.filter(({ relationship }) =>
+    relationship.name !== "tagged"
+  );
   const { data: referenceCounts } = useObjectReferenceCounts(object._id);
   const createObjectMutation = useCreateObject();
   const deleteObjectMutation = useDeleteObject();

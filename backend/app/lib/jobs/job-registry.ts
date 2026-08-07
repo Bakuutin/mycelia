@@ -24,15 +24,20 @@ export interface JobCapability<T = Job<JobData>> extends Omit<CapabilityManifest
     sources: JobTriggerSource[];
   };
   /**
-   * Optional cheap guard for automatic triggers. Returning false skips job
-   * creation while keeping the trigger itself active for future work.
+   * Optional cheap guard for automatic triggers. Returning false (or 0) skips
+   * job creation while keeping the trigger itself active for future work.
+   * Returning a number additionally caps the fan-out: it is the count of jobs
+   * worth starting right now (e.g. ceil(backlog / batchSize)), so a trigger
+   * never fills every free concurrency slot with jobs that will find nothing.
+   * Returning true keeps the legacy fill-all-free-slots behavior.
    */
   hasPendingWork?: (context: {
     mongo: (input: any) => Promise<any>;
     reason: string;
-  }) => Promise<boolean>;
+  }) => Promise<boolean | number>;
   maxConcurrency?: number;
-  
+  /** Extra `host:port` entries appended to the job subprocess --allow-net. */
+  allowedHosts?: string[];
 }
 
 /**

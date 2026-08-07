@@ -28,6 +28,17 @@ your own words.
 - Track visibility controls, object overlays, and event creation from selection.
 - Quick presets (last hour, today, yesterday, this week, and more).
 
+### Location Tracks & Map
+
+- Import GPS tracks from Organic Maps and other navigators (GPX, KML/KMZ).
+- Opt-in Locations row on the timeline: stays with city labels, movements, and
+  grey "assumed" gaps; click a band to see where it was on a mini-map.
+- Dedicated Map page: movements over any period with automatic simplification,
+  dwell-time-sized stay circles, and conversation clusters you can browse.
+- Fully offline reverse geocoding (GeoNames) and automatic timezone periods
+  derived from your movements; manual location assignment for ranges without
+  data. See [LOCATIONS.md](docs/LOCATIONS.md) for the full manual.
+
 ### AI Chat
 
 - Chat with your memory — tool-calling agent with access to all backend
@@ -463,6 +474,7 @@ You can reconfigure these settings anytime in Settings.
 See **[DEVELOPMENT.md](DEVELOPMENT.md)** for:
 
 - Docker dev mode with hot reload
+- Parallel development on two branches (second frontend or a second full stack)
 - Native development setup (Deno + Vite)
 - Python tooling (audio import, STT, conversation extraction)
 - GPU inference stack setup

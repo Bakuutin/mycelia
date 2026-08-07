@@ -5,7 +5,7 @@ import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
 
 const DEFAULT_BUCKET = "uploads";
-const ALLOWED_BUCKETS = ["uploads", "voice_samples"];
+const ALLOWED_BUCKETS = ["uploads", "voice_samples", "location_files"];
 
 function contentTypeForExtension(ext: string): string {
   switch (ext.toLowerCase()) {

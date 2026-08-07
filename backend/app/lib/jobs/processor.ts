@@ -98,6 +98,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const allowedHosts = [
     extractHostname(backendUrl),
     extractHostname(pythonWorkerUrl),
+    ...(capability.manifest.allowedHosts ?? []),
   ].join(",");
 
   const launcherPath = `${sdkPath}/app/lib/jobs/workerLauncher.ts`;

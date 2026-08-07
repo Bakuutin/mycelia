@@ -47,7 +47,7 @@ function SummaryPanel({
   onStar: () => void;
   isStarred: boolean;
   isFocused: boolean;
-  panelRef: React.RefObject<HTMLDivElement>;
+  panelRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const formatCost = (cost: number | undefined) => {
     if (cost === undefined || cost === null) return "N/A";

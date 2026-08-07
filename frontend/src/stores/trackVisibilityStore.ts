@@ -11,6 +11,8 @@ const DEFAULT_VISIBLE_TRACKS: TrackId[] = [
   "objects",
 ];
 
+// "locations" is deliberately NOT in DEFAULT_VISIBLE_TRACKS: the track is
+// opt-in and performs zero requests until enabled in the visibility panel.
 const DEFAULT_HEIGHTS: Record<TrackId, number> = {
   "voice-detection": 32,
   "data-presence": 20,
@@ -18,6 +20,7 @@ const DEFAULT_HEIGHTS: Record<TrackId, number> = {
   "audio-chunks": 40,
   "diarizations": 40,
   "objects": 120,
+  "locations": 28,
 };
 
 const ALL_OBJECT_CATEGORIES: ObjectCategory[] = [

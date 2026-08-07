@@ -1027,6 +1027,16 @@ export default function JobDetailPage() {
                                     </div>
                                 </div>
                             )}
+                            {job.type === "summarization" && r.success &&
+                                (r.processed ?? 0) === 0 && !r.objectId &&
+                                !r.inference && (
+                                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                                    <div className="font-medium">Empty batch — no LLM call</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        {r.message || "No conversations missing summaries"}. The worker exited without calling the LLM and no summary was created.
+                                    </div>
+                                </div>
+                            )}
                             {job.type === "conversation_extractor" &&
                                 (r.chunksProcessed ?? 0) === 0 && (
                                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">

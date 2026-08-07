@@ -100,3 +100,47 @@ Deno.test("provider-wide response and transport failures remain retryable", () =
   expect(isTerminalSummarizationResponseError("connection refused"))
     .toBe(false);
 });
+
+Deno.test("hasPendingWork reports jobs worth starting, not just a boolean", async () => {
+  const capability = (await import("./summarization.ts")).default;
+  const calls: any[] = [];
+  const fakeMongo = (pending: number, batchSize?: number) => (input: any) => {
+    calls.push(input);
+    if (input.action === "count") return Promise.resolve(pending);
+    if (input.action === "findOne" && input.collection === "workers") {
+      return Promise.resolve(
+        batchSize === undefined ? null : { defaultOverrides: { batchSize } },
+      );
+    }
+    return Promise.resolve(null);
+  };
+
+  // Empty queue: 0 jobs, and the workers collection is not even consulted.
+  calls.length = 0;
+  expect(await capability.hasPendingWork!({
+    mongo: fakeMongo(0),
+    reason: "test",
+  })).toBe(0);
+  expect(calls.length).toBe(1);
+  // The count must use the indexed subfield predicate.
+  expect(calls[0].query["summaries.0.date"]).toEqual({ $exists: false });
+  expect(calls[0].query.isConversation).toBe(true);
+
+  // Backlog splits into ceil(pending / batchSize) jobs.
+  expect(await capability.hasPendingWork!({
+    mongo: fakeMongo(25, 10),
+    reason: "test",
+  })).toBe(3);
+
+  // No operator override falls back to the schema default batch of 25.
+  expect(await capability.hasPendingWork!({
+    mongo: fakeMongo(26),
+    reason: "test",
+  })).toBe(2);
+
+  // A single stray conversation still yields exactly one job.
+  expect(await capability.hasPendingWork!({
+    mongo: fakeMongo(1, 10),
+    reason: "test",
+  })).toBe(1);
+});

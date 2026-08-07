@@ -74,8 +74,8 @@ export const useAudioRecording = (): AudioRecordingReturn => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const durationIntervalRef = useRef<number>();
-  const keepAliveIntervalRef = useRef<number>();
+  const durationIntervalRef = useRef<number | undefined>(undefined);
+  const keepAliveIntervalRef = useRef<number | undefined>(undefined);
   const chunkCountRef = useRef(0);
   const audioProcessingStartedRef = useRef(false);
   const isWebSocketReadyRef = useRef(false);

@@ -24,7 +24,8 @@ async function main() {
       outputSchema: capability.outputSchema,
       policies: capability.policies,
       maxConcurrency: capability.maxConcurrency,
-      triggers: capability.triggers
+      triggers: capability.triggers,
+      allowedHosts: capability.allowedHosts
     };
 
     console.log(JSON.stringify(manifest));

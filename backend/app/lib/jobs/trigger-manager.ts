@@ -251,21 +251,25 @@ export class TriggerManager {
       }
 
       const implementation = await this.registry.loadImplementation(jobName);
-      if (
-        implementation.hasPendingWork &&
-        !await implementation.hasPendingWork({ mongo, reason })
-      ) {
-        log("DEBUG", `Skipping trigger - no pending work`, {
-          jobName,
-          reason,
-        });
-        return;
+      let pendingWork: boolean | number | undefined;
+      if (implementation.hasPendingWork) {
+        pendingWork = await implementation.hasPendingWork({ mongo, reason });
+        if (!pendingWork) {
+          log("DEBUG", `Skipping trigger - no pending work`, {
+            jobName,
+            reason,
+          });
+          return;
+        }
       }
 
       // Fill every free runtime slot. Discovery workers use atomic source
       // claims, while STT additionally reserves a provider-profile slot for
-      // each queued job.
-      const freeSlots = maxConcurrency - activeJobs;
+      // each queued job. A worker reporting a numeric backlog caps the
+      // fan-out so no slot is burned on a job that would find nothing.
+      const freeSlots = typeof pendingWork === "number"
+        ? Math.min(maxConcurrency - activeJobs, pendingWork)
+        : maxConcurrency - activeJobs;
       log("INFO", `Enqueuing jobs`, { jobName, reason, freeSlots });
       const enqueueOptions: EnqueueJobOptions = {
         trigger: {

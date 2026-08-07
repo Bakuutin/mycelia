@@ -8,7 +8,7 @@ const DEFAULT_BUCKET = "uploads";
 
 const uploadSchema = z.object({
   metadata: z.record(z.string(), z.any()).optional(),
-  bucket: z.enum(["uploads", "voice_samples"]).optional(),
+  bucket: z.enum(["uploads", "voice_samples", "location_files"]).optional(),
 });
 
 export type UploadData = z.infer<typeof uploadSchema>;

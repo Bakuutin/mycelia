@@ -1522,7 +1522,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         collection: "objects",
         query: {
           isConversation: true,
-          "summaries.0": { $exists: false },
+          // Subfield predicate matches the conversation_missing_summary index.
+          "summaries.0.date": { $exists: false },
         },
       }),
       // Conversations no tagging pass has touched yet (extraction-time

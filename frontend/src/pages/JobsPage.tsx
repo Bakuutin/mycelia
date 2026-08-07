@@ -419,6 +419,16 @@ const WORKER_PIPELINE = [
     description: "Recalculates timeline histograms",
   },
   {
+    type: "geonames_download",
+    description:
+      "One-time setup: downloads the GeoNames cities database (~13MB) for offline reverse geocoding of location tracks",
+  },
+  {
+    type: "location_processing",
+    description:
+      "Turns imported GPS points into stay/move/gap segments, labels places offline, and derives timezone periods for the timeline",
+  },
+  {
     type: "testPythonIntegration",
     description: "Health-check worker for the Python service bridge",
   },
@@ -1000,6 +1010,23 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             >
               view conversations
             </Link>
+          </div>
+        );
+      }
+      // Auto batch that found nothing to summarize: no LLM was called.
+      if (result.processed === 0 && !result.objectId && !result.inference) {
+        return (
+          <div className="space-y-1">
+            <Badge
+              variant="secondary"
+              className="bg-amber-500/10 text-amber-500 text-xs"
+            >
+              Empty
+            </Badge>
+            <div className="text-xs text-muted-foreground">
+              {result.message || "No conversations missing summaries"} · no LLM
+              calls
+            </div>
           </div>
         );
       }

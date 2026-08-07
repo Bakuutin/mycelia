@@ -8,7 +8,9 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/debug/find-conversations.sh [--write-json [FILE]]
 
-Lists conversation records that should be re-extracted with the v2 extractor.
+Lists conversation records that should be re-extracted with the current
+extractor. Records produced by a current extractor ("v2" legacy two-call or
+"merged-v1" single-call) with a complete receipt are considered healthy.
 It does not create a JSONL file by default.
 
 Options:
@@ -50,14 +52,22 @@ import { getRootDB } from "./app/lib/mongo/core.server.ts";
 
 const db = await getRootDB();
 
+// Extractor versions whose receipts are considered current. "v2" is the
+// legacy two-call extractor, "merged-v1" the single-call merged extractor
+// that replaced it (migration 0029). Anything else is stale.
+const CURRENT_VERSIONS = ["v2", "merged-v1"];
+
 const rows = await db.collection("objects").find({
   isConversation: true,
   "metadata.extractedWith.chunkId": { $type: "string" },
   $or: [
-    { "metadata.extractedWith.extractorVersion": { $ne: "v2" } },
+    { "metadata.extractedWith.extractorVersion": { $nin: CURRENT_VERSIONS } },
     { "metadata.extractedWith.result": { $exists: false } },
     { "icon.text": { $exists: false } },
     {
+      // Entity-link mismatch. Only v2 receipts carry these two fields;
+      // both $ifNull defaults MUST be equal so documents without them
+      // (all merged-v1 receipts) do not match.
       $expr: {
         $ne: [
           {
@@ -69,7 +79,7 @@ const rows = await db.collection("objects").find({
           {
             $ifNull: [
               "$metadata.extractedWith.result.relationshipsAttempted",
-              -2
+              -1
             ]
           }
         ]
@@ -91,8 +101,8 @@ for (const row of rows) {
   const result = extracted.result ?? {};
   const reasons = [];
 
-  if (extracted.extractorVersion !== "v2") {
-    reasons.push("not_v2");
+  if (!CURRENT_VERSIONS.includes(extracted.extractorVersion)) {
+    reasons.push("stale_extractor");
   }
 
   if (!extracted.result) {
@@ -103,11 +113,19 @@ for (const row of rows) {
     reasons.push("missing_emoji");
   }
 
+  // Only v2 receipts have these counters; skip the check when absent.
   if (
-    result.relationshipsCreated !==
-    result.relationshipsAttempted
+    result.relationshipsCreated !== undefined &&
+    result.relationshipsAttempted !== undefined &&
+    result.relationshipsCreated !== result.relationshipsAttempted
   ) {
     reasons.push("link_mismatch");
+  }
+
+  // The query matched but no rule above explains why (e.g. a receipt with
+  // only one of the two link counters). Flag it instead of hiding it.
+  if (reasons.length === 0) {
+    reasons.push("receipt_anomaly");
   }
 
   console.log(JSON.stringify({

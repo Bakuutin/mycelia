@@ -9,11 +9,13 @@ import {
   Maximize2,
   CircleOff,
   CalendarPlus,
+  MapPin,
   Wand2,
   Play,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
+import { AssignLocationDialog } from "@/components/location/AssignLocationDialog";
 
 interface TimelineSelectionActionsProps {
   startDate: Date;
@@ -34,6 +36,7 @@ export function TimelineSelectionActions({
 }: TimelineSelectionActionsProps) {
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isRunJobOpen, setIsRunJobOpen] = useState(false);
+  const [isSetLocationOpen, setIsSetLocationOpen] = useState(false);
 
   return (
     <div className="flex items-start gap-3 mr-auto">
@@ -124,6 +127,30 @@ export function TimelineSelectionActions({
         </Tooltip>
         <span className="text-xs text-muted-foreground">Create</span>
       </div>
+
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setIsSetLocationOpen(true)}
+            >
+              <MapPin className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Set where you were during this range (also sets the timezone)</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Location</span>
+      </div>
+      <AssignLocationDialog
+        open={isSetLocationOpen}
+        onOpenChange={setIsSetLocationOpen}
+        initialStart={startDate}
+        initialEnd={endDate}
+      />
 
       <div className="flex flex-col items-center gap-1">
         <Tooltip>

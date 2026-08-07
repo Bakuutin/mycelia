@@ -7,6 +7,8 @@ import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibi
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useObjects } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
+import { LocationSelectionPanel } from "@/components/location/LocationSelectionPanel";
+import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
 import { useTimelineSelectionStore } from "@/stores/timelineSelectionStore";
 import { useSpanningObjectsStore } from "@/stores/spanningObjectsStore";
 import { useTimeline } from "@/hooks/useTimeline";
@@ -82,6 +84,15 @@ const TimelinePage = () => {
     if (!objects || selectedIds.size === 0) return [];
     return objects.filter((object) => selectedIds.has(object._id.toString()));
   }, [objects, selectedIds]);
+
+  const showLocations = useTrackVisibilityStore((state) =>
+    state.visibleTracks.includes("locations")
+  );
+  // When an object marker is selected, show where it happened on the mini-map.
+  const selectedObjectTime = useMemo(() => {
+    const first = selectedObjects[0]?.timeRanges?.[0]?.start;
+    return first ? new Date(first) : null;
+  }, [selectedObjects]);
 
   const panelObjects = useMemo(() => {
     const excludedIds = new Set([
@@ -197,6 +208,11 @@ const TimelinePage = () => {
           <div className="border rounded-lg p-2">
             <MultiTrackTimeline timeline={timeline} />
           </div>
+
+          <LocationSelectionPanel
+            fallbackTime={selectedObjectTime}
+            enabled={showLocations}
+          />
 
           <SelectedObjectsPanel
             selectedObjects={panelObjects}
