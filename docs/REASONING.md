@@ -7,12 +7,18 @@ Turning it off is a large cost win, but it must be verified as
 quality-neutral. This document describes how the mode is recorded and how to
 measure its impact.
 
+> **Verdict (2026-08-07, see Results below): reasoning stays OFF.** On both
+> the selfhost Qwen and DeepSeek routes, thinking made extraction 3-4×
+> slower, burned 2-9k reasoning tokens per chunk, introduced two new failure
+> modes (an unbounded think loop on Qwen; malformed structured output on
+> DeepSeek) and extracted *fewer* segments/entities, not more.
+
 ## How it works
 
-- Every LLM worker schema has a `reasoning` field: `"off"` (default) or
-  `"default"` (provider decides, usually on). Override it per run in the
-  Launch Job form or persistently via the worker's default overrides on the
-  Jobs page.
+- Every LLM worker schema has a `reasoning` field: `"off"` (default),
+  `"default"` (provider decides) or `"on"` (force thinking — models like
+  DeepSeek do not think unless asked). Override it per run in the Launch Job
+  form or persistently via the worker's default overrides on the Jobs page.
 - The `llm` resource translates the mode per provider route:
   - OpenRouter: `reasoning: { enabled: false }`
   - Self-host / others (llama.cpp, vLLM, Qwen-style): `reasoning_budget: 0`
@@ -103,3 +109,56 @@ B-vs-C comparison to green-light the merged extractor as sole primary.
   manually.
 - Prompt-cache session keys include the reasoning mode, so A/B runs never
   share sticky cache sessions.
+
+## Results — 2026-08-07 run
+
+12 stratified completed chunks (0.5k-17k transcript chars, RU-dominant), one
+run per arm, `force`+`chunkId` re-extraction, metrics from job artifacts.
+Arms A/B/C ran on the selfhost route (Qwen3.6-27B Q4, llama.cpp); DA/DB/DC on
+OpenRouter (deepseek-v4-flash). "Thinking" = `reasoning: "default"` for Qwen
+(thinks by default), `"on"` for DeepSeek.
+
+| Arm | Worker | Reasoning | OK | s/chunk | LLM calls | rTok | Segments | Entities | Tags |
+|-----|--------|-----------|----|---------|-----------|------|----------|----------|------|
+| A | legacy | thinking | 11/12 | 113 | 24 | 45 235 | 13 | 68 | 33 |
+| B | legacy | off | 12/12 | 33 | 42 | 0 | 30 | 119 | 66 |
+| C | merged | off | 12/12 | 20 | 12 | 0 | 38 | 135 | 94 |
+| DA | legacy | on | 7/12* | 198 | 18 | 25 330 | 11 | 45 | 23 |
+| DB | legacy | off | 12/12 | 52 | 49 | 0 | 37 | 104 | 47 |
+| DC | merged | off | 12/12 | 13 | 12 | 0 | 6** | 63 | 17 |
+
+\* 2 chunks skipped by stale claims after container restarts (n=10), 2 failed
+with malformed JSON, 1 timed out. \*\* DeepSeek with the merged prompt
+returned `{"segments": []}` on 6/12 chunks including a rich 12.8k-char one.
+
+Pairwise agreement (entity-name Jaccard / tag Jaccard, mean per chunk):
+C vs B 0.37/0.63 · B vs A 0.36/0.58 · C vs A 0.22/0.51 ·
+DB vs DA 0.51/0.43 · DC vs DB 0.48/0.29.
+
+Findings:
+
+1. **Thinking under-segments.** On both models the thinking arm collapsed
+   almost every chunk into a single segment and found roughly half the
+   entities of the off arms. The two off arms agree with each other more
+   than either agrees with the thinking arm.
+2. **Thinking is fragile.** Qwen looped on 1/12 chunks until the token cap
+   (twice, at 4096 and 16384 — the same chunk extracted fine with reasoning
+   off in 46s). DeepSeek+thinking produced unparseable JSON on 2/12 chunks
+   and timed out on one: thinking fights constrained/structured decoding.
+3. **Thinking is expensive.** ≈2-9k reasoning tokens per chunk, 3-4× wall
+   time, for strictly less output.
+4. **The production config wins.** merged + off + Qwen (arm C): most
+   segments (38), entities (135), tags (94), 100% valid emoji, 28/38
+   boundaries phrase-resolved, fewest calls (12), fastest (20s/chunk).
+5. **DeepSeek is a poor extractor for this corpus.** With the merged prompt
+   it declares half the chunks "no usable conversation" (the prompt's empty
+   escape hatch invites this); with the legacy prompt it segments but still
+   finds fewer entities/tags than Qwen. Keep selfhost as the extraction
+   route; if merged ever runs on DeepSeek, tighten the empty-response rule.
+6. **Run-to-run entity extraction is unstable** (Jaccard 0.2-0.6 between any
+   two arms) — duplicate-merge tooling stays important.
+
+Caveats: single run per arm, completeness metrics only (no manual accuracy
+audit), 12 chunks. The raw per-chunk rows live in the experiment's
+`ab-results.jsonl` (job ids included — every job is inspectable on the Jobs
+page).
