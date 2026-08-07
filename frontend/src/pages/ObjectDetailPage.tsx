@@ -459,6 +459,37 @@ const ObjectDetailPage = () => {
     );
   }
 
+  // Tombstone: the object was deleted (directly or by a merge); the backend
+  // reports when/by whom instead of failing with an error.
+  if (object.deleted) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div className="flex items-center gap-4">
+          <SmartBackButton defaultPath="/objects" />
+        </div>
+        <div className="border rounded-lg p-8 text-center space-y-3">
+          <p className="text-lg font-medium">
+            {object.name ? `«${object.name}»` : "This object"} was deleted
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {object.deletedAt && (
+              <>Deleted {formatTime(object.deletedAt)}</>
+            )}
+            {object.deletedBy && <> by {object.deletedBy}</>}
+          </p>
+          {object.mergedInto && (
+            <Button
+              variant="outline"
+              onClick={() => navigate(`/objects/${object.mergedInto}`)}
+            >
+              It was merged — open the combined object
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const hasTimeRanges = object.timeRanges && object.timeRanges.length > 0;
   
   // Get object type info for badge
