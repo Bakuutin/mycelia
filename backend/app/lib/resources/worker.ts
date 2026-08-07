@@ -207,6 +207,12 @@ const StatsSchema = z.object({
   action: z.literal("stats"),
 });
 
+const ErrorStatsSchema = z.object({
+  action: z.literal("error_stats"),
+  sinceDays: z.number().int().min(1).max(90).default(14),
+  types: z.array(z.string()).nullable().optional(),
+});
+
 const PipelineHealthSchema = z.object({
   action: z.literal("pipeline_health"),
   force: z.boolean().optional(),
@@ -269,6 +275,7 @@ const RequestSchema = z.union([
   GetWorkerDefaultsSchema,
   UpdateWorkerDefaultsSchema,
   StatsSchema,
+  ErrorStatsSchema,
   PipelineHealthSchema,
   RetryFailedJobsSchema,
   ModelArtifactsSchema,
@@ -498,6 +505,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.updateWorkerDefaults(input, auth);
       case "stats":
         return this.stats(auth);
+      case "error_stats":
+        return this.errorStats(input, auth);
       case "pipeline_health":
         return this.pipelineHealth(input, auth);
       case "retry_failed":
@@ -2334,6 +2343,49 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     return { checkedAt: new Date().toISOString(), workers: status };
   }
 
+  /**
+   * Compact failure feed for error analysis on the Jobs page: every failed
+   * job (including dismissed ones — analysis wants history) in the window,
+   * with the failure reason truncated to what classification needs. The
+   * frontend groups rows by error code/label and renders counts + timeline.
+   */
+  private async errorStats(
+    input: z.infer<typeof ErrorStatsSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const since = new Date(Date.now() - input.sinceDays * 24 * 60 * 60 * 1000);
+
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        state: "failed",
+        createdAt: { $gte: since },
+        ...(input.types?.length ? { type: { $in: input.types } } : {}),
+      },
+      options: {
+        sort: { createdAt: -1 },
+        limit: 5000,
+        projection: { type: 1, createdAt: 1, failedReason: 1, dismissedAt: 1 },
+      },
+    });
+
+    return {
+      sinceDays: input.sinceDays,
+      truncated: jobs.length >= 5000,
+      failures: jobs.map((job: any) => ({
+        id: job._id.toString(),
+        type: job.type,
+        timestamp: job.createdAt?.getTime(),
+        dismissed: job.dismissedAt != null,
+        // 500 chars is enough for every classifier pattern while keeping the
+        // payload small at the 5000-row cap.
+        reason: String(job.failedReason ?? "").slice(0, 500),
+      })),
+    };
+  }
+
   private async stats(auth: Auth) {
     const mongo = await getMongoResource(auth);
     const staleCutoff = new Date(Date.now() - 15 * 60 * 1000);
@@ -2782,6 +2834,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       case "update_worker_defaults":
         return [{ path: ["jobs", input.workerType], actions: ["configure"] }];
       case "stats":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "error_stats":
         return [{ path: ["jobs"], actions: ["read"] }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];

@@ -81,6 +81,10 @@ import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
+import {
+  classifyJobFailure,
+  JobErrorStats,
+} from "@/components/JobErrorStats";
 
 type WorkerStatus = {
   checkedAt: string;
@@ -1280,6 +1284,9 @@ export default function JobsPage() {
   });
   const [allTypesSelected, setAllTypesSelected] = useState(!typeParam);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  // Error-type filter for failed jobs; buckets come from classifyJobFailure
+  // so the dropdown matches the "Failed jobs by error type" panel grouping.
+  const [errorFilter, setErrorFilter] = useState<string | null>(null);
   const [limit, setLimit] = useState<number>(50);
   const [sortColumn, setSortColumn] = useState<string>("timestamp");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -2535,6 +2542,17 @@ export default function JobsPage() {
     };
   }, [jobs]);
 
+  // Options (with counts) for the error-type filter, from the fetched jobs.
+  const errorFilterOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const job of jobs) {
+      if (job.state !== "failed" || !job.failedReason) continue;
+      const key = classifyJobFailure(job.failedReason);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [jobs]);
+
   const filteredJobs = useMemo(() => {
     let result = jobs;
 
@@ -2582,6 +2600,14 @@ export default function JobsPage() {
         }
         return facets.models.has(inferenceFilter.value);
       });
+    }
+
+    // Apply error-type filter (failed jobs whose classified error matches)
+    if (errorFilter) {
+      result = result.filter((job) =>
+        job.state === "failed" &&
+        classifyJobFailure(job.failedReason ?? "") === errorFilter
+      );
     }
 
     // Apply hide empty filter
@@ -2653,6 +2679,7 @@ export default function JobsPage() {
     filterStatuses,
     searchQuery,
     inferenceFilter,
+    errorFilter,
     limit,
     sortColumn,
     sortDirection,
@@ -2765,6 +2792,7 @@ export default function JobsPage() {
       filterStatuses.size !== ALL_STATUSES.length ||
       searchQuery !== "" ||
       inferenceFilter !== null ||
+      errorFilter !== null ||
       hideEmpty
     );
   }, [
@@ -2773,6 +2801,7 @@ export default function JobsPage() {
     filterStatuses.size,
     searchQuery,
     inferenceFilter,
+    errorFilter,
     hideEmpty,
     ALL_STATUSES.length,
   ]);
@@ -2829,6 +2858,7 @@ export default function JobsPage() {
     setFilterStatuses(new Set(ALL_STATUSES));
     setSearchQuery("");
     setInferenceFilter(null);
+    setErrorFilter(null);
     const newParams = new URLSearchParams(searchParams);
     newParams.delete("type");
     newParams.delete("hideEmpty");
@@ -4245,6 +4275,8 @@ export default function JobsPage() {
         </Button>
       </div>
 
+      <JobErrorStats />
+
       <Card>
         <CardContent className="space-y-3 mt-6">
           <div className="flex flex-wrap items-center gap-3">
@@ -4404,6 +4436,26 @@ export default function JobsPage() {
                 </Command>
               </PopoverContent>
             </Popover>
+
+            <Select
+              value={errorFilter ?? "__all"}
+              onValueChange={(v) => setErrorFilter(v === "__all" ? null : v)}
+            >
+              <SelectTrigger
+                className="w-[190px]"
+                title="Filter failed jobs by error type"
+              >
+                <SelectValue placeholder="Error type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">All errors</SelectItem>
+                {errorFilterOptions.map(([key, count]) => (
+                  <SelectItem key={key} value={key}>
+                    {key} ({count})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
