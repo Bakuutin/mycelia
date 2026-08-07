@@ -49,10 +49,10 @@ import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
  *                                    │
  *                                    ▼
  *    ┌─────────────────────────────────────────────────────────────────┐
- *    │  3. For each untagged conversation:                             │
- *    │     a. Get conversation summary/name                            │
- *    │     b. Call LLM with tag list + conversation context            │
- *    │     c. LLM returns applicable tag names                         │
+ *    │  3. For each BATCH of untagged conversations (batchSize):       │
+ *    │     a. Get each conversation's summary/name                     │
+ *    │     b. One LLM call: tag list + all conversations with ids      │
+ *    │     c. LLM returns {"results": [{id, tags}]} per conversation   │
  *    │     d. Create "tagged" relationship for each applicable tag     │
  *    └─────────────────────────────────────────────────────────────────┘
  *
@@ -114,8 +114,9 @@ interface Conversation {
   };
 }
 
-type TaggingLLMResult = {
-  tags: string[];
+type BatchTaggingLLMResult = {
+  // Valid tag names per conversation id; ids the model omitted are absent.
+  byId: Map<string, string[]>;
   provenance: InferenceProvenance;
   parseStatus: "ok" | "empty" | "parse_error";
   parseError?: string;
@@ -135,6 +136,10 @@ export const schema = z.object({
     .describe(
       "Conversations tagged per run; large backlogs self-continue via hasMore",
     ),
+  batchSize: z.number().int().min(1).max(20).default(5)
+    .describe(
+      "Conversations tagged per LLM call — the tag list is sent once per batch (like entity_typing)",
+    ),
   model: z.string().default("small"),
   fallbackModel: z.string().optional()
     .describe(
@@ -145,9 +150,9 @@ export const schema = z.object({
       "Pin the LLM call to one provider profile (no cross-provider failover)",
     ),
   force: z.boolean().default(false),
-  maxTokens: z.number().int().min(256).max(32768).default(512)
+  maxTokens: z.number().int().min(256).max(32768).default(1536)
     .describe(
-      "Output-token cap per tagging call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+      "Output-token cap per tagging call (covers a whole batch); a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
   reasoning: z.enum(["off", "default"]).default("off")
     .describe(
@@ -160,17 +165,18 @@ export const schema = z.object({
   ),
   system_prompt: z.string()
     .default(
-      `You are a tagging assistant. Given a conversation title, summary, and a list of available tags, determine which tags apply to this conversation.
+      `You are a tagging assistant. You receive a list of available tags and several conversations (each with an id, title and optional summary). For every conversation, determine which tags apply.
 
 Rules:
 - Only select tags that are clearly relevant to the conversation content
 - Be conservative - only apply tags when you're confident they match
-- Return an empty array if no tags apply
+- Use an empty array when no tags apply to a conversation
 - Return tag names exactly as provided (case-sensitive)
+- Return one entry per input conversation, using the exact id you were given
 
-Output JSON with a single field "tags" containing an array of applicable tag names.`,
+Output JSON: {"results": [{"id": "<conversation id>", "tags": ["tag", ...]}]}`,
     )
-    .describe("System prompt for the LLM tagging call"),
+    .describe("System prompt for the batched LLM tagging call"),
 });
 
 export type TaggerJobData = z.infer<typeof schema>;
@@ -289,50 +295,72 @@ function extractJsonFromText(content: string): any {
   return JSON.parse(cleaned.substring(jsonStart, jsonEnd));
 }
 
-function parseTagsResponse(
+/**
+ * Parses the batched response {"results": [{"id", "tags"}]} into a map of
+ * conversation id → valid tag names. Unknown ids, duplicate ids and invalid
+ * tag names are dropped; ids the model omitted are simply absent so the
+ * caller can record them explicitly.
+ */
+export function parseBatchTagsResponse(
   content: string,
   validTagNames: Set<string>,
-): string[] {
+  expectedIds: readonly string[],
+): Map<string, string[]> {
   const parsed = extractJsonFromText(content);
-  const tags = parsed.tags || parsed || [];
-
-  if (!Array.isArray(tags)) {
-    return [];
+  const results = Array.isArray(parsed?.results)
+    ? parsed.results
+    : Array.isArray(parsed)
+    ? parsed
+    : [];
+  const expected = new Set(expectedIds);
+  const byId = new Map<string, string[]>();
+  for (const entry of results) {
+    if (!entry || typeof entry !== "object") continue;
+    const id = String((entry as Record<string, unknown>).id ?? "");
+    if (!expected.has(id) || byId.has(id)) continue;
+    const rawTags = (entry as Record<string, unknown>).tags;
+    const tags = Array.isArray(rawTags)
+      ? rawTags.filter((tag: unknown): tag is string =>
+        typeof tag === "string" && validTagNames.has(tag)
+      )
+      : [];
+    byId.set(id, tags);
   }
-
-  // Filter to only valid tag names
-  return tags.filter((tag: any) =>
-    typeof tag === "string" && validTagNames.has(tag)
-  );
+  return byId;
 }
 
 // ============================================================================
 // LLM Operations
 // ============================================================================
 
-async function callLLMForTags(
+async function callLLMForTagsBatch(
   llm: (input: any) => Promise<any>,
   model: string,
   fallbackModel: string | undefined,
   providerProfileId: string | undefined,
   systemPrompt: string,
   tagsPrompt: string,
-  conversationPrompt: string,
+  batch: ReadonlyArray<{ id: string; prompt: string }>,
   validTagNames: Set<string>,
   logContext: string,
   options?: { maxTokens?: number; reasoning?: "off" | "default" },
-): Promise<TaggingLLMResult> {
+): Promise<BatchTaggingLLMResult> {
   // Strict providers require the {name, schema} envelope around the schema.
   const responseFormat = {
     type: "json_schema" as const,
     json_schema: {
-      name: "conversation_tags",
-      schema: z.object({ tags: z.array(z.string()) }).toJSONSchema() as Record<
-        string,
-        unknown
-      >,
+      name: "conversation_tags_batch",
+      schema: z.object({
+        results: z.array(z.object({
+          id: z.string(),
+          tags: z.array(z.string()),
+        })),
+      }).toJSONSchema() as Record<string, unknown>,
     },
   };
+  const conversationsPrompt = `Conversations:\n${
+    batch.map((entry) => `--- id: ${entry.id}\n${entry.prompt}`).join("\n\n")
+  }`;
   const response = await llm({
     action: "completions",
     model,
@@ -351,16 +379,13 @@ async function callLLMForTags(
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: tagsPrompt },
-      {
-        role: "user",
-        content: `Conversation:\n${conversationPrompt}`,
-      },
+      { role: "user", content: conversationsPrompt },
     ],
     response_format: responseFormat,
   }) as any;
 
-  // A truncated tag list is a configuration error — fail loudly instead of
-  // silently applying a partial set.
+  // A truncated batch is a configuration error — fail loudly instead of
+  // silently tagging only the first conversations.
   assertCompletionNotTruncated(response, {
     requestedModel: model,
     maxTokens: options?.maxTokens,
@@ -371,7 +396,7 @@ async function callLLMForTags(
   const provenance = getInferenceProvenance(response, model, fallbackModel);
   if (!content) {
     console.log(`[Tagger] ${logContext}: EMPTY response from LLM`);
-    return { tags: [], provenance, parseStatus: "empty" };
+    return { byId: new Map(), provenance, parseStatus: "empty" };
   }
 
   const truncatedContent = content.length > 300
@@ -381,14 +406,18 @@ async function callLLMForTags(
 
   try {
     return {
-      tags: parseTagsResponse(content, validTagNames),
+      byId: parseBatchTagsResponse(
+        content,
+        validTagNames,
+        batch.map((entry) => entry.id),
+      ),
       provenance,
       parseStatus: "ok",
     };
   } catch (error) {
     console.log(`[Tagger] ${logContext}: parse failed: ${error}`);
     return {
-      tags: [],
+      byId: new Map(),
       provenance,
       parseStatus: "parse_error",
       parseError: error instanceof Error ? error.message : String(error),
@@ -598,24 +627,34 @@ const capability: JobCapability = {
       `[Tagger] Job ${job.id}: processing ${conversationsToProcess.length} conversations, hasMore=${hasMore}`,
     );
 
-    // Step 5: Process each conversation
-    for (let i = 0; i < conversationsToProcess.length; i++) {
-      const conversation = conversationsToProcess[i];
+    // Step 5: Tag conversations in batches — one LLM call covers batchSize
+    // conversations and the tag list is sent once per call.
+    const batches: Conversation[][] = [];
+    for (let i = 0; i < conversationsToProcess.length; i += input.batchSize) {
+      batches.push(conversationsToProcess.slice(i, i + input.batchSize));
+    }
+    const taggerFallbackModel = resolveWorkerFallbackModel(
+      input.fallbackModel,
+      "TAGGER_FALLBACK_MODEL",
+    );
 
+    let done = 0;
+    for (const batch of batches) {
       await job.updateProgress({
         stage: "tagging",
-        current: i + 1,
+        current: Math.min(done + batch.length, conversationsToProcess.length),
         total: conversationsToProcess.length,
-        conversationId: conversation._id.toString(),
+        batchSize: batch.length,
         // Live routing info for the jobs list while the job is active.
         ...(inferenceRuns.length > 0
           ? { inference: summarizeInferenceUsage(inferenceRuns) }
           : {}),
       });
+      done += batch.length;
 
-      try {
-        // If force mode, delete existing tag relationships for this conversation
-        if (input.force) {
+      // If force mode, delete existing tag relationships first
+      if (input.force) {
+        for (const conversation of batch) {
           const existingRels = await objects({
             action: "list",
             filters: {
@@ -632,120 +671,144 @@ const capability: JobCapability = {
             });
           }
         }
+      }
 
-        // Format conversation for LLM
-        const conversationPrompt = formatConversationForPrompt(conversation);
+      const batchEntries = batch.map((conversation) => ({
+        id: conversation._id.toString(),
+        prompt: formatConversationForPrompt(conversation),
+      }));
 
-        // Call LLM to determine applicable tags
-        const taggingResult = await callLLMForTags(
+      let batchResult: BatchTaggingLLMResult;
+      try {
+        batchResult = await callLLMForTagsBatch(
           llm,
           input.model,
-          resolveWorkerFallbackModel(
-            input.fallbackModel,
-            "TAGGER_FALLBACK_MODEL",
-          ),
+          taggerFallbackModel,
           input.providerProfileId,
           input.system_prompt,
           tagsPrompt,
-          conversationPrompt,
+          batchEntries,
           validTagNames,
-          `Conv ${conversation._id}`,
+          `Batch of ${batch.length} (job ${job.id})`,
           { maxTokens: input.maxTokens, reasoning: input.reasoning ?? "off" },
         );
-        const applicableTags = taggingResult.tags;
-        inferenceRuns.push(taggingResult.provenance);
-
-        // Apply min/max constraints
-        const tagsToApply = applicableTags.slice(0, input.maxTags);
-
-        console.log(
-          `[Tagger] Conv ${conversation._id} "${conversation.name}": LLM suggested ${applicableTags.length} tags: [${
-            tagsToApply.join(", ")
-          }]`,
-        );
-
-        const generatedAt = new Date();
-        const taggingRun = {
-          task: "tagging",
-          ...taggingResult.provenance,
-          parseStatus: taggingResult.parseStatus,
-          parseError: taggingResult.parseError,
-          selectedTags: tagsToApply,
-          selectedTagCount: tagsToApply.length,
-          jobId: job.id,
-          generatedAt,
-          forced: input.force,
-        };
-
-        // Create tag relationships
-        for (const tagName of tagsToApply) {
-          const tagId = tagMap.get(tagName);
-          if (!tagId) continue;
-
-          try {
-            await objects({
-              action: "create",
-              object: {
-                isRelationship: true,
-                name: "tagged",
-                relationship: {
-                  subject: conversation._id,
-                  object: tagId,
-                  symmetrical: false,
-                },
-                metadata: { generatedWith: taggingRun },
-              },
-            });
-            tagsApplied++;
-            console.log(
-              `[Tagger] Conv ${conversation._id}: applied tag "${tagName}"`,
-            );
-          } catch (error) {
-            console.error(
-              `[Tagger] Failed to apply tag "${tagName}" to conversation ${conversation._id}:`,
-              error,
-            );
-            errors.push({
-              type: "tag_relationship",
-              message: error instanceof Error ? error.message : String(error),
-              conversationId: conversation._id.toString(),
-            });
-          }
-        }
-
-        // Persist the run on the conversation as well. This records valid
-        // zero-tag outcomes, which otherwise leave no relationship artifact.
-        const latestConversation = await objects({
-          action: "get",
-          id: conversation._id.toString(),
-        }) as Conversation;
-        const priorRuns = latestConversation.metadata?.aiProvenance
-          ?.taggingRuns ?? [];
-        await objects({
-          action: "update",
-          id: conversation._id.toString(),
-          version: latestConversation.version ?? 0,
-          field: "metadata.aiProvenance.taggingRuns",
-          value: [...priorRuns, taggingRun],
-        });
-
-        conversationsProcessed++;
-        artifacts.push({
-          conversationId: conversation._id.toString(),
-          title: conversation.name || "Untitled conversation",
-          tags: tagsToApply,
-          parseStatus: taggingResult.parseStatus,
-        });
+        inferenceRuns.push(batchResult.provenance);
       } catch (error) {
-        console.error(
-          `[Tagger] Failed to process conversation ${conversation._id}:`,
-          error,
-        );
-        errors.push({
-          type: "processing",
-          message: error instanceof Error ? error.message : String(error),
-          conversationId: conversation._id.toString(),
-        });
+        // Transport/truncation errors leave no tagging marker, so these
+        // conversations are retried by a later run.
+        console.error(`[Tagger] Batch call failed:`, error);
+        for (const conversation of batch) {
+          errors.push({
+            type: "processing",
+            message: error instanceof Error ? error.message : String(error),
+            conversationId: conversation._id.toString(),
+          });
+        }
+        continue;
+      }
+
+      for (const conversation of batch) {
+        const conversationId = conversation._id.toString();
+        try {
+          const modelTags = batchResult.byId.get(conversationId);
+          // Distinguish a broken call (empty/parse_error) from a parseable
+          // response that omitted this id. Both get a marker with the status
+          // recorded — mirroring the old per-conversation behavior where
+          // parse failures counted as an attempt and were not retried
+          // forever on the same content.
+          const parseStatus = batchResult.parseStatus !== "ok"
+            ? batchResult.parseStatus
+            : modelTags === undefined
+            ? "missing_in_batch"
+            : "ok";
+          const tagsToApply = (modelTags ?? []).slice(0, input.maxTags);
+
+          console.log(
+            `[Tagger] Conv ${conversationId} "${conversation.name}": ${parseStatus}, ${tagsToApply.length} tags: [${
+              tagsToApply.join(", ")
+            }]`,
+          );
+
+          const generatedAt = new Date();
+          const taggingRun = {
+            task: "tagging",
+            ...batchResult.provenance,
+            parseStatus,
+            parseError: batchResult.parseError,
+            selectedTags: tagsToApply,
+            selectedTagCount: tagsToApply.length,
+            jobId: job.id,
+            generatedAt,
+            forced: input.force,
+          };
+
+          // Create tag relationships
+          for (const tagName of tagsToApply) {
+            const tagId = tagMap.get(tagName);
+            if (!tagId) continue;
+
+            try {
+              await objects({
+                action: "create",
+                object: {
+                  isRelationship: true,
+                  name: "tagged",
+                  relationship: {
+                    subject: conversation._id,
+                    object: tagId,
+                    symmetrical: false,
+                  },
+                  metadata: { generatedWith: taggingRun },
+                },
+              });
+              tagsApplied++;
+            } catch (error) {
+              console.error(
+                `[Tagger] Failed to apply tag "${tagName}" to conversation ${conversationId}:`,
+                error,
+              );
+              errors.push({
+                type: "tag_relationship",
+                message: error instanceof Error ? error.message : String(error),
+                conversationId,
+              });
+            }
+          }
+
+          // Persist the run on the conversation as well. This records valid
+          // zero-tag outcomes, which otherwise leave no relationship artifact.
+          const latestConversation = await objects({
+            action: "get",
+            id: conversationId,
+          }) as Conversation;
+          const priorRuns = latestConversation.metadata?.aiProvenance
+            ?.taggingRuns ?? [];
+          await objects({
+            action: "update",
+            id: conversationId,
+            version: latestConversation.version ?? 0,
+            field: "metadata.aiProvenance.taggingRuns",
+            value: [...priorRuns, taggingRun],
+          });
+
+          conversationsProcessed++;
+          artifacts.push({
+            conversationId,
+            title: conversation.name || "Untitled conversation",
+            tags: tagsToApply,
+            parseStatus,
+          });
+        } catch (error) {
+          console.error(
+            `[Tagger] Failed to process conversation ${conversationId}:`,
+            error,
+          );
+          errors.push({
+            type: "processing",
+            message: error instanceof Error ? error.message : String(error),
+            conversationId,
+          });
+        }
       }
     }
 
