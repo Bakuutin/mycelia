@@ -70,6 +70,51 @@ Deno.test(
 );
 
 Deno.test(
+  "jobRegistry.validateJobData materializes schema defaults, including enums",
+  withFixtures(["JobWorkers"], () => {
+    // Workers cast job.data without re-parsing, so enqueue-time validation
+    // must fill every schema default. Enum defaults are the regression case:
+    // the toJSONSchema/fromJSONSchema round-trip does not apply them.
+    const result = jobRegistry.validateJobData({
+      type: "summarization",
+    }) as Record<string, unknown>;
+
+    expect(result.reasoning).toBe("off"); // enum default
+    expect(result.maxTokens).toBe(8192); // number default
+    expect(result.retryNow).toBe(false); // boolean default
+  }),
+);
+
+Deno.test(
+  "jobRegistry.validateJobData keeps explicit values over defaults",
+  withFixtures(["JobWorkers"], () => {
+    const result = jobRegistry.validateJobData({
+      type: "summarization",
+      reasoning: "default",
+      maxTokens: 512,
+    }) as Record<string, unknown>;
+
+    expect(result.reasoning).toBe("default");
+    expect(result.maxTokens).toBe(512);
+  }),
+);
+
+Deno.test(
+  "jobRegistry.validateJobData rejects unknown fields",
+  withFixtures(["JobWorkers"], () => {
+    // io:"input" manifests drop additionalProperties:false, so the registry
+    // enforces unknown-field rejection itself — typos must not be silently
+    // stripped into a job that ignores them.
+    expect(() =>
+      jobRegistry.validateJobData({
+        type: "summarization",
+        bogusOption: true,
+      })
+    ).toThrow(/Unknown field/);
+  }),
+);
+
+Deno.test(
   "jobRegistry.validateJobData throws for unknown type",
   withFixtures(["JobWorkers"], () => {
     const invalidData = {

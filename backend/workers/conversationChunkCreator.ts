@@ -789,7 +789,7 @@ async function processManualRange(
 
 const capability: JobCapability = {
   name: "conversation_chunk_creator",
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
     finalized: z.number(),

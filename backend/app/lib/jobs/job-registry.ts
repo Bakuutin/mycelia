@@ -95,16 +95,47 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
     
     const jobType = (data as { type: string }).type;
     const capability = this.get(jobType);
-    
+
     if (!capability) {
       throw new Error(`Unknown job type: ${jobType}`);
     }
-    console.log(JSON.stringify(data));
 
     const routingContext = (data as JobData).routingContext;
     data = JSON.parse(JSON.stringify(data)); // serialize native json types
     const capabilityData = { ...(data as JobData) };
     delete capabilityData.routingContext;
+
+    const properties = (capability.manifest.inputSchema as {
+      properties?: Record<string, unknown>;
+    })?.properties;
+    if (properties) {
+      // Manifests are generated with io:"input", which omits
+      // additionalProperties:false — reject unknown fields here so typos and
+      // unsupported options still fail loudly instead of being stripped.
+      const unknown = Object.keys(capabilityData).filter(
+        (key) => !(key in properties),
+      );
+      if (unknown.length > 0) {
+        throw new Error(
+          `Unknown field(s) for job type ${jobType}: ${unknown.join(", ")}`,
+        );
+      }
+
+      // Workers cast job.data without re-parsing, so every schema default
+      // must be materialized here. fromJSONSchema applies property defaults
+      // for plain types but not for enums, so fill absent defaulted
+      // properties from the JSON Schema before parsing.
+      for (const [key, property] of Object.entries(properties)) {
+        if (
+          capabilityData[key] === undefined &&
+          property && typeof property === "object" && "default" in property
+        ) {
+          capabilityData[key] = structuredClone(
+            (property as { default: unknown }).default,
+          );
+        }
+      }
+    }
 
     const parsed = fromJSONSchema(capability.manifest.inputSchema).parse(
       capabilityData,

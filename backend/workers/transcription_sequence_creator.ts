@@ -233,7 +233,7 @@ async function persistSequence(
 
 const capability: JobCapability = {
   name: "transcription_sequence_creator",
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
     processed: z.number(),

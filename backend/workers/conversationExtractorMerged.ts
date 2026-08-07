@@ -98,9 +98,9 @@ export const schema = z.object({
     .describe(
       "Output-token cap for the single composite call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
-  reasoning: z.enum(["off", "default"]).optional()
+  reasoning: z.enum(["off", "default"]).default("off")
     .describe(
-      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
+      "Reasoning/thinking mode for the LLM call; recorded in provenance for later analysis",
     ),
   merged_system_prompt: z.string().default(DEFAULT_MERGED_PROMPT)
     .describe(
@@ -259,7 +259,7 @@ export function parseMergedResponse(
 
 const capability: JobCapability = {
   name: "conversation_extractor_merged",
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("completed"),
     success: z.boolean(),

@@ -198,9 +198,9 @@ export const schema = z.object({
     .describe(
       "Output-token cap per LLM call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
-  reasoning: z.enum(["off", "default"]).optional()
+  reasoning: z.enum(["off", "default"]).default("off")
     .describe(
-      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
+      "Reasoning/thinking mode for the LLM call; recorded in provenance for later analysis",
     ),
 
   // Prompt overrides (migrated from config.prompts)
@@ -1864,7 +1864,7 @@ async function processChunk(params: {
 
 const capability: JobCapability = {
   name: "conversation_extractor",
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("completed"),
     success: z.boolean(),

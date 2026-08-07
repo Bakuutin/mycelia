@@ -53,9 +53,9 @@ export const schema = z.object({
     .describe(
       "Output-token cap per summary call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
     ),
-  reasoning: z.enum(["off", "default"]).optional()
+  reasoning: z.enum(["off", "default"]).default("off")
     .describe(
-      "Reasoning/thinking mode (defaults to off; the zod JSON-schema round-trip at enqueue drops enum defaults, so the default is applied in code); recorded in provenance",
+      "Reasoning/thinking mode for the LLM call; recorded in provenance for later analysis",
     ),
   providerProfileId: z.string().optional()
     .describe(
@@ -1255,7 +1255,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 const capability: JobCapability = {
   name,
   maxConcurrency: 1,
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(z.object({
     success: z.boolean(),
     objectId: z.string().optional(),

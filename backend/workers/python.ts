@@ -51,7 +51,7 @@ export class NetworkJobCapability<
   }
 
   get inputSchema() {
-    return z.toJSONSchema(this.schema);
+    return z.toJSONSchema(this.schema, { io: "input" });
   }
 
   get outputSchema() {

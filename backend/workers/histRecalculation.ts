@@ -740,7 +740,7 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
 
 const capability: JobCapability = {
   name,
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(
     z.object({
       success: z.boolean(),

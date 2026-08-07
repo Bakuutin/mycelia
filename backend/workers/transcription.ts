@@ -83,7 +83,7 @@ export const schema = z.object({
 
 const capability: JobCapability = {
   name: "transcription",
-  inputSchema: z.toJSONSchema(schema),
+  inputSchema: z.toJSONSchema(schema, { io: "input" }),
   outputSchema: z.toJSONSchema(z.object({
     status: z.literal("success"),
     result: z.string().optional(),
