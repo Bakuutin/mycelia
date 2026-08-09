@@ -10,6 +10,15 @@ import { getJobTimeoutMinutes, getJobTimeoutMs } from "./job-timeouts.ts";
 
 const activeChildren = new Map<string, Deno.ChildProcess>();
 
+/**
+ * True while this process still has a live worker child for the job. The queue
+ * can lose its record of a job (a Redis restart drops everything written since
+ * the last snapshot) while the work itself is very much still in flight.
+ */
+export function isJobRunningLocally(jobId: string): boolean {
+  return activeChildren.has(jobId);
+}
+
 export function cancelRunningJob(jobId: string): boolean {
   const child = activeChildren.get(jobId);
   if (!child) return false;

@@ -15,7 +15,11 @@ services:
       test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
-      start_period: 10s
+      # Redis refuses connections until the RDB is fully loaded, which takes
+      # well over 10s once the dataset grows (~13s at 345MB on a bind mount).
+      # A short start_period reports it unhealthy during normal startup and
+      # makes every dependent service flap along with it.
+      start_period: 120s
       retries: 6
   mongo:
     image: mongo:8.2

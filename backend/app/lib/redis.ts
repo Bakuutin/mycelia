@@ -13,6 +13,30 @@ export const redis = new Redis({
   lazyConnect: true,
 });
 
+// Redis restores an RDB snapshot on restart, so anything written since its last
+// save is gone. Callers that read an absence as meaningful (for example the
+// orphaned-job reaper) need to know how long the current connection has been up
+// before trusting what they see.
+let connectedSince: number | null = null;
+
+redis.on("ready", () => {
+  connectedSince = Date.now();
+});
+for (const event of ["close", "end", "reconnecting"]) {
+  redis.on(event, () => {
+    connectedSince = null;
+  });
+}
+
+/**
+ * Milliseconds the Redis connection has been continuously established, or null
+ * when it is not currently up.
+ */
+export function getRedisConnectedForMs(): number | null {
+  if (connectedSince === null || redis.status !== "ready") return null;
+  return Date.now() - connectedSince;
+}
+
 export const redlock = new Redlock([redis as any], {
   driftFactor: 0.01,
   retryCount: 10,
