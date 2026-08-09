@@ -358,11 +358,19 @@ export function createSegmentParser(
           return { title, start, end };
         }
 
-        // Both strings → try as dates
+        // Both strings → try as dates. V8 date parsing is lenient enough to
+        // turn transcript phrases into dates (new Date("Так, 300.") is the
+        // year 300), so a parse only counts when both dates land near the
+        // chunk window; otherwise fall through to phrase resolution.
         if (typeof startVal === "string" && typeof endVal === "string") {
           const start = new Date(startVal);
           const end = new Date(endVal);
-          if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          const windowStart = chunkStart.getTime() - 24 * 60 * 60 * 1000;
+          const windowEnd = chunkEnd.getTime() + 24 * 60 * 60 * 1000;
+          const plausible = (date: Date) =>
+            !isNaN(date.getTime()) &&
+            date.getTime() >= windowStart && date.getTime() <= windowEnd;
+          if (plausible(start) && plausible(end)) {
             return { title, start, end };
           }
 

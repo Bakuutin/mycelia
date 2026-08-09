@@ -89,3 +89,27 @@ Deno.test("json_schema response format wraps the schema in the required envelope
     },
   });
 });
+
+Deno.test("phrase boundaries that V8 parses as absurd dates are rejected", () => {
+  // new Date("Так, 300.") parses to the year 300 — without the chunk-window
+  // sanity check this became a conversation spanning year 0300 that no
+  // transcript could ever match (summarization then failed forever).
+  const parse = createSegmentParser(
+    [
+      "[time: 2026-08-06T02:14:15.000Z]",
+      "Так, 300.",
+      "[time: 2026-08-06T02:19:45.000Z]",
+    ],
+    new Date("2026-08-06T02:14:15.000Z"),
+    new Date("2026-08-06T02:19:45.000Z"),
+  );
+
+  const [segment] = parse(JSON.stringify({
+    segments: [{ title: "Price talk", start: "Так, 300.", end: "Так, 300." }],
+  }));
+  expect(segment.start.getFullYear()).toBe(2026);
+  expect(segment.end.getFullYear()).toBe(2026);
+  expect(segment.start.getTime()).toBeGreaterThanOrEqual(
+    new Date("2026-08-06T02:14:15.000Z").getTime(),
+  );
+});
