@@ -176,7 +176,8 @@ describe("TranscriptionSettingsPage", () => {
     await user.click(screen.getByRole("button", { name: "Load models" }));
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("large-v3-turbo")).toBeInTheDocument();
+      expect(screen.getByRole("combobox"))
+        .toHaveTextContent("large-v3-turbo");
     });
   });
 });
