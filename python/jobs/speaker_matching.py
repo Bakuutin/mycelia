@@ -23,6 +23,8 @@ class SpeakerMatchingJobData(BaseModel):
     batch_size: int = 500  # Batch size for MongoDB queries
     threshold: Optional[float] = None  # Override default similarity threshold
     profile_id: Optional[str] = None  # Only match for specific profile (for re-matching)
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
 
 
 def _apply_updates(updates: List[tuple]) -> int:
@@ -100,6 +102,12 @@ def process_speaker_matching_job(
         "matched_speaker": {"$exists": False},
         "embedding": {"$exists": True},
     }
+    if data.start or data.end:
+        query["start"] = {}
+        if data.start:
+            query["start"]["$gte"] = data.start
+        if data.end:
+            query["start"]["$lte"] = data.end
     
     progress_callback({
         "stage": "loading_segments",
@@ -188,5 +196,5 @@ def process_speaker_matching_job(
         "profiles_count": len(profiles),
         "threshold": threshold,
         "duration": round(duration, 2),
-        "has_more": has_more,
+        "hasMore": bool(has_more),
     }

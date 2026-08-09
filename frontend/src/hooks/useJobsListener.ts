@@ -17,10 +17,14 @@ function formatJobType(type: string): string {
     conversationChunkCreator: "Conversation Chunking",
     histRecalculation: "History Recalculation",
     diarization: "Speaker Diarization",
+    speakerMatching: "Speaker Matching",
+    speakerIdentity: "Speaker Identity",
+    enrollment: "Voice Enrollment",
     ingestion: "Audio Ingestion",
     vad: "Voice Activity Detection",
   };
-  return names[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return names[type] ||
+    type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /** Get description from job result */
@@ -31,17 +35,32 @@ function getResultDescription(result: any): string | null {
 
   const parts: string[] = [];
 
-  if (typeof result.conversationsCreated === "number" && result.conversationsCreated > 0) {
-    parts.push(`${result.conversationsCreated} conversation${result.conversationsCreated !== 1 ? "s" : ""}`);
+  if (
+    typeof result.conversationsCreated === "number" &&
+    result.conversationsCreated > 0
+  ) {
+    parts.push(
+      `${result.conversationsCreated} conversation${
+        result.conversationsCreated !== 1 ? "s" : ""
+      }`,
+    );
   }
   if (typeof result.chunksCreated === "number" && result.chunksCreated > 0) {
-    parts.push(`${result.chunksCreated} chunk${result.chunksCreated !== 1 ? "s" : ""}`);
+    parts.push(
+      `${result.chunksCreated} chunk${result.chunksCreated !== 1 ? "s" : ""}`,
+    );
   }
   if (typeof result.processed === "number" && result.processed > 0) {
     parts.push(`${result.processed} processed`);
   }
-  if (typeof result.chunksProcessed === "number" && result.chunksProcessed > 0) {
-    parts.push(`${result.chunksProcessed} chunk${result.chunksProcessed !== 1 ? "s" : ""} processed`);
+  if (
+    typeof result.chunksProcessed === "number" && result.chunksProcessed > 0
+  ) {
+    parts.push(
+      `${result.chunksProcessed} chunk${
+        result.chunksProcessed !== 1 ? "s" : ""
+      } processed`,
+    );
   }
 
   return parts.length > 0 ? parts.join(", ") : null;
@@ -49,6 +68,11 @@ function getResultDescription(result: any): string | null {
 
 interface UseJobsListenerOptions {
   types?: string[];
+  onJobFinished?: (job: {
+    id: string;
+    type: string;
+    state: "completed" | "failed";
+  }) => void;
 }
 
 export function useJobsListener(options: UseJobsListenerOptions = {}) {
@@ -83,7 +107,9 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
   });
 
   const runningCount = jobs.filter(
-    (job) => job.state === "active" || job.state === "waiting" || job.state === "delayed"
+    (job) =>
+      job.state === "active" || job.state === "waiting" ||
+      job.state === "delayed",
   ).length;
 
   const getJobById = (id: string) => jobs.find((job) => job.id === id);
@@ -112,7 +138,9 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
 
       queryClient.setQueryData<JobInfo[]>(queryKey, (oldJobs = []) => {
         const newState = jobData.state || event.event.replace("job.", "");
-        const existingIndex = oldJobs.findIndex((job) => job.id === jobData.jobId);
+        const existingIndex = oldJobs.findIndex((job) =>
+          job.id === jobData.jobId
+        );
 
         if (existingIndex >= 0) {
           const updated = [...oldJobs];
@@ -120,7 +148,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
 
           // Determine processedOn and finishedOn with fallbacks
           let processedOn = jobData.processedOn ?? existing.processedOn;
-          if (!processedOn && (event.event === "job.started" || event.event === "job.active" || event.event === "job.progress" || newState === "active")) {
+          if (
+            !processedOn &&
+            (event.event === "job.started" || event.event === "job.active" ||
+              event.event === "job.progress" || newState === "active")
+          ) {
             processedOn = Date.now();
           }
 
@@ -129,7 +161,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
           let finishedOn = isRunning
             ? undefined
             : jobData.finishedOn ?? existing.finishedOn;
-          if (!finishedOn && (event.event === "job.completed" || event.event === "job.failed" || newState === "completed" || newState === "failed")) {
+          if (
+            !finishedOn &&
+            (event.event === "job.completed" || event.event === "job.failed" ||
+              newState === "completed" || newState === "failed")
+          ) {
             finishedOn = Date.now();
           }
 
@@ -158,6 +194,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       });
 
       if (event.event === "job.completed" && event.data) {
+        options.onJobFinished?.({
+          id: jobData.jobId,
+          type: jobData.jobType,
+          state: "completed",
+        });
         if (jobData.jobType === "summarization") {
           const notifications = buildSummarizationCompletionNotifications(
             jobData.result,
@@ -184,9 +225,12 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
                   label: isBatch
                     ? "View notifications"
                     : notification.action?.label || "View summary",
-                  onClick: () => navigate(
-                    isBatch ? "/summaries" : notification.action?.path || "/summaries",
-                  ),
+                  onClick: () =>
+                    navigate(
+                      isBatch
+                        ? "/summaries"
+                        : notification.action?.path || "/summaries",
+                    ),
                 },
                 duration: 10000,
               },
@@ -204,7 +248,10 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
               type: "success",
               title: `${jobName} completed`,
               description,
-              action: { label: "Details", path: `/jobs/${jobData.jobId}?type=${jobData.jobType}` },
+              action: {
+                label: "Details",
+                path: `/jobs/${jobData.jobId}?type=${jobData.jobType}`,
+              },
             });
 
             // Show popup toast if enabled
@@ -213,7 +260,8 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
                 description,
                 action: {
                   label: "Details",
-                  onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
+                  onClick: () =>
+                    navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
                 },
                 duration: 5000,
               });
@@ -221,19 +269,29 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
           }
         }
       } else if (event.event === "job.failed" && event.data) {
+        options.onJobFinished?.({
+          id: jobData.jobId,
+          type: jobData.jobType,
+          state: "failed",
+        });
         const job = jobs.find((j) => j.id === jobData.jobId);
         const isManualJob = job?.trigger?.type === "manual";
 
         const jobName = formatJobType(jobData.jobType);
         const reason = jobData.failedReason || "Unknown error";
-        const description = reason.length > 100 ? reason.slice(0, 100) + "..." : reason;
+        const description = reason.length > 100
+          ? reason.slice(0, 100) + "..."
+          : reason;
 
         // Always add failed jobs to notification center (important for monitoring)
         addNotification({
           type: "error",
           title: `${jobName} failed`,
           description,
-          action: { label: "Details", path: `/jobs/${jobData.jobId}?type=${jobData.jobType}` },
+          action: {
+            label: "Details",
+            path: `/jobs/${jobData.jobId}?type=${jobData.jobType}`,
+          },
         });
 
         // Show popup toast only for manual jobs (to avoid spam from automated failures)
@@ -242,7 +300,8 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
             description,
             action: {
               label: "Details",
-              onClick: () => navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
+              onClick: () =>
+                navigate(`/jobs/${jobData.jobId}?type=${jobData.jobType}`),
             },
           });
         }

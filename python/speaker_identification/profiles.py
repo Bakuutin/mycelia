@@ -159,6 +159,38 @@ def create_or_update_profile(
         return new_profile
 
 
+def add_sample_to_profile(
+    profile: Dict[str, Any],
+    embedding: List[float],
+    duration: float,
+) -> Dict[str, Any]:
+    """Update an existing profile by ID without changing its identity flags."""
+    normalized = np.array(_normalize_embedding(embedding), dtype=np.float32)
+    old_embedding = np.array(profile["embedding"], dtype=np.float32)
+    old_count = int(profile.get("sample_count", 1))
+    old_duration = float(profile.get("total_duration", 0.0))
+    merged = (old_embedding * old_count + normalized) / (old_count + 1)
+    norm = np.linalg.norm(merged)
+    if norm > 0:
+        merged = merged / norm
+
+    update_data = {
+        "embedding": merged.tolist(),
+        "sample_count": old_count + 1,
+        "total_duration": old_duration + duration,
+        "updated_at": datetime.now(UTC),
+    }
+    result = call_resource("mongo", {
+        "action": "updateOne",
+        "collection": "speaker_profiles",
+        "query": {"_id": profile["_id"]},
+        "update": {"$set": update_data},
+    })
+    if (result or {}).get("matchedCount", 0) != 1:
+        raise RuntimeError(f"Speaker profile disappeared while enrolling: {profile['_id']}")
+    return {**profile, **update_data}
+
+
 def get_all_profiles() -> List[Dict[str, Any]]:
     """Get all speaker profiles."""
     result = call_resource("mongo", {

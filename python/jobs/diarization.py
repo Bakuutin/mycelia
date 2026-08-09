@@ -19,6 +19,9 @@ class DiarizationJobData(BaseModel):
     """Data model for diarization job."""
     start: Optional[datetime] = None  # Filter chunks starting from this time
     end: Optional[datetime] = None  # Filter chunks up to this time
+    limit: int = 4
+    mode: str = "missing"
+    runId: Optional[str] = None
 
 
 def process_diarization_job(
@@ -73,10 +76,11 @@ def process_diarization_job(
     chunks_processed = 0
     segments_created = 0
     errors = 0
+    last_error: Optional[str] = None
     
     # Get and process sequences
     for sequence in get_diarization_sequences(
-        limit=None,  # Process all matching
+        limit=data.limit,
         filters=filters if filters else None,
         worker_id=worker_id,
     ):
@@ -87,6 +91,7 @@ def process_diarization_job(
         
         if result.get("status") == "error":
             errors += 1
+            last_error = result.get("error") or "Unknown diarization error"
         
         # Update progress periodically
         if sequences_processed % 5 == 0:
@@ -98,6 +103,10 @@ def process_diarization_job(
                 "segments_created": segments_created,
             })
     
+    if errors > 0 and chunks_processed == 0:
+        raise RuntimeError(last_error or "Diarization made no progress")
+
+    remaining = count_pending_chunks(filters if filters else None) or 0
     logger.info(f"Diarization job {job_id} completed: {sequences_processed} sequences, {chunks_processed} chunks, {segments_created} segments")
     
     return {
@@ -106,4 +115,6 @@ def process_diarization_job(
         "chunks_processed": chunks_processed,
         "segments_created": segments_created,
         "errors": errors,
+        "processed": chunks_processed,
+        "hasMore": remaining > 0,
     }

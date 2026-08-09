@@ -9,7 +9,11 @@ from typing import Any, Callable, Dict, Optional
 from pydantic import BaseModel
 
 from lib.resources import call_resource
-from speaker_identification.profiles import create_or_update_profile
+from speaker_identification.profiles import (
+    add_sample_to_profile,
+    create_or_update_profile,
+    get_profile_by_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +24,7 @@ DIARIZATION_SERVER_URL = os.environ.get("DIARIZATION_SERVER_URL", "http://localh
 class EnrollmentJobData(BaseModel):
     """Data model for enrollment job."""
     name: str  # Speaker name (e.g., "Me", "Wife")
+    profile_id: Optional[str] = None
     is_primary: bool = False  # True if this is "my voice"
     audio_chunk_id: Optional[str] = None  # If enrolling from existing audio chunk
     audio_data_base64: Optional[str] = None  # If enrolling from uploaded audio (base64)
@@ -205,30 +210,36 @@ def process_enrollment_job(
     
     # Create or update profile
     try:
-        profile = create_or_update_profile(
-            name=data.name,
-            embedding=embedding,
-            duration=duration,
-            is_primary=data.is_primary,
-        )
+        if data.profile_id:
+            existing = get_profile_by_id(data.profile_id)
+            if not existing:
+                raise ValueError(f"Profile not found: {data.profile_id}")
+            profile = add_sample_to_profile(existing, embedding, duration)
+        else:
+            profile = create_or_update_profile(
+                name=data.name,
+                embedding=embedding,
+                duration=duration,
+                is_primary=data.is_primary,
+            )
     except Exception as e:
         logger.error(f"Failed to save profile: {e}")
         raise
     
     # Link the sample to the profile if using a saved sample
     if data.sample_file_id and profile.get("_id"):
-        try:
-            from bson import ObjectId
-            call_resource("mongo", {
-                "action": "updateOne",
-                "collection": "voice_samples.files",
-                "query": {"_id": ObjectId(data.sample_file_id)},
-                "update": {"$set": {"metadata.profile_id": str(profile["_id"])}},
-            })
-            logger.info(f"Linked sample {data.sample_file_id} to profile {profile['_id']}")
-        except Exception as e:
-            logger.warning(f"Failed to link sample to profile: {e}")
-            # Don't fail the job if linking fails
+        from bson import ObjectId
+        link_result = call_resource("mongo", {
+            "action": "updateOne",
+            "collection": "voice_samples.files",
+            "query": {"_id": ObjectId(data.sample_file_id)},
+            "update": {"$set": {"metadata.profile_id": str(profile["_id"])}},
+        })
+        if (link_result or {}).get("matchedCount", 0) != 1:
+            raise RuntimeError(
+                f"Voice sample {data.sample_file_id} was not linked to profile {profile['_id']}"
+            )
+        logger.info(f"Linked sample {data.sample_file_id} to profile {profile['_id']}")
     
     logger.info(f"Enrollment job {job_id} completed successfully")
     

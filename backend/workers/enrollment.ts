@@ -13,6 +13,8 @@ export const schema = z.object({
   type: z.literal("enrollment"),
   /** Speaker name (e.g., "Me", "Wife", "Bob") */
   name: z.string().min(1),
+  /** Authoritative ID of an existing profile to update. */
+  profile_id: z.string().optional(),
   /** True if this is the user's primary voice ("my voice") */
   is_primary: z.boolean().default(false),
   /** ID of an existing audio chunk to enroll from */
@@ -26,11 +28,16 @@ export const schema = z.object({
   /** End time for segment extraction (optional) */
   end: z.number().optional(),
 }).refine(
-  (data) => data.audio_chunk_id || data.audio_data_base64 || data.sample_file_id,
-  { message: "Either audio_chunk_id, audio_data_base64, or sample_file_id must be provided" }
+  (data) =>
+    data.audio_chunk_id || data.audio_data_base64 || data.sample_file_id,
+  {
+    message:
+      "Either audio_chunk_id, audio_data_base64, or sample_file_id must be provided",
+  },
 );
 
-const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
+const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||
+  "http://localhost:8000";
 
 export default new NetworkJobCapability({
   name: "enrollment",

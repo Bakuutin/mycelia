@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import diarization from "./diarization.ts";
+import diarization, { schema } from "./diarization.ts";
 
 Deno.test("diarization job can read its feature flag and speaker profiles", () => {
   expect(diarization.policies).toEqual([
@@ -9,4 +9,22 @@ Deno.test("diarization job can read its feature flag and speaker profiles", () =
     { resource: "db/diarizations", action: "write", effect: "allow" },
     { resource: "db/speaker_profiles", action: "read", effect: "allow" },
   ]);
+});
+
+Deno.test("diarization jobs are bounded and preserve the requested run", () => {
+  expect(schema.parse({ type: "diarization" })).toMatchObject({
+    type: "diarization",
+    limit: 4,
+    mode: "missing",
+  });
+  expect(schema.parse({
+    type: "diarization",
+    limit: 8,
+    mode: "build_generation",
+    runId: "run-1",
+  })).toMatchObject({
+    limit: 8,
+    mode: "build_generation",
+    runId: "run-1",
+  });
 });

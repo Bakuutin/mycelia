@@ -38,6 +38,7 @@ import {
   Timer,
   Trash2,
 } from "lucide-react";
+import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
 import {
   Collapsible,
   CollapsibleContent,
@@ -615,6 +616,8 @@ export default function AudioPipelinePage() {
           </Button>
         </div>
       </div>
+
+      <ServiceHealthBanner />
 
       <Card
         className={pipelineHealth === "loading"

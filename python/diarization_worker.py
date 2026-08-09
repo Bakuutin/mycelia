@@ -642,6 +642,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         log_info(f'  → Increase timeout or check diarization server at {DIARIZATION_SERVER_URL}')
         return {
             "status": "error",
+            "error": "Diarization request timed out",
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
@@ -667,6 +668,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         )
         return {
             "status": "error",
+            "error": f"HTTP {status_code}: {http_err}",
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
@@ -679,6 +681,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         log_info(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)}')
         return {
             "status": "error",
+            "error": str(e),
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,

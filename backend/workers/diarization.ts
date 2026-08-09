@@ -7,6 +7,9 @@ export const schema = z.object({
   type: z.literal("diarization"),
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
+  limit: z.number().int().positive().max(100).default(4),
+  mode: z.enum(["missing", "build_generation"]).default("missing"),
+  runId: z.string().min(1).optional(),
 });
 
 const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||

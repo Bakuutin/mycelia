@@ -113,7 +113,7 @@ type WorkerStatus = {
 };
 
 type ExternalServiceHealth = {
-  id: "stt" | "llm";
+  id: "stt" | "llm" | "diarizator";
   label: string;
   status: "disabled" | "healthy" | "loading" | "unavailable" | "misconfigured";
   configured: boolean;

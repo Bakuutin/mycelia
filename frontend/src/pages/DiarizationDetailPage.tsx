@@ -1,12 +1,12 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { callResource, apiClient } from "@/lib/api";
+import { apiClient, callResource } from "@/lib/api";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { formatTime } from "@/lib/formatTime";
 import { SmartBackButton } from "@/components/SmartBackButton";
 import { embeddingToColor } from "@/lib/pcaColor";
 import { ObjectId } from "bson";
-import { Play, Pause, Loader2 } from "lucide-react";
+import { Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import * as d3 from "d3";
 import {
@@ -14,6 +14,7 @@ import {
   SpeakerAssignmentControl,
 } from "@/modules/speakers";
 import { normalizeObjectId } from "@/lib/diarization";
+import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 
 interface DiarizationDoc {
   _id: unknown;
@@ -51,22 +52,35 @@ const EmbeddingHeatmap = ({ embedding, color }: EmbeddingHeatmapProps) => {
     return () => resizeObserver.disconnect();
   }, []);
 
-  const { cells, colorScale, cellSize, cols, rows, absMax, heatmapHeight, heatmapCenterX } = useMemo(() => {
+  const {
+    cells,
+    colorScale,
+    cellSize,
+    cols,
+    rows,
+    absMax,
+    heatmapHeight,
+    heatmapCenterX,
+  } = useMemo(() => {
     const length = embedding.length;
     const cols = Math.round(Math.sqrt(length));
     const rows = Math.ceil(length / cols);
-    
+
     const padding = 2;
     const availableWidth = dimensions.width - 40;
     const availableHeight = dimensions.height - 80;
-    const cellWidth = Math.floor((availableWidth - (cols - 1) * padding) / cols);
-    const cellHeight = Math.floor((availableHeight - (rows - 1) * padding) / rows);
+    const cellWidth = Math.floor(
+      (availableWidth - (cols - 1) * padding) / cols,
+    );
+    const cellHeight = Math.floor(
+      (availableHeight - (rows - 1) * padding) / rows,
+    );
     const cellSize = Math.min(cellWidth, cellHeight, 12);
 
     const min = Math.min(...embedding);
     const max = Math.max(...embedding);
     const absMax = Math.max(Math.abs(min), Math.abs(max));
-    
+
     const colorScale = d3.scaleSequential(d3.interpolateRdYlBu)
       .domain([absMax, -absMax]);
 
@@ -88,7 +102,16 @@ const EmbeddingHeatmap = ({ embedding, color }: EmbeddingHeatmapProps) => {
 
     const heatmapHeight = 20 + rows * (cellSize + padding);
 
-    return { cells, colorScale, cellSize, cols, rows, absMax, heatmapHeight, heatmapCenterX };
+    return {
+      cells,
+      colorScale,
+      cellSize,
+      cols,
+      rows,
+      absMax,
+      heatmapHeight,
+      heatmapCenterX,
+    };
   }, [embedding, dimensions]);
 
   const arrowStartY = heatmapHeight + 20;
@@ -114,7 +137,7 @@ const EmbeddingHeatmap = ({ embedding, color }: EmbeddingHeatmapProps) => {
             fill={cell.color}
           />
         ))}
-        
+
         <line
           x1={heatmapCenterX}
           y1={arrowStartY}
@@ -124,13 +147,15 @@ const EmbeddingHeatmap = ({ embedding, color }: EmbeddingHeatmapProps) => {
           strokeWidth="2"
           className="text-muted-foreground"
         />
-        
+
         <polygon
-          points={`${heatmapCenterX},${arrowEndY} ${heatmapCenterX - 6},${arrowEndY - 8} ${heatmapCenterX + 6},${arrowEndY - 8}`}
+          points={`${heatmapCenterX},${arrowEndY} ${heatmapCenterX - 6},${
+            arrowEndY - 8
+          } ${heatmapCenterX + 6},${arrowEndY - 8}`}
           fill="currentColor"
           className="text-muted-foreground"
         />
-        
+
         <circle
           cx={heatmapCenterX}
           cy={circleY}
@@ -173,7 +198,9 @@ const DiarizationDetailPage = () => {
           setError("Diarization not found");
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to fetch diarization");
+        setError(
+          err instanceof Error ? err.message : "Failed to fetch diarization",
+        );
       } finally {
         setLoading(false);
       }
@@ -189,13 +216,17 @@ const DiarizationDetailPage = () => {
     try {
       const originalId = diarization.original_id || diarization.original;
       const originalIdStr = normalizeObjectId(originalId);
-      if (!originalIdStr) throw new Error("Diarization has no valid original audio ID");
+      if (!originalIdStr) {
+        throw new Error("Diarization has no valid original audio ID");
+      }
 
       const startParam = (diarization.start.getTime() / 1000).toString();
       const endParam = (diarization.end.getTime() / 1000).toString();
 
       const blob = await apiClient.getBlob(
-        `/api/audio/wav?start=${encodeURIComponent(startParam)}&end=${encodeURIComponent(endParam)}&original_id=${encodeURIComponent(originalIdStr)}`
+        `/api/audio/wav?start=${encodeURIComponent(startParam)}&end=${
+          encodeURIComponent(endParam)
+        }&original_id=${encodeURIComponent(originalIdStr)}`,
       );
 
       const url = URL.createObjectURL(blob);
@@ -209,11 +240,16 @@ const DiarizationDetailPage = () => {
   };
 
   const handlePlayPause = () => {
+    const playbackId = `diarization-detail:${id ?? "unknown"}`;
     if (!audioUrl) {
       loadAudio().then(() => {
         setTimeout(() => {
-          audioRef.current?.play();
-          setIsPlaying(true);
+          if (!audioRef.current) return;
+          useAudioPlaybackStore.getState().acquire(
+            playbackId,
+            () => audioRef.current?.pause(),
+          );
+          void audioRef.current.play();
         }, 100);
       });
       return;
@@ -225,8 +261,11 @@ const DiarizationDetailPage = () => {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play();
-      setIsPlaying(true);
+      useAudioPlaybackStore.getState().acquire(
+        playbackId,
+        () => audioRef.current?.pause(),
+      );
+      void audioRef.current.play();
     }
   };
 
@@ -239,10 +278,17 @@ const DiarizationDetailPage = () => {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    const playbackId = `diarization-detail:${id ?? "unknown"}`;
 
     const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-    const handleEnded = () => setIsPlaying(false);
+    const handlePause = () => {
+      setIsPlaying(false);
+      useAudioPlaybackStore.getState().release(playbackId);
+    };
+    const handleEnded = () => {
+      setIsPlaying(false);
+      useAudioPlaybackStore.getState().release(playbackId);
+    };
 
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
@@ -252,8 +298,9 @@ const DiarizationDetailPage = () => {
       audio.removeEventListener("play", handlePlay);
       audio.removeEventListener("pause", handlePause);
       audio.removeEventListener("ended", handleEnded);
+      useAudioPlaybackStore.getState().release(playbackId);
     };
-  }, [audioUrl]);
+  }, [audioUrl, id]);
 
   useEffect(() => {
     return () => {
@@ -315,14 +362,18 @@ const DiarizationDetailPage = () => {
               matchedSpeaker={diarization.matched_speaker}
               onChanged={(matchedSpeaker) =>
                 setDiarization((current) =>
-                  current ? { ...current, matched_speaker: matchedSpeaker } : current
+                  current
+                    ? { ...current, matched_speaker: matchedSpeaker }
+                    : current
                 )}
             />
           </div>
         </div>
 
         <div className="pt-4 border-t">
-          <div className="text-sm font-medium text-muted-foreground mb-3">Audio Player</div>
+          <div className="text-sm font-medium text-muted-foreground mb-3">
+            Audio Player
+          </div>
           <div className="flex items-center gap-3">
             <Button
               onClick={handlePlayPause}
@@ -330,25 +381,23 @@ const DiarizationDetailPage = () => {
               size="lg"
               className="flex-shrink-0"
             >
-              {audioLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : isPlaying ? (
-                <Pause className="w-5 h-5" />
-              ) : (
-                <Play className="w-5 h-5" />
-              )}
+              {audioLoading
+                ? <Loader2 className="w-5 h-5 animate-spin" />
+                : isPlaying
+                ? <Pause className="w-5 h-5" />
+                : <Play className="w-5 h-5" />}
             </Button>
             <div className="flex-1">
               {audioUrl && (
-              <audio
-                ref={audioRef}
-                src={audioUrl || undefined}
-                className="w-full"
-                controls
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onEnded={() => setIsPlaying(false)}
-              />
+                <audio
+                  ref={audioRef}
+                  src={audioUrl || undefined}
+                  className="w-full"
+                  controls
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onEnded={() => setIsPlaying(false)}
+                />
               )}
             </div>
           </div>
@@ -361,18 +410,28 @@ const DiarizationDetailPage = () => {
 
         <div className="grid grid-cols-2 gap-4 pt-4 border-t">
           <div>
-            <div className="text-sm font-medium text-muted-foreground">Start Time</div>
-            <div className="text-lg">{formatTime(diarization.start, timeFormat)}</div>
+            <div className="text-sm font-medium text-muted-foreground">
+              Start Time
+            </div>
+            <div className="text-lg">
+              {formatTime(diarization.start, timeFormat)}
+            </div>
           </div>
           <div>
-            <div className="text-sm font-medium text-muted-foreground">End Time</div>
-            <div className="text-lg">{formatTime(diarization.end, timeFormat)}</div>
+            <div className="text-sm font-medium text-muted-foreground">
+              End Time
+            </div>
+            <div className="text-lg">
+              {formatTime(diarization.end, timeFormat)}
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 pt-4 border-t">
           <div>
-            <div className="text-sm font-medium text-muted-foreground mb-1">Duration</div>
+            <div className="text-sm font-medium text-muted-foreground mb-1">
+              Duration
+            </div>
             <div className="text-lg">
               {durationMinutes > 0
                 ? `${durationMinutes}m ${durationSecondsRemainder.toFixed(0)}s`
@@ -381,14 +440,20 @@ const DiarizationDetailPage = () => {
           </div>
           {diarization.created_at && (
             <div>
-              <div className="text-sm font-medium text-muted-foreground mb-1">Processed At</div>
-              <div className="text-lg">{formatTime(diarization.created_at, timeFormat)}</div>
+              <div className="text-sm font-medium text-muted-foreground mb-1">
+                Processed At
+              </div>
+              <div className="text-lg">
+                {formatTime(diarization.created_at, timeFormat)}
+              </div>
             </div>
           )}
         </div>
 
         <div className="pt-4 border-t">
-          <div className="text-sm font-medium text-muted-foreground mb-1">Segment ID</div>
+          <div className="text-sm font-medium text-muted-foreground mb-1">
+            Segment ID
+          </div>
           <div className="text-sm font-mono break-all">
             {diarization._id instanceof ObjectId
               ? diarization._id.toString()
@@ -398,7 +463,9 @@ const DiarizationDetailPage = () => {
 
         {diarization.inference_id != null && (
           <div className="pt-4 border-t">
-            <div className="text-sm font-medium text-muted-foreground mb-1">Inference ID</div>
+            <div className="text-sm font-medium text-muted-foreground mb-1">
+              Inference ID
+            </div>
             <div className="text-sm font-mono break-all">
               {diarization.inference_id instanceof ObjectId
                 ? diarization.inference_id.toString()
@@ -411,7 +478,9 @@ const DiarizationDetailPage = () => {
         )}
 
         <div className="pt-4 border-t">
-          <div className="text-sm font-medium text-muted-foreground mb-1">Original Audio</div>
+          <div className="text-sm font-medium text-muted-foreground mb-1">
+            Original Audio
+          </div>
           <div className="text-sm font-mono break-all">
             {(() => {
               const original = diarization.original_id || diarization.original;

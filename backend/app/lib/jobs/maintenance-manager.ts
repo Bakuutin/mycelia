@@ -8,6 +8,7 @@ import { DEFAULT_JOB_TIMEOUT_MS, getJobTimeoutMs } from "./job-timeouts.ts";
 import { getRedisConnectedForMs } from "@/lib/redis.ts";
 import { isJobRunningLocally } from "./processor.ts";
 import { canTrustMissingQueueRecords } from "./orphan-reaper.ts";
+import { releaseStaleAudioChunkClaims } from "./audio-claim-reaper.ts";
 
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
@@ -57,8 +58,20 @@ export class MaintenanceManager {
       await this.cancelLongRunningJobs();
       await this.cancelMissingWaitingJobs();
       await this.releaseCompletedSummarizationClaims();
+      await this.releaseStaleAudioClaims();
     } finally {
       this.running = false;
+    }
+  }
+
+  private async releaseStaleAudioClaims() {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    const released = await releaseStaleAudioChunkClaims(mongo);
+    if (released > 0) {
+      console.warn(
+        `[SELF-HEAL] Released ${released} stale audio chunk claim(s).`,
+      );
     }
   }
 
