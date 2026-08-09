@@ -46,7 +46,7 @@ Deno.test(
       "transcription_sequence_creator",
       "transcription",
       "conversation_chunk_creator",
-      "conversation_extractor",
+      "conversation_extractor_merged",
       "summarization",
     ]);
     expect(Array.isArray(data.stats.recentJobs)).toBe(true);

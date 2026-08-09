@@ -14,6 +14,10 @@ import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 import {
   buildJsonSchemaResponseFormat,
+  extractJsonFromText,
+  resolveWorkerFallbackModel,
+} from "@/lib/llm/worker-response.ts";
+import {
   buildTagListPrompt,
   type ConversationChunk,
   type ConversationError,
@@ -25,13 +29,11 @@ import {
   type EntityType,
   type ExtractedEntity,
   type ExtractionTag,
-  extractJsonFromText,
   formatChunkAsPrompt,
   getExtractionRetryDelayMs,
   normalizeEmoji,
-  resolveWorkerFallbackModel,
   transcriptionToUtterances,
-} from "./conversationExtractor.ts";
+} from "@/lib/extraction/shared.ts";
 
 /**
  * Merged Conversation Extractor — the PRIMARY extraction worker.
@@ -766,7 +768,7 @@ const capability: JobCapability = {
         },
       },
     ],
-    ...getTriggerTiming("conversation_extractor"),
+    ...getTriggerTiming("conversation_extractor_merged"),
   },
 };
 

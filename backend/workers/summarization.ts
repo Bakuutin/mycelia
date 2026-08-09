@@ -20,7 +20,7 @@ import { getChatCompletionText } from "@/lib/llm/completion-response.ts";
 import {
   buildJsonSchemaResponseFormat,
   resolveWorkerFallbackModel,
-} from "./conversationExtractor.ts";
+} from "@/lib/llm/worker-response.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 
 /** Job type name */

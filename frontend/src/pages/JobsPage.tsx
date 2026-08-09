@@ -392,12 +392,7 @@ const WORKER_PIPELINE = [
   {
     type: "conversation_extractor_merged",
     description:
-      "PRIMARY extraction: one LLM call per chunk does segmentation + typed entities + tags + emoji + agreements",
-  },
-  {
-    type: "conversation_extractor",
-    description:
-      "DEPRECATED legacy extraction (2 LLM calls per chunk) — replaced by conversation_extractor_merged; keep paused, kept only for rollback",
+      "Conversation extraction: one LLM call per chunk does segmentation + typed entities + tags + emoji + agreements",
   },
   {
     type: "summarization",
@@ -434,6 +429,13 @@ const WORKER_PIPELINE = [
   },
 ] as const;
 
+// Removed workers whose historical jobs are still listed and openable.
+const LEGACY_JOB_TYPES = ["conversation_extractor"];
+const LEGACY_JOB_TYPE_DESCRIPTIONS: Record<string, string> = {
+  conversation_extractor:
+    "Legacy two-call extractor (removed) — replaced by conversation_extractor_merged",
+};
+
 const CRITICAL_PIPELINE_WORKERS = new Set([
   "vad",
   "transcription_sequence_creator",
@@ -448,9 +450,17 @@ const STATUS_PRIORITY: Record<string, number> = {
   active: 0,
   waiting: 1,
   failed: 2,
-  delayed: 3,
-  completed: 4,
+  cancelled: 3,
+  delayed: 4,
+  completed: 5,
 };
+
+/**
+ * States that carry a diagnosable reason. Queue maintenance cancels jobs it
+ * reaps (timeout, queue_record_missing) instead of failing them, so "cancelled"
+ * has to be grouped with "failed" wherever errors are shown or filtered.
+ */
+const ERRORED_JOB_STATES = new Set(["failed", "cancelled"]);
 
 /**
  * Renders a date range link to the timeline from job data start/end fields.
@@ -489,8 +499,11 @@ function JobProgressCell({ job }: { job: JobInfo }) {
     (job.state === "active" && hasResult);
   const isActive = job.state === "active" && !hasResult;
 
-  // --- Failed jobs: show parsed error ---
-  if (job.state === "failed" && job.failedReason) {
+  // --- Failed and cancelled jobs: show parsed error ---
+  // Queue maintenance cancels jobs (timeout, queue_record_missing) rather than
+  // failing them, so gating on "failed" alone hides the only clue about why a
+  // job stopped.
+  if (ERRORED_JOB_STATES.has(job.state) && job.failedReason) {
     const error = parseJobError(job.failedReason);
     if (error) {
       return (
@@ -1296,7 +1309,14 @@ function JobProgressCell({ job }: { job: JobInfo }) {
 }
 
 export default function JobsPage() {
-  const ALL_STATUSES = ["active", "waiting", "completed", "failed", "delayed"];
+  const ALL_STATUSES = [
+    "active",
+    "waiting",
+    "completed",
+    "failed",
+    "cancelled",
+    "delayed",
+  ];
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const hideEmpty = searchParams.get("hideEmpty") === "true";
@@ -1691,6 +1711,35 @@ export default function JobsPage() {
     },
   });
 
+  // Task routes pinned to a provider (workers.defaultOverrides.providerProfileId,
+  // written by Settings → Inference). Shown as a warning on a disabled route:
+  // pinned jobs fail instead of failing over.
+  const { data: pinnedTaskRoutes } = useQuery({
+    queryKey: ["worker-provider-pins"],
+    queryFn: async () => {
+      const routingWorkers = [
+        "summarization",
+        "conversation_chunk_creator",
+        "conversation_extractor_merged",
+        "tagger",
+        "entity_typing",
+      ];
+      const result: Record<string, string> = {};
+      await Promise.all(
+        routingWorkers.map(async (workerType) => {
+          const response = await api.callResource("jobs", {
+            action: "get_worker_defaults",
+            workerType,
+          }) as { defaults?: Record<string, unknown> };
+          const pin = response?.defaults?.providerProfileId;
+          if (typeof pin === "string" && pin) result[workerType] = pin;
+        }),
+      );
+      return result;
+    },
+    staleTime: 60000,
+  });
+
   const getEffectiveBatchSize = (workerType: string): number | undefined => {
     if (workerType === "transcription") {
       return pipelineHealth?.transcriptionRuntime.configuredBatchSize ??
@@ -1833,8 +1882,7 @@ export default function JobsPage() {
     mutationFn: async (workerType: string) => {
       // retryNow only exists on some worker schemas; strict validation
       // rejects the key on the others (tagger, entity_typing).
-      const supportsRetryNow = workerType === "conversation_extractor" ||
-        workerType === "conversation_extractor_merged" ||
+      const supportsRetryNow = workerType === "conversation_extractor_merged" ||
         workerType === "summarization";
       return await api.callResource("jobs", {
         action: "enqueue",
@@ -2323,12 +2371,24 @@ export default function JobsPage() {
     },
   });
 
-  const allTypes = useMemo(() => Object.keys(schemas || {}), [schemas]);
+  // Removed workers whose historical jobs stay visible; the backend jobs
+  // list includes them in its default type set.
+  const legacyTypes = useMemo(
+    () =>
+      LEGACY_JOB_TYPES.filter((type) => !(schemas && type in schemas)),
+    [schemas],
+  );
+  const allTypes = useMemo(
+    () => [...Object.keys(schemas || {}), ...legacyTypes],
+    [schemas, legacyTypes],
+  );
 
   const allPaused = useMemo(() => {
     if (!workerStatus?.workers || allTypes.length === 0) return false;
-    return allTypes.every((type) => workerStatus.workers[type]?.paused);
-  }, [workerStatus, allTypes]);
+    return allTypes
+      .filter((type) => !legacyTypes.includes(type))
+      .every((type) => workerStatus.workers[type]?.paused);
+  }, [workerStatus, allTypes, legacyTypes]);
 
   const somePaused = useMemo(() => {
     if (!workerStatus?.workers) return false;
@@ -2351,6 +2411,7 @@ export default function JobsPage() {
       active: 0,
       waiting: 0,
       failed: 0,
+      cancelled: 0,
       completed: 0,
       delayed: 0,
       total: 0,
@@ -2462,16 +2523,21 @@ export default function JobsPage() {
       WORKER_PIPELINE.map((w) => [w.type, w.description]),
     );
 
-    return [...allTypes].sort((a, b) => {
-      const orderA = pipelineOrder.get(a) ?? 999;
-      const orderB = pipelineOrder.get(b) ?? 999;
-      return orderA - orderB;
-    }).map((type) => ({
-      type,
-      description: pipelineDescriptions.get(type) || "Worker process",
-      order: pipelineOrder.get(type) ?? 999,
-    }));
-  }, [allTypes]);
+    // Legacy types have no live worker — they belong to the jobs filter and
+    // history, not to the workers table.
+    return [...allTypes]
+      .filter((type) => !legacyTypes.includes(type))
+      .sort((a, b) => {
+        const orderA = pipelineOrder.get(a) ?? 999;
+        const orderB = pipelineOrder.get(b) ?? 999;
+        return orderA - orderB;
+      }).map((type) => ({
+        type,
+        description: pipelineDescriptions.get(type) ||
+          LEGACY_JOB_TYPE_DESCRIPTIONS[type] || "Worker process",
+        order: pipelineOrder.get(type) ?? 999,
+      }));
+  }, [allTypes, legacyTypes]);
 
   // Job type statistics from backend (aggregates ALL jobs in database)
   const jobTypeStats = useMemo(() => {
@@ -2573,7 +2639,7 @@ export default function JobsPage() {
   const errorFilterOptions = useMemo(() => {
     const counts = new Map<string, number>();
     for (const job of jobs) {
-      if (job.state !== "failed" || !job.failedReason) continue;
+      if (!ERRORED_JOB_STATES.has(job.state) || !job.failedReason) continue;
       const key = classifyJobFailure(job.failedReason);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
@@ -2632,7 +2698,7 @@ export default function JobsPage() {
     // Apply error-type filter (failed jobs whose classified error matches)
     if (errorFilter) {
       result = result.filter((job) =>
-        job.state === "failed" &&
+        ERRORED_JOB_STATES.has(job.state) &&
         classifyJobFailure(job.failedReason ?? "") === errorFilter
       );
     }
@@ -2912,6 +2978,8 @@ export default function JobsPage() {
         return "bg-green-500/10 text-green-500 hover:bg-green-500/20";
       case "failed":
         return "bg-red-500/10 text-red-500 hover:bg-red-500/20";
+      case "cancelled":
+        return "bg-orange-500/10 text-orange-500 hover:bg-orange-500/20";
       case "active":
         return "bg-blue-500/10 text-blue-500 hover:bg-blue-500/20";
       case "waiting":
@@ -3240,7 +3308,15 @@ export default function JobsPage() {
                                   route and fail over down the list on errors.
                                 </p>
                                 <div className="space-y-1">
-                                  {service.routes.map((route) => (
+                                  {service.routes.map((route) => {
+                                    const pinnedWorkers = Object.entries(
+                                      pinnedTaskRoutes ?? {},
+                                    )
+                                      .filter(([, providerId]) =>
+                                        providerId === route.providerProfileId
+                                      )
+                                      .map(([workerType]) => workerType);
+                                    return (
                                     <div
                                       key={route.providerProfileId}
                                       className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
@@ -3267,6 +3343,21 @@ export default function JobsPage() {
                                               ? "Enabled for new requests"
                                               : "Disabled for new requests"}
                                           </div>
+                                          {!route.enabled &&
+                                            pinnedWorkers.length > 0 && (
+                                            <div className="text-red-500">
+                                              {pinnedWorkers.length}{" "}
+                                              task route(s) pinned to this
+                                              provider will fail:{" "}
+                                              {pinnedWorkers.join(", ")} —{" "}
+                                              <Link
+                                                to="/settings/inference"
+                                                className="underline"
+                                              >
+                                                Configure routing
+                                              </Link>
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
                                       <span className="font-mono text-muted-foreground">
@@ -3302,7 +3393,8 @@ export default function JobsPage() {
                                         </Badge>
                                       </div>
                                     </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               </>
                             )
@@ -3699,14 +3791,6 @@ export default function JobsPage() {
                   {sortedWorkers.map((worker) => {
                     const isPaused =
                       workerStatus?.workers[worker.type]?.paused ?? false;
-                    // Extractor exclusivity: the regular and the merged
-                    // extractor claim the same ready chunks, so running both
-                    // at once deserves an inline warning with a one-click fix.
-                    const extractorPaused = workerStatus
-                      ?.workers["conversation_extractor"]?.paused ?? false;
-                    const mergedPaused = workerStatus
-                      ?.workers["conversation_extractor_merged"]?.paused ??
-                      false;
                     // Only the row being toggled waits; a slow pause request
                     // must not freeze the other workers' checkboxes.
                     const isMutating =
@@ -3912,59 +3996,11 @@ export default function JobsPage() {
                           </button>
                           {worker.type === "conversation_extractor_merged" && (
                             <div className="mt-1 ml-5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                              <span>replaces:</span>
-                              <Badge variant="outline" className="px-1.5 py-0">
-                                conversation_extractor
-                              </Badge>
-                              <span>(both its LLM calls)</span>
-                              <span>+</span>
+                              <span>also tags new conversations —</span>
                               <Badge variant="outline" className="px-1.5 py-0">
                                 tagger
                               </Badge>
-                              <span>(for new conversations)</span>
-                            </div>
-                          )}
-                          {worker.type === "conversation_extractor_merged" &&
-                            !isPaused && !extractorPaused && (
-                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-amber-500">
-                              <span>
-                                conversation_extractor is also on — both
-                                compete for the same chunks
-                              </span>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 px-2 text-xs"
-                                disabled={pauseWorkerMutation.isPending}
-                                onClick={() =>
-                                  pauseWorkerMutation.mutate(
-                                    "conversation_extractor",
-                                  )}
-                              >
-                                Pause conversation_extractor
-                              </Button>
-                            </div>
-                          )}
-                          {worker.type === "conversation_extractor" &&
-                            !isPaused && !mergedPaused && (
-                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-amber-500">
-                              <span>
-                                the primary merged extractor is also on — both
-                                compete for the same chunks; this legacy worker
-                                should stay paused
-                              </span>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-6 px-2 text-xs"
-                                disabled={pauseWorkerMutation.isPending}
-                                onClick={() =>
-                                  pauseWorkerMutation.mutate(
-                                    "conversation_extractor",
-                                  )}
-                              >
-                                Pause conversation_extractor
-                              </Button>
+                              <span>is only needed as a backfill</span>
                             </div>
                           )}
                         </TableCell>
@@ -4357,6 +4393,14 @@ export default function JobsPage() {
                           onCheckedChange={() => toggleType(type)}
                         />
                         {type}
+                        {legacyTypes.includes(type) && (
+                          <Badge
+                            variant="outline"
+                            className="ml-1 px-1 py-0 text-[10px]"
+                          >
+                            legacy
+                          </Badge>
+                        )}
                       </DropdownMenuItem>
                     ))
                   )}

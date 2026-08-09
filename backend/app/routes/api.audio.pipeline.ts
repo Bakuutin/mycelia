@@ -11,7 +11,7 @@ const PIPELINE_STAGES = [
   { type: "transcription_sequence_creator", label: "Sequence creation" },
   { type: "transcription", label: "Transcription" },
   { type: "conversation_chunk_creator", label: "Conversation chunks" },
-  { type: "conversation_extractor", label: "Conversation extraction" },
+  { type: "conversation_extractor_merged", label: "Conversation extraction" },
   { type: "summarization", label: "Summarization" },
 ] as const;
 
@@ -893,7 +893,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       transcription_sequence_creator: pendingSequenceChunks,
       transcription: sequencesReady + sequencesProcessing + sequencesError,
       conversation_chunk_creator: unassignedTranscriptions,
-      conversation_extractor: convChunksReady + convChunksProcessing +
+      conversation_extractor_merged: convChunksReady + convChunksProcessing +
         convChunksError,
       summarization: conversationsAwaitingSummary,
     };
@@ -901,7 +901,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       ingestion: sourceFilesStats.errors,
       vad: vadStats.vadJobs.failed,
       transcription: sequencesError,
-      conversation_extractor: convChunksError,
+      conversation_extractor_merged: convChunksError,
     };
     const stages = PIPELINE_STAGES.map(({ type, label }) => {
       const jobs = jobStats.get(type) ?? {};

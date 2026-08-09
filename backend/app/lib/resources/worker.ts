@@ -44,6 +44,7 @@ const ListJobsSchema = z.object({
         "waiting",
         "completed",
         "failed",
+        "cancelled",
         "delayed",
         "paused",
       ]),
@@ -284,6 +285,18 @@ const RequestSchema = z.union([
 
 type WorkerProgressRequest = z.infer<typeof RequestSchema>;
 
+// Removed worker types whose historical jobs must stay visible in the jobs
+// list and retryable/dismissable. No new jobs of these types are created.
+export const LEGACY_JOB_TYPES = ["conversation_extractor"] as const;
+
+// Both extractor generations claim conversation_chunks the same way; the
+// legacy type stays here so its historical failed jobs keep chunk-targeted
+// retry/supersede behavior.
+const EXTRACTOR_JOB_TYPES = new Set([
+  "conversation_extractor",
+  "conversation_extractor_merged",
+]);
+
 export function getFailedJobsQuery(workerType: string) {
   return {
     type: workerType,
@@ -307,7 +320,7 @@ export function getFailedJobRetryData(
   // the source claimed by the failed run so a bulk retry targets each failed
   // source exactly once instead of creating many competing discovery jobs.
   if (
-    workerType === "conversation_extractor" && !data.chunkId &&
+    EXTRACTOR_JOB_TYPES.has(workerType) && !data.chunkId &&
     failedJob.progress?.chunkId
   ) {
     data.chunkId = failedJob.progress.chunkId;
@@ -383,7 +396,7 @@ async function findSupersededFailedJobIds(
 
   for (const failedJob of failedJobs) {
     const failedJobId = failedJob._id.toString();
-    if (workerType === "conversation_extractor") {
+    if (EXTRACTOR_JOB_TYPES.has(workerType)) {
       addSource(
         failedJob.data?.chunkId ?? failedJob.progress?.chunkId,
         failedJobId,
@@ -404,7 +417,7 @@ async function findSupersededFailedJobIds(
     new ObjectId(id)
   );
   let completedSources: any[] = [];
-  if (workerType === "conversation_extractor") {
+  if (EXTRACTOR_JOB_TYPES.has(workerType)) {
     completedSources = await mongo({
       action: "find",
       collection: "conversation_chunks",
@@ -1833,7 +1846,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       return result.modifiedCount ?? 0;
     }
 
-    if (job.type === "conversation_extractor") {
+    if (job.type === "conversation_extractor_merged") {
       const result = await mongo({
         action: "updateMany",
         collection: "conversation_chunks",
@@ -2035,9 +2048,14 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
   private async list(input: z.infer<typeof ListJobsSchema>, auth: Auth) {
     const mongo = await getMongoResource(auth);
 
-    const types = input.types || jobRegistry.getJobTypes();
+    // Legacy types keep historical jobs of removed workers visible.
+    const types = input.types ||
+      [...jobRegistry.getJobTypes(), ...LEGACY_JOB_TYPES];
+    // "cancelled" belongs here: queue maintenance reaps jobs into that state
+    // rather than failing them, and omitting it made those jobs vanish from the
+    // list along with the only record of why they stopped.
     const queryStatuses = input.statuses ||
-      ["active", "waiting", "delayed", "failed", "completed"];
+      ["active", "waiting", "delayed", "failed", "cancelled", "completed"];
 
     const totalLimit = input.limit || 100;
 

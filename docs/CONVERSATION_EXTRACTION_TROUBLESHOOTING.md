@@ -1,5 +1,7 @@
 # Conversation extraction: verification and historical backfill
 
+> **Note (2026-08):** the legacy two-call `conversation_extractor` worker was removed; `conversation_extractor_merged` (one LLM call per chunk) is the only extractor. Job-launch examples below apply to it; chunk states and verification steps are unchanged.
+
 This runbook covers `conversation_extractor` v2: what it creates, how to verify
 the result, and how to safely rebuild one historical chunk whose metadata is
 missing or incomplete.

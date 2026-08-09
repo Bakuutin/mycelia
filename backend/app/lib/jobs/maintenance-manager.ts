@@ -5,6 +5,9 @@ import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { jobRegistry } from "./job-registry.ts";
 import { getQueue } from "./queue.ts";
 import { DEFAULT_JOB_TIMEOUT_MS, getJobTimeoutMs } from "./job-timeouts.ts";
+import { getRedisConnectedForMs } from "@/lib/redis.ts";
+import { isJobRunningLocally } from "./processor.ts";
+import { canTrustMissingQueueRecords } from "./orphan-reaper.ts";
 
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
@@ -60,6 +63,16 @@ export class MaintenanceManager {
   }
 
   private async cancelMissingActiveJobs() {
+    // A missing BullMQ record is only evidence of an orphan when Redis itself
+    // has been healthy long enough for that absence to mean something.
+    const trust = canTrustMissingQueueRecords(getRedisConnectedForMs());
+    if (!trust.trusted) {
+      console.warn(
+        `[MaintenanceManager] Skipping orphaned-job sweep: ${trust.reason}.`,
+      );
+      return;
+    }
+
     const auth = await getServerAuth();
     const mongo = await getMongoResource(auth);
     const cutoff = new Date(Date.now() - ACTIVE_MISSING_GRACE_MS);
@@ -77,6 +90,11 @@ export class MaintenanceManager {
       const jobId = job._id?.toString();
       const jobType = job.type as string | undefined;
       if (!jobId || !jobType || !jobRegistry.get(jobType)) continue;
+
+      // The worker child outlives the queue record. Cancelling here would mark
+      // a job dead while it is still transcribing, and the result it later
+      // commits would contradict the cancellation.
+      if (isJobRunningLocally(jobId)) continue;
 
       const queueJob = await getQueue(jobType).getJob(jobId);
       if (queueJob && LIVE_QUEUE_STATES.has(await queueJob.getState())) {
@@ -107,7 +125,7 @@ export class MaintenanceManager {
           query: { "_summarizationClaim.jobId": jobId },
           update: { $unset: { _summarizationClaim: "" } },
         });
-      } else if (jobType === "conversation_extractor") {
+      } else if (jobType === "conversation_extractor_merged") {
         await mongo({
           action: "updateMany",
           collection: "conversation_chunks",

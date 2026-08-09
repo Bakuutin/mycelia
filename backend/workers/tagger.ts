@@ -9,7 +9,7 @@ import {
   summarizeInferenceUsage,
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
-import { resolveWorkerFallbackModel } from "./conversationExtractor.ts";
+import { resolveWorkerFallbackModel } from "@/lib/llm/worker-response.ts";
 import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 

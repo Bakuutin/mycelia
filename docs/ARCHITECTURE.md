@@ -103,7 +103,7 @@ interface JobCapability {
 | `transcription_sequence_creator` | `transcription_sequence_creator.ts` | Group audio chunks into sequences | Event + Interval (5min) |
 | `diarization` | `diarization.ts` | Speaker identification | Manual |
 | `ingestion` | `ingestion.ts` | Audio file processing | Manual |
-| `conversation_extractor` | `conversationExtractor.ts` | Extract conversations from transcriptions | Manual |
+| `conversation_extractor_merged` | `conversationExtractorMerged.ts` | Extract conversations from transcriptions (single LLM call) | Auto |
 | `summarization` | `summarization.ts` | Generate conversation summaries | Auto (after conversation extraction) |
 | `histRecalculation` | `histRecalculation.ts` | Recalculate timeline histograms | Manual |
 

@@ -865,7 +865,7 @@ export default function JobDetailPage() {
                         ],
                     },
                     conversation_extractor: {
-                        icon: Users, title: "Conversation Extractor Details",
+                        icon: Users, title: "Conversation Extractor (legacy, removed) Details",
                         metrics: [
                             { icon: Clock, label: "Processing Time", value: processingTime },
                             { icon: MessageSquare, label: "Conversations Created", value: r.conversationsCreated ?? 0 },
@@ -902,7 +902,7 @@ export default function JobDetailPage() {
                         errors: r.errors,
                     },
                     conversation_extractor_merged: {
-                        icon: Users, title: "Merged Extractor Details (primary single-call)",
+                        icon: Users, title: "Conversation Extraction Details",
                         metrics: [
                             { icon: Clock, label: "Processing Time", value: processingTime },
                             { icon: Layers, label: "Chunks Processed", value: r.chunksProcessed ?? 0 },

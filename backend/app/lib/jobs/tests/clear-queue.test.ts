@@ -100,10 +100,10 @@ Deno.test("clear_failed query cannot delete other worker types or states", () =>
 
 Deno.test("failed pipeline retries preserve the claimed source id", () => {
   expect(getFailedJobRetryData({
-    data: { type: "conversation_extractor", limit: 1 },
+    data: { type: "conversation_extractor_merged", limit: 1 },
     progress: { chunkId: "chunk-1" },
-  }, "conversation_extractor")).toEqual({
-    type: "conversation_extractor",
+  }, "conversation_extractor_merged")).toEqual({
+    type: "conversation_extractor_merged",
     limit: 1,
     chunkId: "chunk-1",
   });
@@ -137,15 +137,15 @@ Deno.test("bulk retry keeps distinct conversation sources separate", () => {
   const groups = groupFailedJobsForRetry([
     {
       _id: { toString: () => "job-1" },
-      data: { type: "conversation_extractor", limit: 1 },
+      data: { type: "conversation_extractor_merged", limit: 1 },
       progress: { chunkId: "chunk-1" },
     },
     {
       _id: { toString: () => "job-2" },
-      data: { type: "conversation_extractor", limit: 1 },
+      data: { type: "conversation_extractor_merged", limit: 1 },
       progress: { chunkId: "chunk-2" },
     },
-  ], "conversation_extractor");
+  ], "conversation_extractor_merged");
 
   expect(groups).toHaveLength(2);
   expect(groups.map((group) => group.data.chunkId)).toEqual([

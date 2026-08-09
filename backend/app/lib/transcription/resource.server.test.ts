@@ -257,3 +257,48 @@ Deno.test("STT models probe uses the provider-reported model from STT status", a
     restoreEnv("PROXY_API_KEY", previous.key);
   }
 });
+
+Deno.test("STT provider pin does not bypass the route toggle", async () => {
+  const resource = new TranscriptionResource();
+  const providers = [
+    {
+      id: "profile-off",
+      name: "Disabled route",
+      baseUrl: "http://off.example",
+      apiKey: "k",
+      model: "whisper",
+      priority: 10,
+      concurrency: 1,
+      enabled: false,
+      source: "transcription_profile" as const,
+    },
+    {
+      id: "profile-on",
+      name: "Enabled route",
+      baseUrl: "http://on.example",
+      apiKey: "k",
+      model: "whisper",
+      priority: 20,
+      concurrency: 1,
+      enabled: true,
+      source: "transcription_profile" as const,
+    },
+  ];
+  (resource as any).getInferenceProviders = () => Promise.resolve(providers);
+
+  // Pinned to a disabled route → loud failure, not silent traffic.
+  await expect(resource.getInferenceProvider("profile-off")).rejects.toThrow(
+    'STT provider "Disabled route" is disabled',
+  );
+  // Unknown pin keeps its explicit error.
+  await expect(resource.getInferenceProvider("missing")).rejects.toThrow(
+    "STT provider profile not found",
+  );
+  // No pin → first enabled route; never a disabled fallback.
+  const picked = await resource.getInferenceProvider();
+  expect(picked?.id).toBe("profile-on");
+
+  (resource as any).getInferenceProviders = () =>
+    Promise.resolve(providers.map((p) => ({ ...p, enabled: false })));
+  expect(await resource.getInferenceProvider()).toBeNull();
+});

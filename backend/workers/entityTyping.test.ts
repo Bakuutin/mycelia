@@ -10,7 +10,7 @@ import {
 import {
   hasAnyTypeFlagKey,
   TYPE_FLAG_FIELDS,
-} from "./conversationExtractor.ts";
+} from "@/lib/extraction/shared.ts";
 
 Deno.test("entity typing defaults batch many entities per LLM call", () => {
   const input = schema.parse({ type: "entity_typing" });

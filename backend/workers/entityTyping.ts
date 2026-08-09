@@ -12,13 +12,15 @@ import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 import {
   buildJsonSchemaResponseFormat,
+  resolveWorkerFallbackModel,
+} from "@/lib/llm/worker-response.ts";
+import {
   ENTITY_TYPE_FLAG,
   ENTITY_TYPES,
   type EntityType,
   hasAnyTypeFlagKey,
-  resolveWorkerFallbackModel,
   TYPE_FLAG_FIELDS,
-} from "./conversationExtractor.ts";
+} from "@/lib/extraction/shared.ts";
 
 /**
  * Entity Typing Worker

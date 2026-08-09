@@ -11,7 +11,7 @@ page (Workers table → "Concurrency · Batch" column) or per job run via the
 | `transcription` | Audio sequences per STT request | `config.transcription.batchSize` | env `TRANSCRIPTION_BATCH_SIZE` |
 
 Workers that are *not* batched at the request level (`summarization`,
-`conversation_extractor`, `tagger`) make one call per conversation/segment —
+`conversation_extractor_merged`) make one call per chunk/batch —
 their "batch" settings (`limit`) only control how many items one job run
 processes, which affects job-chaining granularity, not token usage.
 

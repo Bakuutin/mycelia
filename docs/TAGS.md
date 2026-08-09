@@ -22,7 +22,7 @@ Default tags are seeded via migration `0016_seed_default_tags.ts`:
 
 ## How conversations get tagged
 
-**Primary path — extraction time.** The `conversation_extractor` selects tags
+**Primary path — extraction time.** The `conversation_extractor_merged` extractor selects tags
 inside the same metadata LLM call that extracts entities and emoji: the
 transcript is already being sent, so the tag list is the only extra prompt
 cost. Matching tags become `tagged` relationships and a tagging run is

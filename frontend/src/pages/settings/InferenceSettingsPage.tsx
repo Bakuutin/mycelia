@@ -1000,10 +1000,18 @@ const InferenceSettingsPage = () => {
             const pinnedProviderId = override
               ? taskProviders[route.workerType] || ""
               : "";
-            const pinnedProviderName = pinnedProviderId
+            const pinnedProfile = pinnedProviderId
               ? profiles.find((profile) => profile.id === pinnedProviderId)
-                ?.name ?? pinnedProviderId
+              : undefined;
+            const pinnedProviderName = pinnedProviderId
+              ? pinnedProfile?.name ?? pinnedProviderId
               : "";
+            // A pin to a disabled/deleted provider makes every job for this
+            // task fail — surface it loudly instead of leaving the failure
+            // to the jobs page.
+            const pinnedProviderBroken = Boolean(
+              pinnedProviderId && (!pinnedProfile || !pinnedProfile.enabled),
+            );
             return (
               <div
                 key={route.workerType}
@@ -1016,10 +1024,42 @@ const InferenceSettingsPage = () => {
                       <Badge variant={override ? "default" : "secondary"}>
                         {override ? "Task override" : "Global default"}
                       </Badge>
+                      {pinnedProviderName && (
+                        <Badge
+                          variant={pinnedProviderBroken
+                            ? "destructive"
+                            : "outline"}
+                        >
+                          pinned to {pinnedProviderName}
+                        </Badge>
+                      )}
+                      {pinnedProviderName && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs"
+                          onClick={() =>
+                            setTaskProviders((current) => ({
+                              ...current,
+                              [route.workerType]: "",
+                            }))}
+                          title="Remove the provider pin; routing picks the provider by priority"
+                        >
+                          Unpin
+                        </Button>
+                      )}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {route.description}
                     </p>
+                    {pinnedProviderBroken && (
+                      <p className="mt-1 text-xs text-red-500">
+                        {pinnedProfile
+                          ? "This provider is disabled — jobs for this task will fail until it is enabled or unpinned."
+                          : "This provider no longer exists — jobs for this task will fail until unpinned."}
+                      </p>
+                    )}
                   </div>
                   <div className="text-right text-xs">
                     <p className="text-muted-foreground">Effective primary</p>

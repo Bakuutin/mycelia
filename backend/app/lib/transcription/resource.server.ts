@@ -202,10 +202,17 @@ export class TranscriptionResource
       if (!provider) {
         throw new Error(`STT provider profile not found: ${profileId}`);
       }
+      // A pin must not bypass the route toggle: jobs snapshotted before the
+      // route was disabled fail loudly instead of silently sending audio to
+      // a provider the user switched off. They retry after re-enabling.
+      if (!provider.enabled) {
+        throw new Error(
+          `STT provider "${provider.name}" is disabled — enable the route or clear the job's provider pin`,
+        );
+      }
       return provider;
     }
-    return providers.find((provider) => provider.enabled) ?? providers[0] ??
-      null;
+    return providers.find((provider) => provider.enabled) ?? null;
   }
 
   async use(

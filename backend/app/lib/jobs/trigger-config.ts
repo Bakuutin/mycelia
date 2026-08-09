@@ -9,7 +9,7 @@ const DEFAULTS = {
   transcription_sequence_creator: { debounceMs: 1000, interval: 300 },
   transcription: { debounceMs: 5000, interval: 300 },
   conversation_chunk_creator: { debounceMs: 2000, interval: 30 },
-  conversation_extractor: { debounceMs: 5000, interval: 300 },
+  conversation_extractor_merged: { debounceMs: 5000, interval: 300 },
   // Watchdog only: the backfill chain self-continues via hasMore, the
   // interval just resumes it after a broken link (timeout/crash/restart).
   tagger: { debounceMs: 5000, interval: 900 },
@@ -23,7 +23,7 @@ const FAST = {
   transcription_sequence_creator: { debounceMs: 500, interval: 0 },
   transcription: { debounceMs: 1000, interval: 0 },
   conversation_chunk_creator: { debounceMs: 500, interval: 30 }, // Needs polling to finalize stale chunks
-  conversation_extractor: { debounceMs: 1000, interval: 0 },
+  conversation_extractor_merged: { debounceMs: 1000, interval: 0 },
   tagger: { debounceMs: 1000, interval: 60 },
   location_processing: { debounceMs: 500, interval: 0 },
 } as const;
