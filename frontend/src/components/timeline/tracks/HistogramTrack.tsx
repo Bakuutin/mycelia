@@ -2,6 +2,9 @@ import React, { memo, useMemo } from "react";
 import type { TrackConfig, TrackRenderProps } from "@/types/tracks";
 import type { HistogramItem } from "@/modules/histogram/useHistogramCache";
 import { BaseTrack } from "./BaseTrack";
+import { useQuery } from "@tanstack/react-query";
+import { callResource } from "@/lib/api";
+import { useNavigate } from "react-router-dom";
 
 // Config for each histogram track type
 export const TRANSCRIPTIONS_CONFIG: TrackConfig = {
@@ -24,8 +27,8 @@ export const AUDIO_CHUNKS_CONFIG: TrackConfig = {
 
 export const DIARIZATIONS_CONFIG: TrackConfig = {
   id: "diarizations",
-  label: "Diarizations",
-  description: "Speaker diarization data",
+  label: "Speaker identity",
+  description: "Sky / other / uncertain voice intervals",
   defaultVisible: true,
   defaultHeight: 40,
   color: "hsl(25, 95%, 53%)", // Orange
@@ -125,11 +128,49 @@ export const AudioChunksTrack = memo(function AudioChunksTrack(
 export const DiarizationsTrack = memo(function DiarizationsTrack(
   props: TrackRenderProps
 ) {
+  const navigate = useNavigate();
+  const rescaledScale = useMemo(() => props.transform.rescaleX(props.scale), [props.transform, props.scale]);
+  const [start, end] = rescaledScale.domain() as [Date, Date];
+  const { data } = useQuery({
+    queryKey: ["speaker-track", start.getTime(), end.getTime()],
+    queryFn: () => callResource("speaker-segments", { action: "list", start, end, limit: 5000 }) as Promise<{ segments: any[] }>,
+  });
+  const segments = data?.segments ?? [];
+  const farZoom = (end.getTime() - start.getTime()) / Math.max(props.width, 1) > 60_000;
+  const color = (state?: string) => state === "matched" ? "#22c55e" : state === "rejected" ? "#64748b" : "#f59e0b";
+  const marks = useMemo(() => {
+    if (!farZoom) return segments.map((segment) => ({
+      id: String(segment._id),
+      x: rescaledScale(new Date(segment.start)),
+      width: Math.max(2, rescaledScale(new Date(segment.end)) - rescaledScale(new Date(segment.start))),
+      state: segment.speakerIdentity?.state,
+      segment,
+    }));
+    const buckets = new Map<number, { counts: Record<string, number>; segment: any }>();
+    for (const segment of segments) {
+      const x = Math.max(0, Math.floor(rescaledScale(new Date(segment.start))));
+      const bucket = buckets.get(x) ?? { counts: {}, segment };
+      const state = segment.speakerIdentity?.state ?? "uncertain";
+      bucket.counts[state] = (bucket.counts[state] ?? 0) + 1;
+      buckets.set(x, bucket);
+    }
+    return [...buckets.entries()].map(([x, bucket]) => ({
+      id: `bucket-${x}`,
+      x,
+      width: 2,
+      state: Object.entries(bucket.counts).sort((a, b) => b[1] - a[1])[0]?.[0],
+      segment: bucket.segment,
+    }));
+  }, [farZoom, segments, rescaledScale]);
   return (
-    <HistogramTrackInner
-      {...props}
-      config={DIARIZATIONS_CONFIG}
-      dataKey="diarizations"
-    />
+    <BaseTrack {...props} config={DIARIZATIONS_CONFIG}>
+      <g>
+        {marks.map((mark) => (
+          <rect key={mark.id} x={mark.x} y={4} width={mark.width} height={Math.max(4, props.height - 8)} fill={color(mark.state)} opacity={0.82} className="cursor-pointer" onClick={() => navigate(`/diarizations/${String(mark.segment._id)}`)}>
+            <title>{mark.state === "matched" ? "Sky" : mark.state === "rejected" ? "not Sky" : "uncertain"}</title>
+          </rect>
+        ))}
+      </g>
+    </BaseTrack>
   );
 });

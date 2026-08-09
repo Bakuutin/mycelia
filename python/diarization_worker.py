@@ -260,15 +260,11 @@ class DiarizationSequence(BaseModel):
 
 
 
-def _build_pending_chunk_filters(filters: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    base_filters: dict[str, Any] = {
-        '$and': [
-            {
-                '$or': [
-                    {'diarized_at': {'$exists': False}},
-                    {'diarized_at': None}
-                ]
-            },
+def _build_pending_chunk_filters(
+    filters: Optional[dict[str, Any]] = None,
+    include_diarized: bool = False,
+) -> dict[str, Any]:
+    required = [
             {
                 '$or': [
                     {'processing_by': {'$exists': False}},
@@ -277,7 +273,15 @@ def _build_pending_chunk_filters(filters: Optional[dict[str, Any]] = None) -> di
             },
             {'vad.has_speech': True}
         ]
-    }
+    if not include_diarized:
+        required.insert(0,
+            {
+                '$or': [
+                    {'diarized_at': {'$exists': False}},
+                    {'diarized_at': None}
+                ]
+            })
+    base_filters: dict[str, Any] = {'$and': required}
 
     if filters:
         base_filters.update(filters)
@@ -324,11 +328,11 @@ def _format_eta(seconds: Optional[float]) -> str:
 
 
 
-def get_diarization_sequences(limit=10, filters=None, max_sequence_length=MAX_SEQUENCE_CHUNKS, worker_id=None) -> Iterator[DiarizationSequence]:
+def get_diarization_sequences(limit=10, filters=None, max_sequence_length=MAX_SEQUENCE_CHUNKS, worker_id=None, include_diarized=False) -> Iterator[DiarizationSequence]:
     sequences_by_id: dict[ObjectId, DiarizationSequence] = {}
     yielded = 0
 
-    base_filters = _build_pending_chunk_filters(filters)
+    base_filters = _build_pending_chunk_filters(filters, include_diarized=include_diarized)
 
     for chunk in mongo_cursor('audio_chunks', base_filters, {
         "sort": {"start": 1},  # Sort ascending to get consecutive chunks
@@ -463,7 +467,16 @@ def release_sequence(seq: DiarizationSequence, worker_id: str):
     release_chunks(chunk_ids, worker_id)
 
 
-def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
+def diarize_sequence(
+    sequence: DiarizationSequence,
+    worker_id: str,
+    *,
+    run_id: str = "legacy-v0",
+    generation: int = 0,
+    lifecycle_status: str = "active",
+    mark_chunks: bool = True,
+    expected_embedding_space_id: Optional[str] = None,
+):
     """
     Combine chunks to WAV, call diarization API, and save results to MongoDB.
     """
@@ -492,7 +505,7 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
         # Check if speaker identification is enabled and get profiles
         speaker_profiles = []
         clusters_param = None
-        if _is_speaker_identification_enabled():
+        if run_id == "legacy-v0" and _is_speaker_identification_enabled():
             speaker_profiles = _get_speaker_profiles()
             if speaker_profiles:
                 clusters_param = _build_clusters_param(speaker_profiles)
@@ -512,6 +525,11 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
 
         data = response.json()
         segments = data.get('segments', [])
+        embedding_space_id = data.get('embeddingSpaceId', 'legacy-unknown')
+        if expected_embedding_space_id and embedding_space_id != expected_embedding_space_id:
+            raise ValueError(
+                f"Diarizator embedding space changed while building run: {embedding_space_id} != {expected_embedding_space_id}"
+            )
 
         previous_segments = _get_overlap_segments(sequence)
         reserved_labels = _get_existing_speaker_labels(sequence.original_id)
@@ -586,7 +604,11 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
                 "speaker": segment['speaker'],
                 "embedding": segment['embedding'],  # 256 floats
                 "duration": (segment_end_absolute - segment_start_absolute).total_seconds(),
-                "created_at": datetime.now(tz=UTC)
+                "created_at": datetime.now(tz=UTC),
+                "runId": run_id,
+                "generation": generation,
+                "embeddingSpaceId": embedding_space_id,
+                "lifecycleStatus": lifecycle_status,
             }
 
             # Add matched_speaker if cluster was matched
@@ -611,7 +633,11 @@ def diarize_sequence(sequence: DiarizationSequence, worker_id: str):
             saved_segments += 1
 
         # Mark chunks as diarized
-        chunks_marked = mark_as_diarized(sequence, worker_id)
+        if mark_chunks:
+            chunks_marked = mark_as_diarized(sequence, worker_id)
+        else:
+            release_sequence(sequence, worker_id)
+            chunks_marked = chunks_count
 
         end_time = time.time()
         duration = end_time - start_time

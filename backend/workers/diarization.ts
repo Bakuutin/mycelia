@@ -10,6 +10,7 @@ export const schema = z.object({
   limit: z.number().int().positive().max(100).default(4),
   mode: z.enum(["missing", "build_generation"]).default("missing"),
   runId: z.string().min(1).optional(),
+  cursor: zDateOrString().optional(),
 });
 
 const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||
@@ -24,6 +25,8 @@ export default new NetworkJobCapability({
     { resource: "db/configs", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "*", effect: "allow" },
     { resource: "db/diarizations", action: "write", effect: "allow" },
+    { resource: "db/diarizations", action: "update", effect: "allow" },
+    { resource: "db/diarization_runs", action: "*", effect: "allow" },
     { resource: "db/speaker_profiles", action: "read", effect: "allow" },
   ],
 });

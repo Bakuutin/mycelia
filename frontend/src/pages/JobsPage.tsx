@@ -1340,7 +1340,7 @@ export default function JobsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedSttModel, setSelectedSttModel] = useState("");
   const [serviceTestResults, setServiceTestResults] = useState<
-    Partial<Record<"stt" | "llm", string>>
+    Partial<Record<"stt" | "llm" | "diarizator", string>>
   >({});
   const [inferenceFilter, setInferenceFilter] = useState<
     InferenceFilter | null

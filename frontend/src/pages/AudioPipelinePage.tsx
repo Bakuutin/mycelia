@@ -39,6 +39,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
+import { VoiceIdentityOperations } from "@/components/VoiceIdentityOperations";
 import {
   Collapsible,
   CollapsibleContent,
@@ -618,6 +619,7 @@ export default function AudioPipelinePage() {
       </div>
 
       <ServiceHealthBanner />
+      <VoiceIdentityOperations />
 
       <Card
         className={pipelineHealth === "loading"

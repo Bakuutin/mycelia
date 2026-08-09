@@ -21,9 +21,13 @@ export function shouldContinueJobChain(
  */
 export function getContinuationJobData(
   data: Record<string, unknown>,
+  result?: Record<string, unknown>,
 ): Record<string, unknown> {
   if (data.type === "summarization") {
     return { type: "summarization" };
+  }
+  if (typeof result?.cursor === "string" && result.cursor.length > 0) {
+    return { ...data, cursor: result.cursor };
   }
   return data;
 }

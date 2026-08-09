@@ -77,6 +77,12 @@ const SettingsLayout = () => {
       icon: UserRound,
       description: "Enroll and manage speaker voices",
     },
+    {
+      name: "Voice Identity",
+      path: "/settings/voice-identity",
+      icon: UserRound,
+      description: "Review uncertain voices and validate Sky thresholds",
+    },
   ];
 
   const administrationSettings = [

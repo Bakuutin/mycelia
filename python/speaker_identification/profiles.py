@@ -51,6 +51,7 @@ def create_or_update_profile(
     embedding: List[float],
     duration: float,
     is_primary: bool = False,
+    embedding_space_id: str = "legacy-unknown",
 ) -> Dict[str, Any]:
     """
     Create a new speaker profile or update existing via weighted average.
@@ -81,6 +82,11 @@ def create_or_update_profile(
     now = datetime.now(UTC)
 
     if existing:
+        existing_space = existing.get("embeddingSpaceId", "legacy-unknown")
+        if existing_space != embedding_space_id:
+            raise ValueError(
+                f"Embedding space mismatch for profile {name}: {existing_space} != {embedding_space_id}; re-enroll the profile"
+            )
         # Update existing profile with weighted average
         old_emb = np.array(existing["embedding"], dtype=np.float32)
         new_emb = np.array(embedding, dtype=np.float32)
@@ -145,6 +151,9 @@ def create_or_update_profile(
             "color": color,
             "created_at": now,
             "updated_at": now,
+            "embeddingSpaceId": embedding_space_id,
+            "revision": 1,
+            "enrollmentProvenance": {"source": "enrollment", "embeddingSpaceId": embedding_space_id},
         }
 
         result = call_resource("mongo", {
@@ -163,8 +172,14 @@ def add_sample_to_profile(
     profile: Dict[str, Any],
     embedding: List[float],
     duration: float,
+    embedding_space_id: str = "legacy-unknown",
 ) -> Dict[str, Any]:
     """Update an existing profile by ID without changing its identity flags."""
+    existing_space = profile.get("embeddingSpaceId", "legacy-unknown")
+    if existing_space != embedding_space_id:
+        raise ValueError(
+            f"Embedding space mismatch for profile {profile.get('name')}: {existing_space} != {embedding_space_id}; re-enroll the profile"
+        )
     normalized = np.array(_normalize_embedding(embedding), dtype=np.float32)
     old_embedding = np.array(profile["embedding"], dtype=np.float32)
     old_count = int(profile.get("sample_count", 1))
@@ -179,6 +194,8 @@ def add_sample_to_profile(
         "sample_count": old_count + 1,
         "total_duration": old_duration + duration,
         "updated_at": datetime.now(UTC),
+        "embeddingSpaceId": embedding_space_id,
+        "revision": int(profile.get("revision", 1)),
     }
     result = call_resource("mongo", {
         "action": "updateOne",

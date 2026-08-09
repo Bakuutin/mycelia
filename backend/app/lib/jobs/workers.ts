@@ -232,7 +232,7 @@ export async function startWorkers() {
         );
         try {
           await enqueueJob(
-            getContinuationJobData(job.data) as typeof job.data,
+            getContinuationJobData(job.data, job.returnvalue) as typeof job.data,
             {
               trigger: { type: "auto", reason: "hasMore" },
             },

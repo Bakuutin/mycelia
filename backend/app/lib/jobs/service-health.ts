@@ -242,6 +242,12 @@ async function probeDiarizator(): Promise<ExternalServiceHealth> {
       signal: AbortSignal.timeout(5_000),
     });
     const body = await response.text();
+    let metadata: Record<string, unknown> | undefined;
+    try {
+      metadata = JSON.parse(body);
+    } catch {
+      metadata = undefined;
+    }
     return {
       id: "diarizator",
       label: "Diarizator (speaker service)",
@@ -252,6 +258,7 @@ async function probeDiarizator(): Promise<ExternalServiceHealth> {
       latencyMs: Math.round(performance.now() - startedAt),
       checkedAt,
       usedBy,
+      metadata,
     };
   } catch (error) {
     return {

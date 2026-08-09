@@ -25,6 +25,7 @@ export interface ExternalServiceHealth {
   message: string;
   checkedAt: string;
   usedBy: string[];
+  metadata?: Record<string, unknown>;
   routes?: Array<{
     providerProfileId: string;
     providerProfileName: string;
@@ -48,6 +49,7 @@ export const JOB_SERVICE_DEPENDENCIES: Record<string, ExternalServiceId[]> = {
   // speakerMatching is pure numpy over stored embeddings — no diarizator needed.
   diarization: ["diarizator"],
   enrollment: ["diarizator"],
+  profileReenrollment: ["diarizator"],
 };
 
 export function getJobServiceDependencies(

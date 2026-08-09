@@ -26,3 +26,11 @@ Deno.test("other job continuations preserve their validated data", () => {
   const data = { type: "transcription", limit: 10 };
   expect(getContinuationJobData(data)).toBe(data);
 });
+
+Deno.test("cursor-based workers advance their continuation cursor", () => {
+  const data = { type: "speakerIdentity", cursor: "old" };
+  expect(getContinuationJobData(data, { cursor: "new" })).toEqual({
+    type: "speakerIdentity",
+    cursor: "new",
+  });
+});

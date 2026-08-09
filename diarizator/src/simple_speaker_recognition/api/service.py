@@ -15,6 +15,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from simple_speaker_recognition.core.audio_backend import AudioBackend
+from simple_speaker_recognition.provenance import build_runtime_fingerprint
 
 
 # Load .env from root directory if running locally
@@ -108,11 +109,22 @@ app = FastAPI(title="PyAnnote Diarization Service", version="1.0.0", lifespan=li
 @app.get("/health")
 async def health():
     """Health check endpoint."""
+    fingerprint = None
+    if audio_backend is not None:
+        fingerprint = build_runtime_fingerprint(
+            diarization_model=audio_backend.diarization_model,
+            embedding_model=audio_backend.embedding_model,
+            sample_rate=16000,
+            embedding_dimension=int(audio_backend.embedder.dimension),
+            preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
+        )
     return {
         "status": "ok",
         "version": "1.0.0",
         "device": str(device),
         "service": "pyannote-diarization",
+        "ready": audio_backend is not None,
+        **(fingerprint or {}),
     }
 
 
@@ -198,6 +210,13 @@ async def embed(
             "embedding": emb_flat.tolist(),
             "dimension": len(emb_flat),
             "duration": round(duration, 3),
+            **build_runtime_fingerprint(
+                diarization_model=audio_backend.diarization_model,
+                embedding_model=audio_backend.embedding_model,
+                sample_rate=16000,
+                embedding_dimension=len(emb_flat),
+                preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
+            ),
         }
 
     except ValueError as e:
@@ -635,7 +654,17 @@ async def diarize(
             )
             log.debug(f"Matched cluster IDs: {sorted(matched_cluster_ids)}")
 
-        return {"segments": result_segments, "summary": summary}
+        return {
+            "segments": result_segments,
+            "summary": summary,
+            **build_runtime_fingerprint(
+                diarization_model=audio_backend.diarization_model,
+                embedding_model=audio_backend.embedding_model,
+                sample_rate=16000,
+                embedding_dimension=int(audio_backend.embedder.dimension),
+                preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
+            ),
+        }
 
     except Exception as e:
         log.error(f"Error during diarization: {e}", exc_info=True)

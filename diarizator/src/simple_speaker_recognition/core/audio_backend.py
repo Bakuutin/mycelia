@@ -39,6 +39,9 @@ class AudioBackend:
             "DIARIZATION_MODEL",
             "pyannote/speaker-diarization-community-1",
         )
+        self.embedding_model = os.environ.get(
+            "EMBEDDING_MODEL", "pyannote/wespeaker-voxceleb-resnet34-LM"
+        )
         logger.debug(f"Initializing AudioBackend with device: {device}")
         logger.info("Loading diarization pipeline: %s", self.diarization_model)
         self.diar = Pipeline.from_pretrained(self.diarization_model, token=hf_token).to(
@@ -49,7 +52,7 @@ class AudioBackend:
         # Use the EXACT same embedding model that the diarization pipeline uses internally
         logger.debug("Loading wespeaker-voxceleb-resnet34-LM embedding model")
         self.embedder = PretrainedSpeakerEmbedding(
-            "pyannote/wespeaker-voxceleb-resnet34-LM", device=device
+            self.embedding_model, device=device
         )
         logger.debug(f"Embedding model loaded, dimension: {self.embedder.dimension}")
         logger.debug(f"AudioBackend ready (audio backend: {AUDIO_BACKEND})")

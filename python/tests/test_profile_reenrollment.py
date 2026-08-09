@@ -1,0 +1,41 @@
+from pathlib import Path
+from sys import path
+from unittest.mock import patch
+
+from bson import ObjectId
+
+path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from jobs.profile_reenrollment import (  # noqa: E402
+    ProfileReenrollmentJobData,
+    process_profile_reenrollment_job,
+)
+
+
+def test_rebuilds_profile_in_one_embedding_space() -> None:
+    profile_id = ObjectId()
+    samples = [{"_id": ObjectId()}, {"_id": ObjectId()}]
+    writes = []
+
+    def resource(_name, request):
+        if request["action"] == "find":
+            return samples
+        writes.append(request)
+        return {"matchedCount": 1}
+
+    embeddings = iter([
+        {"embedding": [1.0, 0.0], "duration": 3.0, "embeddingSpaceId": "space-v1"},
+        {"embedding": [0.8, 0.2], "duration": 4.0, "embeddingSpaceId": "space-v1"},
+    ])
+    with (
+        patch("jobs.profile_reenrollment.get_profile_by_id", return_value={"_id": profile_id, "revision": 1}),
+        patch("jobs.profile_reenrollment._get_audio_from_gridfs", return_value=b"wav"),
+        patch("jobs.profile_reenrollment._extract_embedding", side_effect=lambda _audio: next(embeddings)),
+        patch("jobs.profile_reenrollment.call_resource", side_effect=resource),
+    ):
+        result = process_profile_reenrollment_job("job-1", ProfileReenrollmentJobData(profileId=str(profile_id)), lambda _progress: None)
+
+    assert result["profileRevision"] == 2
+    update = writes[-1]["update"]["$set"]
+    assert update["embeddingSpaceId"] == "space-v1"
+    assert update["sample_count"] == 2

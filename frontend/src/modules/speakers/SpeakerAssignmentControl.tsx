@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
 import {
-  buildSpeakerAssignmentQuery,
   normalizeSpeakerEmbedding,
   type SpeakerAssignmentScope,
 } from "@/lib/speakerAssignment";
@@ -62,6 +61,7 @@ interface SpeakerAssignmentControlProps {
   duration?: number;
   matchedSpeaker?: MatchedSpeakerValue;
   onChanged: (matchedSpeaker?: MatchedSpeakerValue) => void;
+  embeddingSpaceId?: string;
 }
 
 export function SpeakerAssignmentControl({
@@ -72,6 +72,7 @@ export function SpeakerAssignmentControl({
   duration = 0,
   matchedSpeaker,
   onChanged,
+  embeddingSpaceId = "legacy-unknown",
 }: SpeakerAssignmentControlProps) {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<SpeakerAssignmentScope>("segment");
@@ -114,18 +115,9 @@ export function SpeakerAssignmentControl({
     [profiles, selectedProfileId],
   );
 
-  const assignmentQuery = () =>
-    buildSpeakerAssignmentQuery({
-      id: segmentId,
-      originalId,
-      speaker,
-    }, scope);
-
   const updateAssignment = async (profile?: SpeakerProfileOption) => {
     setSaving(true);
     try {
-      const query = assignmentQuery();
-      const action = scope === "segment" ? "updateOne" : "updateMany";
       const matched = profile
         ? {
           profile_id: { $oid: normalizeObjectId(profile._id)! },
@@ -136,13 +128,13 @@ export function SpeakerAssignmentControl({
         }
         : undefined;
 
-      await callResource("mongo", {
-        action,
-        collection: "diarizations",
-        query,
-        update: matched
-          ? { $set: { matched_speaker: matched } }
-          : { $unset: { matched_speaker: "" } },
+      const normalizedSegmentId = normalizeObjectId(segmentId);
+      if (!normalizedSegmentId) throw new Error("Diarization segment has no valid ID");
+      await callResource("speaker-segments", {
+        action: "assign",
+        segmentId: normalizedSegmentId,
+        scope,
+        ...(profile ? { profileId: normalizeObjectId(profile._id) } : {}),
       });
 
       setSelectedProfileId(profile ? normalizeObjectId(profile._id)! : "");
@@ -181,6 +173,9 @@ export function SpeakerAssignmentControl({
         source: "diarization_segment",
         created_at: now,
         updated_at: now,
+        embeddingSpaceId,
+        revision: 1,
+        enrollmentProvenance: { source: "diarization_segment", embeddingSpaceId },
       };
       const result = await callResource("mongo", {
         action: "insertOne",

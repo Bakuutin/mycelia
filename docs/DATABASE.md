@@ -1,5 +1,15 @@
 # Database Documentation
 
+## Voice identity collections
+
+- `diarization_runs`: generation provenance and lifecycle (`building`, `ready`, `active`, `superseded`, `failed`).
+- `diarizations`: intervals with `runId`, `generation`, `embeddingSpaceId`, `lifecycleStatus` and tri-state `speakerIdentity`.
+- `speaker_annotations`: manual interval labels projected by overlap; these override automatic identity.
+- `speaker_calibrations`: thresholds and validation metrics for a profile revision/embedding space.
+- `speaker_profiles`: includes `revision`, `embeddingSpaceId` and enrollment provenance.
+
+See [VOICE_IDENTITY_RUNBOOK.md](VOICE_IDENTITY_RUNBOOK.md) for migration and purge invariants.
+
 This document describes the database structure, collections, fields, and relationships for the Mycelia system.
 
 ## Overview

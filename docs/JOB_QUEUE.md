@@ -1,5 +1,13 @@
 # Job Queue System
 
+## Voice Identity jobs
+
+- `profileReenrollment`: rebuilds a profile from every linked saved sample and advances its revision.
+- `diarization`: `missing` processes only uncovered speech; `build_generation` writes a bounded, cursor-resumable versioned run without changing active data.
+- `speakerIdentity`: idempotent tri-state matching over stored embeddings for one run/profile revision/calibration.
+
+`speakerMatching` remains a legacy compatibility worker. New historical backfills should use `speakerIdentity`.
+
 Mycelia uses a distributed job queue system with **isolated worker processes** that execute tasks in sandboxed environments with scoped permissions.
 
 ## Architecture

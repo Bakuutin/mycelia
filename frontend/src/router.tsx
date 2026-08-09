@@ -16,6 +16,7 @@ import WorkersPage from "./pages/settings/WorkersPage";
 import MapsSettingsPage from "./pages/settings/MapsSettingsPage";
 import WorkerDetailPage from "./pages/settings/WorkerDetailPage";
 import VoiceProfilesPage from "./pages/settings/VoiceProfilesPage";
+import VoiceIdentityReviewPage from "./pages/settings/VoiceIdentityReviewPage";
 import ConfigSettingsPage from "./pages/settings/ConfigSettingsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
@@ -204,6 +205,10 @@ export const router = createBrowserRouter([
           {
             path: "voice-profiles",
             element: <VoiceProfilesPage />,
+          },
+          {
+            path: "voice-identity",
+            element: <VoiceIdentityReviewPage />,
           },
         ],
       },

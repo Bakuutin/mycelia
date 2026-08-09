@@ -202,6 +202,7 @@ def process_enrollment_job(
     
     embedding = embed_result["embedding"]
     duration = embed_result["duration"]
+    embedding_space_id = embed_result.get("embeddingSpaceId", "legacy-unknown")
     
     progress_callback({
         "stage": "saving_profile",
@@ -214,13 +215,14 @@ def process_enrollment_job(
             existing = get_profile_by_id(data.profile_id)
             if not existing:
                 raise ValueError(f"Profile not found: {data.profile_id}")
-            profile = add_sample_to_profile(existing, embedding, duration)
+            profile = add_sample_to_profile(existing, embedding, duration, embedding_space_id)
         else:
             profile = create_or_update_profile(
                 name=data.name,
                 embedding=embedding,
                 duration=duration,
                 is_primary=data.is_primary,
+                embedding_space_id=embedding_space_id,
             )
     except Exception as e:
         logger.error(f"Failed to save profile: {e}")
@@ -250,4 +252,6 @@ def process_enrollment_job(
         "sample_count": profile.get("sample_count"),
         "total_duration": profile.get("total_duration"),
         "is_primary": profile.get("is_primary"),
+        "embeddingSpaceId": profile.get("embeddingSpaceId"),
+        "revision": profile.get("revision", 1),
     }

@@ -13,6 +13,10 @@ const PIPELINE_STAGES = [
   { type: "conversation_chunk_creator", label: "Conversation chunks" },
   { type: "conversation_extractor_merged", label: "Conversation extraction" },
   { type: "summarization", label: "Summarization" },
+  { type: "diarization", label: "Speaker diarization" },
+  { type: "speakerMatching", label: "Legacy speaker matching" },
+  { type: "speakerIdentity", label: "Speaker identity" },
+  { type: "enrollment", label: "Voice enrollment" },
 ] as const;
 
 const PIPELINE_STATS_MAX_TIME_MS = 10_000;
@@ -642,6 +646,10 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       pendingSequenceChunkStatsResult,
       unassignedTranscriptions,
       conversationsAwaitingSummary,
+      diarizationBacklog,
+      speakerMatchingBacklog,
+      speakerIdentityBacklog,
+      enrollmentBacklog,
       jobStatsResult,
       recentJobsResult,
       serverConfig,
@@ -803,6 +811,32 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         query: { isConversation: true, "summaries.0.date": { $exists: false } },
       }),
       mongo({
+        action: "count",
+        collection: "audio_chunks",
+        query: {
+          "vad.has_speech": true,
+          $and: [
+            { $or: [{ diarized_at: { $exists: false } }, { diarized_at: null }] },
+            { $or: [{ processing_by: { $exists: false } }, { processing_by: null }] },
+          ],
+        },
+      }),
+      mongo({
+        action: "count",
+        collection: "diarizations",
+        query: { embedding: { $exists: true }, matched_speaker: { $exists: false } },
+      }),
+      mongo({
+        action: "count",
+        collection: "diarizations",
+        query: { lifecycleStatus: "active", embedding: { $exists: true }, speakerIdentity: { $exists: false } },
+      }),
+      mongo({
+        action: "count",
+        collection: "voice_samples.files",
+        query: { "metadata.profile_id": { $exists: false } },
+      }),
+      mongo({
         action: "aggregate",
         collection: "jobs",
         pipeline: [
@@ -896,6 +930,10 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       conversation_extractor_merged: convChunksReady + convChunksProcessing +
         convChunksError,
       summarization: conversationsAwaitingSummary,
+      diarization: diarizationBacklog,
+      speakerMatching: speakerMatchingBacklog,
+      speakerIdentity: speakerIdentityBacklog,
+      enrollment: enrollmentBacklog,
     };
     const stageErrors: Record<string, number> = {
       ingestion: sourceFilesStats.errors,

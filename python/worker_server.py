@@ -43,12 +43,16 @@ def _load_jobs():
     from jobs.enrollment import EnrollmentJobData, process_enrollment_job
     from jobs.speaker_matching import SpeakerMatchingJobData, process_speaker_matching_job
     from jobs.diarization import DiarizationJobData, process_diarization_job
+    from jobs.speaker_identity import SpeakerIdentityJobData, process_speaker_identity_job
+    from jobs.profile_reenrollment import ProfileReenrollmentJobData, process_profile_reenrollment_job
 
     register_job("vad", VadJobData, process_vad_job)
     register_job("testPythonIntegration", TestPythonIntegrationJobData, process_test_python_integration_job)
     register_job("enrollment", EnrollmentJobData, process_enrollment_job)
     register_job("speakerMatching", SpeakerMatchingJobData, process_speaker_matching_job)
     register_job("diarization", DiarizationJobData, process_diarization_job)
+    register_job("speakerIdentity", SpeakerIdentityJobData, process_speaker_identity_job)
+    register_job("profileReenrollment", ProfileReenrollmentJobData, process_profile_reenrollment_job)
 
 
 _load_jobs()

@@ -32,7 +32,7 @@ class EnrollmentJobTest(TestCase):
             patch("jobs.enrollment._get_audio_from_gridfs", return_value=b"wav"),
             patch(
                 "jobs.enrollment._extract_embedding",
-                return_value={"embedding": [1.0, 0.0], "duration": 10.0},
+                return_value={"embedding": [1.0, 0.0], "duration": 10.0, "embeddingSpaceId": "space-v1"},
             ),
             patch("jobs.enrollment.get_profile_by_id", return_value=profile),
             patch("jobs.enrollment.add_sample_to_profile", return_value=profile) as add,
@@ -51,7 +51,7 @@ class EnrollmentJobTest(TestCase):
                 lambda _progress: None,
             )
 
-        add.assert_called_once_with(profile, [1.0, 0.0], 10.0)
+        add.assert_called_once_with(profile, [1.0, 0.0], 10.0, "space-v1")
         link_request = resource.call_args.args[1]
         self.assertEqual(link_request["collection"], "voice_samples.files")
         self.assertEqual(link_request["update"]["$set"]["metadata.profile_id"], profile_id)

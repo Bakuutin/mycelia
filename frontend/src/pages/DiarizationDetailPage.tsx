@@ -28,6 +28,13 @@ interface DiarizationDoc {
   duration?: number;
   created_at?: Date;
   matched_speaker?: MatchedSpeakerValue;
+  runId?: string;
+  speakerIdentity?: {
+    state: "matched" | "rejected" | "uncertain";
+    source?: string;
+    annotationId?: unknown;
+  };
+  embeddingSpaceId?: string;
 }
 
 interface EmbeddingHeatmapProps {
@@ -179,6 +186,7 @@ const DiarizationDetailPage = () => {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioLoading, setAudioLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -193,7 +201,16 @@ const DiarizationDetailPage = () => {
         });
 
         if (result) {
-          setDiarization(result);
+          const active = await callResource("speaker-segments", {
+            action: "list",
+            start: result.start,
+            end: result.end,
+            limit: 100,
+          }) as { segments: DiarizationDoc[] };
+          const projected = active.segments.find((segment) =>
+            normalizeObjectId(segment._id) === id
+          );
+          setDiarization(projected ?? result);
         } else {
           setError("Diarization not found");
         }
@@ -208,6 +225,61 @@ const DiarizationDetailPage = () => {
 
     fetchData();
   }, [id]);
+
+  const annotateIdentity = async (state: "me" | "not-me" | "clear") => {
+    if (!diarization) return;
+    setAnnotating(true);
+    try {
+      if (state === "clear") {
+        const annotationId = normalizeObjectId(
+          diarization.speakerIdentity?.annotationId,
+        );
+        if (!annotationId) throw new Error("This segment has no manual annotation");
+        await callResource("speaker-segments", {
+          action: "delete-annotation",
+          id: annotationId,
+        });
+        setDiarization({ ...diarization, speakerIdentity: undefined });
+        return;
+      }
+      const profiles = await callResource("mongo", {
+        action: "find",
+        collection: "speaker_profiles",
+        query: { is_primary: true },
+        options: { limit: 1 },
+      }) as Array<{ _id: unknown }>;
+      const profileId = normalizeObjectId(profiles[0]?._id);
+      const originalId = normalizeObjectId(
+        diarization.original_id ?? diarization.original,
+      );
+      const segmentId = normalizeObjectId(diarization._id);
+      if (!profileId || !originalId) {
+        throw new Error("Primary profile or original audio is missing");
+      }
+      await callResource("speaker-segments", {
+        action: "annotate",
+        originalId,
+        segmentId,
+        runId: diarization.runId,
+        start: diarization.start,
+        end: diarization.end,
+        ...(state === "me"
+          ? { profileId, excludedProfileIds: [] }
+          : { excludedProfileIds: [profileId] }),
+      });
+      setDiarization({
+        ...diarization,
+        speakerIdentity: {
+          state: state === "me" ? "matched" : "rejected",
+          source: "manual_projection",
+        },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update identity");
+    } finally {
+      setAnnotating(false);
+    }
+  };
 
   const loadAudio = async () => {
     if (!diarization || audioUrl) return;
@@ -360,6 +432,7 @@ const DiarizationDetailPage = () => {
               embedding={diarization.embedding}
               duration={diarization.duration ?? durationSeconds}
               matchedSpeaker={diarization.matched_speaker}
+              embeddingSpaceId={diarization.embeddingSpaceId}
               onChanged={(matchedSpeaker) =>
                 setDiarization((current) =>
                   current
@@ -367,6 +440,37 @@ const DiarizationDetailPage = () => {
                     : current
                 )}
             />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => void annotateIdentity("me")}
+                disabled={annotating}
+              >
+                This is me
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void annotateIdentity("not-me")}
+                disabled={annotating}
+              >
+                Not me
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void annotateIdentity("clear")}
+                disabled={annotating ||
+                  diarization.speakerIdentity?.source !== "manual_projection"}
+              >
+                Clear manual label
+              </Button>
+              {diarization.speakerIdentity && (
+                <span className="self-center text-xs text-muted-foreground">
+                  {diarization.speakerIdentity.state} · {diarization.speakerIdentity.source}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

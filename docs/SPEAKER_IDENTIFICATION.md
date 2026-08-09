@@ -1,5 +1,7 @@
 # Speaker Identification
 
+> Versioned tri-state identity, calibration, backfill and purge operations are documented in [VOICE_IDENTITY_RUNBOOK.md](VOICE_IDENTITY_RUNBOOK.md). `matched_speaker` is a compatibility projection; new consumers should read `speakerIdentity` through the `speaker-segments` resource.
+
 This guide explains how to set up and use voice identification to recognize enrolled speakers in your recordings.
 
 ## Overview

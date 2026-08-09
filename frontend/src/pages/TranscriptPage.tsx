@@ -56,6 +56,12 @@ interface DiarizationDoc {
     name: string;
     similarity: number;
   };
+  speakerIdentity?: {
+    state: "matched" | "rejected" | "uncertain";
+    profileId?: unknown;
+    primaryScore?: number;
+    source?: "automatic" | "manual_projection";
+  };
 }
 
 interface ConversationDoc {
@@ -202,6 +208,18 @@ const TranscriptPage = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchSegments, setSearchSegments] = useState<RenderSegment[]>([]);
   const [lastSearchedQ, setLastSearchedQ] = useState<string>(initialQ);
+  const [identityFilter, setIdentityFilter] = useState<
+    "all" | "matched" | "rejected" | "uncertain"
+  >("all");
+  const [profileFilter, setProfileFilter] = useState("all");
+  const [minConfidence, setMinConfidence] = useState(0);
+  const visibleProfiles = useMemo(() => Array.from(new Map(
+    diarizations.flatMap((item) => {
+      const id = normalizeObjectId(item.speakerIdentity?.profileId ?? item.matched_speaker?.profile_id);
+      const name = item.matched_speaker?.name ?? (item.speakerIdentity?.state === "matched" ? "Sky" : null);
+      return id && name ? [[id, name] as const] : [];
+    }),
+  ).entries()), [diarizations]);
   const [openingConversationKey, setOpeningConversationKey] = useState<
     string | null
   >(null);
@@ -252,16 +270,13 @@ const TranscriptPage = () => {
     rangeStart: Date,
     rangeEnd: Date,
   ): Promise<DiarizationDoc[]> {
-    const docs: DiarizationDoc[] = await callResource("mongo", {
-      action: "find",
-      collection: "diarizations",
-      query: {
-        start: { $lt: rangeEnd },
-        end: { $gt: rangeStart },
-      },
-      options: { sort: { start: 1 }, limit: 5000 },
-    });
-    return docs;
+    const result = await callResource("speaker-segments", {
+      action: "list",
+      start: rangeStart,
+      end: rangeEnd,
+      limit: 5000,
+    }) as { segments: DiarizationDoc[] };
+    return result.segments;
   }
 
   async function fetchSegmentsRange(
@@ -800,6 +815,30 @@ const TranscriptPage = () => {
           >
             Latest 15min
           </Button>
+          <select
+            value={identityFilter}
+            onChange={(event) => setIdentityFilter(event.target.value as typeof identityFilter)}
+            className="h-10 rounded-md border bg-background px-3 text-sm"
+            aria-label="Speaker identity filter"
+          >
+            <option value="all">All voices</option>
+            <option value="matched">Contains Sky</option>
+            <option value="rejected">Not Sky</option>
+            <option value="uncertain">Uncertain</option>
+          </select>
+          <select
+            value={profileFilter}
+            onChange={(event) => setProfileFilter(event.target.value)}
+            className="h-10 rounded-md border bg-background px-3 text-sm"
+            aria-label="Speaker profile filter"
+          >
+            <option value="all">All profiles</option>
+            {visibleProfiles.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+          <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-xs text-muted-foreground">
+            Confidence ≥ {Math.round(minConfidence * 100)}%
+            <input type="range" min="0" max="1" step="0.05" value={minConfidence} onChange={(event) => setMinConfidence(Number(event.target.value))} />
+          </label>
           <Button
             type="submit"
             disabled={loading || !formStartDate || !formEndDate || searching}
@@ -844,7 +883,17 @@ const TranscriptPage = () => {
           )
           : (
             <div className="divide-y">
-              {(lastSearchedQ ? searchSegments : segments).map(
+              {(lastSearchedQ ? searchSegments : segments).filter((segment) => {
+                if (identityFilter === "all" && profileFilter === "all" && minConfidence === 0) return true;
+                return diarizations.some((diarization) => {
+                  if (!diarizationOverlapsTranscript(diarization, segment)) return false;
+                  if (identityFilter !== "all" && diarization.speakerIdentity?.state !== identityFilter) return false;
+                  const profileId = normalizeObjectId(diarization.speakerIdentity?.profileId ?? diarization.matched_speaker?.profile_id);
+                  if (profileFilter !== "all" && profileId !== profileFilter) return false;
+                  const score = diarization.speakerIdentity?.primaryScore ?? diarization.matched_speaker?.similarity ?? 0;
+                  return score >= minConfidence;
+                });
+              }).map(
                 (seg, idx, arr) => {
                   const prev = idx > 0 ? arr[idx - 1] : null;
                   const showGap = prev &&
@@ -1036,6 +1085,11 @@ const TranscriptPage = () => {
                                   diarization.embedding,
                                 ) || "#6b7280"}
                               />
+                            ))}
+                            {Array.from(new Set(diarizationsInSegment.map((d) => d.speakerIdentity?.state).filter(Boolean))).map((state) => (
+                              <Badge key={state} variant="outline" className={state === "matched" ? "border-green-500 text-green-700" : state === "rejected" ? "border-slate-400 text-slate-600" : "border-amber-500 text-amber-700"}>
+                                {state === "matched" ? "Sky" : state === "rejected" ? "not Sky" : "uncertain"}
+                              </Badge>
                             ))}
                           </div>
                           <div className="whitespace-pre-wrap leading-relaxed">
