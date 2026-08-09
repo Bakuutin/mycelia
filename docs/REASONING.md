@@ -114,7 +114,7 @@ B-vs-C comparison to green-light the merged extractor as sole primary.
 
 12 stratified completed chunks (0.5k-17k transcript chars, RU-dominant), one
 run per arm, `force`+`chunkId` re-extraction, metrics from job artifacts.
-Arms A/B/C ran on the selfhost route (Qwen3.6-27B Q4, llama.cpp); DA/DB/DC on
+Arms A/B/C ran on the selfhost route (a local ~27B model on llama.cpp); DA/DB/DC on
 OpenRouter (deepseek-v4-flash). "Thinking" = `reasoning: "default"` for Qwen
 (thinks by default), `"on"` for DeepSeek.
 
@@ -159,6 +159,6 @@ Findings:
    two arms) — duplicate-merge tooling stays important.
 
 Caveats: single run per arm, completeness metrics only (no manual accuracy
-audit), 12 chunks. The raw per-chunk rows live in the experiment's
-`ab-results.jsonl` (job ids included — every job is inspectable on the Jobs
-page).
+audit), 12 chunks. The raw per-chunk rows are kept outside the repository
+(they contain transcript excerpts); every job id is inspectable on the Jobs
+page.

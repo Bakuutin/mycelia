@@ -30,3 +30,6 @@ misc/.htpasswd
 cloudflare.ini
 qdrant_storage/*
 .playwright-cli
+
+# Experiment dumps contain transcript excerpts — keep them out of git
+docs/reasoning-ab-*.jsonl
