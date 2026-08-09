@@ -493,6 +493,7 @@ const capability: JobCapability = {
     > = [];
     let conversationsProcessed = 0;
     let tagsApplied = 0;
+    let markersBackfilled = 0;
     const inferenceRuns: InferenceProvenance[] = [];
     const artifacts: Array<{
       conversationId: string;
@@ -610,6 +611,51 @@ const capability: JobCapability = {
 
       for (const rel of tagRelationships || []) {
         taggedConversationIds.add(rel.relationship.subject.toString());
+      }
+
+      // Conversations that already carry tag edges but no taggingRuns marker
+      // (tagged manually or by pre-marker extractors) would otherwise stay in
+      // the untagged count forever and keep the watchdog enqueuing empty
+      // runs. Record the decision so they leave the backlog.
+      const alreadyTagged = allConversations.filter((c) =>
+        taggedConversationIds.has(c._id.toString()) &&
+        !(c.metadata?.aiProvenance?.taggingRuns?.length)
+      );
+      for (const conversation of alreadyTagged) {
+        try {
+          const latest = await objects({
+            action: "get",
+            id: conversation._id.toString(),
+          }) as Conversation;
+          const priorRuns = latest.metadata?.aiProvenance?.taggingRuns ?? [];
+          if (priorRuns.length > 0) continue;
+          await objects({
+            action: "update",
+            id: conversation._id.toString(),
+            version: latest.version ?? 0,
+            field: "metadata.aiProvenance.taggingRuns",
+            value: [{
+              task: "tagging",
+              parseStatus: "already_tagged",
+              selectedTags: [],
+              selectedTagCount: 0,
+              jobId: job.id,
+              generatedAt: new Date(),
+              source: "marker_backfill_existing_edges",
+            }],
+          });
+          markersBackfilled++;
+        } catch (error) {
+          console.error(
+            `[Tagger] Failed to backfill marker for ${conversation._id}:`,
+            error,
+          );
+        }
+      }
+      if (markersBackfilled > 0) {
+        console.log(
+          `[Tagger] Job ${job.id}: backfilled taggingRuns markers on ${markersBackfilled} already-tagged conversation(s)`,
+        );
       }
 
       conversationsToProcess = allConversations
@@ -823,6 +869,7 @@ const capability: JobCapability = {
       conversationsProcessed,
       processed: conversationsProcessed,
       tagsApplied,
+      ...(markersBackfilled > 0 ? { markersBackfilled } : {}),
       hasMore,
       ...(artifacts.length > 0 ? { artifacts } : {}),
       // Compact routing summary so the jobs list can show the provider and
