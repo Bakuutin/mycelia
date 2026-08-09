@@ -11,6 +11,13 @@ export interface LocationPlace {
 
 export type LocationSegmentType = "stay" | "move" | "gap" | "manual";
 
+export interface SegmentSource {
+  manual?: boolean;
+  createdBy?: string;
+  importId?: string;
+  filename?: string | null;
+}
+
 export interface LocationSegment {
   _id: ObjectId | string;
   type: LocationSegmentType;
@@ -24,6 +31,18 @@ export interface LocationSegment {
   distanceM?: number;
   assumed?: boolean;
   source: "derived" | "manual";
+  importIds?: unknown[];
+  sources?: SegmentSource[];
+  overlapIds?: string[];
+}
+
+export function formatSources(sources?: SegmentSource[]): string[] {
+  if (!sources || sources.length === 0) return [];
+  return sources.map((s) =>
+    s.manual ? `✍️ manual${s.createdBy ? ` (${s.createdBy})` : ""}` : `📄 ${
+      s.filename ?? "deleted import"
+    }`
+  );
 }
 
 export interface LocationStatus {
@@ -32,6 +51,8 @@ export interface LocationStatus {
   segmentCount: number;
   geonamesReady: boolean;
   geonamesCount: number;
+  geonamesRefreshedAt: Date | string | null;
+  geonamesSourceUrl: string | null;
   lastImportAt: Date | string | null;
 }
 

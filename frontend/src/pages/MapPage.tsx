@@ -29,6 +29,7 @@ import { LocationMap, formatDurationShort } from "@/components/location/Location
 import { ConversationClustersLayer } from "@/components/location/ConversationClustersLayer";
 import { ImportTracksDialog } from "@/components/location/ImportTracksDialog";
 import { AssignLocationDialog } from "@/components/location/AssignLocationDialog";
+import { GeotagsSheet } from "@/components/location/GeotagsSheet";
 import type {
   ConversationMapGroup,
   LocationPlace,
@@ -90,6 +91,7 @@ const MapPage = () => {
   const [showConversations, setShowConversations] = useState(true);
   const [conversationsAllTime, setConversationsAllTime] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [geotagsOpen, setGeotagsOpen] = useState(false);
   const [assignRange, setAssignRange] = useState<
     { start: Date; end: Date } | null
   >(null);
@@ -304,6 +306,14 @@ const MapPage = () => {
               Download places database
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setGeotagsOpen(true)}
+          >
+            <MapPin className="mr-2 h-4 w-4" />
+            Geotags
+          </Button>
           <Button size="sm" onClick={() => setImportOpen(true)}>
             <Upload className="mr-2 h-4 w-4" />
             Import tracks
@@ -524,7 +534,39 @@ const MapPage = () => {
         )}
       </div>
 
-      <ImportTracksDialog open={importOpen} onOpenChange={setImportOpen} />
+      <ImportTracksDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onShowImportOnMap={(imp) => {
+          if (!imp.timeRange?.start) return;
+          setImportOpen(false);
+          setRange(
+            new Date(new Date(imp.timeRange.start).getTime() - 60 * 60 * 1000),
+            new Date(new Date(imp.timeRange.end).getTime() + 60 * 60 * 1000),
+          );
+        }}
+      />
+      <GeotagsSheet
+        open={geotagsOpen}
+        onOpenChange={setGeotagsOpen}
+        start={start}
+        end={end}
+        onShowOnMap={(segment) => {
+          setGeotagsOpen(false);
+          if (segment.loc) {
+            setFlyTarget([
+              segment.loc.coordinates[1],
+              segment.loc.coordinates[0],
+            ]);
+          } else if (segment.path?.length) {
+            setFlyTarget([segment.path[0][1], segment.path[0][0]]);
+          }
+          if (segment.type === "stay" || segment.type === "manual") {
+            setSelectedGroup(null);
+            setSelectedSegment(segment);
+          }
+        }}
+      />
       <AssignLocationDialog
         open={assignRange !== null}
         onOpenChange={(open) => !open && setAssignRange(null)}

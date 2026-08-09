@@ -36,6 +36,7 @@ interface SettingsState {
   playbackRate: number;
   volume: number;
   autoSave: boolean;
+  mapTileUrl: string;
   setApiEndpoint: (endpoint: string) => void;
   setClientId: (id: string) => void;
   setClientSecret: (secret: string) => void;
@@ -53,8 +54,12 @@ interface SettingsState {
   setPlaybackRate: (rate: number) => void;
   setVolume: (volume: number) => void;
   setAutoSave: (enabled: boolean) => void;
+  setMapTileUrl: (url: string) => void;
   clearSettings: () => void;
 }
+
+export const DEFAULT_MAP_TILE_URL =
+  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 
 function getDefaultApiEndpoint(): string {
   return `${window.location.protocol}//${window.location.host}`;
@@ -79,6 +84,7 @@ export const useSettingsStore = create<SettingsState>()(
       timelineTimeZoneOverride: "UTC",
       favoriteTimeZones: [],
       transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
+      mapTileUrl: DEFAULT_MAP_TILE_URL,
       preferredAudioDeviceId: null,
       echoCancellation: true,
       noiseSuppression: false,
@@ -111,6 +117,8 @@ export const useSettingsStore = create<SettingsState>()(
       setPlaybackRate: (rate) => set({ playbackRate: rate }),
       setVolume: (volume) => set({ volume }),
       setAutoSave: (enabled) => set({ autoSave: enabled }),
+      setMapTileUrl: (url) =>
+        set({ mapTileUrl: url.trim() || DEFAULT_MAP_TILE_URL }),
       clearSettings: () =>
         set({
           apiEndpoint: DEFAULT_API_ENDPOINT,
@@ -123,6 +131,7 @@ export const useSettingsStore = create<SettingsState>()(
           timelineTimeZoneOverride: "UTC",
           favoriteTimeZones: [],
           transcriptThresholdHours: DEFAULT_TRANSCRIPT_THRESHOLD_HOURS,
+          mapTileUrl: DEFAULT_MAP_TILE_URL,
           preferredAudioDeviceId: null,
           echoCancellation: true,
           noiseSuppression: false,

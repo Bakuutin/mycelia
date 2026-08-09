@@ -19,8 +19,11 @@ import { DateTimePicker } from "@/components/ui/datetime-picker";
 import {
   useAssignManualLocation,
   usePlaceSearch,
+  useUpdateSegment,
 } from "@/hooks/useLocationQueries";
-import type { GeonamesCity } from "@/types/location";
+import type { GeonamesCity, LocationSegment } from "@/types/location";
+import { formatPlace } from "@/types/location";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 const pinIcon = L.divIcon({
   className: "",
@@ -46,6 +49,11 @@ interface AssignLocationDialogProps {
   onOpenChange: (open: boolean) => void;
   initialStart?: Date;
   initialEnd?: Date;
+  /**
+   * Edit mode: a manual segment is updated in place; a derived segment gets
+   * a manual override for the same range (derived data is clipped around it).
+   */
+  editSegment?: LocationSegment | null;
 }
 
 export function AssignLocationDialog({
@@ -53,6 +61,7 @@ export function AssignLocationDialog({
   onOpenChange,
   initialStart,
   initialEnd,
+  editSegment,
 }: AssignLocationDialogProps) {
   const [start, setStart] = useState<Date | undefined>(initialStart);
   const [end, setEnd] = useState<Date | undefined>(initialEnd);
@@ -62,16 +71,39 @@ export function AssignLocationDialog({
   const [pickedPoint, setPickedPoint] = useState<
     { lat: number; lng: number } | null
   >(null);
+  const [placeTouched, setPlaceTouched] = useState(false);
+  const tileUrl = useSettingsStore((state) => state.mapTileUrl);
+
+  const isManualEdit = editSegment?.type === "manual";
 
   useEffect(() => {
     if (open) {
-      setStart(initialStart);
-      setEnd(initialEnd);
+      if (editSegment) {
+        setStart(new Date(editSegment.start));
+        setEnd(new Date(editSegment.end));
+        if (editSegment.loc) {
+          setPickedPoint({
+            lat: editSegment.loc.coordinates[1],
+            lng: editSegment.loc.coordinates[0],
+          });
+        } else {
+          setPickedPoint(null);
+        }
+      } else {
+        setStart(initialStart);
+        setEnd(initialEnd);
+        setPickedPoint(null);
+      }
       setSearch("");
       setSelectedCity(null);
-      setPickedPoint(null);
+      setPlaceTouched(false);
     }
-  }, [open, initialStart?.getTime(), initialEnd?.getTime()]);
+  }, [
+    open,
+    initialStart?.getTime(),
+    initialEnd?.getTime(),
+    editSegment ? String(editSegment._id) : null,
+  ]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 250);
@@ -80,6 +112,7 @@ export function AssignLocationDialog({
 
   const { data: cities, isFetching } = usePlaceSearch(debouncedSearch, open);
   const assign = useAssignManualLocation();
+  const update = useUpdateSegment();
 
   const chosen = useMemo(() => {
     if (selectedCity) {
@@ -91,36 +124,47 @@ export function AssignLocationDialog({
     }
     if (pickedPoint) {
       return {
-        label: `${pickedPoint.lat.toFixed(4)}, ${pickedPoint.lng.toFixed(4)}`,
+        label: !placeTouched && editSegment?.place
+          ? formatPlace(editSegment.place)
+          : `${pickedPoint.lat.toFixed(4)}, ${pickedPoint.lng.toFixed(4)}`,
         ...pickedPoint,
       };
     }
     return null;
-  }, [selectedCity, pickedPoint]);
+  }, [selectedCity, pickedPoint, placeTouched, editSegment]);
 
+  const isPending = assign.isPending || update.isPending;
   const canSubmit = !!chosen && !!start && !!end &&
-    end.getTime() > start.getTime() && !assign.isPending;
+    end.getTime() > start.getTime() && !isPending;
 
   const submit = async () => {
     if (!chosen || !start || !end) return;
+    const placeInput = selectedCity
+      ? { geonameId: selectedCity.geonameId }
+      : { latitude: pickedPoint!.lat, longitude: pickedPoint!.lng };
     try {
-      await assign.mutateAsync({
-        start,
-        end,
-        place: selectedCity
-          ? { geonameId: selectedCity.geonameId }
-          : {
-            latitude: pickedPoint!.lat,
-            longitude: pickedPoint!.lng,
-          },
-      });
-      toast.success(
-        `Location "${chosen.label}" assigned. The timeline timezone updates automatically.`,
-      );
+      if (isManualEdit) {
+        await update.mutateAsync({
+          id: String(editSegment!._id),
+          start,
+          end,
+          // Untouched place keeps the stored one (avoid degrading a city
+          // name into raw coordinates).
+          ...(placeTouched || selectedCity ? { place: placeInput } : {}),
+        });
+        toast.success(`Location updated. Timezone follows automatically.`);
+      } else {
+        await assign.mutateAsync({ start, end, place: placeInput });
+        toast.success(
+          editSegment
+            ? `Manual override "${chosen.label}" created — it replaces the imported data for this range.`
+            : `Location "${chosen.label}" assigned. The timeline timezone updates automatically.`,
+        );
+      }
       onOpenChange(false);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to assign location",
+        err instanceof Error ? err.message : "Failed to save location",
       );
     }
   };
@@ -129,10 +173,19 @@ export function AssignLocationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Set location for a time range</DialogTitle>
+          <DialogTitle>
+            {isManualEdit
+              ? "Edit manual location"
+              : editSegment
+              ? "Override with a manual location"
+              : "Set location for a time range"}
+          </DialogTitle>
           <DialogDescription>
-            Tell Mycelia where you were when there is no GPS data. This also
-            sets the timezone for the range.
+            {isManualEdit
+              ? "Adjust the place or the time range; the paired timezone period follows."
+              : editSegment
+              ? "The imported data for this range stays in the database but is replaced by your manual assignment."
+              : "Tell Mycelia where you were when there is no GPS data. This also sets the timezone for the range."}
           </DialogDescription>
         </DialogHeader>
 
@@ -211,13 +264,14 @@ export function AssignLocationDialog({
               scrollWheelZoom
             >
               <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                url={tileUrl}
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
               />
               <PickPoint
                 onPick={(lat, lng) => {
                   setPickedPoint({ lat, lng });
                   setSelectedCity(null);
+                  setPlaceTouched(true);
                 }}
               />
               {chosen && (
@@ -237,10 +291,8 @@ export function AssignLocationDialog({
             Cancel
           </Button>
           <Button onClick={submit} disabled={!canSubmit}>
-            {assign.isPending && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            Set location
+            {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {isManualEdit ? "Save changes" : "Set location"}
           </Button>
         </DialogFooter>
       </DialogContent>

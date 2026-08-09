@@ -31,6 +31,8 @@ export interface TrackPoint {
   ts: Date;
   lat: number;
   lng: number;
+  /** Source import this point came from (provenance). */
+  importId?: unknown;
 }
 
 export interface Segment {
@@ -42,6 +44,17 @@ export interface Segment {
   path?: [number, number][];
   distanceM?: number;
   assumed?: boolean;
+  /** Imports whose points contributed to this segment. */
+  importIds?: unknown[];
+}
+
+/** Unique import ids of the given points, order-stable. */
+function importIdsOf(points: TrackPoint[]): unknown[] {
+  const seen = new Map<string, unknown>();
+  for (const p of points) {
+    if (p.importId != null) seen.set(String(p.importId), p.importId);
+  }
+  return [...seen.values()];
 }
 
 const EARTH_RADIUS_M = 6371000;
@@ -120,6 +133,7 @@ async function segmentSession(points: TrackPoint[]): Promise<Segment[]> {
       end: pts[pts.length - 1].ts,
       path: await simplifyPath(pts),
       distanceM: Math.round(distanceM),
+      importIds: importIdsOf(pts),
     });
   };
 
@@ -155,6 +169,7 @@ async function segmentSession(points: TrackPoint[]): Promise<Segment[]> {
         end: cluster[cluster.length - 1].ts,
         loc: { type: "Point", coordinates: [center.lng, center.lat] },
         radiusM: Math.round(radiusM),
+        importIds: importIdsOf(cluster),
       });
       movePts = [cluster[cluster.length - 1]];
       i = k;
@@ -195,6 +210,7 @@ export async function segmentPoints(points: TrackPoint[]): Promise<Segment[]> {
           haversineM(prev.lat, prev.lng, next.lat, next.lng),
         ),
         assumed: true,
+        importIds: importIdsOf([prev, next]),
       });
     }
     segments.push(...await segmentSession(sessions[s]));
@@ -253,7 +269,7 @@ async function loadPoints(
       options: {
         sort: { ts: 1 },
         limit: POINT_BATCH,
-        projection: { ts: 1, loc: 1 },
+        projection: { ts: 1, loc: 1, importId: 1 },
       },
     });
     for (const doc of batch) {
@@ -261,6 +277,7 @@ async function loadPoints(
         ts: new Date(doc.ts),
         lng: doc.loc.coordinates[0],
         lat: doc.loc.coordinates[1],
+        importId: doc.importId,
       });
     }
     if (batch.length < POINT_BATCH) break;
@@ -422,14 +439,24 @@ async function processWindow(
     docs.map((d) => ({ start: new Date(d.start), end: new Date(d.end) }))
   );
 
-  // Manual assignments are ground truth: assumed gaps never cover them.
+  // Manual assignments are ground truth: every derived segment type is
+  // clipped around them, so a manual override fully replaces derived data
+  // for its range. Clipped stays keep centroid/place; clipped moves keep
+  // their full path (display-only simplification).
+  const MIN_CLIPPED_MS = 60 * 1000;
   const finalSegments: Segment[] = [];
   for (const segment of segments) {
-    if (segment.type !== "gap") {
+    const parts = subtractIntervals(segment, manualSegments);
+    if (
+      parts.length === 1 &&
+      parts[0].start.getTime() === segment.start.getTime() &&
+      parts[0].end.getTime() === segment.end.getTime()
+    ) {
       finalSegments.push(segment);
       continue;
     }
-    for (const part of subtractIntervals(segment, manualSegments)) {
+    for (const part of parts) {
+      if (part.end.getTime() - part.start.getTime() < MIN_CLIPPED_MS) continue;
       finalSegments.push({ ...segment, start: part.start, end: part.end });
     }
   }

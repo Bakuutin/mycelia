@@ -7,11 +7,11 @@ are always displayed correctly.
 
 ## First-time setup
 
-1. **Download the places database** (one time, ~13 MB). Open **Jobs → Run
-   worker → `geonames_download`**, or click **"Download places database"** on
-   the Map page. This loads the offline GeoNames cities dataset (~235k cities)
-   into MongoDB — reverse geocoding then works fully offline, no coordinates
-   ever leave your server.
+1. **Download the places database** (one time, ~13 MB). Open **Settings →
+   Maps → Download database** (live progress bar), or click **"Download
+   places database"** on the Map page. This loads the offline GeoNames cities
+   dataset (~235k cities) into MongoDB — reverse geocoding then works fully
+   offline, no coordinates ever leave your server.
 2. **Export a track from your navigation app.**
    - *Organic Maps*: open the track (Bookmarks & Tracks) → share/export →
      choose **GPX** (preferred) or **KML/KMZ**.
@@ -76,6 +76,34 @@ processing worker maintains `timeline_timezone_periods` records with
 automatically, so times are rendered in the zone you were actually in.
 Manually created timezone periods always win — imported periods are clipped
 around them, never overwrite them.
+
+## Managing geotags
+
+Every segment (geotag) knows where it came from: import file(s) or a manual
+assignment — shown as source chips everywhere.
+
+- **Timeline**: click a Locations band → the panel below shows the place,
+  timezone and source, with **details** (ⓘ), **edit** (✎) and, inside the
+  details card, **Delete / Override / Open in map**.
+- **Map page → Geotags** button: the full list for the current period with
+  type filter, source chips, overlap warnings, and per-row actions (show on
+  map, details, edit, delete).
+- **Deleting** a manual geotag removes the assignment (derived data
+  reappears). Deleting a *derived* geotag permanently deletes the GPS points
+  behind it — re-importing the same file will not restore them (they stay
+  deduplicated away). Deleting a whole import (Settings → Maps or the import
+  dialog) removes all its points.
+- **Duplicates / overlapping tracks**: points from overlapping imports are
+  deduplicated by timestamp+coordinates and merged during segmentation — a
+  segment then simply lists several source files. A manual assignment always
+  wins: all derived segments (stays, moves and gaps) are clipped around it.
+
+## Settings → Maps
+
+One place for everything geo: GeoNames status (count, last update) with a
+live-progress download/update button, the list of track imports with delete,
+the tile-server URL (point it at your own server for fully offline maps), a
+toggle for the timeline Locations track, and a full-reprocess button.
 
 ## Manual locations
 

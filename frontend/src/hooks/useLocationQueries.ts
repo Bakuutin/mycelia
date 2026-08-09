@@ -19,6 +19,8 @@ export const locationKeys = {
     [...locationKeys.all, "forRange", start, end] as const,
   places: (query: string) => [...locationKeys.all, "places", query] as const,
   imports: () => [...locationKeys.all, "imports"] as const,
+  geotags: (filters: Record<string, unknown>) =>
+    [...locationKeys.all, "geotags", filters] as const,
   conversationsOnMap: (start?: number, end?: number) =>
     [...locationKeys.all, "conversationsOnMap", start ?? "all", end ?? "all"] as const,
 };
@@ -136,6 +138,64 @@ export function useConversationsOnMap(
     enabled: enabled && (allTime || (!!start && !!end)),
     staleTime: 60 * 1000,
     placeholderData: (prev) => prev,
+  });
+}
+
+export function useGeotags(
+  filters: {
+    start?: Date;
+    end?: Date;
+    type?: string;
+    importId?: string;
+    limit?: number;
+    skip?: number;
+  },
+  enabled = true,
+) {
+  return useQuery<{ segments: LocationSegment[]; total: number }>({
+    queryKey: locationKeys.geotags({
+      start: filters.start?.getTime(),
+      end: filters.end?.getTime(),
+      type: filters.type,
+      importId: filters.importId,
+      limit: filters.limit,
+      skip: filters.skip,
+    }),
+    queryFn: () =>
+      callResource("location", {
+        action: "list-geotags",
+        ...(filters.start && filters.end
+          ? { start: filters.start, end: filters.end }
+          : {}),
+        ...(filters.type ? { type: filters.type } : {}),
+        ...(filters.importId ? { importId: filters.importId } : {}),
+        limit: filters.limit ?? 100,
+        skip: filters.skip ?? 0,
+      }),
+    enabled,
+    staleTime: 15 * 1000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useUpdateSegment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      id: string;
+      start?: Date;
+      end?: Date;
+      place?: {
+        geonameId?: number;
+        name?: string;
+        latitude?: number;
+        longitude?: number;
+      };
+      timeZone?: string;
+    }) => callResource("location", { action: "update-segment", ...input }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: locationKeys.all });
+    },
   });
 }
 

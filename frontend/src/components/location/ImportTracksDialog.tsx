@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileUp, Loader2, Trash2, Upload } from "lucide-react";
+import { FileUp, Loader2, Upload } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -15,9 +15,10 @@ import { api } from "@/lib/api";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
 import {
   locationKeys,
-  useDeleteLocationImport,
   useLocationImports,
 } from "@/hooks/useLocationQueries";
+import { ImportsList } from "./ImportsList";
+import type { LocationImport } from "@/types/location";
 
 interface ImportResult {
   filename: string;
@@ -32,11 +33,14 @@ interface ImportResult {
 interface ImportTracksDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** "Show on map" action for a listed import (optional). */
+  onShowImportOnMap?: (imp: LocationImport) => void;
 }
 
 export function ImportTracksDialog({
   open,
   onOpenChange,
+  onShowImportOnMap,
 }: ImportTracksDialogProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [results, setResults] = useState<ImportResult[]>([]);
@@ -44,7 +48,6 @@ export function ImportTracksDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const { data: imports } = useLocationImports(open);
-  const deleteImport = useDeleteLocationImport();
   const { visibleTracks, toggleTrack } = useTrackVisibilityStore();
 
   const uploadFiles = useCallback(async (files: File[]) => {
@@ -174,27 +177,8 @@ export function ImportTracksDialog({
             <p className="text-xs font-medium uppercase text-muted-foreground">
               Previous imports
             </p>
-            <div className="max-h-40 space-y-1 overflow-y-auto text-sm">
-              {imports!.map((imp) => (
-                <div
-                  key={String(imp._id)}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <span className="truncate">{imp.filename}</span>
-                  <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-                    {imp.pointCount} pts
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      title="Delete import and its points"
-                      onClick={() => deleteImport.mutate(String(imp._id))}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </span>
-                </div>
-              ))}
+            <div className="max-h-52 overflow-y-auto">
+              <ImportsList enabled={open} onShowOnMap={onShowImportOnMap} />
             </div>
           </div>
         )}

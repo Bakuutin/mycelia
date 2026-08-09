@@ -136,6 +136,22 @@ async function use(job: Job<JobData>): Promise<JobResult> {
     });
   }
 
+  await mongo({
+    action: "updateOne",
+    collection: "location_meta",
+    query: { key: "geonames" },
+    update: {
+      $set: {
+        key: "geonames",
+        cities: upserted,
+        countries: countries.size,
+        sourceUrl: jobData.citiesUrl,
+        refreshedAt: new Date(),
+      },
+    },
+    options: { upsert: true },
+  });
+
   // Backfill place labels on stays created before the database existed.
   const jobs = (input: any) => callResource("jobs", input, { jwt, myceliaUrl });
   try {
@@ -176,6 +192,7 @@ const capability: JobCapability = {
   ),
   policies: [
     { resource: "db/geonames_cities", action: "*", effect: "allow" },
+    { resource: "db/location_meta", action: "*", effect: "allow" },
     { resource: "jobs/location_processing", action: "enqueue", effect: "allow" },
   ],
   allowedHosts: ["download.geonames.org:443"],

@@ -13,6 +13,7 @@ import PromptsPage from "./pages/settings/PromptsPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
 import WorkersPage from "./pages/settings/WorkersPage";
+import MapsSettingsPage from "./pages/settings/MapsSettingsPage";
 import WorkerDetailPage from "./pages/settings/WorkerDetailPage";
 import VoiceProfilesPage from "./pages/settings/VoiceProfilesPage";
 import ConfigSettingsPage from "./pages/settings/ConfigSettingsPage";
@@ -195,6 +196,10 @@ export const router = createBrowserRouter([
           {
             path: "workers/:workerType",
             element: <WorkerDetailPage />,
+          },
+          {
+            path: "maps",
+            element: <MapsSettingsPage />,
           },
           {
             path: "voice-profiles",

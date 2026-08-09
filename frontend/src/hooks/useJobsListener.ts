@@ -67,7 +67,14 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       const response = await api.callResource("jobs", {
         action: "list",
         limit: 1000,
-        statuses: ["active", "waiting", "delayed", "completed", "failed"],
+        statuses: [
+          "active",
+          "waiting",
+          "delayed",
+          "completed",
+          "failed",
+          "cancelled",
+        ],
         ...(options.types?.length && { types: options.types }),
       });
       return response as JobInfo[];

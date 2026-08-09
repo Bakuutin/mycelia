@@ -21,6 +21,21 @@ export function parseJobError(
   const r = failedReason;
   const providerMessage = extractProviderMessage(r);
 
+  if (r === "queue_record_missing") {
+    return {
+      label: "Queue record lost",
+      detail:
+        "Redis no longer had this job when the queue was reconciled — usually a Redis restart, which drops everything queued since its last snapshot. The job was stopped, not failed; re-run it.",
+    };
+  }
+  if (r === "timeout") {
+    return {
+      label: "Timed out",
+      detail:
+        "The job exceeded its configured time limit and was cancelled by queue maintenance.",
+    };
+  }
+
   if (r.includes("requires more credits") || r.includes("can only afford")) {
     const match = r.match(
       /requested up to (\d+) tokens.*can only afford (\d+)/,

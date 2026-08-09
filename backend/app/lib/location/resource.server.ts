@@ -67,6 +67,31 @@ const deleteSegmentSchema = z.object({
   id: z.string().refine(ObjectId.isValid, "Invalid segment id"),
 });
 
+const listGeotagsSchema = z.object({
+  action: z.literal("list-geotags"),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
+  type: z.enum(["stay", "move", "gap", "manual"]).optional(),
+  importId: z.string().refine(ObjectId.isValid, "Invalid import id")
+    .optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+  skip: z.number().int().min(0).default(0),
+});
+
+const updateSegmentSchema = z.object({
+  action: z.literal("update-segment"),
+  id: z.string().refine(ObjectId.isValid, "Invalid segment id"),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
+  place: z.object({
+    geonameId: z.number().optional(),
+    name: z.string().trim().min(1).optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+  }).optional(),
+  timeZone: z.string().optional(),
+});
+
 const conversationsOnMapSchema = z.object({
   action: z.literal("conversations-on-map"),
   start: zDateOrString().optional(),
@@ -93,6 +118,8 @@ export const locationRequestSchema = z.discriminatedUnion("action", [
   searchPlacesSchema,
   assignManualSchema,
   deleteSegmentSchema,
+  listGeotagsSchema,
+  updateSegmentSchema,
   conversationsOnMapSchema,
   statusSchema,
   listImportsSchema,
@@ -114,6 +141,55 @@ function decimatePath(
   }
   result.push(path[path.length - 1]);
   return result;
+}
+
+export interface SegmentSource {
+  manual?: boolean;
+  createdBy?: string;
+  importId?: string;
+  filename?: string | null;
+}
+
+/**
+ * Resolve each segment's provenance into display-ready `sources`:
+ * manual segments → who set them; derived → contributing import files.
+ */
+async function attachSources(
+  mongo: (input: any) => Promise<any>,
+  segments: any[],
+): Promise<void> {
+  const importIds = new Map<string, ObjectId>();
+  for (const segment of segments) {
+    for (const id of segment.importIds ?? []) {
+      importIds.set(String(id), new ObjectId(String(id)));
+    }
+  }
+  let filenames = new Map<string, string>();
+  if (importIds.size > 0) {
+    const imports: any[] = await mongo({
+      action: "find",
+      collection: "location_imports",
+      query: { _id: { $in: [...importIds.values()] } },
+      options: { projection: { filename: 1 } },
+    });
+    filenames = new Map(
+      imports.map((doc) => [String(doc._id), doc.filename]),
+    );
+  }
+  for (const segment of segments) {
+    if (segment.type === "manual") {
+      segment.sources = [
+        { manual: true, createdBy: segment.createdBy } as SegmentSource,
+      ];
+    } else {
+      segment.sources = (segment.importIds ?? []).map((
+        id: unknown,
+      ): SegmentSource => ({
+        importId: String(id),
+        filename: filenames.get(String(id)) ?? null,
+      }));
+    }
+  }
 }
 
 function overlapMs(
@@ -182,6 +258,7 @@ export class LocationResource
             }
           }
         }
+        await attachSources(mongo, visible);
         return { segments: visible, rangeMs, totalSegments: segments.length };
       }
 
@@ -199,6 +276,7 @@ export class LocationResource
           (priority[b.type as keyof typeof priority] ?? 9)
         );
         const segment = segments[0] ?? null;
+        if (segment) await attachSources(mongo, [segment]);
 
         const [before] = await mongo({
           action: "find",
@@ -409,14 +487,187 @@ export class LocationResource
           query: { _id: new ObjectId(input.id) },
         });
         if (!segment) return { success: false, error: "Segment not found" };
-        if (segment.type !== "manual") {
-          throw new Error("Only manual segments can be deleted");
+
+        if (segment.type === "manual") {
+          await mongo({
+            action: "deleteOne",
+            collection: SEGMENTS,
+            query: { _id: new ObjectId(input.id) },
+          });
+          await mongo({
+            action: "deleteMany",
+            collection: TZ_PERIODS,
+            query: {
+              "metadata.origin": "location-manual",
+              start: segment.start,
+              end: segment.end,
+            },
+          });
+          await this.enqueueReprocess(
+            auth,
+            new Date(segment.start),
+            new Date(segment.end),
+            "Manual location removed; regenerating derived segments",
+          );
+          return { success: true, deletedPoints: 0 };
         }
+
+        // Derived segments are rebuilt from GPS points on every processing
+        // run — real deletion means deleting the underlying points (re-import
+        // of the same file is then blocked by point-level dedupe).
+        const pointQuery: Record<string, unknown> = {
+          ts: { $gte: new Date(segment.start), $lte: new Date(segment.end) },
+        };
+        if (segment.importIds?.length) {
+          pointQuery.importId = {
+            $in: segment.importIds.map((id: unknown) =>
+              new ObjectId(String(id))
+            ),
+          };
+        }
+        const deleted = await mongo({
+          action: "deleteMany",
+          collection: POINTS,
+          query: pointQuery,
+        });
         await mongo({
           action: "deleteOne",
           collection: SEGMENTS,
           query: { _id: new ObjectId(input.id) },
         });
+        await this.enqueueReprocess(
+          auth,
+          new Date(segment.start),
+          new Date(segment.end),
+          "Geotag deleted; regenerating segments without its points",
+        );
+        return { success: true, deletedPoints: deleted.deletedCount ?? 0 };
+      }
+
+      case "list-geotags": {
+        const query: Record<string, unknown> = {};
+        if (input.start && input.end) {
+          query.start = { $lt: input.end };
+          query.end = { $gt: input.start };
+        }
+        if (input.type) query.type = input.type;
+        if (input.importId) {
+          query.importIds = new ObjectId(input.importId);
+        }
+        const [segments, total] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: SEGMENTS,
+            query,
+            options: {
+              sort: { start: -1 },
+              skip: input.skip,
+              limit: input.limit,
+              projection: { path: 0 },
+            },
+          }),
+          mongo({ action: "count", collection: SEGMENTS, query }),
+        ]);
+        await attachSources(mongo, segments);
+        // Flag time overlaps within the page (manual vs derived leftovers,
+        // anything the clipping has not cleaned up yet).
+        for (const a of segments) {
+          const overlaps = segments.filter((b: any) =>
+            String(b._id) !== String(a._id) &&
+            new Date(b.start).getTime() < new Date(a.end).getTime() &&
+            new Date(b.end).getTime() > new Date(a.start).getTime()
+          );
+          if (overlaps.length > 0) {
+            a.overlapIds = overlaps.map((b: any) => String(b._id));
+          }
+        }
+        return { segments, total };
+      }
+
+      case "update-segment": {
+        const segment = await mongo({
+          action: "findOne",
+          collection: SEGMENTS,
+          query: { _id: new ObjectId(input.id) },
+        });
+        if (!segment) return { success: false, error: "Segment not found" };
+        if (segment.type !== "manual") {
+          throw new Error(
+            "Only manual segments can be edited; override a derived one with assign-manual instead",
+          );
+        }
+
+        const start = input.start ?? new Date(segment.start);
+        const end = input.end ?? new Date(segment.end);
+        if (end.getTime() <= start.getTime()) {
+          throw new Error("Range end must be after its start");
+        }
+
+        let lat = segment.loc?.coordinates?.[1];
+        let lng = segment.loc?.coordinates?.[0];
+        let place = segment.place;
+        let timeZone: string | undefined = input.timeZone ?? segment.timeZone;
+
+        if (input.place) {
+          if (input.place.geonameId !== undefined) {
+            const city = await mongo({
+              action: "findOne",
+              collection: GEONAMES,
+              query: { geonameId: input.place.geonameId },
+            });
+            if (!city) {
+              throw new Error(`Unknown geonameId: ${input.place.geonameId}`);
+            }
+            lat = city.loc.coordinates[1];
+            lng = city.loc.coordinates[0];
+            place = {
+              name: input.place.name ?? city.name,
+              city: city.name,
+              country: city.country,
+              countryCode: city.countryCode,
+              geonameId: city.geonameId,
+            };
+            if (!input.timeZone) timeZone = city.tz ?? timeZone;
+          } else if (
+            input.place.latitude !== undefined &&
+            input.place.longitude !== undefined
+          ) {
+            lat = input.place.latitude;
+            lng = input.place.longitude;
+            place = {
+              name: input.place.name ??
+                `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+            };
+          } else if (input.place.name) {
+            place = { ...place, name: input.place.name };
+          }
+        }
+        if (!timeZone && lat !== undefined && lng !== undefined) {
+          try {
+            timeZone = tzLookup(lat, lng);
+          } catch {
+            timeZone = undefined;
+          }
+        }
+
+        await mongo({
+          action: "updateOne",
+          collection: SEGMENTS,
+          query: { _id: new ObjectId(input.id) },
+          update: {
+            $set: {
+              start,
+              end,
+              ...(lat !== undefined && lng !== undefined
+                ? { loc: { type: "Point", coordinates: [lng, lat] } }
+                : {}),
+              place,
+              ...(timeZone ? { timeZone } : {}),
+            },
+          },
+        });
+
+        // Recreate the paired manual timezone period.
         await mongo({
           action: "deleteMany",
           collection: TZ_PERIODS,
@@ -426,11 +677,39 @@ export class LocationResource
             end: segment.end,
           },
         });
+        if (timeZone) {
+          await mongo({
+            action: "insertOne",
+            collection: TZ_PERIODS,
+            doc: {
+              start,
+              end,
+              timeZone,
+              location: {
+                name: place?.name,
+                ...(lat !== undefined ? { latitude: lat } : {}),
+                ...(lng !== undefined ? { longitude: lng } : {}),
+              },
+              source: "manual",
+              metadata: { origin: "location-manual" },
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              createdBy: auth.principal,
+            },
+          });
+        }
+
+        const windowStart = new Date(
+          Math.min(start.getTime(), new Date(segment.start).getTime()),
+        );
+        const windowEnd = new Date(
+          Math.max(end.getTime(), new Date(segment.end).getTime()),
+        );
         await this.enqueueReprocess(
           auth,
-          new Date(segment.start),
-          new Date(segment.end),
-          "Manual location removed; regenerating derived segments",
+          windowStart,
+          windowEnd,
+          "Manual location edited; re-clipping derived segments",
         );
         return { success: true };
       }
@@ -562,7 +841,7 @@ export class LocationResource
       }
 
       case "status": {
-        const [pointCount, segmentCount, geonamesCount, lastImport] =
+        const [pointCount, segmentCount, geonamesCount, lastImport, geoMeta] =
           await Promise.all([
             mongo({ action: "count", collection: POINTS, query: {} }),
             mongo({ action: "count", collection: SEGMENTS, query: {} }),
@@ -573,6 +852,11 @@ export class LocationResource
               query: {},
               options: { sort: { createdAt: -1 }, limit: 1 },
             }).then((docs: any[]) => docs[0] ?? null),
+            mongo({
+              action: "findOne",
+              collection: "location_meta",
+              query: { key: "geonames" },
+            }),
           ]);
         return {
           hasData: pointCount > 0 || segmentCount > 0,
@@ -580,6 +864,8 @@ export class LocationResource
           segmentCount,
           geonamesReady: geonamesCount > 0,
           geonamesCount,
+          geonamesRefreshedAt: geoMeta?.refreshedAt ?? null,
+          geonamesSourceUrl: geoMeta?.sourceUrl ?? null,
           lastImportAt: lastImport?.createdAt ?? null,
         };
       }

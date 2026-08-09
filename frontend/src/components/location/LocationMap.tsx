@@ -11,8 +11,8 @@ import type { LatLngBoundsExpression, LatLngExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { LocationSegment } from "@/types/location";
 import { formatPlace, segmentDurationMs } from "@/types/location";
+import { useSettingsStore } from "@/stores/settingsStore";
 
-const OSM_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const OSM_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
@@ -126,6 +126,7 @@ export function LocationMap({
   children,
   scrollWheelZoom = true,
 }: LocationMapProps) {
+  const tileUrl = useSettingsStore((state) => state.mapTileUrl);
   const bounds = useMemo(
     () => (fitToSegments ? segmentsBounds(segments) : null),
     [segments, fitToSegments],
@@ -145,7 +146,7 @@ export function LocationMap({
       scrollWheelZoom={scrollWheelZoom}
       attributionControl
     >
-      <TileLayer url={OSM_URL} attribution={OSM_ATTRIBUTION} />
+      <TileLayer url={tileUrl} attribution={OSM_ATTRIBUTION} />
       <InvalidateOnResize />
       <FitBounds bounds={bounds} />
 

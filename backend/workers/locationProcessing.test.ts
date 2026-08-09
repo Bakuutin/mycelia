@@ -65,6 +65,19 @@ Deno.test("segmentPoints inserts an assumed gap across silence", async () => {
   expect(gaps[0].path!.length).toBe(2);
 });
 
+Deno.test("segments carry importIds provenance from their points", async () => {
+  const points: TrackPoint[] = [];
+  for (let m = 0; m <= 20; m += 2) {
+    points.push({
+      ...pt(m, 41.7151, 44.8271),
+      importId: m < 10 ? "importA" : "importB",
+    });
+  }
+  const segments = await segmentPoints(points);
+  const stay = segments.find((s) => s.type === "stay")!;
+  expect(stay.importIds).toEqual(["importA", "importB"]);
+});
+
 Deno.test("subtractIntervals clips around blocked ranges", () => {
   const day = (h: number) => new Date(Date.UTC(2026, 7, 1, h));
   const parts = subtractIntervals(

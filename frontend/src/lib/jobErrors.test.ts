@@ -32,6 +32,19 @@ describe("parseJobError truncation", () => {
   });
 });
 
+describe("parseJobError maintenance reasons", () => {
+  it("explains queue_record_missing instead of echoing the raw slug", () => {
+    const parsed = parseJobError("queue_record_missing");
+    expect(parsed?.label).toBe("Queue record lost");
+    expect(parsed?.detail).toContain("Redis");
+    expect(parsed?.detail).not.toBe("queue_record_missing");
+  });
+
+  it("explains the maintenance timeout reason", () => {
+    expect(parseJobError("timeout")?.label).toBe("Timed out");
+  });
+});
+
 describe("getJobErrorCode", () => {
   it("extracts the truncation code", () => {
     expect(

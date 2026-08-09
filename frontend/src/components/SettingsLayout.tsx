@@ -6,6 +6,7 @@ import {
   FileSearch,
   Flag,
   Key,
+  Map as MapIcon,
   Monitor,
   Palette,
   ScrollText,
@@ -63,6 +64,12 @@ const SettingsLayout = () => {
       path: "/settings/workers",
       icon: Cog,
       description: "Configure background job workers",
+    },
+    {
+      name: "Maps",
+      path: "/settings/maps",
+      icon: MapIcon,
+      description: "Places database, GPS imports and map preferences",
     },
     {
       name: "Voice Profiles",
