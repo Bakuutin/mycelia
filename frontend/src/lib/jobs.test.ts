@@ -8,7 +8,7 @@ import { getToggledWorkerFilter } from "./jobFilters";
 describe("parseJobError", () => {
   it("explains an unavailable configured inference server", () => {
     expect(parseJobError(
-      'LLM API error (502) for model "medium-sky" at http://100.119.163.116:8082/v1: tcp connect error: Connection refused',
+      'LLM API error (502) for model "medium-sky" at http://gpu-host.example:8082/v1: tcp connect error: Connection refused',
     )).toEqual({
       label: "Inference server unavailable",
       detail:

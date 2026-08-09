@@ -8,10 +8,10 @@ This deployment runs speech-to-text as two containers on an NVIDIA GPU host:
 | `mycelia-stt-proxy-1` | Yes | Exposes the authenticated OpenAI-compatible `POST /v1/audio/transcriptions` API. |
 | `cloudflared` | No | Only needed when a Cloudflare Tunnel that owns the chosen hostname is configured to route to this proxy. It is not needed for direct Tailscale access. |
 
-The Portainer container page is an administration URL, not an STT API URL. For the deployment on `100.119.163.116`, the direct API base URL is:
+The Portainer container page is an administration URL, not an STT API URL. For the deployment on your GPU host, the direct API base URL is:
 
 ```text
-http://100.119.163.116:8001
+http://gpu-host.example:8001
 ```
 
 ## Prerequisites
@@ -103,7 +103,7 @@ docker inspect mycelia-stt-proxy-1 \
   --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^ASR_MODEL='
 curl --fail-with-body \
   -H "Authorization: Bearer $PROXY_API_KEY" \
-  http://100.119.163.116:8001/v1/models
+  http://gpu-host.example:8001/v1/models
 ```
 
 Only after all three checks agree should the STT model be saved in Mycelia.
@@ -131,7 +131,7 @@ the authenticated endpoint below after it has been rebuilt from this checkout.
 From the Docker host or a machine that can reach its Tailscale IP:
 
 ```bash
-curl http://100.119.163.116:8001/health
+curl http://gpu-host.example:8001/health
 ```
 
 Expected response:
@@ -146,7 +146,7 @@ the stack:
 ```bash
 curl --fail-with-body \
   -H "Authorization: Bearer $PROXY_API_KEY" \
-  http://100.119.163.116:8001/v1/models
+  http://gpu-host.example:8001/v1/models
 ```
 
 The response contains one model whose `id` matches the stack's `ASR_MODEL`.
@@ -168,7 +168,7 @@ Check cache policy/status:
 ```bash
 curl --fail-with-body \
   -H "Authorization: Bearer $PROXY_API_KEY" \
-  http://100.119.163.116:8001/v1/stt/status
+  http://gpu-host.example:8001/v1/stt/status
 ```
 
 This reports the persistent model-cache policy, idle timeout, and proxy-observed
@@ -186,7 +186,7 @@ curl --fail-with-body \
   -F "file=@test.wav;type=audio/wav" \
   -F "model=large-v3-turbo" \
   -F "language=en" \
-  http://100.119.163.116:8001/v1/audio/transcriptions
+  http://gpu-host.example:8001/v1/audio/transcriptions
 ```
 
 Expected result is JSON containing `text` and `segments`. An HTTP 401 means the keys differ. A timeout means the client cannot reach the host; check Tailscale and the host firewall. HTTP 500/502 requires checking both container logs.
@@ -196,7 +196,7 @@ Expected result is JSON containing `text` and `segments`. An HTTP 401 means the 
 Set the direct proxy URL and the same key in Mycelia's root `.env`:
 
 ```dotenv
-STT_SERVER_URL=http://100.119.163.116:8001
+STT_SERVER_URL=http://gpu-host.example:8001
 PROXY_API_KEY=replace-with-the-Portainer-stack-key
 ```
 

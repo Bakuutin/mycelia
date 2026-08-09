@@ -307,7 +307,7 @@ switches models silently.
 Before running it, configure at least:
 
 ```dotenv
-STT_SERVER_URL=http://100.119.163.116:8001
+STT_SERVER_URL=http://gpu-host.example:8001
 PROXY_API_KEY=your-proxy-key
 STT_MODEL=whisper
 ```
@@ -352,7 +352,7 @@ To change it, for example to `large-v3-turbo`:
    ```bash
    curl --fail-with-body \
      -H "Authorization: Bearer $PROXY_API_KEY" \
-     http://100.119.163.116:8001/v1/models
+     http://gpu-host.example:8001/v1/models
    ```
 
    The response must contain `large-v3-turbo` in `data[].id`.
