@@ -222,6 +222,54 @@ async function probeProvider(input: {
   }
 }
 
+function getDiarizatorBaseUrl(): string {
+  return Deno.env.get("DIARIZATION_SERVER_URL") ??
+    "http://host.docker.internal:8085";
+}
+
+// The diarizator exposes only GET /health — probeProvider's /models + apiKey
+// contract doesn't fit, so it gets a dedicated probe.
+async function probeDiarizator(): Promise<ExternalServiceHealth> {
+  const usedBy = Object.entries(JOB_SERVICE_DEPENDENCIES)
+    .filter(([, dependencies]) => dependencies.includes("diarizator"))
+    .map(([workerType]) => workerType);
+  const checkedAt = new Date().toISOString();
+  const baseUrl = getDiarizatorBaseUrl();
+  const healthUrl = `${baseUrl.trim().replace(/\/+$/, "")}/health`;
+  const startedAt = performance.now();
+  try {
+    const response = await fetch(healthUrl, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = await response.text();
+    return {
+      id: "diarizator",
+      label: "Diarizator (speaker service)",
+      ...classifyServiceResponse(response.status, body),
+      configured: true,
+      baseUrl,
+      httpStatus: response.status,
+      latencyMs: Math.round(performance.now() - startedAt),
+      checkedAt,
+      usedBy,
+    };
+  } catch (error) {
+    return {
+      id: "diarizator",
+      label: "Diarizator (speaker service)",
+      status: "unavailable",
+      configured: true,
+      baseUrl,
+      latencyMs: Math.round(performance.now() - startedAt),
+      message: `${
+        error instanceof Error ? error.message : String(error)
+      } — start it with scripts/start-diarizator.sh`,
+      checkedAt,
+      usedBy,
+    };
+  }
+}
+
 export async function getExternalServicesHealth(
   force = false,
 ): Promise<ExternalServiceHealth[]> {
@@ -234,6 +282,7 @@ export async function getExternalServicesHealth(
     ),
   ]);
   const fingerprint = JSON.stringify({
+    diarizator: getDiarizatorBaseUrl(),
     stt: sttProviders.map((provider) => ({
       id: provider.id,
       enabled: provider.enabled,
@@ -442,7 +491,9 @@ export async function getExternalServicesHealth(
       : undefined,
   };
 
-  const services = [sttService, llmService];
+  const diarizatorService = await probeDiarizator();
+
+  const services = [sttService, llmService, diarizatorService];
 
   cached = { checkedAt: now, fingerprint, services };
   return services;

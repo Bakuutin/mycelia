@@ -51,5 +51,8 @@ Deno.test("classifies a model loading response separately from downtime", () => 
 Deno.test("maps external services to dependent workers", () => {
   expect(getJobServiceDependencies("transcription")).toEqual(["stt"]);
   expect(getJobServiceDependencies("summarization")).toEqual(["llm"]);
+  expect(getJobServiceDependencies("diarization")).toEqual(["diarizator"]);
+  expect(getJobServiceDependencies("enrollment")).toEqual(["diarizator"]);
+  expect(getJobServiceDependencies("speakerMatching")).toEqual([]);
   expect(getJobServiceDependencies("vad")).toEqual([]);
 });

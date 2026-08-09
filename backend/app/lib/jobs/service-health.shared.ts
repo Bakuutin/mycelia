@@ -1,6 +1,6 @@
 import { normalizeOpenAIBaseUrl } from "../llm/model-routing.ts";
 
-export type ExternalServiceId = "stt" | "llm";
+export type ExternalServiceId = "stt" | "llm" | "diarizator";
 export type ExternalServiceStatus =
   | "disabled"
   | "healthy"
@@ -45,6 +45,9 @@ export const JOB_SERVICE_DEPENDENCIES: Record<string, ExternalServiceId[]> = {
   summarization: ["llm"],
   tagger: ["llm"],
   entity_typing: ["llm"],
+  // speakerMatching is pure numpy over stored embeddings — no diarizator needed.
+  diarization: ["diarizator"],
+  enrollment: ["diarizator"],
 };
 
 export function getJobServiceDependencies(

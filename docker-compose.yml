@@ -103,6 +103,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000
+      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://host.docker.internal:8085}
     volumes:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk
