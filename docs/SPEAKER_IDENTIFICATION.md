@@ -1,285 +1,648 @@
-# Speaker Identification
+# Diarization and Voice Identity Runbook
 
-> Versioned tri-state identity, calibration, backfill and purge operations are documented in [VOICE_IDENTITY_RUNBOOK.md](VOICE_IDENTITY_RUNBOOK.md). `matched_speaker` is a compatibility projection; new consumers should read `speakerIdentity` through the `speaker-segments` resource.
+Операторская инструкция для полного speaker pipeline Mycelia: запуск сервиса
+диаризации на Mac или NVIDIA-сервере, настройка маршрутов, заполнение истории,
+создание voice profiles, калибровка Sky и identity backfill.
 
-This guide explains how to set up and use voice identification to recognize enrolled speakers in your recordings.
+Низкоуровневое API и устройство image описаны в
+[`diarizator/README.md`](../diarizator/README.md).
 
-## Overview
+## Как устроен pipeline
 
-Speaker identification allows you to:
-- **Enroll voices**: Record or upload audio samples to create voice profiles
-- **Automatic labeling**: Identify enrolled speakers during diarization
-- **Named transcripts**: See speaker names instead of "SPEAKER_00" in transcripts
-- **Timeline visualization**: Filter and view when specific speakers talk
-
-## Architecture
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Voice Profile  │────▶│  Diarization     │────▶│  Transcripts    │
-│  (Enrollment)   │     │  (GPU Service)   │     │  with Names     │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-        │                       │
-        │    256-dim embedding  │
-        └───────────────────────┘
+```text
+audio
+  -> VAD: где есть речь
+  -> STT: что сказано
+  -> diarization: интервалы спикеров + anonymous labels + embeddings
+  -> enrollment: эталонный embedding известного профиля
+  -> calibration: проверенные thresholds для профиля и embedding space
+  -> speakerIdentity: identified / unknown / uncertain
+  -> Timeline и Transcript
 ```
 
-**Components:**
-- **Speaker Profiles**: MongoDB collection storing voice embeddings
-- **Diarization Service**: PyAnnote-based service on GPU for segmentation and matching
-- **Feature Flag**: Enable/disable speaker identification globally
+- Diarization отвечает «когда меняется говорящий», но сама по себе не знает его
+  имя.
+- `speakerIdentity` сравнивает уже сохранённые embeddings. Он не перезапускает
+  VAD, STT или diarization.
+- Ручная annotation имеет приоритет над automatic identity.
+- Timeline и Transcript — проекции активных segments, а не источник истины.
+- Для новых backfill используется `speakerIdentity`, не legacy
+  `speakerMatching`.
 
-## Setup
+## Правильный порядок запуска
 
-### Prerequisites
+1. Запустить Mycelia и применить migrations.
+2. Запустить локальный CPU diarizator или GPU-сервис на сервере.
+3. Добавить route в Mycelia и получить статус **Running**.
+4. Дождаться automatic `Diarize missing` или запустить bounded campaign вручную.
+5. Создать/обновить профиль Sky и выполнить re-enrollment.
+6. Разметить разнообразные Sky/not-Sky segments.
+7. Провести calibration на отдельных recordings.
+8. Запустить `Classify existing` сначала на 24 часа.
+9. Проверить результаты, затем расширить pilot до 7 дней.
+10. Запускать исторический identity backfill диапазонами.
+11. Re-diarization делать только для несовместимого или отсутствующего
+    покрытия.
+12. Новую generation сначала сравнить, затем активировать; старую сохранить для
+    rollback.
 
-1. **GPU Server with Diarization Service** (see [GPU README](../gpu/README.md))
-2. **Hugging Face Token** with access to PyAnnote models
-3. **Tailscale or VPN** for connecting main server to GPU
+Не запускайте full identity backfill до calibration. Не запускайте purge как
+часть обычной обработки.
 
-### Step 1: Deploy Diarization Service
+## 1. Запуск Mycelia
 
-On your GPU machine:
+### Режимы runtime
+
+Для стабильной unattended работы в корневом `.env`:
+
+```dotenv
+FRONTEND_MODE=prod
+BACKEND_TASK=start
+```
+
+Для разработки с live reload:
+
+```dotenv
+FRONTEND_MODE=dev
+BACKEND_TASK=dev
+```
+
+После изменения режима или `.env` пересоздайте application services:
 
 ```bash
-cd mycelia/gpu
-
-# Create .env with HF_TOKEN
-echo "HF_TOKEN=hf_your_token_here" >> .env
-
-# Start all GPU services
-docker compose up -d --build
-
-# Wait for models to download (check logs)
-docker compose logs -f diarization
+docker compose up -d --build --force-recreate frontend backend python-worker
+docker compose restart nginx
+docker compose ps
+curl -fkSs https://localhost:4433/readiness
 ```
 
-Wait until you see: `Models ready ✔ – device=cuda`
+В dev ожидаются `"mode":"dev"` и `"reload":"watch"`. Изменения исходников
+перезагружаются автоматически; изменения `.env`, Compose, Dockerfile и
+dependencies требуют recreate. Не перезапускайте MongoDB и Redis ради reload
+кода.
 
-### Step 2: Run Migrations
-
-On your main Mycelia server:
+### Migrations
 
 ```bash
-# Check migration status
 docker compose exec backend deno run -A server.ts migrate-status
-
-# Apply new migrations
 docker compose exec backend deno run -A server.ts migrate-up
 ```
 
-This creates:
-- `speaker_profiles` collection
-- Indexes for `matched_speaker` on diarizations
+Voice pipeline использует `diarization_runs`, `diarization_campaigns`,
+`speaker_annotations`, `speaker_calibrations` и observability/review indexes.
 
-### Step 3: Configure Connection
+## 2. Hugging Face models
 
-Set the diarization server URL in your main server's environment:
+Аккаунт токена должен принять условия обеих моделей:
+
+- `pyannote/speaker-diarization-community-1`;
+- `pyannote/wespeaker-voxceleb-resnet34-LM`.
+
+Токен передаётся напрямую в model loader. `huggingface-cli login` внутри
+контейнера не требуется. Не коммитьте `.env` и не выводите токен в логах.
+
+## 3. Локальный Mac: CPU diarizator
+
+Для основного Compose положите настройки в **корневой** `.env`:
+
+```dotenv
+HF_TOKEN=hf_replace_me
+DIARIZATION_SERVER_URL=http://diarizator:8085
+```
+
+Запуск:
 
 ```bash
-# In your main docker-compose.yml or .env
-DIARIZATION_SERVER_URL=http://<gpu-tailscale-ip>:8085
+docker compose --profile diarization up -d --build diarizator
+docker compose --profile diarization logs -f diarizator
 ```
 
-### Step 4: Enable Feature Flag
+Дождитесь `Models ready ... device=cpu`, затем:
 
-1. Open Mycelia web UI
-2. Go to **Settings → Feature Flags**
-3. Enable **"Speaker Identification"**
-
-## Usage
-
-### Enrolling Your Voice
-
-1. Go to **Settings → Voice Profiles**
-2. Click **"Add Profile"**
-3. Enter a name (e.g., "Me", "Wife", "Bob")
-4. Check **"This is my voice"** if applicable
-5. Either:
-   - Click **"Record from Mic"** and speak for 10-30 seconds
-   - Click **"Upload Audio File"** with a clear audio sample
-6. Click **"Enroll Voice"**
-
-**Tips for better enrollment:**
-- Record 10-30 seconds of clear speech
-- Avoid background noise
-- Speak naturally (don't read)
-- Add multiple samples over time to improve accuracy
-
-### Viewing Identified Speakers
-
-Once voices are enrolled and identification is enabled:
-
-- **Transcripts**: Speaker names appear with colored badges
-- **Diarization Detail**: Shows speaker matches with confidence scores
-- **Timeline**: Filter by speaker (coming soon)
-
-### Retroactive Matching
-
-To identify speakers in existing recordings:
-
-1. Go to **Jobs → New Job**
-2. Select job type: **"speakerMatching"**
-3. Optionally set:
-   - `limit`: Maximum segments to process (default: 10000)
-   - `threshold`: Similarity threshold (default: 0.35, range: 0-1)
-4. Click **"Create Job"**
-
-The job will match existing diarization segments against enrolled profiles.
-
-## Configuration
-
-### Similarity Threshold
-
-The default threshold is **0.35** (35% similarity). Lower values = more matches but more false positives.
-
-Set via environment variable:
 ```bash
-SPEAKER_SIMILARITY_THRESHOLD=0.35
+docker compose --profile diarization ps diarizator
+curl -fsS http://localhost:8085/health | jq
 ```
 
-Recommended ranges:
-- **0.30-0.35**: Balanced (default)
-- **0.25-0.30**: More permissive, may have false matches
-- **0.40-0.50**: More strict, may miss some matches
+Ответ должен содержать `status=ok`, `ready=true`, `device=cpu`, fingerprint и
+`embeddingSpaceId`.
 
-### Profile Cache
+На Apple Silicon Docker не даёт этому CUDA/PyTorch сервису Apple GPU. Используйте
+CPU image и выделите Docker Desktop минимум 10 GB, лучше 12 GB RAM.
 
-Speaker profiles are cached for 5 minutes during diarization to avoid repeated database queries. This is configurable in `diarization_worker.py`:
-
-```python
-_PROFILE_CACHE_TTL_SECONDS = 300  # 5 minutes
-```
-
-## Technical Details
-
-### Embedding Model
-
-Uses **WeSpeaker ResNet34-LM** (256-dimensional embeddings):
-- Pre-trained on VoxCeleb dataset
-- L2-normalized embeddings
-- Cosine similarity for matching
-
-### Matching Algorithm
-
-1. During diarization, segments are extracted with embeddings
-2. If profiles are enrolled and feature is enabled:
-   - Profiles are passed to diarization service as "clusters"
-   - Seeded agglomerative clustering assigns segments to known speakers
-   - Unmatched segments get generic labels (SPEAKER_XX)
-3. Results include `matched_speaker` with profile ID, name, and similarity
-
-### Database Schema
-
-**speaker_profiles collection:**
-```javascript
-{
-  _id: ObjectId,
-  name: "Me",                    // Unique name
-  embedding: [0.1, -0.2, ...],   // 256 floats, L2-normalized
-  sample_count: 3,               // Number of enrollment samples
-  total_duration: 45.5,          // Total seconds of enrolled audio
-  is_primary: true,              // Is this "my voice"?
-  color: "#3b82f6",              // Display color (hex)
-  created_at: ISODate,
-  updated_at: ISODate
-}
-```
-
-**diarizations collection (with matched_speaker):**
-```javascript
-{
-  _id: ObjectId,
-  // ... other fields ...
-  matched_speaker: {
-    profile_id: ObjectId("..."),
-    name: "Me",
-    similarity: 0.85,
-    matched_at: ISODate,
-    method: "live"  // or "retroactive"
-  }
-}
-```
-
-## Troubleshooting
-
-### Speakers not being identified
-
-1. **Check feature flag** is enabled (Settings → Feature Flags)
-2. **Verify diarization service** is running: `curl http://gpu-ip:8085/health`
-3. **Check profiles exist**: Settings → Voice Profiles
-4. **Check threshold**: Try lowering to 0.30 for testing
-
-### Low similarity scores
-
-- Add more enrollment samples (3-5 is good)
-- Use cleaner audio for enrollment
-- Ensure consistent microphone/recording conditions
-
-### Enrollment fails
-
-- Check diarization service is accessible
-- Ensure audio is at least 0.5 seconds
-- Check Python worker logs: `docker compose logs python-worker`
-
-### Wrong speaker matched
-
-- Increase similarity threshold to 0.40-0.50
-- Delete profile and re-enroll with cleaner samples
-- Ensure enrolled speakers have distinct voices
-
-## Running on Mac
-
-For development/testing on Mac (without NVIDIA GPU):
+Standalone-вариант для разработки:
 
 ```bash
 cd diarizator
-
-# Install dependencies
-uv sync --extra cpu
-
-# Run service
-HF_TOKEN=your_token COMPUTE_MODE=cpu uv run simple-speaker-service
+docker compose -p sky-diarization-local --profile cpu up -d --build
 ```
 
-Note: CPU mode is significantly slower (10-30x) than GPU. For production, use a machine with NVIDIA GPU.
+Этот Compose читает `diarizator/.env`. Основной Compose читает корневой `.env`.
+Для обычного локального запуска предпочтителен основной профиль: внутри сети
+Mycelia доступен стабильный адрес `http://diarizator:8085`.
 
-## API Reference
+## 4. Сервер с RTX 4090
 
-### Enrollment Job
-
-```json
-POST /resource/jobs
-{
-  "action": "enqueue",
-  "data": {
-    "type": "enrollment",
-    "name": "Speaker Name",
-    "is_primary": true,
-    "audio_data_base64": "base64-encoded-audio"
-  }
-}
-```
-
-### Speaker Matching Job
-
-```json
-POST /resource/jobs
-{
-  "action": "enqueue",
-  "data": {
-    "type": "speakerMatching",
-    "limit": 10000,
-    "threshold": 0.35
-  }
-}
-```
-
-### Diarization with Clusters (Direct API)
+### Preflight
 
 ```bash
-curl -X POST "http://gpu-ip:8085/diarize" \
-  -F "file=@audio.wav" \
-  -F 'clusters=[{"id":"profile_id","name":"Me","embedding":[...]}]' \
-  -F "similarity_threshold=0.35"
+nvidia-smi
+docker compose version
+docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
 ```
+
+На сервере создайте `diarizator/.env`:
+
+```dotenv
+HF_TOKEN=hf_replace_me
+COMPUTE_MODE=gpu
+PYTORCH_CUDA_VERSION=cu126
+SPEAKER_SERVICE_HOST=0.0.0.0
+SPEAKER_SERVICE_PORT=8085
+AUDIO_BACKEND=soundfile
+DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
+```
+
+### Сборка из checkout на сервере
+
+```bash
+cd /path/to/mycelia/diarizator
+docker compose -p sky-diarization --profile gpu up -d --build diarization-service-gpu
+docker compose -p sky-diarization --profile gpu logs -f diarization-service-gpu
+```
+
+Проверка GPU внутри контейнера:
+
+```bash
+docker compose -p sky-diarization --profile gpu exec diarization-service-gpu \
+  uv run --no-sync --extra cu126 --no-dev python -c \
+  'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
+```
+
+Ожидаются `True` и RTX 4090.
+
+### Сборка amd64 image на ARM Mac
+
+Используйте этот вариант, если сервер/Portainer не может стабильно собирать
+image или обращаться к registry:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --build-arg PYTORCH_CUDA_VERSION=cu126 \
+  -t sky-mycelia-diarization:latest \
+  --load ./diarizator
+
+docker image inspect sky-mycelia-diarization:latest \
+  --format 'os={{.Os}} arch={{.Architecture}}'
+
+docker run --rm --platform linux/amd64 \
+  sky-mycelia-diarization:latest \
+  uv run --no-sync --extra cu126 --no-dev python -c \
+  'import simple_speaker_recognition.core; print("import ok")'
+```
+
+Ожидаемая архитектура — `linux/amd64`. Отсутствие CUDA на Mac нормально; GPU
+проверяется на сервере.
+
+Перенос image:
+
+```bash
+docker save sky-mycelia-diarization:latest | gzip > /tmp/sky-mycelia-diarization.tar.gz
+rsync -ah --partial --info=progress2 \
+  /tmp/sky-mycelia-diarization.tar.gz SERVER:/tmp/
+ssh SERVER 'gzip -dc /tmp/sky-mycelia-diarization.tar.gz | sudo docker load'
+```
+
+Для Portainer используйте image `sky-mycelia-diarization:latest`, persistent
+volume `/models`, NVIDIA reservation и команду без runtime dependency sync:
+
+```yaml
+services:
+  diarization:
+    image: sky-mycelia-diarization:latest
+    command: [uv, run, --no-sync, --extra, cu126, --no-dev, simple-speaker-service]
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      HF_HOME: /models
+      COMPUTE_MODE: gpu
+      PYTORCH_CUDA_VERSION: cu126
+      AUDIO_BACKEND: soundfile
+      SPEAKER_SERVICE_HOST: 0.0.0.0
+      SPEAKER_SERVICE_PORT: 8085
+    volumes:
+      - diarization-models:/models
+    ports:
+      - "8085:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  diarization-models:
+```
+
+Порт 8085 не имеет application authentication. Оставляйте его за
+Tailscale/VPN/firewall или authenticated reverse proxy, а не в публичном
+интернете.
+
+### Проверка реального inference
+
+`/health=200` недостаточно: container может быть жив, а decoding/inference —
+сломаны. Проверьте короткий WAV с речью:
+
+```bash
+curl -fsS http://SERVER_PRIVATE_IP:8085/health | jq
+
+curl -fsS -X POST http://SERVER_PRIVATE_IP:8085/embed \
+  -F file=@sample.wav | jq '{dimension, duration}'
+
+curl -fsS -X POST http://SERVER_PRIVATE_IP:8085/diarize \
+  -F file=@sample.wav | jq \
+  '{segments: (.segments | length), speakers: .summary.num_speakers}'
+```
+
+`/health` должен показать `ready=true` и CUDA device, `/embed` — dimension 256,
+`/diarize` — ненулевое число segments.
+
+## 5. Routing в Mycelia
+
+Откройте:
+
+- `https://localhost:4433/settings/diarization` — настройка routes;
+- `https://localhost:4433/jobs` — health, priorities, workers и jobs.
+
+Для remote route:
+
+1. Нажмите **Add server**.
+2. Укажите понятное имя, например `faeon-diar`.
+3. Укажите private base URL, например `http://100.x.x.x:8085`.
+4. Включите route.
+5. Поставьте preferred route наименьший числовой priority.
+6. Сохраните, нажмите **Refresh health**.
+7. Перед запуском campaign получите **Running**.
+
+Новый job выбирает первый healthy enabled route по числовому priority и
+сохраняет snapshot route. Изменение priority не переносит уже запущенный job.
+
+Environment route берётся из корневого `.env`:
+
+```dotenv
+DIARIZATION_SERVER_URL=http://REMOTE_PRIVATE_IP:8085
+```
+
+После изменения пересоздайте оба consumer:
+
+```bash
+docker compose up -d --force-recreate backend python-worker
+docker compose restart nginx
+curl -fkSs https://localhost:4433/readiness
+```
+
+Дополнительные routes можно хранить в UI config. Environment route при этом
+можно отключить, не меняя `.env`.
+
+## 6. Diarization campaigns
+
+### Automatic mode
+
+Worker реагирует на speech chunk, когда:
+
+- `vad.has_speech=true`;
+- отсутствует `diarized_at`;
+- chunk не занят и не помечен `needs_attention`.
+
+Для новых данных создаётся live campaign конкретной записи. Watchdog каждые 300
+секунд возобновляет разорванную historical missing-chain. Обычно continuation
+создаётся сразу через `hasMore`, не по watchdog.
+
+В **Jobs → Diarization** есть два независимых переключателя:
+
+- worker enabled/paused управляет всей очередью diarization;
+- live trigger управляет только созданием jobs при переходе
+  `vad.has_speech` в `true`.
+
+Если live-обработка сейчас не нужна, выключите live trigger. Historical watchdog
+и ручные campaigns при этом остаются доступны. Для полного прекращения новых
+запусков поставьте worker на pause.
+
+По умолчанию job обрабатывает 4 speech sequences; одна sequence содержит до 6
+chunks на inference request. Diarization concurrency — 1. На **Jobs** worker
+должен быть enabled. Его toggle управляет новыми jobs, но не remote process.
+
+### Manual `Diarize missing`
+
+На **Jobs** нажмите play у diarization worker. Доступны 24 часа, 7/14/30 дней,
+custom range и batch size.
+
+`Diarize missing`:
+
+- ищет только speech chunks без diarization;
+- не пересчитывает готовые segments;
+- работает resumable и idempotent;
+- является стандартным способом заполнения backlog.
+
+Не создавайте overlapping campaigns. Если диалог находит существующую —
+откройте её progress.
+
+Campaign объединяет continuation jobs и показывает fixed range,
+processed/total/pending chunks, batch, sequences, segments, route, rate, ETA и
+structured errors. `Counting` и ранний `Estimating` нормальны; ETA становится
+полезнее после двух успешных batches.
+
+Отмена одного job не удаляет уже записанные segments. Но `hasMore`-chain или
+watchdog могут продолжить ту же campaign: cancel job не означает stop campaign.
+Для короткого теста выберите непересекающийся bounded range и дождитесь
+свободного worker slot. Если нужно остановить всю обработку, поставьте worker на
+pause; уже сохранённые результаты останутся целыми.
+
+Ошибка одной sequence не отменяет успешные. `Will retry automatically` не
+требует ручного действия. `Action required` означает исчерпанный retry budget:
+исправьте причину и повторите только проблемную sequence.
+
+## 7. Versioned re-diarization
+
+`Re-diarize range` — не то же самое, что `Diarize missing`. Используйте его
+только если:
+
+- отсутствует корректное coverage;
+- legacy embedding space несовместим с профилем;
+- меняется diarization/embedding model или preprocessing;
+- нужно сравнить поколения.
+
+Он строит данные рядом со старыми и не меняет Timeline до activation:
+
+```text
+building -> ready -> active -> superseded
+                    |             |
+                    +-- rollback -+
+
+building/interrupted -> failed
+```
+
+Порядок:
+
+1. Выбрать bounded range в **Audio Pipeline → Voice Identity**.
+2. Нажать **Re-diarize range**.
+3. Дождаться generation campaign или разобрать errors.
+4. Для `interrupted` resume допустим только при idempotent writes; иначе
+   **Mark failed** и новая чистая generation.
+5. Нажать **Compare**, проверить coverage, segments/minute, errors, fingerprint,
+   embedding space и identity distribution.
+6. После QA нажать **Activate**.
+7. Сохранить superseded generation для rollback.
+
+Нельзя purge `building` или `active` run. Перед первым purge сделайте Mongo
+backup и проверьте restore. Затем **Preview purge**, сверка точного run/count и
+ручное подтверждение. Raw audio, VAD, STT и transcripts purge не затрагивает.
+
+## 8. Voice profiles и enrollment
+
+Откройте `https://localhost:4433/settings/voice-profiles`.
+
+Для Sky:
+
+1. Создайте или выберите primary profile (`My Voice`).
+2. Запишите/загрузите несколько чистых samples.
+3. Прикрепите samples к Sky и проверьте карточки внутри профиля.
+4. На Voice Identity нажмите **Re-enroll Sky from saved samples**.
+5. Проследите `profileReenrollment` job на **Jobs**.
+6. Проверьте новую revision и текущий `embeddingSpaceId`.
+
+Лучше несколько разных 10–30-секундных samples, чем один длинный: разные
+комнаты, микрофоны и манера речи. Избегайте второго говорящего, музыки и overlap.
+
+### Sample из Timeline
+
+1. На Timeline выберите 3–120 секунд с одним спикером; лучше 10–30 секунд.
+2. Нажмите **Voice sample**.
+3. Выберите профиль.
+4. Нажмите **Save and rebuild profile**.
+5. Проследите enrollment job.
+
+Source interval сохраняется вместе с sample. Другие профили добавляются тем же
+способом, но каждому нужна своя calibration в совместимом embedding space.
+
+## 9. Review и calibration Sky
+
+Откройте `https://localhost:4433/settings/voice-identity`.
+
+Review queue содержит активные unclassified/uncertain segments:
+
+- **This is me** — positive Sky annotation;
+- **Not me** — Sky явно исключён;
+- undo удаляет последнее ручное решение;
+- **Skip** оставляет segment вне training/calibration;
+- autoplay и shortcuts двигают очередь;
+- review session, окно из 100 segments и текущая позиция сохраняются на
+  backend, поэтому работу можно продолжить позже;
+- compact list показывает все 100 элементов текущего окна;
+- соседние короткие segments одного anonymous speaker можно объединить в
+  playback group и разметить одним подтверждённым batch.
+
+Не размечайте как Sky всё, где слышен хотя бы фрагмент вашего голоса:
+
+- чистая одноголосая речь Sky → **This is me**;
+- чистая речь другого человека → **Not me**;
+- обрывок короче секунды, мычание без достаточного голосового материала,
+  clipping, шум или непонятный кусок → **Skip**;
+- одновременная речь двух людей/overlap → **Skip**, если нельзя уверенно
+  выделить один голос;
+- batch-label применяйте только когда каждый segment группы действительно имеет
+  одну и ту же метку.
+
+Минимальный набор:
+
+- 40 Sky;
+- 40 not-Sky;
+- 100 labels всего;
+- несколько recordings;
+- разные комнаты/микрофоны и разные люди, но достаточно чистая одноголосая речь.
+
+Не используйте 100 соседних коротких segments одной записи как validation.
+Делите по source recording: calibration recordings выбирают thresholds, другие
+validation recordings проверяют переносимость.
+
+Цель auto-Sky precision — не ниже 98%. Precision важнее recall: сомнительные
+случаи должны остаться `uncertain`.
+
+### Calibration wizard
+
+UI не принимает вручную введённые thresholds или precision. Backend:
+
+1. Берёт latest manual annotation каждого segment.
+2. Исключает embeddings из несовместимого space.
+3. Считает cosine scores против текущей revision профиля.
+4. Делит source recordings на непересекающиеся **Fit** и **Check** sets.
+5. Подбирает positive/negative thresholds на Fit.
+6. Измеряет precision/coverage на ранее не виденном Check audio.
+7. Разрешает сохранение только при минимум 40 Sky, 40 not-Sky, 100 совместимых
+   labels и auto-Sky precision не ниже 98%.
+
+Карточки recordings показывают дату/время и label mix; raw ObjectId оставлен
+только вторичной ссылкой. Если Check set содержит только Sky или только not-Sky,
+добавьте разметку другого класса из другой записи. Кнопка сохранения показывает
+конкретные blockers и остаётся disabled, пока они не устранены. При сохранении
+backend пересчитывает метрики повторно, поэтому значение из браузера нельзя
+подменить.
+
+## 10. Identity pilot и backfill
+
+После актуального Sky profile и validated calibration откройте
+`https://localhost:4433/audio/pipeline`, блок **Voice Identity — Sky first**.
+
+Порядок rollout:
+
+1. **24 hours → Classify existing**.
+2. Проверить случайные `identified`, `unknown` и все `uncertain`.
+3. Исправить ошибки manual annotations.
+4. Расширить до **7 days**.
+5. Ещё раз проверить distribution и false positives.
+6. Запускать историю bounded ranges.
+
+Состояния:
+
+- `identified` — выше positive threshold;
+- `unknown` — ниже conservative negative threshold;
+- `uncertain` — между thresholds;
+- `unclassified` — identity worker ещё не оценивал segment.
+
+Показанный similarity score — не вероятность и не процент готовности. Только
+calibrated thresholds превращают score в identity decision.
+
+Cross-space matching блокируется. Если `legacy-unknown` не проходит validation,
+используйте rolling versioned re-diarization, а не принудительный match.
+
+`Classify existing` создаёт identity campaign. На Audio Pipeline, Voice Identity,
+Jobs и Job Details отображаются общий processed/total, текущий batch, Sky,
+not-Sky, uncertain, incompatible, rate и ETA. Continuation сохраняет тот же
+`campaignId`, поэтому прогресс не возвращается к нулю между jobs. После каждого
+batch Timeline speaker-layer обновляется автоматически.
+
+После pilot:
+
+1. Откройте все `uncertain` и случайную выборку Sky/not-Sky.
+2. Исправьте ошибки manual annotation; автоматический backfill их не
+   перезаписывает.
+3. Если false-positive rate приемлем, расширьте период.
+4. Если precision ниже цели, добавьте разнообразные записи и пересчитайте
+   calibration; не ослабляйте threshold вручную.
+5. Histogram/Timeline отдельным job пересчитывать не нужно: speaker track читает
+   active diarization segments и сбрасывает frontend cache после identity batch.
+
+## 11. Проверка на Timeline и Transcript
+
+Timeline содержит независимые слои:
+
+- **Diarization coverage** — speech diarized/missing/processing/error/building;
+- **Speaker Identity** — Sky/unknown/uncertain/unclassified.
+
+Нет coverage — нужна diarization. Coverage есть, но segment `unclassified` —
+нужен identity calibration/backfill.
+
+На близком масштабе клик по segment открывает аудио, transcript context,
+campaign/job и manual actions. Transcript показывает все пересекающиеся voice
+segments. Точная speaker-by-word attribution не заявляется, поскольку word
+timestamps отсутствуют.
+
+## Verification checklist
+
+Перед заявлением «diarization работает»:
+
+- [ ] Mycelia `/readiness` отвечает 200.
+- [ ] Bind mounts указывают на нужный checkout, runtime mode ожидаемый.
+- [ ] Diarizator container запущен.
+- [ ] `/health`: `ready=true`, ожидаемый device, fingerprint и embedding space.
+- [ ] `/embed` возвращает dimension 256.
+- [ ] `/diarize` возвращает segments на реальном speech audio.
+- [ ] Settings → Diarization показывает нужный именованный route как Running.
+- [ ] Worker enabled, campaign сохраняет route/range/progress/errors.
+- [ ] Timeline coverage изменяется после успешных batches.
+
+Перед заявлением «speaker identity работает»:
+
+- [ ] Profile имеет samples, актуальные revision и embedding space.
+- [ ] Calibration/validation используют разные recordings.
+- [ ] Есть минимум 100 labels, включая 40 Sky и 40 not-Sky.
+- [ ] Backend calibration preview показывает вычисленные thresholds и ≥98% на
+      отдельном validation audio.
+- [ ] 24-hour pilot прошёл ручной QA.
+- [ ] Identity campaign дошла до `completed`, а incompatible/remaining понятны.
+- [ ] Timeline и Transcript показывают одинаковые overrides/states.
+
+## Troubleshooting
+
+### Hugging Face 401/403
+
+- Токен должен лежать в `.env`, который читает конкретный Compose project.
+- Аккаунт токена должен принять условия обеих models.
+- После изменения token пересоздайте diarizator.
+
+```bash
+docker compose --profile diarization up -d --force-recreate diarizator
+```
+
+### `torchcodec is not available`
+
+Это inference failure, даже если `/health` отвечает 200. Используйте repository
+image/runtime, `AUDIO_BACKEND=soundfile` и проверяйте `/embed` плюс `/diarize`.
+Не устанавливайте случайный latest TorchCodec: ABI должен совпадать с
+Torch/CUDA.
+
+### Job выбрал не тот server
+
+- Меньший priority предпочтительнее.
+- Выбирается только healthy enabled route.
+- Route snapshot создаётся при enqueue.
+- Измените priority, сохраните, обновите health и создайте новый job.
+
+### Большие gaps между jobs
+
+- Проверьте worker toggle и pause state.
+- Default concurrency равен 1.
+- Смотрите campaign, а не отдельные continuation jobs.
+- Проверьте GPU request duration, provider downtime и retry delay.
+- Проверьте `needs_attention` и потерянный `hasMore` continuation.
+- Watchdog 300 секунд — recovery; здоровая chain продолжается сразу.
+
+### Generation бесконечно `building`
+
+Проверьте campaign/current job. Generation без active/waiting job после stale
+threshold должна считаться `interrupted`. Не активируйте и не purge её. Resume
+только при idempotent writes, иначе mark failed и новая generation.
+
+### `Classify existing` disabled
+
+Нужны одновременно active diarization run, primary profile, совпадающая profile
+revision, validated calibration и совместимые embedding spaces. Закончите
+prerequisite в Voice Profiles/Voice Identity; не обходите gate правкой MongoDB.
+
+## Безопасная остановка
+
+Только local optional diarizator:
+
+```bash
+docker compose --profile diarization stop diarizator
+```
+
+Standalone local:
+
+```bash
+cd diarizator
+docker compose -p sky-diarization-local --profile cpu down
+```
+
+Standalone GPU:
+
+```bash
+cd diarizator
+docker compose -p sky-diarization --profile gpu down
+```
+
+Остановка inference service не удаляет данные, но active jobs могут упасть или
+ждать recovery. Remote process и Mycelia worker toggle управляются отдельно.

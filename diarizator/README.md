@@ -2,6 +2,11 @@
 
 A minimal inference provider for speaker diarization with embeddings using Pyannote Community-1. Supports matching Pyannote speaker clusters against known profiles.
 
+For the complete Mycelia operator workflow — local Mac and remote RTX 4090
+deployment, routing, campaigns, voice enrollment, calibration, identity
+backfill, and Timeline verification — see
+[`docs/SPEAKER_IDENTIFICATION.md`](../docs/SPEAKER_IDENTIFICATION.md).
+
 ## Features
 
 - **Speaker Diarization**: Uses pyannote to segment audio by speaker

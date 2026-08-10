@@ -279,14 +279,18 @@ See [gpu/README.md](gpu/README.md) for detailed setup and VRAM requirements.
 
 ## Speaker Identification
 
-For voice enrollment and speaker recognition:
+For diarization, voice enrollment, speaker recognition, and historical
+backfill:
 
-1. Deploy diarization service on GPU (see above)
-2. Run migrations: `docker compose exec backend deno run -A server.ts migrate-up`
-3. Enable feature flag in Settings → Feature Flags
-4. Enroll voices in Settings → Voice Profiles
+1. Start Mycelia and apply migrations.
+2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
+3. Configure and verify the route in Settings → Diarization.
+4. Complete missing diarization coverage.
+5. Enroll Sky, label validation audio, and calibrate identity matching.
+6. Run a bounded identity pilot before historical backfill.
 
-See [docs/SPEAKER_IDENTIFICATION.md](docs/SPEAKER_IDENTIFICATION.md) for the full guide.
+See [the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
+for exact commands, UI workflow, safety gates, and troubleshooting.
 
 ## Database Migrations
 
