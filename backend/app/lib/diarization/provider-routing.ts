@@ -7,6 +7,28 @@ export interface ResolvedDiarizatorRoute {
   source?: string;
 }
 
+export interface DiarizatorJobRoute {
+  providerProfileId: string;
+  providerProfileName: string;
+  baseUrl: string;
+}
+
+export function buildDiarizatorJobSnapshot(
+  route: DiarizatorJobRoute,
+  _existingContext: unknown,
+  resolvedAt: string,
+) {
+  return {
+    diarizationServerUrl: route.baseUrl,
+    routingContext: {
+      providerProfileId: route.providerProfileId,
+      providerProfileName: route.providerProfileName,
+      sourceId: `diarization:${route.providerProfileId}`,
+      resolvedAt,
+    },
+  };
+}
+
 export function selectDiarizatorRoute(
   routes: ResolvedDiarizatorRoute[],
   healthyIds?: Set<string>,

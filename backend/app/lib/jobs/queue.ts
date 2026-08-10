@@ -23,6 +23,7 @@ import {
 } from "./summarization-defaults.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { selectTranscriptionProvider } from "@/lib/transcription/provider-routing.ts";
+import { buildDiarizatorJobSnapshot } from "@/lib/diarization/provider-routing.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
@@ -349,12 +350,20 @@ export async function enqueueJob(
         `No healthy diarizator route is available. ${diarizator?.message ?? "Configure one in Settings → Diarization."}`,
       );
     }
-    mergedData.diarizationServerUrl = diarizator.baseUrl;
-    mergedData.routingContext = {
-      ...(mergedData.routingContext ?? {}),
-      providerProfileId: diarizator.providerProfileId,
-      resolvedAt: new Date().toISOString(),
-    };
+    if (!diarizator.providerProfileId || !diarizator.providerProfileName) {
+      throw new Error("Selected diarizator route is missing profile provenance");
+    }
+    const snapshot = buildDiarizatorJobSnapshot(
+      {
+        providerProfileId: diarizator.providerProfileId,
+        providerProfileName: diarizator.providerProfileName,
+        baseUrl: diarizator.baseUrl,
+      },
+      mergedData.routingContext,
+      new Date().toISOString(),
+    );
+    mergedData.diarizationServerUrl = snapshot.diarizationServerUrl;
+    mergedData.routingContext = snapshot.routingContext;
   }
 
   const parsedData = jobRegistry.validateJobData(mergedData);
