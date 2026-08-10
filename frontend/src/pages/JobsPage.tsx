@@ -77,6 +77,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
+import { getDiarizationJobRoute } from "@/lib/jobRouting";
 import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
@@ -4790,6 +4791,22 @@ export default function JobsPage() {
                             })()}
                           </div>
                         )}
+                        {(() => {
+                          const route = getDiarizationJobRoute(job);
+                          return route
+                            ? (
+                              <div
+                                className="text-[10px] font-normal text-muted-foreground"
+                                title={route.url
+                                  ? `Diarizator used by this job: ${route.url}`
+                                  : "Diarizator route snapshotted for this job"}
+                              >
+                                Diarizator: {route.name}
+                                {route.url ? ` · ${route.url}` : ""}
+                              </div>
+                            )
+                            : null;
+                        })()}
                         {LLM_JOB_TYPES.has(job.type) && (() => {
                           // Completed jobs report the provider and model that
                           // actually served them; active jobs stream their

@@ -53,7 +53,7 @@ Similarity возвращает top-N только внутри одного `em
 
 ## Operator workflow
 
-1. Запустить diarizator: `scripts/start-diarizator.sh`; проверить `/health` и fingerprint.
+1. Запустить локальный diarizator в общей сети Mycelia: `docker compose --profile diarization up -d --build diarizator`; проверить `/health` и fingerprint. `scripts/start-diarizator.sh` остаётся совместимой обёрткой над этой командой.
 2. На `/settings/voice-identity` выполнить `Re-enroll Sky from saved samples`.
 3. Собрать и проверить pilot 7–14 дней: Sky, not-Sky, mixed/borderline.
 4. Сохранить validated calibration. До выполнения server-side gates full backfill заблокирован.

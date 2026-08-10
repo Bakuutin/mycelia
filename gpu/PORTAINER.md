@@ -6,6 +6,7 @@ This deployment runs speech-to-text as two containers on an NVIDIA GPU host:
 | --- | --- | --- |
 | `mycelia-stt-whisper-1` | Yes | Loads the configured Whisper model (`large-v3-turbo` by default) with `faster-whisper` on CUDA and performs transcription. Port 9000 stays internal. |
 | `mycelia-stt-proxy-1` | Yes | Exposes the authenticated OpenAI-compatible `POST /v1/audio/transcriptions` API. |
+| `mycelia-stt-diarization-1` | Optional | Runs Pyannote diarization on CUDA and exposes port 8085 over the private network. |
 | `cloudflared` | No | Only needed when a Cloudflare Tunnel that owns the chosen hostname is configured to route to this proxy. It is not needed for direct Tailscale access. |
 
 The Portainer container page is an administration URL, not an STT API URL. For the deployment on your GPU host, the direct API base URL is:
@@ -34,9 +35,38 @@ http://gpu-host.example:8001
    | `PROXY_API_KEY` | Generate with `openssl rand -hex 32` | Required. Store it as a secret and use the same value in Mycelia. |
    | `PROXY_PORT` | `8001` | Published host port. Change it if already occupied. |
    | `ASR_MODEL` | `large-v3-turbo` | Optional Whisper model override. The proxy and Whisper container must use the same value. |
+   | `HF_TOKEN` | `hf_...` | Required for diarization. The token account must have accepted both gated Pyannote model licenses. |
+   | `DIARIZATION_PORT` | `8085` | Optional diarizator port exposed on the private/Tailscale interface. |
 
 6. Deploy the stack. The first pull is large and can outlive a reverse-proxy request timeout. If Portainer times out, pre-pull `onerahmet/openai-whisper-asr-webservice:v1.9.1-gpu` from **Images**, then deploy again.
 7. Keep both `whisper` and `proxy` running. Do not publish Whisper's internal port 9000.
+
+### Update the GPU diarizator
+
+The Portainer compose builds `sky-mycelia-diarizator:cu126` from the repository
+and persists downloaded models in `diarization_models`. After diarizator code
+changes, enable **Re-pull image and redeploy** (or rebuild the image without
+cache) and recreate only the `diarization` service. A container restart alone
+does not update Python source baked into the image.
+
+`AUDIO_BACKEND=soundfile` is intentional even on CUDA: audio decoding stays on
+the CPU and the waveform tensor is passed directly to Pyannote, while model
+inference still runs on the RTX 4090. This avoids runtime dependence on
+TorchCodec/FFmpeg ABI compatibility.
+
+Verify the rebuilt service before enabling its Mycelia route:
+
+```bash
+docker inspect mycelia-stt-diarization-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(COMPUTE_MODE|PYTORCH_CUDA_VERSION|AUDIO_BACKEND)='
+docker logs mycelia-stt-diarization-1 2>&1 | grep 'Models ready'
+curl --fail-with-body http://127.0.0.1:${DIARIZATION_PORT:-8085}/health
+```
+
+Expected configuration is `COMPUTE_MODE=gpu`, `PYTORCH_CUDA_VERSION=cu126`,
+`AUDIO_BACKEND=soundfile`; health must report CUDA and the runtime fingerprint.
+Port 8085 has no application authentication, so expose it only through the
+private/Tailscale network or an authenticated reverse proxy.
 
 If the proxy image was already built on the endpoint, Portainer reuses `sky-mycelia-stt-proxy:latest`. A Git-based deployment can also build it from `gpu/proxy/Dockerfile`.
 

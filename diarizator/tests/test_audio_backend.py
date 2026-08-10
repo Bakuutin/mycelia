@@ -66,6 +66,24 @@ class AudioBackendTest(unittest.TestCase):
 
             self.assertEqual(wave.shape, (1, 1, 8000))
 
+    def test_diarization_passes_preloaded_waveform_to_pyannote(self):
+        """CPU diarization must not depend on Pyannote's TorchCodec loader."""
+        annotation = Mock()
+        annotation.itertracks.return_value = []
+        output = Mock(speaker_diarization=annotation)
+        self.backend.diar = Mock(return_value=output)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audio.wav"
+            sf.write(path, np.zeros(8000, dtype=np.float32), 8000)
+
+            self.backend.diarize(path)
+
+        audio_input = self.backend.diar.call_args.args[0]
+        self.assertIsInstance(audio_input, dict)
+        self.assertEqual(audio_input["sample_rate"], 16000)
+        self.assertEqual(audio_input["waveform"].shape, (1, 16000))
+
     def test_cluster_matching_skips_invalid_embeddings(self):
         match = self.backend.match_clusters(
             np.array([1.0, 0.0], dtype=np.float32),

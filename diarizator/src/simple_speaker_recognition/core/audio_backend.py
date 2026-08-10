@@ -143,6 +143,14 @@ class AudioBackend:
             f"Parameters: min_speakers={min_speakers}, max_speakers={max_speakers}, collar={collar}, min_duration_off={min_duration_off}"
         )
 
+        # Preload audio through our configured backend instead of passing a
+        # filename to Pyannote. Pyannote 4 delegates filename decoding to
+        # TorchCodec, which may be unavailable even when soundfile can decode
+        # the same WAV (notably in native CPU containers on Apple Silicon).
+        # load_wave normalizes to mono 16 kHz and returns (batch, channel, time).
+        waveform = self.load_wave(path).squeeze(0)
+        audio_input = {"waveform": waveform, "sample_rate": 16000}
+
         # Community-1 is already tuned. Keep this only as an explicit legacy-model
         # escape hatch; mutating the pipeline per request is not thread-safe.
         if min_duration_off is not None:
@@ -159,7 +167,7 @@ class AudioBackend:
                 kwargs["max_speakers"] = max_speakers
             logger.debug(f"Calling diarization pipeline with kwargs: {kwargs}")
 
-            output = self.diar(str(path), **kwargs)
+            output = self.diar(audio_input, **kwargs)
             logger.info(f"Diarization output: {output}")
             logger.debug(
                 f"Output type: {type(output)}, has speaker_diarization: {hasattr(output, 'speaker_diarization')}"

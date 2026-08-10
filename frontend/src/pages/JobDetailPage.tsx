@@ -19,6 +19,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { JobInfo, JobLogEntry, JobAccessLogEntry } from "@/types/jobs";
 import { parseJobError } from "@/lib/jobs";
 import { getJobErrorCode } from "@/lib/jobErrors";
+import { getDiarizationJobRoute } from "@/lib/jobRouting";
+import { toast } from "sonner";
 
 interface TranscriptionDoc {
     _id: string;
@@ -469,7 +471,11 @@ export default function JobDetailPage() {
         },
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ["jobs"] });
+            toast.success("New job queued with the same input");
             navigate(`/jobs/${result.jobId}`);
+        },
+        onError: (error) => {
+            toast.error(error instanceof Error ? error.message : "Could not rerun job");
         },
     });
 
@@ -479,7 +485,6 @@ export default function JobDetailPage() {
     };
 
     const handleRerun = () => {
-        if (!confirm("Run a new job with the same input?")) return;
         rerunJobMutation.mutate();
     };
     const getStatusColor = (status: string) => {
@@ -569,7 +574,7 @@ export default function JobDetailPage() {
                             disabled={rerunJobMutation.isPending}
                         >
                             <Play className="h-4 w-4 mr-2" />
-                            Run again
+                            {rerunJobMutation.isPending ? "Queueing…" : "Run again"}
                         </Button>
                     )}
                     {["active", "waiting", "delayed"].includes(job.state) && (
@@ -625,6 +630,24 @@ export default function JobDetailPage() {
                             <div className="text-sm text-muted-foreground mb-1">Type</div>
                             <div className="font-medium">{job.type}</div>
                         </div>
+                        {(() => {
+                            const route = getDiarizationJobRoute(job);
+                            return route
+                                ? (
+                                    <div>
+                                        <div className="text-sm text-muted-foreground mb-1">
+                                            Diarizator service
+                                        </div>
+                                        <div className="font-medium">{route.name}</div>
+                                        {route.url && (
+                                            <div className="break-all font-mono text-xs text-muted-foreground">
+                                                {route.url}
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                                : null;
+                        })()}
                         {job.trigger && (
                             <div>
                                 <div className="text-sm text-muted-foreground mb-1">Trigger</div>

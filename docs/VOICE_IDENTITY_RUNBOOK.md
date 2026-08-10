@@ -11,12 +11,16 @@
 ## Bring-up
 
 ```bash
-scripts/start-diarizator.sh
-curl -fsS http://localhost:8085/health | jq
+docker compose --profile diarization up -d --build diarizator
+docker compose exec diarizator curl -fsS http://127.0.0.1:8085/health
 docker compose up -d --build backend python-worker frontend
 docker compose restart nginx
 curl -fkSs https://localhost:4433/readiness
 ```
+
+The in-network URL for local jobs is `http://diarizator:8085`. Prefer the
+container-internal health command above: local IDE/SSH port forwards may also
+claim host port 8085 and make `curl localhost:8085` reach a different machine.
 
 The health response must include `diarizationFingerprint` and `embeddingSpaceId`. The backend Jobs health panel must show the diarizator as healthy before enrollment or re-diarization.
 
@@ -55,4 +59,9 @@ Use `Preview purge`; compare document/embedding counts with the intended run. En
 
 ## Verification
 
-Follow `DEVELOPMENT.md` readiness diagnostics: confirm bind mounts, `BACKEND_TASK=dev`, `FRONTEND_MODE=dev`, `[READY]` logs, container health, `/audio/pipeline`, `/settings/voice-identity`, `/timeline`, `/transcript`, and a real annotation round-trip.
+Follow `DEVELOPMENT.md` readiness diagnostics: confirm bind mounts and the
+effective runtime mode. Live source reload requires `BACKEND_TASK=dev` and
+`FRONTEND_MODE=dev`; `start`/`prod` requires explicit rebuild/recreation.
+Verify `[READY]` logs, container health, `/audio/pipeline`,
+`/settings/voice-identity`, `/timeline`, `/transcript`, and a real annotation
+round-trip.

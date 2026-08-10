@@ -51,15 +51,17 @@ fixed `platform`, so Docker builds it natively as `linux/arm64` on an M-series
 Mac.
 
 ```bash
-cd diarizator
-docker compose --profile cpu up --build -d
+cd /path/to/mycelia
+docker compose --profile diarization up --build -d diarizator
 
 # Follow the first model load. Ready means the log contains "Models ready".
-docker compose --profile cpu logs -f diarization-service
+docker compose --profile diarization logs -f diarizator
 ```
 
-The compatibility wrapper `scripts/start-diarizator.sh` runs the same CPU
-Compose command; Docker Compose is the canonical and documented launch path.
+This main-stack profile is the canonical local launch path. It puts the
+diarizator on the same Docker network as backend and python-worker, where it is
+available as `http://diarizator:8085`. The compatibility wrapper
+`scripts/start-diarizator.sh` runs the same command.
 
 Recommended Docker Desktop resources for Mycelia plus diarization:
 
@@ -101,11 +103,17 @@ docker compose --profile gpu down
 
 ### 3. Connect Mycelia
 
-For Mycelia running in Docker on the same Mac, the default is already correct:
+For Mycelia running in Docker on the same Mac, the default is already correct
+when the main-stack `diarization` profile is used:
 
 ```bash
-DIARIZATION_SERVER_URL=http://host.docker.internal:8085
+DIARIZATION_SERVER_URL=http://diarizator:8085
 ```
+
+The standalone `diarizator/docker-compose.yml --profile cpu` path remains
+useful for isolated service development. If used alongside containerized
+Mycelia, configure an explicit reachable URL; Docker Desktop host-port
+hairpinning is not used as the supported default.
 
 For a remote RTX 4090 server, set the backend to the reachable protected URL,
 or add that URL in **Settings → Diarization** and give it a lower priority:
@@ -123,7 +131,7 @@ Startup and readiness are different states. The container can be running while
 Pyannote is still downloading/loading models.
 
 ```bash
-docker compose --profile cpu ps
+docker compose --profile diarization ps diarizator
 curl -fsS http://localhost:8085/health
 ```
 
@@ -141,7 +149,7 @@ services & routing** or **Settings → Diarization**; the route must show
 - Recreate the container after changing `.env`.
 
 ```bash
-docker compose --profile cpu up -d --force-recreate diarization-service
+docker compose --profile diarization up -d --force-recreate diarizator
 ```
 
 `Exited (137)`

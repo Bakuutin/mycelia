@@ -42,6 +42,8 @@ services:
       - HF_TOKEN=${HF_TOKEN}
       - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
       - COMPUTE_MODE=gpu
+      - PYTORCH_CUDA_VERSION=cu126
+      - AUDIO_BACKEND=soundfile
       - SPEAKER_SERVICE_HOST=0.0.0.0
       - SPEAKER_SERVICE_PORT=8085
       - LOG_LEVEL=INFO

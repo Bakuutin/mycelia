@@ -107,7 +107,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000
-      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://host.docker.internal:8085}
+      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://diarizator:8085}
     volumes:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk
@@ -143,7 +143,7 @@ services:
       STT_SERVER_URL: ${STT_SERVER_URL:-}
       PROXY_API_KEY: ${PROXY_API_KEY:-}
       STT_MODEL: ${STT_MODEL:-}
-      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://host.docker.internal:8085}
+      DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://diarizator:8085}
       SPEAKER_SIMILARITY_THRESHOLD: ${SPEAKER_SIMILARITY_THRESHOLD:-0.35}
       DIARIZATION_CONTINUITY_THRESHOLD: ${DIARIZATION_CONTINUITY_THRESHOLD:-0.75}
     volumes:
@@ -158,6 +158,42 @@ services:
         reservations:
             cpus: '0.5'
             memory: 1G
+
+  # Optional local CPU diarizator. Keeping it in the main Compose project gives
+  # backend and python-worker a stable service-DNS route and avoids unreliable
+  # Docker Desktop host-port hairpinning through host.docker.internal.
+  diarizator:
+    profiles: ["diarization"]
+    image: mycelia-diarizator:cpu
+    build:
+      context: ./diarizator
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: cpu
+    init: true
+    env_file:
+      - .env
+    ports:
+      - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
+    volumes:
+      - ./diarizator/src:/app/src
+      - ./diarizator/model_cache:/models
+      - ./diarizator/debug:/app/debug
+    environment:
+      HF_HOME: /models
+      HF_TOKEN: ${HF_TOKEN}
+      DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      SPEAKER_SERVICE_HOST: ${SPEAKER_SERVICE_HOST:-0.0.0.0}
+      SPEAKER_SERVICE_PORT: ${SPEAKER_SERVICE_PORT:-8085}
+      COMPUTE_MODE: cpu
+      PYTORCH_CUDA_VERSION: cpu
+      AUDIO_BACKEND: ${AUDIO_BACKEND:-soundfile}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:$${SPEAKER_SERVICE_PORT:-8085}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   nginx:
     image: nginx:1.27-alpine

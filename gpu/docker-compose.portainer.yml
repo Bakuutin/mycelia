@@ -36,5 +36,41 @@ services:
       MODEL_IDLE_TIMEOUT: ${MODEL_IDLE_TIMEOUT:-300}
     restart: unless-stopped
 
+  diarization:
+    image: sky-mycelia-diarizator:cu126
+    build:
+      context: ../diarizator
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_CUDA_VERSION: cu126
+    ports:
+      - "${DIARIZATION_PORT:-8085}:8085"
+    environment:
+      HF_HOME: /models
+      HF_TOKEN: ${HF_TOKEN:?Set HF_TOKEN in Portainer}
+      DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      COMPUTE_MODE: gpu
+      PYTORCH_CUDA_VERSION: cu126
+      AUDIO_BACKEND: soundfile
+      SPEAKER_SERVICE_HOST: 0.0.0.0
+      SPEAKER_SERVICE_PORT: 8085
+      LOG_LEVEL: INFO
+    volumes:
+      - diarization_models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
 volumes:
   whisper_cache:
+  diarization_models:
