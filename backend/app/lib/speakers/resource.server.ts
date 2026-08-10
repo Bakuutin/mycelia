@@ -143,6 +143,12 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     profileId: objectId,
   }),
   z.object({
+    action: z.literal("list-identity-campaigns"),
+    profileId: objectId.optional(),
+    runId: z.string().optional(),
+    limit: z.number().int().min(1).max(100).default(20),
+  }),
+  z.object({
     action: z.literal("save-calibration"),
     calibrationId: z.string().min(1),
     profileId: objectId,
@@ -1321,7 +1327,13 @@ export class SpeakerSegmentsResource
         );
       case "identity-status": {
         const profileId = new ObjectId(input.profileId);
-        const [annotations, calibrations, identityCounts, latestJobs] = await Promise.all([
+        const [
+          annotations,
+          calibrations,
+          identityCounts,
+          latestJobs,
+          latestCampaigns,
+        ] = await Promise.all([
           mongo({
             action: "find",
             collection: "speaker_annotations",
@@ -1377,7 +1389,13 @@ export class SpeakerSegmentsResource
               limit: 1,
             },
           }),
-        ]) as [any[], any[], any[], any[]];
+          mongo({
+            action: "find",
+            collection: "speaker_identity_campaigns",
+            query: { profileId: input.profileId },
+            options: { sort: { updatedAt: -1 }, limit: 1 },
+          }),
+        ]) as [any[], any[], any[], any[], any[]];
         const recordings = new Map<string, { id: string; sky: number; notSky: number }>();
         let sky = 0;
         let notSky = 0;
@@ -1422,7 +1440,19 @@ export class SpeakerSegmentsResource
             unclassified: classified.unclassified ?? 0,
           },
           latestJob: latestJobs[0] ?? null,
+          latestCampaign: latestCampaigns[0] ?? null,
         };
+      }
+      case "list-identity-campaigns": {
+        const query: Record<string, unknown> = {};
+        if (input.profileId) query.profileId = input.profileId;
+        if (input.runId) query.runId = input.runId;
+        return await mongo({
+          action: "find",
+          collection: "speaker_identity_campaigns",
+          query,
+          options: { sort: { updatedAt: -1 }, limit: input.limit },
+        });
       }
       case "save-calibration": {
         const calibrationIds = new Set(input.calibrationRecordingIds);

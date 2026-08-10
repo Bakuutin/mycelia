@@ -21,6 +21,7 @@ import {
   validateOperationRange,
 } from "@/lib/voiceIdentityOperations";
 import { useActionDialog } from "@/components/ActionDialogProvider";
+import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 
 type Run = {
   runId: string;
@@ -61,6 +62,24 @@ type Calibration = {
   status: string;
   profileId: string;
   profileRevision: number;
+  updatedAt?: Date;
+};
+type IdentityCampaign = {
+  campaignId: string;
+  status: "counting" | "running" | "completed" | "failed";
+  range?: { start?: Date; end?: Date };
+  processedSegments?: number;
+  totalSegments?: number | null;
+  pendingSegments?: number | null;
+  matched?: number;
+  rejected?: number;
+  uncertain?: number;
+  incompatibleSkipped?: number;
+  etaSeconds?: number | null;
+  segmentsPerSecond?: number | null;
+  batchNumber?: number;
+  estimatedBatches?: number;
+  currentJobId?: string;
   updatedAt?: Date;
 };
 
@@ -125,6 +144,28 @@ export function VoiceIdentityOperations() {
     item.profileRevision === (primary?.revision ?? 1)
   );
   const activeRun = runs.find((run) => run.status === "active");
+  const { data: identityCampaigns = [] } = useQuery<IdentityCampaign[]>({
+    queryKey: ["speaker-identity-campaigns", primaryId, activeRun?.runId],
+    enabled: Boolean(primaryId),
+    queryFn: () =>
+      callResource("speaker-segments", {
+        action: "list-identity-campaigns",
+        profileId: primaryId,
+        runId: activeRun?.runId,
+        limit: 10,
+      }) as Promise<IdentityCampaign[]>,
+    refetchInterval: 5_000,
+  });
+  const latestIdentityCampaign = identityCampaigns[0];
+  const identityProgress = latestIdentityCampaign
+    ? getSpeakerIdentityProgressView({
+      processed: latestIdentityCampaign.processedSegments,
+      total: latestIdentityCampaign.totalSegments,
+      remaining: latestIdentityCampaign.pendingSegments,
+      segmentsPerSecond: latestIdentityCampaign.segmentsPerSecond,
+      etaSeconds: latestIdentityCampaign.etaSeconds,
+    })
+    : null;
 
   const operation = useMutation({
     mutationFn: async (kind: "classify" | "missing" | "rediarize") => {
@@ -212,6 +253,9 @@ export function VoiceIdentityOperations() {
     onSuccess: () => {
       toast.success("Voice Identity operation queued");
       void queryClient.invalidateQueries({ queryKey: ["speaker-runs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker-identity-campaigns"],
+      });
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "Operation failed"),
@@ -378,6 +422,69 @@ export function VoiceIdentityOperations() {
           >
             <Button variant="ghost">Open transcript</Button>
           </Link>
+        </div>
+        <div className="rounded-md border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-medium">Identity backfill</p>
+              <p className="text-xs text-muted-foreground">
+                {latestIdentityCampaign
+                  ? `${latestIdentityCampaign.status} · batch ${
+                    latestIdentityCampaign.batchNumber ?? 0
+                  }/${latestIdentityCampaign.estimatedBatches ?? "?"}`
+                  : "No classification campaign has run for this active generation."}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {latestIdentityCampaign?.currentJobId && (
+                <Link to={`/jobs/${latestIdentityCampaign.currentJobId}`}>
+                  <Button size="sm" variant="outline">Job details</Button>
+                </Link>
+              )}
+              {latestIdentityCampaign?.range?.start && (
+                <Link
+                  to={`/timeline?start=${
+                    new Date(latestIdentityCampaign.range.start).getTime()
+                  }&end=${
+                    latestIdentityCampaign.range.end
+                      ? new Date(latestIdentityCampaign.range.end).getTime()
+                      : Date.now()
+                  }`}
+                >
+                  <Button size="sm" variant="outline">Timeline</Button>
+                </Link>
+              )}
+            </div>
+          </div>
+          {latestIdentityCampaign && identityProgress && (
+            <div className="mt-3 space-y-2">
+              {latestIdentityCampaign.totalSegments != null && (
+                <Progress value={identityProgress.percent} className="h-2" />
+              )}
+              <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+                <span>{identityProgress.progressLabel}</span>
+                <span>{identityProgress.etaLabel}</span>
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <span className="text-green-600">
+                  {latestIdentityCampaign.matched ?? 0} Sky
+                </span>
+                <span>{latestIdentityCampaign.rejected ?? 0} not Sky</span>
+                <span className="text-amber-600">
+                  {latestIdentityCampaign.uncertain ?? 0} uncertain
+                </span>
+                <span className="text-muted-foreground">
+                  {latestIdentityCampaign.incompatibleSkipped ?? 0} incompatible
+                </span>
+                <span className="text-muted-foreground">
+                  {identityProgress.remainingLabel}
+                  {identityProgress.rateLabel
+                    ? ` · ${identityProgress.rateLabel}`
+                    : ""}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
         <div className="space-y-2">
           {runs.slice(0, 8).map((run) => {

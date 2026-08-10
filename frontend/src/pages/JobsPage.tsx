@@ -83,6 +83,7 @@ import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
 import { getDiarizationProgressView } from "@/lib/diarizationProgress";
+import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import {
   type DiarizationRouteConfig,
   updateDiarizationRouteConfig,
@@ -1199,7 +1200,88 @@ function JobProgressCell({ job }: { job: JobInfo }) {
     }
   }
 
-  // --- Speaker Matching ---
+  // --- Speaker Identity ---
+  if (job.type === "speakerIdentity") {
+    if (isCompleted) {
+      return (
+        <div className="space-y-1">
+          <JobDateRange job={job} />
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span>{result.processed ?? 0} scanned</span>
+            <span className="text-green-500">{result.matched ?? 0} Sky</span>
+            <span>{result.rejected ?? 0} not Sky</span>
+            <span className="text-amber-500">
+              {result.uncertain ?? 0} uncertain
+            </span>
+            {(result.incompatibleSkipped ?? 0) > 0 && (
+              <span>{result.incompatibleSkipped} incompatible</span>
+            )}
+            {result.hasMore && (
+              <span className="text-blue-500">next batch queued</span>
+            )}
+          </div>
+          {result.campaignId && (
+            <div className="text-[11px] text-muted-foreground">
+              Campaign {result.campaignProcessed ?? result.processed ?? 0}/
+              {result.campaignTotal ?? "?"} · {result.campaignMatched ?? 0}{" "}
+              Sky · {result.campaignRejected ?? 0} not Sky ·{" "}
+              {result.campaignUncertain ?? 0} uncertain
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (isActive && progress.stage) {
+      const view = getSpeakerIdentityProgressView({
+        processed: progress.processed,
+        total: progress.total,
+        remaining: progress.remaining,
+        segmentsPerSecond: progress.segmentsPerSecond,
+        etaSeconds: progress.etaSeconds,
+      });
+      return (
+        <div className="min-w-[240px] space-y-2">
+          <Badge
+            variant="secondary"
+            className="bg-violet-500/10 text-violet-500 text-xs"
+          >
+            {progress.stage === "counting"
+              ? "Counting embeddings"
+              : "Classifying voices"}
+          </Badge>
+          <JobDateRange job={job} />
+          {progress.total != null && (
+            <Progress value={view.percent} className="h-1.5" />
+          )}
+          <div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
+            <span>{view.progressLabel}</span>
+            <span>{view.etaLabel}</span>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="text-green-500">{progress.matched ?? 0} Sky</span>
+            <span>{progress.rejected ?? 0} not Sky</span>
+            <span className="text-amber-500">
+              {progress.uncertain ?? 0} uncertain
+            </span>
+            {(progress.incompatibleSkipped ?? 0) > 0 && (
+              <span>{progress.incompatibleSkipped} incompatible</span>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {view.remainingLabel}
+            {view.rateLabel ? ` · ${view.rateLabel}` : ""}
+            {progress.batchNumber
+              ? ` · batch ${progress.batchNumber}/${
+                progress.estimatedBatches ?? "?"
+              }`
+              : ""}
+          </p>
+        </div>
+      );
+    }
+  }
+
+  // --- Speaker Matching (legacy) ---
   if (job.type === "speakerMatching") {
     if (isCompleted) {
       return (

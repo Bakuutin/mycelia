@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import time
 from datetime import UTC, datetime
 from typing import Any, Callable, Dict, Literal, Optional
@@ -14,6 +16,7 @@ from lib.resources import call_resource
 from speaker_identification.profiles import get_profile_by_id
 
 UNKNOWN_SPACES = {"", "legacy-unknown", "unknown", None}
+logger = logging.getLogger(__name__)
 
 
 def classify_identity(
@@ -49,6 +52,7 @@ class SpeakerIdentityJobData(BaseModel):
     end: Optional[datetime] = None
     limit: int = Field(default=1000, ge=1, le=10000)
     cursor: Optional[str] = None
+    campaignId: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "SpeakerIdentityJobData":
@@ -66,6 +70,61 @@ def _cosine(a: list[float], b: list[float]) -> float:
     if denominator == 0:
         raise ValueError("Cannot match a zero-length embedding")
     return float(np.dot(av, bv) / denominator)
+
+
+def _campaign_call(request: Dict[str, Any]) -> Any:
+    """Observability failures must not discard valid identity decisions."""
+    try:
+        return call_resource("mongo", request)
+    except Exception as exc:
+        logger.warning("Could not persist speaker identity campaign telemetry: %s", exc)
+        return None
+
+
+def _update_campaign(campaign_id: str, fields: Dict[str, Any]) -> None:
+    _campaign_call({
+        "action": "updateOne",
+        "collection": "speaker_identity_campaigns",
+        "query": {"campaignId": campaign_id},
+        "update": {"$set": {**fields, "updatedAt": datetime.now(UTC)}},
+        "options": {"upsert": True},
+    })
+
+
+def _rate_estimate(samples: list[float]) -> Optional[float]:
+    recent = [float(value) for value in samples[-10:] if value > 0]
+    if len(recent) < 2:
+        return None
+    estimate = recent[0]
+    for value in recent[1:]:
+        estimate = 0.35 * value + 0.65 * estimate
+    return estimate
+
+
+def _identity_query(data: SpeakerIdentityJobData) -> Dict[str, Any]:
+    """Select segments not yet evaluated with this profile/calibration."""
+    query: Dict[str, Any] = {
+        "runId": data.runId,
+        "lifecycleStatus": "active",
+        "embedding": {"$exists": True},
+        "$or": [
+            {"speakerIdentity": {"$exists": False}},
+            {
+                "speakerIdentity.topCandidate.profileId": {
+                    "$ne": ObjectId(data.profileId)
+                }
+            },
+            {"speakerIdentity.profileRevision": {"$ne": data.profileRevision}},
+            {"speakerIdentity.calibrationId": {"$ne": data.calibrationId}},
+        ],
+    }
+    if data.start or data.end:
+        query["start"] = {}
+        if data.start:
+            query["start"]["$gte"] = data.start
+        if data.end:
+            query["start"]["$lt"] = data.end
+    return query
 
 
 def process_speaker_identity_job(
@@ -93,32 +152,88 @@ def process_speaker_identity_job(
     allow_legacy = bool(calibration.get("allowLegacyCompatibility", False))
     matcher_version = "profile-candidates-v2"
 
-    query: Dict[str, Any] = {
+    campaign_id = data.campaignId or f"speaker-identity-{job_id}"
+    campaign = _campaign_call({
+        "action": "findOne",
+        "collection": "speaker_identity_campaigns",
+        "query": {"campaignId": campaign_id},
+    }) or {}
+    base_query = _identity_query(data)
+    total_segments = campaign.get("totalSegments")
+    count_warning: Optional[str] = None
+    if total_segments is None:
+        progress_callback({
+            "stage": "counting",
+            "campaignId": campaign_id,
+            "message": "Counting speaker embeddings to classify…",
+        })
+        try:
+            counted = call_resource("mongo", {
+                "action": "count",
+                "collection": "diarizations",
+                "query": base_query,
+                "options": {"maxTimeMS": 5_000},
+            })
+            total_segments = int(counted)
+        except Exception as exc:
+            count_warning = str(exc)
+            logger.warning("Speaker identity count unavailable; continuing: %s", exc)
+
+    cumulative_processed = int(campaign.get("processedSegments", 0))
+    cumulative_matched = int(campaign.get("matched", 0))
+    cumulative_rejected = int(campaign.get("rejected", 0))
+    cumulative_uncertain = int(campaign.get("uncertain", 0))
+    cumulative_skipped = int(campaign.get("incompatibleSkipped", 0))
+    rate_samples = [
+        float(value) for value in campaign.get("rateSamples", [])[-9:]
+        if value is not None and float(value) > 0
+    ]
+    job_ids = [str(value) for value in campaign.get("jobIds", [])]
+    if job_id not in job_ids:
+        job_ids.append(job_id)
+    batch_number = len(job_ids)
+    estimated_batches = (
+        max(batch_number, math.ceil(int(total_segments) / data.limit))
+        if total_segments is not None and int(total_segments) > 0
+        else batch_number
+    )
+    _update_campaign(campaign_id, {
+        "campaignId": campaign_id,
+        "mode": "classify_existing",
         "runId": data.runId,
-        "lifecycleStatus": "active",
-        "embedding": {"$exists": True},
-        "$or": [
-            {"speakerIdentity": {"$exists": False}},
-            {"speakerIdentity.profileId": {"$ne": ObjectId(data.profileId)}},
-            {"speakerIdentity.profileRevision": {"$ne": data.profileRevision}},
-            {"speakerIdentity.calibrationId": {"$ne": data.calibrationId}},
-        ],
-    }
-    if data.start or data.end:
-        query["start"] = {}
-        if data.start:
-            query["start"]["$gte"] = data.start
-        if data.end:
-            query["start"]["$lt"] = data.end
+        "profileId": data.profileId,
+        "profileName": profile.get("name"),
+        "profileRevision": data.profileRevision,
+        "calibrationId": data.calibrationId,
+        "range": {"start": data.start, "end": data.end},
+        "status": "running",
+        "totalSegments": total_segments,
+        "totalEstimated": total_segments is None,
+        "countWarning": count_warning,
+        "processedSegments": cumulative_processed,
+        "matched": cumulative_matched,
+        "rejected": cumulative_rejected,
+        "uncertain": cumulative_uncertain,
+        "incompatibleSkipped": cumulative_skipped,
+        "currentJobId": job_id,
+        "firstJobId": campaign.get("firstJobId", job_id),
+        "jobIds": job_ids,
+        "batchNumber": batch_number,
+        "estimatedBatches": estimated_batches,
+        "startedAt": campaign.get("startedAt", datetime.now(UTC)),
+    })
+
+    query = dict(base_query)
     if data.cursor:
         query["_id"] = {"$gt": ObjectId(data.cursor)}
 
-    segments = call_resource("mongo", {
+    candidates = call_resource("mongo", {
         "action": "find",
         "collection": "diarizations",
         "query": query,
-        "options": {"sort": {"_id": 1}, "limit": data.limit},
+        "options": {"sort": {"_id": 1}, "limit": data.limit + 1},
     }) or []
+    segments = candidates[:data.limit]
 
     operations = []
     counts = {"matched": 0, "rejected": 0, "uncertain": 0}
@@ -196,17 +311,74 @@ def process_speaker_identity_job(
 
     processed = len(segments)
     cursor = str(segments[-1]["_id"]) if segments else data.cursor
+    campaign_processed = cumulative_processed + processed
+    campaign_matched = cumulative_matched + counts["matched"]
+    campaign_rejected = cumulative_rejected + counts["rejected"]
+    campaign_uncertain = cumulative_uncertain + counts["uncertain"]
+    campaign_skipped = cumulative_skipped + incompatible_skipped
+    elapsed = max(time.time() - started, 0.0)
+    batch_rate = processed / elapsed if processed > 0 and elapsed > 0 else None
+    final_rate_samples = (rate_samples + ([batch_rate] if batch_rate else []))[-10:]
+    smoothed_rate = _rate_estimate(final_rate_samples)
+    remaining = (
+        max(int(total_segments) - campaign_processed, 0)
+        if total_segments is not None
+        else None
+    )
+    eta_seconds = (
+        remaining / smoothed_rate
+        if remaining is not None and remaining > 0 and smoothed_rate
+        else 0.0 if remaining == 0 and smoothed_rate else None
+    )
+    has_more = len(candidates) > data.limit
+    status = "running" if has_more else "completed"
+    _update_campaign(campaign_id, {
+        "status": status,
+        "processedSegments": campaign_processed,
+        "pendingSegments": remaining,
+        "matched": campaign_matched,
+        "rejected": campaign_rejected,
+        "uncertain": campaign_uncertain,
+        "incompatibleSkipped": campaign_skipped,
+        "currentJobId": job_id,
+        "lastCursor": cursor,
+        "segmentsPerSecond": smoothed_rate or batch_rate,
+        "currentSegmentsPerSecond": batch_rate,
+        "etaSeconds": eta_seconds,
+        "rateSamples": final_rate_samples,
+        "finishedAt": datetime.now(UTC) if not has_more else None,
+    })
     progress_callback({
         "stage": "identity",
-        "processed": processed,
-        "incompatibleSkipped": incompatible_skipped,
-        **counts,
+        "campaignId": campaign_id,
+        "batchNumber": batch_number,
+        "estimatedBatches": estimated_batches,
+        "processed": campaign_processed,
+        "total": total_segments,
+        "remaining": remaining,
+        "matched": campaign_matched,
+        "rejected": campaign_rejected,
+        "uncertain": campaign_uncertain,
+        "incompatibleSkipped": campaign_skipped,
+        "segmentsPerSecond": smoothed_rate or batch_rate,
+        "etaSeconds": eta_seconds,
+        "etaConfidence": "medium" if len(final_rate_samples) >= 5 else "low",
     })
     return {
         "processed": processed,
-        "hasMore": processed == data.limit,
+        "hasMore": has_more,
         "cursor": cursor,
+        "campaignId": campaign_id,
+        "batchNumber": batch_number,
+        "estimatedBatches": estimated_batches,
         "incompatibleSkipped": incompatible_skipped,
         **counts,
-        "duration": round(time.time() - started, 2),
+        "campaignProcessed": campaign_processed,
+        "campaignMatched": campaign_matched,
+        "campaignRejected": campaign_rejected,
+        "campaignUncertain": campaign_uncertain,
+        "campaignIncompatibleSkipped": campaign_skipped,
+        "campaignTotal": total_segments,
+        "campaignRemaining": remaining,
+        "duration": round(elapsed, 2),
     }

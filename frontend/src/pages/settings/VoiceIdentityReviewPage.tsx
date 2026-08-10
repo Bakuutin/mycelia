@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
+import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 import { Button } from "@/components/ui/button";
 import {
@@ -158,6 +159,23 @@ type IdentityStatus = {
     result?: Record<string, number>;
     failedReason?: string;
   } | null;
+  latestCampaign?: {
+    campaignId: string;
+    status: string;
+    processedSegments?: number;
+    totalSegments?: number | null;
+    pendingSegments?: number | null;
+    matched?: number;
+    rejected?: number;
+    uncertain?: number;
+    incompatibleSkipped?: number;
+    etaSeconds?: number | null;
+    segmentsPerSecond?: number | null;
+    batchNumber?: number;
+    estimatedBatches?: number;
+    currentJobId?: string;
+    range?: { start?: Date | string; end?: Date | string };
+  } | null;
 };
 
 export default function VoiceIdentityReviewPage() {
@@ -222,6 +240,15 @@ export default function VoiceIdentityReviewPage() {
       }) as Promise<IdentityStatus>,
     refetchInterval: 15_000,
   });
+  const identityCampaignView = identityStatus?.latestCampaign
+    ? getSpeakerIdentityProgressView({
+      processed: identityStatus.latestCampaign.processedSegments,
+      total: identityStatus.latestCampaign.totalSegments,
+      remaining: identityStatus.latestCampaign.pendingSegments,
+      segmentsPerSecond: identityStatus.latestCampaign.segmentsPerSecond,
+      etaSeconds: identityStatus.latestCampaign.etaSeconds,
+    })
+    : null;
   const { data: pipelineHealth, isLoading: isLoadingHealth } = useQuery<any>({
     queryKey: ["pipeline-health", "voice-identity"],
     queryFn: () =>
@@ -1595,6 +1622,82 @@ export default function VoiceIdentityReviewPage() {
               <br />latest job
             </div>
           </div>
+          {identityStatus?.latestCampaign && identityCampaignView && (
+            <div className="space-y-2 rounded-lg border bg-muted/20 p-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium">
+                    Latest backfill · {identityStatus.latestCampaign.status}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Batch {identityStatus.latestCampaign.batchNumber ?? 0}/
+                    {identityStatus.latestCampaign.estimatedBatches ?? "?"}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {identityStatus.latestCampaign.currentJobId && (
+                    <Button asChild size="sm" variant="outline">
+                      <Link
+                        to={`/jobs/${identityStatus.latestCampaign.currentJobId}`}
+                      >
+                        Job details
+                      </Link>
+                    </Button>
+                  )}
+                  {identityStatus.latestCampaign.range?.start && (
+                    <Button asChild size="sm" variant="outline">
+                      <Link
+                        to={`/timeline?start=${
+                          new Date(
+                            identityStatus.latestCampaign.range.start,
+                          ).getTime()
+                        }&end=${
+                          identityStatus.latestCampaign.range.end
+                            ? new Date(
+                              identityStatus.latestCampaign.range.end,
+                            ).getTime()
+                            : Date.now()
+                        }`}
+                      >
+                        See speakers on Timeline
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {identityStatus.latestCampaign.totalSegments != null && (
+                <Progress
+                  value={identityCampaignView.percent}
+                  className="h-2"
+                />
+              )}
+              <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+                <span>{identityCampaignView.progressLabel}</span>
+                <span>{identityCampaignView.etaLabel}</span>
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <span className="text-green-600">
+                  {identityStatus.latestCampaign.matched ?? 0} Sky
+                </span>
+                <span>
+                  {identityStatus.latestCampaign.rejected ?? 0} not Sky
+                </span>
+                <span className="text-amber-600">
+                  {identityStatus.latestCampaign.uncertain ?? 0} uncertain
+                </span>
+                <span className="text-muted-foreground">
+                  {identityStatus.latestCampaign.incompatibleSkipped ?? 0}{" "}
+                  incompatible
+                </span>
+                <span className="text-muted-foreground">
+                  {identityCampaignView.remainingLabel}
+                  {identityCampaignView.rateLabel
+                    ? ` · ${identityCampaignView.rateLabel}`
+                    : ""}
+                </span>
+              </div>
+            </div>
+          )}
           <div className="rounded-lg border bg-muted/20 p-4 text-sm">
             <p className="font-medium">
               What happens after the first 100 labels

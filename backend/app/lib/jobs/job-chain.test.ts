@@ -46,9 +46,13 @@ Deno.test("other job continuations preserve their validated data", () => {
 
 Deno.test("cursor-based workers advance their continuation cursor", () => {
   const data = { type: "speakerIdentity", cursor: "old" };
-  expect(getContinuationJobData(data, { cursor: "new" })).toEqual({
+  expect(getContinuationJobData(data, {
+    cursor: "new",
+    campaignId: "identity-1",
+  })).toEqual({
     type: "speakerIdentity",
     cursor: "new",
+    campaignId: "identity-1",
   });
 });
 

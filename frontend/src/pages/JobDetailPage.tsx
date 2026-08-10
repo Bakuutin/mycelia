@@ -36,6 +36,7 @@ import { parseJobError } from "@/lib/jobs";
 import { getJobErrorCode } from "@/lib/jobErrors";
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
 import { getDiarizationProgressView } from "@/lib/diarizationProgress";
+import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import { buildFreshDiarizationGeneration } from "@/lib/diarizationRerun";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
@@ -771,6 +772,68 @@ export default function JobDetailPage() {
                           }`
                           : ""}
                       </div>
+                    )}
+                  </>
+                )}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
+      {job.type === "speakerIdentity" && job.state === "active" && (() => {
+        const view = getSpeakerIdentityProgressView({
+          processed: job.progress?.processed,
+          total: job.progress?.total,
+          remaining: job.progress?.remaining,
+          segmentsPerSecond: job.progress?.segmentsPerSecond,
+          etaSeconds: job.progress?.etaSeconds,
+        });
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle>Speaker Identity progress</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {job.progress?.stage === "counting"
+                ? (
+                  <p className="text-sm text-muted-foreground">
+                    Counting compatible stored embeddings in the selected range…
+                  </p>
+                )
+                : (
+                  <>
+                    {job.progress?.total != null && (
+                      <Progress value={view.percent} />
+                    )}
+                    <div className="flex flex-wrap justify-between gap-2 text-sm">
+                      <span>{view.progressLabel}</span>
+                      <span>{view.etaLabel}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
+                      <span className="text-green-500">
+                        {job.progress?.matched ?? 0} Sky
+                      </span>
+                      <span>{job.progress?.rejected ?? 0} not Sky</span>
+                      <span className="text-amber-500">
+                        {job.progress?.uncertain ?? 0} uncertain
+                      </span>
+                      <span>
+                        {job.progress?.incompatibleSkipped ?? 0} incompatible
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {view.remainingLabel}
+                      {view.rateLabel ? ` · ${view.rateLabel}` : ""}
+                      {job.progress?.batchNumber
+                        ? ` · batch ${job.progress.batchNumber}/${
+                          job.progress.estimatedBatches ?? "?"
+                        }`
+                        : ""}
+                    </p>
+                    {job.progress?.campaignId && (
+                      <p className="font-mono text-xs text-muted-foreground">
+                        Campaign {job.progress.campaignId}
+                      </p>
                     )}
                   </>
                 )}
@@ -1523,6 +1586,42 @@ export default function JobDetailPage() {
                   icon: Users,
                   label: "Profiles",
                   value: r.profiles_count ?? 0,
+                },
+              ],
+            },
+            speakerIdentity: {
+              icon: Users,
+              title: "Speaker Identity batch",
+              metrics: [
+                {
+                  icon: Clock,
+                  label: "Processing Time",
+                  value: processingTime,
+                },
+                { icon: Hash, label: "Scanned", value: r.processed ?? 0 },
+                { icon: Users, label: "Sky", value: r.matched ?? 0 },
+                { icon: Users, label: "Not Sky", value: r.rejected ?? 0 },
+                {
+                  icon: AlertTriangle,
+                  label: "Uncertain",
+                  value: r.uncertain ?? 0,
+                },
+                {
+                  icon: Layers,
+                  label: "Incompatible",
+                  value: r.incompatibleSkipped ?? 0,
+                },
+                {
+                  icon: Hash,
+                  label: "Campaign progress",
+                  value: `${r.campaignProcessed ?? r.processed ?? 0} / ${
+                    r.campaignTotal ?? "?"
+                  }`,
+                },
+                {
+                  icon: Layers,
+                  label: "Next batch",
+                  value: r.hasMore ? "Queued automatically" : "Complete",
                 },
               ],
             },

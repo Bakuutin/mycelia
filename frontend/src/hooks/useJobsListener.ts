@@ -194,6 +194,15 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       });
 
       if (event.event === "job.completed" && event.data) {
+        if (jobData.jobType === "speakerIdentity") {
+          void queryClient.invalidateQueries({ queryKey: ["speaker-track"] });
+          void queryClient.invalidateQueries({
+            queryKey: ["speaker-identity-status"],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["speaker-identity-campaigns"],
+          });
+        }
         options.onJobFinished?.({
           id: jobData.jobId,
           type: jobData.jobType,

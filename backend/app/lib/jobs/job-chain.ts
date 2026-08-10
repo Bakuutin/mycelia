@@ -28,7 +28,7 @@ export function getContinuationJobData(
   }
   const continuation = { ...data };
   if (
-    data.type === "diarization" &&
+    (data.type === "diarization" || data.type === "speakerIdentity") &&
     typeof result?.campaignId === "string" && result.campaignId.length > 0
   ) {
     continuation.campaignId = result.campaignId;

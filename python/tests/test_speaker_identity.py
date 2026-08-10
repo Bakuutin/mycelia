@@ -64,11 +64,13 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
         {"_id": ObjectId(), "embedding": [0.6, 0.8], "embeddingSpaceId": "space-v1"},
     ]
     writes = []
+    segment_queries = []
 
     def resource(_name, request):
         if request["collection"] == "speaker_calibrations":
             return {"status": "validated", "positiveThreshold": 0.8, "negativeThreshold": 0.2}
         if request["action"] == "find":
+            segment_queries.append(request["query"])
             return segments
         if request["action"] == "bulkWrite":
             writes.extend(request["operations"])
@@ -92,6 +94,13 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
     assert identities[1]["identityState"] == "unknown"
     assert identities[2]["identityState"] == "uncertain"
     assert identities[0]["candidates"][0]["profileId"] == profile_id
+    assert {
+        "speakerIdentity.topCandidate.profileId": {"$ne": profile_id}
+    } in segment_queries[0]["$or"]
+    assert not any(
+        "speakerIdentity.profileId" in clause
+        for clause in segment_queries[0]["$or"]
+    )
     assert result["processed"] == 3
     assert result["hasMore"] is False
 

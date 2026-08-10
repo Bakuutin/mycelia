@@ -12,6 +12,7 @@ export const schema = z.object({
   end: zDateOrString().optional(),
   limit: z.number().int().min(1).max(10000).default(1000),
   cursor: z.string().optional(),
+  campaignId: z.string().min(1).optional(),
 });
 
 const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||
@@ -24,6 +25,7 @@ export default new NetworkJobCapability({
   policies: [
     { resource: "db/speaker_profiles", action: "read", effect: "allow" },
     { resource: "db/speaker_calibrations", action: "read", effect: "allow" },
+    { resource: "db/speaker_identity_campaigns", action: "*", effect: "allow" },
     { resource: "db/diarizations", action: "*", effect: "allow" },
   ],
 });
