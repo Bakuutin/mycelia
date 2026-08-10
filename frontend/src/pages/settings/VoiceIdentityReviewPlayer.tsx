@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { normalizeObjectId } from "@/lib/diarization";
+import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 
 export type VoiceIdentityDecision = "me" | "not-me";
 type ReviewCommand =
@@ -150,6 +151,10 @@ export function VoiceIdentityReviewPlayer({
   const sessionPercent = sessionTotal > 0
     ? Math.min(100, Math.round((sessionAnswered / sessionTotal) * 100))
     : 0;
+  const stopThen = (action: () => void) => {
+    useAudioPlaybackStore.getState().stopActive();
+    action();
+  };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -167,16 +172,16 @@ export function VoiceIdentityReviewPlayer({
       if (pending) return;
       if (command === "me" || command === "not-me") {
         event.preventDefault();
-        onDecision(command);
+        stopThen(() => onDecision(command));
       } else if (command === "previous" && canPrevious) {
         event.preventDefault();
-        onPrevious();
+        stopThen(onPrevious);
       } else if (command === "next" && canNext) {
         event.preventDefault();
-        onNext();
+        stopThen(onNext);
       } else if (command === "undo" && canUndo) {
         event.preventDefault();
-        onUndo();
+        stopThen(onUndo);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -200,7 +205,7 @@ export function VoiceIdentityReviewPlayer({
       x: event.clientX,
       y: event.clientY,
     });
-    if (decision) onDecision(decision);
+    if (decision) stopThen(() => onDecision(decision));
   };
 
   return (
@@ -279,7 +284,7 @@ export function VoiceIdentityReviewPlayer({
               variant="outline"
               className="h-14 border-rose-500/40 text-base hover:bg-rose-500/10"
               disabled={pending}
-              onClick={() => onDecision("not-me")}
+              onClick={() => stopThen(() => onDecision("not-me"))}
             >
               <ArrowLeft className="mr-2 h-5 w-5" />Not me
             </Button>
@@ -287,7 +292,7 @@ export function VoiceIdentityReviewPlayer({
               size="lg"
               className="h-14 bg-sky-600 text-base hover:bg-sky-700"
               disabled={pending}
-              onClick={() => onDecision("me")}
+              onClick={() => stopThen(() => onDecision("me"))}
             >
               This is me<ArrowRight className="ml-2 h-5 w-5" />
             </Button>
@@ -326,7 +331,7 @@ export function VoiceIdentityReviewPlayer({
               size="sm"
               variant="ghost"
               disabled={!canPrevious || pending}
-              onClick={onPrevious}
+              onClick={() => stopThen(onPrevious)}
               aria-label="Previous segment"
             >
               <ArrowUp className="h-4 w-4" />
@@ -335,7 +340,7 @@ export function VoiceIdentityReviewPlayer({
               size="sm"
               variant="ghost"
               disabled={!canUndo || pending}
-              onClick={onUndo}
+              onClick={() => stopThen(onUndo)}
             >
               <RotateCcw className="mr-1 h-4 w-4" />Undo
             </Button>
@@ -343,7 +348,7 @@ export function VoiceIdentityReviewPlayer({
               size="sm"
               variant="ghost"
               disabled={!canNext || pending}
-              onClick={onNext}
+              onClick={() => stopThen(onNext)}
               aria-label="Next segment"
             >
               <ArrowDown className="h-4 w-4" />

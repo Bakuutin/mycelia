@@ -733,16 +733,21 @@ export default function JobDetailPage() {
               <CardTitle>Diarization progress</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {job.progress?.stage === "counting" ||
-                  job.progress?.total_chunks == null
+              {job.progress?.stage === "counting"
                 ? (
-                  <div className="text-sm text-muted-foreground">
-                    Counting speech chunks in the selected range…
+                  <div className="space-y-1 text-sm text-muted-foreground">
+                    <p>Preparing the diarization backlog…</p>
+                    <p className="text-xs">
+                      Exact counting is limited to 5 seconds so it cannot hold
+                      the GPU idle.
+                    </p>
                   </div>
                 )
                 : (
                   <>
-                    <Progress value={view.percent} />
+                    {job.progress?.total_chunks != null && (
+                      <Progress value={view.percent} />
+                    )}
                     <div className="flex flex-wrap justify-between gap-2 text-sm">
                       <span>{view.progressLabel}</span>
                       <span>{view.etaLabel}</span>

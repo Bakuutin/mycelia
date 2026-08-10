@@ -134,6 +134,29 @@ class DiarizationJobTest(TestCase):
         self.assertGreater(estimate, 1.0)
         self.assertLess(estimate, 5.0)
 
+    def test_count_timeout_does_not_block_diarization_work(self):
+        updates = []
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization.count_pending_chunks", side_effect=TimeoutError("count timed out")),
+            patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={"status": "diarized", "chunks_diarized": 2, "segments": 3},
+            ),
+        ):
+            result = process_diarization_job(
+                "job-count-timeout",
+                DiarizationJobData(limit=1),
+                updates.append,
+            )
+
+        self.assertEqual(result["processed"], 2)
+        self.assertTrue(result["hasMore"])
+        self.assertTrue(any(update.get("total_estimated") for update in updates))
+        self.assertTrue(any(update.get("total_chunks") is None for update in updates))
+
     def test_job_limits_work_and_reports_continuation(self):
         sequence = object()
 

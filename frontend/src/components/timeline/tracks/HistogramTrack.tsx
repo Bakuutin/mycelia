@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { callResource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import {
+  coverageBucketMs,
   coverageColor,
   dominantCoverageState,
 } from "@/lib/diarizationCoverage";
@@ -241,16 +242,11 @@ export const DiarizationCoverageTrack = memo(
       [props.transform, props.scale],
     );
     const [start, end] = rescaledScale.domain() as [Date, Date];
-    const bucketMs = Math.max(
-      1_000,
-      Math.min(
-        86_400_000,
-        Math.ceil(
-          (end.getTime() - start.getTime()) / Math.max(props.width / 3, 1),
-        ),
-      ),
+    const bucketMs = coverageBucketMs(
+      end.getTime() - start.getTime(),
+      props.width,
     );
-    const { data } = useQuery({
+    const { data, isLoading, isError, refetch } = useQuery({
       queryKey: [
         "diarization-coverage",
         start.getTime(),
@@ -274,11 +270,48 @@ export const DiarizationCoverageTrack = memo(
             range: { start: string | Date; end: string | Date };
           }>;
         }>,
-      refetchInterval: 10_000,
+      staleTime: 10_000,
+      refetchInterval: 15_000,
+      retry: 1,
     });
     return (
       <BaseTrack {...props} config={DIARIZATION_COVERAGE_CONFIG}>
         <g>
+          {isLoading && (
+            <text
+              x={8}
+              y={Math.max(14, props.height / 2 + 4)}
+              fontSize={11}
+              fill="currentColor"
+              opacity={0.65}
+            >
+              Loading diarization coverage…
+            </text>
+          )}
+          {isError && (
+            <text
+              x={8}
+              y={Math.max(14, props.height / 2 + 4)}
+              fontSize={11}
+              fill="#dc2626"
+              className="cursor-pointer"
+              onClick={() => void refetch()}
+            >
+              Coverage unavailable — click to retry
+            </text>
+          )}
+          {!isLoading && !isError && (data?.buckets.length ?? 0) === 0 &&
+            (data?.buildingRuns.length ?? 0) === 0 && (
+            <text
+              x={8}
+              y={Math.max(14, props.height / 2 + 4)}
+              fontSize={11}
+              fill="currentColor"
+              opacity={0.55}
+            >
+              No speech chunks in this range
+            </text>
+          )}
           {(data?.buckets ?? []).map((bucket) => {
             const state = dominantCoverageState(bucket.counts);
             const x = rescaledScale(new Date(bucket.start));

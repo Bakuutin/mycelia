@@ -7,6 +7,7 @@ import {
   getSwipeDecision,
   VoiceIdentityReviewPlayer,
 } from "./VoiceIdentityReviewPlayer";
+import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 
 const playerControls = vi.hoisted(() => ({
   togglePlayback: vi.fn(),
@@ -109,5 +110,16 @@ describe("VoiceIdentityReviewPlayer", () => {
     expect(getSwipeDecision({ x: 100, y: 20 }, { x: 180, y: 90 })).toBeNull();
     expect(getReviewShortcut("u")).toBe("undo");
     expect(getReviewShortcut("ArrowDown")).toBe("next");
+  });
+
+  it("stops the active clip before moving to another review segment", () => {
+    const stopActiveClip = vi.fn();
+    useAudioPlaybackStore.getState().acquire("active-review", stopActiveClip);
+    const { props } = renderPlayer();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next segment" }));
+
+    expect(stopActiveClip).toHaveBeenCalledOnce();
+    expect(props.onNext).toHaveBeenCalledOnce();
   });
 });

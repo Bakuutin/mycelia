@@ -210,6 +210,10 @@ export class SpeakerSegmentsResource
               },
               { $sort: { "_id.bucket": 1 } },
             ],
+            options: {
+              hint: "audio_chunks_diarization_coverage_v1",
+              maxTimeMS: 8_000,
+            },
           }),
           mongo({
             action: "find",

@@ -1,5 +1,6 @@
 export type DiarizationProgress = {
-  total_chunks?: number;
+  total_chunks?: number | null;
+  total_estimated?: boolean;
   chunks_processed?: number;
   chunks_remaining?: number;
   chunks_per_second?: number | null;
@@ -26,6 +27,7 @@ function formatEta(seconds: number): string {
 export function getDiarizationProgressView(
   progress: DiarizationProgress,
 ): DiarizationProgressView {
+  const hasKnownTotal = typeof progress.total_chunks === "number";
   const total = Math.max(progress.total_chunks ?? 0, 0);
   const processed = Math.max(progress.chunks_processed ?? 0, 0);
   const remaining = Math.max(
@@ -36,6 +38,18 @@ export function getDiarizationProgressView(
     ? Math.min(Math.max((processed / total) * 100, 0), 100)
     : 0;
   const rate = progress.chunks_per_second;
+
+  if (!hasKnownTotal) {
+    return {
+      percent: 0,
+      progressLabel: `${processed} chunks processed`,
+      remainingLabel: "Exact backlog total unavailable",
+      rateLabel: rate && rate > 0
+        ? `${(rate * 60).toFixed(1)} chunks/min`
+        : null,
+      etaLabel: "ETA available when the backlog total is known",
+    };
+  }
 
   return {
     percent,

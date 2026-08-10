@@ -1127,7 +1127,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
     }
     if (isActive && progress.stage) {
       const stageLabels: Record<string, string> = {
-        counting: "Counting",
+        counting: "Preparing backlog",
         processing: "Processing",
       };
       const progressView = getDiarizationProgressView(progress);
@@ -1140,6 +1140,12 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {stageLabels[progress.stage] ?? progress.stage}
           </Badge>
           <JobDateRange job={job} />
+          {progress.stage === "counting" && (
+            <p className="text-[11px] text-muted-foreground">
+              Exact count is bounded to 5s; processing continues if it times
+              out.
+            </p>
+          )}
           {progress.total_chunks != null && (
             <div className="space-y-1">
               <Progress value={progressView.percent} className="h-1.5" />
@@ -1151,6 +1157,12 @@ function JobProgressCell({ job }: { job: JobInfo }) {
                 {progressView.remainingLabel}
                 {progressView.rateLabel ? ` · ${progressView.rateLabel}` : ""}
               </div>
+            </div>
+          )}
+          {progress.stage === "processing" && progress.total_chunks == null && (
+            <div className="text-[11px] text-muted-foreground">
+              {progressView.progressLabel} · {progressView.remainingLabel}
+              {progressView.rateLabel ? ` · ${progressView.rateLabel}` : ""}
             </div>
           )}
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

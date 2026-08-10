@@ -358,12 +358,7 @@ def _build_pending_chunk_filters(
     include_diarized: bool = False,
 ) -> dict[str, Any]:
     required = [
-            {
-                '$or': [
-                    {'processing_by': {'$exists': False}},
-                    {'processing_by': None}
-                ]
-            },
+            {'processing_by': None},
             {'vad.has_speech': True},
             {'diarizationFailure.status': {'$ne': 'needs_attention'}},
             {
@@ -375,13 +370,7 @@ def _build_pending_chunk_filters(
             },
         ]
     if not include_diarized:
-        required.insert(0,
-            {
-                '$or': [
-                    {'diarized_at': {'$exists': False}},
-                    {'diarized_at': None}
-                ]
-            })
+        required.insert(0, {'diarized_at': None})
     base_filters: dict[str, Any] = {'$and': required}
 
     if filters:
@@ -398,7 +387,11 @@ def count_pending_chunks(filters: Optional[dict[str, Any]] = None) -> Optional[i
     result = call_resource('mongo', {
         "action": "count",
         "collection": "audio_chunks",
-        "query": query
+        "query": query,
+        "options": {
+            "hint": "audio_chunks_diarization_pending_v2",
+            "maxTimeMS": 5_000,
+        },
     })
     return int(result) if result is not None else None
 

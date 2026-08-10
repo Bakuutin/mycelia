@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { coverageColor, dominantCoverageState } from "./diarizationCoverage";
+import {
+  coverageBucketMs,
+  coverageColor,
+  dominantCoverageState,
+} from "./diarizationCoverage";
 
 describe("diarization coverage", () => {
   it("prioritizes attention errors over pending and completed chunks", () => {
@@ -14,5 +18,12 @@ describe("diarization coverage", () => {
     expect(coverageColor("diarized")).toBe("#2563eb");
     expect(coverageColor("processing")).toBe("#38bdf8");
     expect(coverageColor("pending")).toBe("#94a3b8");
+  });
+
+  it("keeps month-scale coverage requests on a stable bucket size", () => {
+    const month = 30 * 86_400_000;
+
+    expect(coverageBucketMs(month, 1_000)).toBe(3 * 60 * 60 * 1_000);
+    expect(coverageBucketMs(month, 980)).toBe(3 * 60 * 60 * 1_000);
   });
 });

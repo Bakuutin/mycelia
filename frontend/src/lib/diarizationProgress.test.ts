@@ -27,4 +27,19 @@ describe("getDiarizationProgressView", () => {
       etaLabel: "ETA available after the first completed sequence",
     });
   });
+
+  it("shows useful progress when the bounded backlog count times out", () => {
+    expect(getDiarizationProgressView({
+      total_chunks: null,
+      total_estimated: true,
+      chunks_processed: 6,
+      chunks_per_second: 0.25,
+    })).toEqual({
+      percent: 0,
+      progressLabel: "6 chunks processed",
+      remainingLabel: "Exact backlog total unavailable",
+      rateLabel: "15.0 chunks/min",
+      etaLabel: "ETA available when the backlog total is known",
+    });
+  });
 });

@@ -118,23 +118,41 @@ def process_diarization_job(
 
     # Count once when a campaign starts. Continuations use the fixed campaign
     # total instead of scanning the entire historical backlog between batches.
-    if campaign:
-        pending_count = max(
-            int(campaign.get("totalChunks", 0))
-            - int(campaign.get("processedChunks", 0)),
-            0,
+    count_warning: Optional[str] = None
+    campaign_total = campaign.get("totalChunks") if campaign else None
+    try:
+        if campaign and campaign_total is not None:
+            pending_count: Optional[int] = max(
+                int(campaign_total) - int(campaign.get("processedChunks", 0)),
+                0,
+            )
+        # Re-diarization deliberately includes chunks that already have diarized_at.
+        elif building_generation:
+            pending_count = call_resource("mongo", {
+                "action": "count", "collection": "audio_chunks",
+                "query": {**filters, "vad.has_speech": True},
+                "options": {
+                    "hint": "audio_chunks_diarization_coverage_v1",
+                    "maxTimeMS": 5_000,
+                },
+            })
+        else:
+            pending_count = count_pending_chunks(filters if filters else None)
+    except Exception as exc:
+        pending_count = None
+        count_warning = str(exc)
+        logger.warning(
+            "Pending count unavailable after bounded query; processing will continue: %s",
+            exc,
         )
-    # Re-diarization deliberately includes chunks that already have diarized_at.
-    elif building_generation:
-        pending_count = call_resource("mongo", {
-            "action": "count", "collection": "audio_chunks",
-            "query": {**filters, "vad.has_speech": True},
-        })
-    else:
-        pending_count = count_pending_chunks(filters if filters else None)
     logger.info(f"Pending chunks: {pending_count}")
 
-    total_chunks = int(campaign.get("totalChunks", pending_count or 0))
+    total_chunks: Optional[int] = (
+        int(campaign_total)
+        if campaign_total is not None
+        else int(pending_count) if pending_count is not None
+        else None
+    )
     cumulative_chunks = int(campaign.get("processedChunks", 0))
     cumulative_sequences = int(campaign.get("processedSequences", 0))
     cumulative_segments = int(campaign.get("segmentsCreated", 0))
@@ -152,7 +170,7 @@ def process_diarization_job(
     estimated_batches = max(
         batch_number,
         math.ceil(total_chunks / max(effective_batch_size * MAX_SEQUENCE_CHUNKS, 1)),
-    ) if total_chunks else batch_number
+    ) if total_chunks is not None and total_chunks > 0 else batch_number
     _update_campaign(campaign_id, {
         "campaignId": campaign_id,
         "mode": data.mode,
@@ -162,6 +180,8 @@ def process_diarization_job(
         "route": data.diarizationServerUrl,
         "status": "running",
         "totalChunks": total_chunks,
+        "totalEstimated": total_chunks is None,
+        "countWarning": count_warning,
         "processedChunks": cumulative_chunks,
         "processedSequences": cumulative_sequences,
         "segmentsCreated": cumulative_segments,
@@ -174,7 +194,7 @@ def process_diarization_job(
         "startedAt": campaign.get("startedAt", datetime.now().astimezone()),
     })
     
-    if not pending_count:
+    if pending_count == 0:
         final_empty_status = (
             "completed_with_errors" if cumulative_errors > 0 else "completed"
         )
@@ -204,10 +224,20 @@ def process_diarization_job(
     
     progress_callback({
         "stage": "processing",
-        "message": f"Processing {pending_count} pending chunks...",
+        "message": (
+            f"Processing {pending_count} pending chunks..."
+            if pending_count is not None
+            else "Processing while the exact backlog total is unavailable..."
+        ),
         "total_chunks": total_chunks,
+        "total_estimated": total_chunks is None,
+        "count_warning": count_warning,
         "chunks_processed": cumulative_chunks,
-        "chunks_remaining": max(total_chunks - cumulative_chunks, 0),
+        "chunks_remaining": (
+            max(total_chunks - cumulative_chunks, 0)
+            if total_chunks is not None
+            else None
+        ),
         "campaignId": campaign_id,
         "batchNumber": batch_number,
         "estimatedBatches": estimated_batches,
@@ -265,7 +295,11 @@ def process_diarization_job(
         
         elapsed_seconds = max(time.monotonic() - started_at, 0.0)
         campaign_processed = cumulative_chunks + chunks_processed
-        chunks_remaining = max(total_chunks - campaign_processed, 0)
+        chunks_remaining = (
+            max(total_chunks - campaign_processed, 0)
+            if total_chunks is not None
+            else None
+        )
         batch_rate = (
             chunks_processed / elapsed_seconds
             if chunks_processed > 0 and elapsed_seconds > 0
@@ -275,13 +309,15 @@ def process_diarization_job(
         smoothed_rate = campaign_rate_estimate(rate_samples)
         eta_seconds = (
             chunks_remaining / smoothed_rate
-            if smoothed_rate and chunks_remaining > 0
-            else 0.0 if smoothed_rate else None
+            if smoothed_rate and chunks_remaining is not None and chunks_remaining > 0
+            else 0.0 if smoothed_rate and chunks_remaining == 0 else None
         )
         progress_callback({
             "stage": "processing",
             "message": f"Processed {sequences_processed} sequences, {chunks_processed} chunks",
             "total_chunks": total_chunks,
+            "total_estimated": total_chunks is None,
+            "count_warning": count_warning,
             "sequences_processed": cumulative_sequences + sequences_processed,
             "chunks_processed": campaign_processed,
             "chunks_remaining": chunks_remaining,
@@ -327,16 +363,22 @@ def process_diarization_job(
         })
         raise RuntimeError(last_error or "Diarization made no progress")
 
-    remaining = max(
-        total_chunks - (cumulative_chunks + chunks_processed),
-        0,
+    remaining = (
+        max(total_chunks - (cumulative_chunks + chunks_processed), 0)
+        if total_chunks is not None
+        else None
     )
-    if building_generation and remaining == 0:
+    has_more = (
+        remaining > 0
+        if remaining is not None
+        else sequences_processed >= effective_batch_size and errors == 0
+    )
+    if building_generation and not has_more:
         now = datetime.now().astimezone()
         call_resource("mongo", {"action": "updateMany", "collection": "diarizations", "query": {"runId": data.runId}, "update": {"$set": {"lifecycleStatus": "ready"}}})
         call_resource("mongo", {"action": "updateOne", "collection": "diarization_runs", "query": {"runId": data.runId, "status": "building"}, "update": {"$set": {"status": "ready", "readyAt": now, "coverage": {"chunks": cumulative_chunks + chunks_processed, "segments": cumulative_segments + segments_created}, "errors": cumulative_errors + errors}}})
     final_status = (
-        "running" if remaining > 0
+        "running" if has_more
         else "completed_with_errors" if cumulative_errors + errors > 0
         else "completed"
     )
@@ -357,7 +399,7 @@ def process_diarization_job(
         "pendingChunks": remaining,
         "errorCount": cumulative_errors + errors,
         "errors": (previous_errors + error_details)[-100:],
-        "finishedAt": datetime.now().astimezone() if remaining == 0 else None,
+        "finishedAt": datetime.now().astimezone() if not has_more else None,
         "lastCursor": cursor,
         "rateSamples": final_rate_samples,
     })
@@ -373,7 +415,7 @@ def process_diarization_job(
         "successfulSequences": successful_sequences,
         "failedSequences": failed_sequences,
         "processed": chunks_processed,
-        "hasMore": remaining > 0,
+        "hasMore": has_more,
         "cursor": cursor.isoformat() if cursor else None,
         "campaignId": campaign_id,
         "batchNumber": batch_number,
