@@ -25,6 +25,7 @@ export default new NetworkJobCapability({
     { resource: "config/read", action: "read", effect: "allow" },
     { resource: "db/configs", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "*", effect: "allow" },
+    { resource: "db/diarizations", action: "read", effect: "allow" },
     { resource: "db/diarizations", action: "write", effect: "allow" },
     { resource: "db/diarizations", action: "update", effect: "allow" },
     { resource: "db/diarization_runs", action: "*", effect: "allow" },
