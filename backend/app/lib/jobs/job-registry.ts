@@ -17,6 +17,8 @@ import { Policy } from "@/lib/auth/resources.ts";
 export interface JobTriggerSource extends TriggerSource {
   // Use sift syntax for filters so they can be serialized
   filter?: Record<string, any>;
+  /** Optional boolean worker-config flag gating this event source only. */
+  workerConfigFlag?: string;
 }
 /**
  * A job capability represents a worker that can process a specific job type.

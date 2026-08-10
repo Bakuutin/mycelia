@@ -1,5 +1,8 @@
 import { expect } from "@std/expect";
-import { buildTriggeredJobData } from "./trigger-manager.ts";
+import {
+  buildTriggeredJobData,
+  isEventTriggerEnabled,
+} from "./trigger-manager.ts";
 
 Deno.test("trigger payload can scope an automatic job", async () => {
   const capability = {
@@ -27,4 +30,20 @@ Deno.test("workers without trigger data builders keep the legacy payload", async
   ).toEqual({
     type: "vad",
   });
+});
+
+Deno.test("live trigger config gates only its event source", () => {
+  const source = {
+    channel: "mycelia:mongo:audio_chunks",
+    name: "speech_missing_diarization",
+    workerConfigFlag: "liveTriggerEnabled",
+  };
+
+  expect(isEventTriggerEnabled(source, {})).toBe(true);
+  expect(isEventTriggerEnabled(source, { liveTriggerEnabled: false })).toBe(
+    false,
+  );
+  expect(isEventTriggerEnabled(undefined, { liveTriggerEnabled: false })).toBe(
+    true,
+  );
 });

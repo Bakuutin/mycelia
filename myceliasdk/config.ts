@@ -203,6 +203,10 @@ export const zWorkerConfig = z.object({
       "Scheduled-run interval override in seconds. 0 disables scheduled runs " +
         "(event triggers still fire); unset keeps the worker's default.",
     ),
+  liveTriggerEnabled: z.boolean().optional().default(true).describe(
+    "Whether change-stream events may enqueue live jobs for this worker. " +
+      "Scheduled, continuation, and manual jobs are unaffected.",
+  ),
   routingContext: z.object({
     sourceId: z.string().trim().min(1).optional(),
     providerProfileId: z.string().trim().min(1).optional(),

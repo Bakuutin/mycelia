@@ -168,20 +168,21 @@ class AudioBackend:
             logger.debug(f"Calling diarization pipeline with kwargs: {kwargs}")
 
             output = self.diar(audio_input, **kwargs)
-            logger.info(f"Diarization output: {output}")
             logger.debug(
-                f"Output type: {type(output)}, has speaker_diarization: {hasattr(output, 'speaker_diarization')}"
+                "Diarization output structure: type=%s, has_speaker_diarization=%s",
+                type(output).__name__,
+                hasattr(output, "speaker_diarization"),
             )
 
             # In pyannote.audio 4.0+, the pipeline returns a DiarizeOutput object
             # We need to access .speaker_diarization to get the Annotation object
             if hasattr(output, "speaker_diarization"):
                 diarization = output.speaker_diarization
-                logger.info(f"Using speaker_diarization from output (pyannote 4.0+)")
+                logger.debug("Using speaker_diarization from output (pyannote 4.0+)")
             else:
                 # Fallback for older versions (3.x) that return Annotation directly
                 diarization = output
-                logger.info(f"Using output directly as Annotation (pyannote 3.x)")
+                logger.debug("Using output directly as Annotation (pyannote 3.x)")
 
             if collar is not None and collar > 0:
                 logger.debug(f"Applying explicit gap filling with collar={collar}s")

@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { sift } from "@/lib/mongo/core.server.ts";
 import diarization, { schema } from "./diarization.ts";
 
 Deno.test("diarization job can read its feature flag and speaker profiles", () => {
@@ -38,6 +39,38 @@ Deno.test("diarization automatically watches speech-ready chunks and historical 
     originalId: "507f1f77bcf86cd799439011",
   });
   expect(data?.campaignId).toMatch(/^diarization-live-/);
+});
+
+Deno.test("diarization live trigger only matches the VAD field changing to speech", () => {
+  const source = diarization.triggers?.sources.find((candidate) =>
+    candidate.name === "speech_missing_diarization"
+  );
+  expect(source).toBeDefined();
+  const matches = sift(source!.filter!);
+
+  expect(matches({
+    event: "mongo.change",
+    data: {
+      operationType: "update",
+      changedFields: ["vad.has_speech"],
+      document: { vad: { has_speech: true } },
+    },
+  })).toBe(true);
+  for (const changedField of [
+    "processing_by",
+    "claimed_at",
+    "diarized_at",
+    "diarizationFailure.status",
+  ]) {
+    expect(matches({
+      event: "mongo.change",
+      data: {
+        operationType: "update",
+        changedFields: [changedField],
+        document: { vad: { has_speech: true } },
+      },
+    })).toBe(false);
+  }
 });
 
 Deno.test("historical watchdog resumes an interrupted campaign", async () => {

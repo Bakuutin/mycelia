@@ -643,10 +643,14 @@ async def diarize(
 
         total_time = time.time() - diarize_start
         log.info(
-            f"Diarization complete: {len(result_segments)} segments, {len(unique_speakers)} speakers in {total_time:.2f}s total"
-        )
-        log.debug(
-            f"Performance breakdown: diarization={diarize_time:.2f}s, embeddings={embed_time:.2f}s, clustering={cluster_time:.2f}s"
+            "Diarization complete: %d segments, %d speakers; "
+            "diarization=%.2fs, embeddings=%.2fs, clustering=%.2fs, total=%.2fs",
+            len(result_segments),
+            len(unique_speakers),
+            diarize_time,
+            embed_time,
+            cluster_time,
+            total_time,
         )
         if cluster_list:
             log.info(

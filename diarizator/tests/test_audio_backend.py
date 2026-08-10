@@ -84,6 +84,22 @@ class AudioBackendTest(unittest.TestCase):
         self.assertEqual(audio_input["sample_rate"], 16000)
         self.assertEqual(audio_input["waveform"].shape, (1, 16000))
 
+    def test_diarization_does_not_format_full_model_output_for_info_logging(self):
+        class DiarizationOutput:
+            speaker_diarization = Mock()
+
+            def __str__(self):
+                raise AssertionError("full Pyannote output must not be formatted")
+
+        DiarizationOutput.speaker_diarization.itertracks.return_value = []
+        self.backend.diar = Mock(return_value=DiarizationOutput())
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audio.wav"
+            sf.write(path, np.zeros(8000, dtype=np.float32), 8000)
+
+            self.backend.diarize(path)
+
     def test_cluster_matching_skips_invalid_embeddings(self):
         match = self.backend.match_clusters(
             np.array([1.0, 0.0], dtype=np.float32),

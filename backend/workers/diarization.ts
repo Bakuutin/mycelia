@@ -122,11 +122,12 @@ export default new NetworkJobCapability({
     sources: [{
       channel: "mycelia:mongo:audio_chunks",
       name: "speech_missing_diarization",
+      workerConfigFlag: "liveTriggerEnabled",
       filter: {
         event: "mongo.change",
         "data.operationType": "update",
+        "data.changedFields": { $in: ["vad.has_speech"] },
         "data.document.vad.has_speech": true,
-        "data.document.diarized_at": { $exists: false },
       },
     }],
     ...getTriggerTiming("diarization"),

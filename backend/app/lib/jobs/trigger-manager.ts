@@ -6,7 +6,6 @@ import {
   JobRegistryEntry,
   JobTriggerSource,
 } from "./job-registry.ts";
-import { TriggerSource } from "@/utils/registries.ts";
 import { enqueueJob } from "./queue.ts";
 import { EnqueueJobOptions } from "./types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
@@ -31,6 +30,14 @@ export async function buildTriggeredJobData(
   return await capability.getTriggerJobData?.(payload, reason, { mongo }) ?? {
     type: capability.manifest.name,
   };
+}
+
+export function isEventTriggerEnabled(
+  source: Pick<JobTriggerSource, "workerConfigFlag"> | undefined,
+  workerConfig: Record<string, unknown> | undefined,
+): boolean {
+  if (!source?.workerConfigFlag) return true;
+  return workerConfig?.[source.workerConfigFlag] !== false;
 }
 
 export class TriggerManager {
@@ -150,7 +157,7 @@ export class TriggerManager {
 
   private async setupRedisTrigger(
     cap: JobRegistryEntry,
-    source: TriggerSource,
+    source: JobTriggerSource,
     onTrigger: (payload: any) => void,
   ) {
     const channel = source.channel;
@@ -174,13 +181,40 @@ export class TriggerManager {
       await subscriber.subscribe(channel);
     }
 
-    subscriber.on("message", (chan: string, message: string) => {
+    subscriber.on("message", async (chan: string, message: string) => {
       if (chan !== channel) return;
       try {
         const payload = JSON.parse(message);
         // Use sift to evaluate the filter if it exists
         const matches = !source.filter || sift(source.filter)(payload);
         if (matches) {
+          let enabled = true;
+          if (source.workerConfigFlag) {
+            try {
+              const config = await getServerConfig();
+              enabled = isEventTriggerEnabled(
+                source,
+                config?.workers?.[cap.manifest.name] as unknown as
+                  | Record<string, unknown>
+                  | undefined,
+              );
+            } catch (error) {
+              log("WARN", `Could not read event trigger config; using default`, {
+                jobName: cap.manifest.name,
+                triggerName: source.name,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          if (!enabled) {
+            log("DEBUG", `Redis event trigger disabled by worker config`, {
+              channel,
+              jobName: cap.manifest.name,
+              triggerName: source.name,
+              workerConfigFlag: source.workerConfigFlag,
+            });
+            return;
+          }
           log("INFO", `Redis event received`, {
             channel,
             jobName: cap.manifest.name,

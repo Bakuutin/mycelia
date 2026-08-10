@@ -102,6 +102,7 @@ type WorkerStatus = {
     maxConcurrency: number;
     defaultTriggerIntervalSeconds?: number;
     triggerIntervalSeconds?: number;
+    liveTriggerEnabled?: boolean;
     running: boolean;
     active: number;
     waiting: number;
@@ -1610,6 +1611,25 @@ export default function JobsPage() {
     );
   };
 
+  const applyOptimisticDiarizationLiveTrigger = (enabled: boolean) => {
+    queryClient.setQueryData<WorkerStatus>(
+      ["worker-status"],
+      (current) =>
+        current?.workers?.diarization
+          ? {
+            ...current,
+            workers: {
+              ...current.workers,
+              diarization: {
+                ...current.workers.diarization,
+                liveTriggerEnabled: enabled,
+              },
+            },
+          }
+          : current,
+    );
+  };
+
   const pauseWorkerMutation = useMutation({
     mutationFn: async (workerType: string) => {
       await api.callResource("jobs", {
@@ -1702,6 +1722,30 @@ export default function JobsPage() {
         error instanceof Error ? error.message : "Failed to save interval",
       );
     },
+  });
+
+  const setDiarizationLiveTriggerMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await api.callResource("config", {
+        action: "patch",
+        path: "workers.diarization",
+        updates: { liveTriggerEnabled: enabled },
+      });
+      return enabled;
+    },
+    onMutate: (enabled) => {
+      queryClient.cancelQueries({ queryKey: ["worker-status"] });
+      applyOptimisticDiarizationLiveTrigger(enabled);
+    },
+    onError: (error, enabled) => {
+      applyOptimisticDiarizationLiveTrigger(!enabled);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to save live diarization setting",
+      );
+    },
+    onSettled: () => refetchWorkerStatus(),
   });
 
   const setWorkerConcurrencyMutation = useMutation({
@@ -4281,6 +4325,28 @@ export default function JobsPage() {
                                 tagger
                               </Badge>
                               <span>is only needed as a backfill</span>
+                            </div>
+                          )}
+                          {worker.type === "diarization" && (
+                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <Switch
+                                checked={runtime?.liveTriggerEnabled ?? true}
+                                onCheckedChange={(enabled) =>
+                                  setDiarizationLiveTriggerMutation.mutate(
+                                    enabled,
+                                  )}
+                                disabled={setDiarizationLiveTriggerMutation
+                                  .isPending}
+                                aria-label="Live diarization from VAD updates"
+                                className="scale-75 origin-left"
+                              />
+                              <span className="-ml-2 text-foreground">
+                                Live diarization
+                              </span>
+                              <span>
+                                VAD events only · manual, historical and
+                                continuations stay active
+                              </span>
                             </div>
                           )}
                         </TableCell>

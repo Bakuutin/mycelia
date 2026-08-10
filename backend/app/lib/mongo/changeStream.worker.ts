@@ -18,6 +18,25 @@ const debouncedFrequentChanges = debounce(async (collectionName: string) => {
   });
 }, 1000);
 
+export function normalizeChangedFields(updateDescription: unknown): string[] {
+  if (!updateDescription || typeof updateDescription !== "object") return [];
+  const description = updateDescription as {
+    updatedFields?: Record<string, unknown>;
+    removedFields?: unknown[];
+    truncatedArrays?: Array<{ field?: unknown }>;
+  };
+  const fields = [
+    ...Object.keys(description.updatedFields ?? {}),
+    ...(description.removedFields ?? []).filter((field): field is string =>
+      typeof field === "string"
+    ),
+    ...(description.truncatedArrays ?? []).map((entry) => entry?.field).filter(
+      (field): field is string => typeof field === "string",
+    ),
+  ];
+  return [...new Set(fields)];
+}
+
 
 async function publishMongoChange(
   collectionName: string,
@@ -32,6 +51,7 @@ async function publishMongoChange(
     documentId,
     document,
     updateDescription,
+    changedFields: normalizeChangedFields(updateDescription),
     timestamp: new Date().toISOString(),
   };
 
