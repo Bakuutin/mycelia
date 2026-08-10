@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
+import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,9 +15,14 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import {
-  type VoiceIdentityDecision,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
+import {
   VoiceIdentityReviewPlayer,
   type VoiceIdentityReviewSegment,
 } from "./VoiceIdentityReviewPlayer";
@@ -24,10 +30,62 @@ import {
 const AUTO_PLAY_STORAGE_KEY = "voice-identity-review-autoplay-next";
 
 type ReviewHistoryEntry = {
-  annotationId: string;
-  segment: VoiceIdentityReviewSegment;
-  decision: VoiceIdentityDecision;
+  decisionId: string;
 };
+
+type ReviewWindowItem = {
+  segmentId: unknown;
+  groupId?: string;
+  status: "pending" | "skipped" | "reviewed";
+  decisionId?: unknown;
+};
+
+type ReviewGroup = {
+  groupId: string;
+  segmentIds: string[];
+  start: Date | string;
+  end: Date | string;
+  durationSeconds: number;
+  speaker?: string | null;
+};
+
+type ReviewSession = {
+  _id: unknown;
+  name: string;
+  status: "active" | "completed" | "abandoned";
+  revision: number;
+  targetProfileIds: unknown[];
+  window: ReviewWindowItem[];
+  groups: ReviewGroup[];
+  segments: VoiceIdentityReviewSegment[];
+  activeSegmentId?: unknown;
+  loadedCount: number;
+  sessionLoadedCount?: number;
+  reviewedCount: number;
+  skippedCount: number;
+  windowReviewedCount?: number;
+  windowSkippedCount?: number;
+  windowNumber?: number;
+  hasMore?: boolean;
+  backlogEstimate: number;
+  backlogEstimateCapped?: boolean;
+  preferences?: {
+    autoPlay?: boolean;
+    groupMode?: boolean;
+    compactMode?: boolean;
+  };
+  lastOpenedAt?: Date | string;
+  querySnapshot: {
+    rangeMode: "fixed" | "all_before";
+    start: Date | string;
+    end: Date | string;
+  };
+};
+
+type ReviewSessionSummary = Omit<
+  ReviewSession,
+  "window" | "groups" | "segments"
+>;
 
 type IdentityStatus = {
   labels: {
@@ -64,10 +122,24 @@ export default function VoiceIdentityReviewPage() {
   const [precision, setPrecision] = useState(0.98);
   const [calibrationRecordings, setCalibrationRecordings] = useState("");
   const [validationRecordings, setValidationRecordings] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
   const [history, setHistory] = useState<ReviewHistoryEntry[]>([]);
-  const [sessionTotal, setSessionTotal] = useState<number | null>(null);
   const [playOnMount, setPlayOnMount] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    () => {
+      try {
+        return localStorage.getItem("voice-identity-review-session");
+      } catch {
+        return null;
+      }
+    },
+  );
+  const [reviewProfileId, setReviewProfileId] = useState<string | null>(null);
+  const [showNewSession, setShowNewSession] = useState(false);
+  const [newRange, setNewRange] = useState<"14d" | "30d" | "custom" | "all">(
+    "14d",
+  );
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
   const [autoPlayNext, setAutoPlayNext] = useState(() => {
     try {
       const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
@@ -77,10 +149,6 @@ export default function VoiceIdentityReviewPage() {
     }
   });
   const calibrationSectionRef = useRef<HTMLDivElement>(null);
-  const [range] = useState(() => ({
-    start: new Date(Date.now() - 14 * 86_400_000),
-    end: new Date(),
-  }));
 
   const { data: profiles = [] } = useQuery<any[]>({
     queryKey: ["speaker_profiles"],
@@ -94,6 +162,12 @@ export default function VoiceIdentityReviewPage() {
   });
   const primary = profiles.find((profile) => profile.is_primary);
   const profileId = normalizeObjectId(primary?._id);
+  useEffect(() => {
+    if (!reviewProfileId && profileId) setReviewProfileId(profileId);
+  }, [profileId, reviewProfileId]);
+  const reviewProfile = profiles.find((profile) =>
+    normalizeObjectId(profile._id) === reviewProfileId
+  );
   const { data: identityStatus, refetch: refetchIdentityStatus } = useQuery<
     IdentityStatus
   >({
@@ -125,118 +199,273 @@ export default function VoiceIdentityReviewPage() {
     ? diarizatorHealth?.message ??
       "Diarizator is unavailable. Start the CPU or GPU Docker service first."
     : null;
-  const reviewQueryKey = [
-    "speaker-review",
-    range.start.getTime(),
-    range.end.getTime(),
+  const sessionsQueryKey = [
+    "speaker-review-sessions",
+    reviewProfileId,
   ] as const;
+  const { data: sessions = [], isLoading: sessionsLoading } = useQuery<
+    ReviewSessionSummary[]
+  >({
+    queryKey: sessionsQueryKey,
+    enabled: Boolean(reviewProfileId),
+    queryFn: () =>
+      callResource("speaker-segments", {
+        action: "list-review-sessions",
+        profileId: reviewProfileId,
+        limit: 20,
+      }) as Promise<ReviewSessionSummary[]>,
+  });
+
+  useEffect(() => {
+    if (sessionsLoading) return;
+    if (sessions.length === 0) {
+      if (selectedSessionId) setSelectedSessionId(null);
+      return;
+    }
+    const selectedExists = sessions.some((session) =>
+      normalizeObjectId(session._id) === selectedSessionId
+    );
+    if (!selectedExists) {
+      const next = sessions.find((session) => session.status === "active") ??
+        sessions[0];
+      setSelectedSessionId(normalizeObjectId(next._id));
+    }
+  }, [selectedSessionId, sessions, sessionsLoading]);
+
+  useEffect(() => {
+    try {
+      if (selectedSessionId) {
+        localStorage.setItem(
+          "voice-identity-review-session",
+          selectedSessionId,
+        );
+      } else {
+        localStorage.removeItem("voice-identity-review-session");
+      }
+    } catch {
+      // The server remains authoritative when browser storage is unavailable.
+    }
+  }, [selectedSessionId]);
+
+  const sessionQueryKey = [
+    "speaker-review-session",
+    selectedSessionId,
+  ] as const;
+  const selectedSessionExists = sessions.some((session) =>
+    normalizeObjectId(session._id) === selectedSessionId
+  );
   const {
-    data: queue = [],
+    data: reviewSession,
     isLoading,
     isFetching,
     isError,
     error,
     refetch,
-  } = useQuery<any[]>({
-    queryKey: reviewQueryKey,
+  } = useQuery<ReviewSession>({
+    queryKey: sessionQueryKey,
+    enabled: Boolean(selectedSessionId && selectedSessionExists),
     queryFn: () =>
       callResource("speaker-segments", {
-        action: "review-queue",
-        ...range,
-        state: "reviewable",
-        limit: 100,
-      }) as Promise<any[]>,
-    staleTime: 30_000,
+        action: "get-review-session",
+        sessionId: selectedSessionId,
+      }) as Promise<ReviewSession>,
+    staleTime: 10_000,
   });
 
   useEffect(() => {
-    if (!isLoading && sessionTotal === null) setSessionTotal(queue.length);
-  }, [isLoading, queue.length, sessionTotal]);
-
-  useEffect(() => {
-    if (queue.length === 0) {
-      setActiveIndex(0);
-      return;
+    if (reviewSession?.preferences?.autoPlay != null) {
+      setAutoPlayNext(reviewSession.preferences.autoPlay);
     }
-    setActiveIndex((current) => Math.min(current, queue.length - 1));
-  }, [queue.length]);
+  }, [reviewSession?.preferences?.autoPlay]);
 
-  const label = useMutation({
-    mutationFn: async (
-      { segment, state }: { segment: any; state: "me" | "not-me" },
-    ) => {
-      if (!profileId) throw new Error("Primary profile is missing");
-      const segmentId = normalizeObjectId(segment._id);
-      const originalId = normalizeObjectId(
-        segment.original_id ?? segment.original,
-      );
-      if (!segmentId || !originalId) {
-        throw new Error("Segment identity is incomplete");
+  const createSession = useMutation({
+    mutationFn: async () => {
+      if (!reviewProfileId) throw new Error("Choose a voice profile first");
+      const now = new Date();
+      const data: Record<string, unknown> = {
+        action: "create-review-session",
+        targetProfileIds: [reviewProfileId],
+        embeddingSpaceIds: reviewProfile?.embeddingSpaceId
+          ? [reviewProfile.embeddingSpaceId]
+          : [],
+        rangeMode: newRange === "all" ? "all_before" : "fixed",
+        limit: 100,
+        preferences: {
+          autoPlay: autoPlayNext,
+          groupMode: true,
+          compactMode: true,
+        },
+      };
+      if (newRange !== "all") {
+        const end = newRange === "custom" && customEnd
+          ? new Date(customEnd)
+          : now;
+        const start = newRange === "custom" && customStart
+          ? new Date(customStart)
+          : new Date(
+            end.getTime() - (newRange === "30d" ? 30 : 14) * 86_400_000,
+          );
+        if (
+          !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())
+        ) {
+          throw new Error("Enter a valid custom date range");
+        }
+        data.start = start;
+        data.end = end;
       }
-      const annotation = await callResource("speaker-segments", {
-        action: "annotate",
-        originalId,
-        segmentId,
-        runId: segment.runId,
-        start: segment.start,
-        end: segment.end,
-        ...(state === "me"
-          ? { profileId, excludedProfileIds: [] }
-          : { excludedProfileIds: [profileId] }),
-      });
-      const annotationId = normalizeObjectId((annotation as any)?._id);
-      if (!annotationId) throw new Error("Saved annotation has no ID");
-      return { annotationId, segment, state };
+      return await callResource("speaker-segments", data) as ReviewSession;
     },
-    onSuccess: ({ annotationId, segment, state }) => {
-      const segmentId = normalizeObjectId(segment._id);
-      const nextQueue = queue.filter((item) =>
-        normalizeObjectId(item._id) !== segmentId
+    onSuccess: (session) => {
+      const id = normalizeObjectId(session._id);
+      setSelectedSessionId(id);
+      queryClient.setQueryData(["speaker-review-session", id], session);
+      void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+      setShowNewSession(false);
+      setHistory([]);
+      toast.success(
+        `Review session created with ${session.loadedCount} segments`,
       );
-      queryClient.setQueryData(reviewQueryKey, nextQueue);
-      setHistory((current) => [...current, {
-        annotationId,
-        segment,
-        decision: state,
-      }]);
-      setActiveIndex((current) =>
-        Math.min(current, Math.max(0, nextQueue.length - 1))
-      );
-      setPlayOnMount(autoPlayNext && nextQueue.length > 0);
-      void refetchIdentityStatus();
     },
     onError: (error) =>
       toast.error(
-        error instanceof Error ? error.message : "Could not label segment",
+        error instanceof Error
+          ? error.message
+          : "Could not create review session",
       ),
   });
 
-  const undo = useMutation({
-    mutationFn: async (entry: ReviewHistoryEntry) => {
-      await callResource("speaker-segments", {
-        action: "delete-annotation",
-        id: entry.annotationId,
-      });
-      return entry;
+  const updatePosition = useMutation({
+    mutationFn: async (input: {
+      activeSegmentId?: string | null;
+      skipSegmentId?: string;
+      preferences?: Record<string, boolean>;
+    }) => {
+      if (!reviewSession || !selectedSessionId) {
+        throw new Error("Review session is not loaded");
+      }
+      return await callResource("speaker-segments", {
+        action: "update-review-position",
+        sessionId: selectedSessionId,
+        revision: reviewSession.revision,
+        ...input,
+      }) as ReviewSession;
     },
-    onSuccess: (entry) => {
-      queryClient.setQueryData<any[]>(reviewQueryKey, (current = []) => {
-        const restoredId = normalizeObjectId(entry.segment._id);
-        return [
-          entry.segment,
-          ...current.filter((item) =>
-            normalizeObjectId(item._id) !== restoredId
-          ),
-        ];
-      });
+    onSuccess: (session, variables) => {
+      queryClient.setQueryData(sessionQueryKey, session);
+      if (variables.skipSegmentId) {
+        setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
+      }
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not save review position",
+      );
+      void refetch();
+    },
+  });
+
+  const label = useMutation({
+    mutationFn: async (
+      { clientRequestId, segmentIds, state }: {
+        clientRequestId: string;
+        segmentIds: string[];
+        state: "me" | "not-me";
+      },
+    ) => {
+      if (!reviewProfileId || !reviewSession || !selectedSessionId) {
+        throw new Error("Review session or profile is missing");
+      }
+      return await callResource("speaker-segments", {
+        action: "commit-review-decision",
+        sessionId: selectedSessionId,
+        revision: reviewSession.revision,
+        clientRequestId,
+        segmentIds,
+        ...(state === "me"
+          ? { profileId: reviewProfileId, excludedProfileIds: [] }
+          : { excludedProfileIds: [reviewProfileId] }),
+      }) as { decision: { _id: unknown }; session: ReviewSession };
+    },
+    onSuccess: ({ decision, session }) => {
+      const decisionId = normalizeObjectId(decision._id);
+      queryClient.setQueryData(sessionQueryKey, session);
+      if (decisionId) setHistory((current) => [...current, { decisionId }]);
+      setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
+      void refetchIdentityStatus();
+      void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not save review decision",
+      );
+      void refetch();
+    },
+  });
+
+  const undo = useMutation({
+    mutationFn: async (entry: ReviewHistoryEntry) =>
+      await callResource("speaker-segments", {
+        action: "undo-review-decision",
+        decisionId: entry.decisionId,
+      }) as ReviewSession,
+    onSuccess: (session) => {
+      queryClient.setQueryData(sessionQueryKey, session);
       setHistory((current) => current.slice(0, -1));
-      setActiveIndex(0);
       setPlayOnMount(false);
       void refetchIdentityStatus();
     },
     onError: (error) =>
       toast.error(
-        error instanceof Error ? error.message : "Could not undo annotation",
+        error instanceof Error ? error.message : "Could not undo decision",
+      ),
+  });
+
+  const completeSession = useMutation({
+    mutationFn: async () => {
+      if (!selectedSessionId) throw new Error("Review session is not selected");
+      return await callResource("speaker-segments", {
+        action: "complete-review-session",
+        sessionId: selectedSessionId,
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+      void refetch();
+      toast.success("Review session completed; labels remain saved");
+    },
+  });
+
+  const loadNextWindow = useMutation({
+    mutationFn: async () => {
+      if (!selectedSessionId || !reviewSession) {
+        throw new Error("Review session is not loaded");
+      }
+      return await callResource("speaker-segments", {
+        action: "load-next-review-window",
+        sessionId: selectedSessionId,
+        revision: reviewSession.revision,
+      }) as ReviewSession;
+    },
+    onSuccess: (session) => {
+      queryClient.setQueryData(sessionQueryKey, session);
+      setHistory([]);
+      setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
+      void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+      toast.success(
+        session.loadedCount > 0
+          ? `Loaded window ${session.windowNumber} with ${session.loadedCount} segments`
+          : "No more segments in this frozen backlog",
+      );
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not load the next review window",
       ),
   });
 
@@ -261,7 +490,9 @@ export default function VoiceIdentityReviewPage() {
           precision,
           sky: identityStatus?.labels.sky ?? 0,
           notSky: identityStatus?.labels.notSky ?? 0,
-          borderline: queue.length,
+          borderline: reviewSession?.window.filter((item) =>
+            item.status !== "reviewed"
+          ).length ?? 0,
         },
         calibrationRecordingIds: split(calibrationRecordings),
         validationRecordingIds: split(validationRecordings),
@@ -307,11 +538,53 @@ export default function VoiceIdentityReviewPage() {
     labels.notSky < 40 ? `${40 - labels.notSky} more not-Sky` : null,
     labels.total < 100 ? `${100 - labels.total} more total` : null,
   ].filter(Boolean) as string[];
-  const activeSegment = queue[activeIndex] as
-    | VoiceIdentityReviewSegment
-    | undefined;
-  const reviewPending = label.isPending || undo.isPending;
-  const effectiveSessionTotal = sessionTotal ?? queue.length;
+  const windowItems = reviewSession?.window ?? [];
+  const segmentById = useMemo(
+    () =>
+      new Map(
+        (reviewSession?.segments ?? []).map((segment) => [
+          normalizeObjectId(segment._id),
+          segment,
+        ]),
+      ),
+    [reviewSession?.segments],
+  );
+  const activeId = normalizeObjectId(reviewSession?.activeSegmentId) ??
+    normalizeObjectId(
+      windowItems.find((item) => item.status === "pending")?.segmentId,
+    );
+  const activeIndex = Math.max(
+    0,
+    windowItems.findIndex((item) =>
+      normalizeObjectId(item.segmentId) === activeId
+    ),
+  );
+  const activeSegment = activeId ? segmentById.get(activeId) : undefined;
+  const groupMode = reviewSession?.preferences?.groupMode !== false;
+  const activeGroup = reviewSession?.groups.find((group) =>
+    group.segmentIds.includes(activeId ?? "")
+  );
+  const decisionSegmentIds =
+    (groupMode && activeGroup
+      ? activeGroup.segmentIds
+      : activeId
+      ? [activeId]
+      : []).filter((id) => {
+        const item = windowItems.find((candidate) =>
+          normalizeObjectId(candidate.segmentId) === id
+        );
+        return item?.status !== "reviewed";
+      });
+  const playerSegment = activeSegment && groupMode && activeGroup
+    ? {
+      ...activeSegment,
+      start: activeGroup.start,
+      end: activeGroup.end,
+    }
+    : activeSegment;
+  const reviewPending = label.isPending || undo.isPending ||
+    updatePosition.isPending ||
+    completeSession.isPending || loadNextWindow.isPending;
   const setAutoPlayPreference = (enabled: boolean) => {
     setAutoPlayNext(enabled);
     try {
@@ -319,12 +592,39 @@ export default function VoiceIdentityReviewPage() {
     } catch {
       // The preference is still valid for the current page session.
     }
+    if (reviewSession && !updatePosition.isPending) {
+      updatePosition.mutate({ preferences: { autoPlay: enabled } });
+    }
   };
   const moveReview = (direction: -1 | 1) => {
+    if (!reviewSession || reviewPending || windowItems.length === 0) return;
     setPlayOnMount(false);
-    setActiveIndex((current) =>
-      Math.max(0, Math.min(queue.length - 1, current + direction))
+    const nextIndex = Math.max(
+      0,
+      Math.min(windowItems.length - 1, activeIndex + direction),
     );
+    const nextId = normalizeObjectId(windowItems[nextIndex]?.segmentId);
+    if (nextId && nextId !== activeId) {
+      updatePosition.mutate({ activeSegmentId: nextId });
+    }
+  };
+  const openReviewSegment = (id: string) => {
+    if (reviewPending || id === activeId) return;
+    useAudioPlaybackStore.getState().stopActive();
+    setPlayOnMount(false);
+    updatePosition.mutate({ activeSegmentId: id });
+  };
+  const skipActive = () => {
+    if (!activeId || reviewPending) return;
+    const nextPending = [
+      ...windowItems.slice(activeIndex + 1),
+      ...windowItems.slice(0, activeIndex),
+    ]
+      .find((item) => item.status === "pending");
+    updatePosition.mutate({
+      skipSegmentId: activeId,
+      activeSegmentId: normalizeObjectId(nextPending?.segmentId) ?? null,
+    });
   };
   const undoLast = () => {
     const entry = history.at(-1);
@@ -508,25 +808,189 @@ export default function VoiceIdentityReviewPage() {
         </Card>
       </div>
       <Card>
-        <CardHeader>
-          <CardTitle>2. Segments to label — last 14 days</CardTitle>
-          <CardDescription>
-            Up to 100 uncertain or not-yet-classified segments from the active
-            diarization run. Start here before the first calibration.
-          </CardDescription>
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle>2. Review voice segments</CardTitle>
+              <CardDescription>
+                Saved sessions resume on any device. Short neighboring segments
+                from the same diarized speaker are grouped safely.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowNewSession((value) => !value)}
+            >
+              <Plus className="mr-1 h-4 w-4" />New session
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-2">
-          {isLoading && (
+        <CardContent className="space-y-3">
+          <div className="sticky top-2 z-10 grid gap-2 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur md:grid-cols-[10rem_minmax(12rem,1fr)_auto_auto_auto]">
+            <label className="text-xs text-muted-foreground">
+              Target profile
+              <select
+                className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                value={reviewProfileId ?? ""}
+                onChange={(event) => {
+                  useAudioPlaybackStore.getState().stopActive();
+                  setReviewProfileId(event.target.value || null);
+                  setSelectedSessionId(null);
+                  setHistory([]);
+                  setPlayOnMount(false);
+                }}
+                aria-label="Review target profile"
+              >
+                {profiles.map((profile) => {
+                  const id = normalizeObjectId(profile._id) ?? "";
+                  return (
+                    <option key={id} value={id}>
+                      {profile.name ?? id}
+                      {profile.is_primary ? " · primary" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label className="text-xs text-muted-foreground">
+              Saved session
+              <select
+                className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                value={selectedSessionId ?? ""}
+                onChange={(event) => {
+                  useAudioPlaybackStore.getState().stopActive();
+                  setSelectedSessionId(event.target.value || null);
+                  setHistory([]);
+                  setPlayOnMount(false);
+                }}
+                disabled={sessionsLoading || sessions.length === 0}
+                aria-label="Saved review session"
+              >
+                {sessions.length === 0 && (
+                  <option value="">No saved sessions</option>
+                )}
+                {sessions.map((session) => {
+                  const id = normalizeObjectId(session._id) ?? "";
+                  return (
+                    <option key={id} value={id}>
+                      {session.status === "active" ? "Resume" : "Completed"} ·
+                      {" "}
+                      {session.name}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <div className="flex min-w-48 items-end gap-2 text-xs">
+              <div className="flex-1">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Window</span>
+                  <span>
+                    {reviewSession?.windowReviewedCount ??
+                      reviewSession?.reviewedCount ?? 0} reviewed ·{" "}
+                    {reviewSession?.windowSkippedCount ??
+                      reviewSession?.skippedCount ?? 0} skipped
+                  </span>
+                </div>
+                <Progress
+                  className="mt-2 h-2"
+                  value={reviewSession?.loadedCount
+                    ? (((reviewSession.windowReviewedCount ??
+                      reviewSession.reviewedCount) +
+                      (reviewSession.windowSkippedCount ??
+                        reviewSession.skippedCount)) /
+                      reviewSession.loadedCount) * 100
+                    : 0}
+                />
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant={groupMode ? "secondary" : "outline"}
+              className="self-end"
+              disabled={!reviewSession || reviewPending}
+              onClick={() =>
+                updatePosition.mutate({
+                  preferences: { groupMode: !groupMode },
+                })}
+            >
+              Group short: {groupMode ? "on" : "off"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="self-end"
+              disabled={!reviewSession || reviewSession.status !== "active" ||
+                reviewPending}
+              onClick={() => completeSession.mutate()}
+            >
+              <CheckCircle2 className="mr-1 h-4 w-4" />Complete
+            </Button>
+          </div>
+
+          {(showNewSession || (!sessionsLoading && sessions.length === 0)) && (
+            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[12rem_1fr_auto]">
+              <label className="text-xs text-muted-foreground">
+                Range
+                <select
+                  className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={newRange}
+                  onChange={(event) =>
+                    setNewRange(event.target.value as typeof newRange)}
+                >
+                  <option value="14d">Last 14 days</option>
+                  <option value="30d">Last 30 days</option>
+                  <option value="custom">Custom range</option>
+                  <option value="all">Full backlog snapshot</option>
+                </select>
+              </label>
+              {newRange === "custom"
+                ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs text-muted-foreground">
+                      Start<Input
+                        type="datetime-local"
+                        value={customStart}
+                        onChange={(event) => setCustomStart(event.target.value)}
+                      />
+                    </label>
+                    <label className="text-xs text-muted-foreground">
+                      End<Input
+                        type="datetime-local"
+                        value={customEnd}
+                        onChange={(event) => setCustomEnd(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                )
+                : (
+                  <p className="self-center text-xs text-muted-foreground">
+                    The session freezes its end time, order and first 100 items.
+                    New diarization cannot move your saved position.
+                  </p>
+                )}
+              <Button
+                className="self-end"
+                onClick={() => createSession.mutate()}
+                disabled={!reviewProfileId || createSession.isPending}
+              >
+                {createSession.isPending ? "Creating…" : "Start review"}
+              </Button>
+            </div>
+          )}
+
+          {isLoading && selectedSessionId && (
             <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading review queue… normally this takes under 5 seconds.
+              <Loader2 className="h-4 w-4 animate-spin" />Loading saved review
+              session…
             </div>
           )}
           {isError && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
               <AlertCircle className="h-4 w-4" />
               <span className="flex-1">
-                Could not load the review queue:{" "}
+                Could not load the review session:{" "}
                 {error instanceof Error ? error.message : "unknown error"}
               </span>
               <Button
@@ -538,61 +1002,200 @@ export default function VoiceIdentityReviewPage() {
               </Button>
             </div>
           )}
-          {!isLoading && !isError && queue.length === 0 &&
-            history.length === 0 && (
+          {reviewSession && reviewSession.loadedCount === 0 && (
             <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-              No reviewable segments in this range. Wait for diarization
-              coverage or use a wider range on the Timeline.
+              No unlabelled active diarization segments matched this frozen
+              range. Complete it and start a wider session, or check Diarization
+              coverage on Timeline.
             </div>
           )}
-          {!isLoading && !isError && queue.length === 0 && history.length > 0 &&
-            (
-              <div className="space-y-3 rounded-md border border-green-500/30 bg-green-500/5 p-4 text-sm">
-                <p className="font-medium">Loaded review queue completed</p>
-                <p className="text-muted-foreground">
-                  You answered {history.length}{" "}
-                  segments in this session. Undo remains available for the
-                  latest decision.
-                </p>
-                <Button
-                  variant="outline"
-                  onClick={undoLast}
-                  disabled={reviewPending}
-                >
-                  Undo last decision
-                </Button>
+          {reviewSession && reviewSession.loadedCount > 0 && (
+            <>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>{reviewSession.loadedCount} items in this window</span>
+                <span>{reviewSession.groups.length} playback groups</span>
+                <span>
+                  Backlog estimate:{" "}
+                  {reviewSession.backlogEstimateCapped ? "at least " : ""}
+                  {reviewSession.backlogEstimate}
+                </span>
+                <span>
+                  {isFetching
+                    ? "Saving/refreshing…"
+                    : `Saved · revision ${reviewSession.revision}`}
+                </span>
               </div>
-            )}
-          {!isLoading && !isError && queue.length > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {queue.length} segments ready for review
-              {isFetching ? " · refreshing…" : ""}
-            </p>
-          )}
-          {activeSegment && (
-            <VoiceIdentityReviewPlayer
-              key={normalizeObjectId(activeSegment._id) ?? activeIndex}
-              segment={activeSegment}
-              position={activeIndex + 1}
-              remaining={queue.length}
-              sessionAnswered={history.length}
-              sessionTotal={effectiveSessionTotal}
-              pending={reviewPending}
-              autoPlayNext={autoPlayNext}
-              playOnMount={playOnMount}
-              canPrevious={activeIndex > 0}
-              canNext={activeIndex < queue.length - 1}
-              canUndo={history.length > 0}
-              onDecision={(state) => {
-                if (!reviewPending) {
-                  label.mutate({ segment: activeSegment, state });
-                }
-              }}
-              onPrevious={() => moveReview(-1)}
-              onNext={() => moveReview(1)}
-              onUndo={undoLast}
-              onAutoPlayChange={setAutoPlayPreference}
-            />
+              <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Label only a clear target voice. Use{" "}
+                <strong className="text-foreground">Skip</strong>{" "}
+                for noise, humming you cannot identify, clipped speech, or two
+                overlapping voices. Skipped audio is saved in the session but
+                excluded from calibration.
+              </div>
+              {windowItems.every((item) => item.status !== "pending") &&
+                reviewSession.status === "active" && (
+                <div className="flex items-center justify-between rounded-md border border-green-500/30 bg-green-500/5 px-3 py-2 text-sm">
+                  <span>
+                    Window {reviewSession.windowNumber ?? 1} complete ·{" "}
+                    {reviewSession.reviewedCount} reviewed and{" "}
+                    {reviewSession.skippedCount} skipped across this session.
+                  </span>
+                  {reviewSession.hasMore
+                    ? (
+                      <Button
+                        size="sm"
+                        onClick={() => loadNextWindow.mutate()}
+                        disabled={reviewPending}
+                      >
+                        {loadNextWindow.isPending
+                          ? "Loading…"
+                          : "Load next 100"}
+                      </Button>
+                    )
+                    : (
+                      <span className="text-xs text-muted-foreground">
+                        No more known items · Complete the session
+                      </span>
+                    )}
+                </div>
+              )}
+              {activeGroup && groupMode && activeGroup.segmentIds.length > 1 &&
+                (
+                  <div className="rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-sm">
+                    Playing one safe group:{" "}
+                    <strong>
+                      {activeGroup.segmentIds.length} short segments
+                    </strong>
+                    {" · "}
+                    {activeGroup.durationSeconds.toFixed(1)}{" "}
+                    sec. “Me”/“Not me” applies to {decisionSegmentIds.length}
+                    {" "}
+                    unreviewed items. Turn “Group short” off to label one at a
+                    time.
+                  </div>
+                )}
+              {playerSegment && (
+                <VoiceIdentityReviewPlayer
+                  key={`${
+                    normalizeObjectId(playerSegment._id) ?? activeIndex
+                  }-${activeGroup?.groupId ?? "single"}`}
+                  segment={playerSegment}
+                  profileName={reviewProfile?.name ?? "target profile"}
+                  position={activeIndex + 1}
+                  remaining={windowItems.filter((item) =>
+                    item.status === "pending"
+                  ).length}
+                  sessionAnswered={reviewSession.reviewedCount +
+                    reviewSession.skippedCount}
+                  sessionTotal={reviewSession.sessionLoadedCount ??
+                    reviewSession.loadedCount}
+                  pending={reviewPending || decisionSegmentIds.length === 0 ||
+                    reviewSession.status !== "active"}
+                  autoPlayNext={autoPlayNext}
+                  playOnMount={playOnMount}
+                  canPrevious={activeIndex > 0}
+                  canNext={activeIndex < windowItems.length - 1}
+                  canUndo={history.length > 0}
+                  onDecision={(state) => {
+                    if (reviewPending) return;
+                    if (state === "skip") skipActive();
+                    else {
+                      label.mutate({
+                        clientRequestId: crypto.randomUUID(),
+                        segmentIds: decisionSegmentIds,
+                        state,
+                      });
+                    }
+                  }}
+                  onPrevious={() => moveReview(-1)}
+                  onNext={() => moveReview(1)}
+                  onUndo={undoLast}
+                  onAutoPlayChange={setAutoPlayPreference}
+                />
+              )}
+              <div
+                className="max-h-[28rem] overflow-y-auto rounded-lg border"
+                aria-label="Review session items"
+              >
+                {windowItems.map((item, index) => {
+                  const id = normalizeObjectId(item.segmentId) ?? "";
+                  const segment = segmentById.get(id);
+                  if (!segment) return null;
+                  const duration = Math.max(
+                    0,
+                    (new Date(segment.end).getTime() -
+                      new Date(segment.start).getTime()) / 1_000,
+                  );
+                  const group = reviewSession.groups.find((candidate) =>
+                    candidate.groupId === item.groupId
+                  );
+                  const previousGroupId = index > 0
+                    ? windowItems[index - 1]?.groupId
+                    : null;
+                  const score = segment.speakerIdentity?.primaryScore;
+                  return (
+                    <div key={id}>
+                      {item.groupId !== previousGroupId && group && (
+                        <div className="sticky top-0 flex items-center justify-between border-b bg-muted/90 px-3 py-1 text-[11px] text-muted-foreground backdrop-blur">
+                          <span>
+                            {group.segmentIds.length > 1
+                              ? `Group · ${group.segmentIds.length} nearby segments`
+                              : "Single segment"}
+                          </span>
+                          <span>
+                            {group.durationSeconds.toFixed(1)} sec ·{" "}
+                            {group.speaker ?? "speaker unknown"}
+                          </span>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        className={`grid h-10 w-full grid-cols-[2.5rem_8rem_4rem_minmax(7rem,1fr)_7rem] items-center gap-2 border-b px-3 text-left text-xs transition-colors ${
+                          id === activeId
+                            ? "bg-sky-500/10 ring-1 ring-inset ring-sky-500/40"
+                            : "hover:bg-muted/50"
+                        }`}
+                        onClick={() => {
+                          openReviewSegment(id);
+                        }}
+                      >
+                        <span className="tabular-nums text-muted-foreground">
+                          #{index + 1}
+                        </span>
+                        <span className="tabular-nums">
+                          {new Date(segment.start).toLocaleString()}
+                        </span>
+                        <span
+                          className={duration < 1
+                            ? "font-medium text-amber-600"
+                            : ""}
+                        >
+                          {duration.toFixed(1)}s
+                        </span>
+                        <span className="truncate text-muted-foreground">
+                          {(segment as any).speaker ?? "speaker unknown"}
+                          {duration < 1
+                            ? " · very short; skip if unclear/noise"
+                            : ""}
+                        </span>
+                        <span
+                          className={item.status === "reviewed"
+                            ? "text-green-600"
+                            : item.status === "skipped"
+                            ? "text-amber-600"
+                            : "text-muted-foreground"}
+                        >
+                          {item.status}
+                          {typeof score === "number"
+                            ? ` · ${Math.round(score * 100)}%`
+                            : ""}
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -634,7 +1237,9 @@ export default function VoiceIdentityReviewPage() {
           <div className="rounded-md border bg-muted/30 p-3 text-sm md:col-span-2">
             <p className="font-medium">Labels from review</p>
             <p className="text-muted-foreground">
-              {labels.sky} Sky · {labels.notSky} not-Sky · {queue.length}{" "}
+              {labels.sky} Sky · {labels.notSky} not-Sky ·{" "}
+              {windowItems.filter((item) => item.status !== "reviewed").length}
+              {" "}
               currently reviewable
             </p>
           </div>

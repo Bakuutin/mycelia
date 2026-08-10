@@ -7,6 +7,7 @@ import {
   ArrowUp,
   Clock3,
   RotateCcw,
+  SkipForward,
 } from "lucide-react";
 import {
   WaveformPlayer,
@@ -19,7 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { normalizeObjectId } from "@/lib/diarization";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 
-export type VoiceIdentityDecision = "me" | "not-me";
+export type VoiceIdentityDecision = "me" | "not-me" | "skip";
 type ReviewCommand =
   | VoiceIdentityDecision
   | "play"
@@ -31,6 +32,9 @@ export interface VoiceIdentityReviewSegment {
   _id: unknown;
   original_id?: unknown;
   original?: unknown;
+  runId?: string;
+  embeddingSpaceId?: string;
+  speaker?: string;
   start: Date | string;
   end: Date | string;
   speakerIdentity?: {
@@ -41,6 +45,7 @@ export interface VoiceIdentityReviewSegment {
 
 interface VoiceIdentityReviewPlayerProps {
   segment: VoiceIdentityReviewSegment;
+  profileName?: string;
   position: number;
   remaining: number;
   sessionAnswered: number;
@@ -77,6 +82,9 @@ export function getReviewShortcut(key: string): ReviewCommand | null {
     case "u":
     case "U":
       return "undo";
+    case "s":
+    case "S":
+      return "skip";
     default:
       return null;
   }
@@ -125,6 +133,7 @@ function buildAudioUrl(segment: VoiceIdentityReviewSegment): string | null {
 
 export function VoiceIdentityReviewPlayer({
   segment,
+  profileName = "target profile",
   position,
   remaining,
   sessionAnswered,
@@ -170,7 +179,7 @@ export function VoiceIdentityReviewPlayer({
         return;
       }
       if (pending) return;
-      if (command === "me" || command === "not-me") {
+      if (command === "me" || command === "not-me" || command === "skip") {
         event.preventDefault();
         stopThen(() => onDecision(command));
       } else if (command === "previous" && canPrevious) {
@@ -244,7 +253,7 @@ export function VoiceIdentityReviewPlayer({
             {hasScore
               ? (
                 <Badge className="text-sm">
-                  Similarity to Sky: {Math.round(score * 100)}%
+                  Similarity to {profileName}: {Math.round(score * 100)}%
                 </Badge>
               )
               : <Badge variant="secondary">Not classified</Badge>}
@@ -278,7 +287,7 @@ export function VoiceIdentityReviewPlayer({
               </div>
             )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-[1fr_auto_1fr] gap-3">
             <Button
               size="lg"
               variant="outline"
@@ -287,6 +296,16 @@ export function VoiceIdentityReviewPlayer({
               onClick={() => stopThen(() => onDecision("not-me"))}
             >
               <ArrowLeft className="mr-2 h-5 w-5" />Not me
+            </Button>
+            <Button
+              size="lg"
+              variant="ghost"
+              className="h-14 px-4 text-muted-foreground"
+              disabled={pending}
+              onClick={() => stopThen(() => onDecision("skip"))}
+              title="Keep this segment unlabeled and continue (S)"
+            >
+              <SkipForward className="mr-1 h-4 w-4" />Skip
             </Button>
             <Button
               size="lg"
@@ -299,7 +318,7 @@ export function VoiceIdentityReviewPlayer({
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            Swipe left/right or use ← / → · Space plays · U undoes
+            Swipe left/right or use ← / → · S skips · Space plays · U undoes
           </p>
         </div>
 

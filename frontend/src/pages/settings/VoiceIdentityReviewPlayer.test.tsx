@@ -83,14 +83,16 @@ describe("VoiceIdentityReviewPlayer", () => {
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.keyDown(window, { key: "s" });
     fireEvent.keyDown(window, { key: " " });
     expect(props.onDecision).toHaveBeenNthCalledWith(1, "me");
     expect(props.onDecision).toHaveBeenNthCalledWith(2, "not-me");
+    expect(props.onDecision).toHaveBeenNthCalledWith(3, "skip");
     expect(playerControls.togglePlayback).toHaveBeenCalledOnce();
 
     screen.getByRole("switch", { name: /automatically play next/i }).focus();
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(props.onDecision).toHaveBeenCalledTimes(2);
+    expect(props.onDecision).toHaveBeenCalledTimes(3);
 
     rerender(
       <MemoryRouter>
@@ -99,7 +101,7 @@ describe("VoiceIdentityReviewPlayer", () => {
     );
     document.body.focus();
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(props.onDecision).toHaveBeenCalledTimes(2);
+    expect(props.onDecision).toHaveBeenCalledTimes(3);
   });
 
   it("maps horizontal swipes and ignores vertical movement", () => {
@@ -109,6 +111,7 @@ describe("VoiceIdentityReviewPlayer", () => {
     );
     expect(getSwipeDecision({ x: 100, y: 20 }, { x: 180, y: 90 })).toBeNull();
     expect(getReviewShortcut("u")).toBe("undo");
+    expect(getReviewShortcut("s")).toBe("skip");
     expect(getReviewShortcut("ArrowDown")).toBe("next");
   });
 

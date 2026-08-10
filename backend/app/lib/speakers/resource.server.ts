@@ -10,6 +10,7 @@ import {
   getObservedRunStatus,
   projectAnnotationState,
 } from "./run-lifecycle.ts";
+import { groupReviewSegments } from "./review-sessions.ts";
 
 const objectId = z.string().refine(ObjectId.isValid, "Invalid ObjectId");
 const range = { start: zDateOrString(), end: zDateOrString() };
@@ -46,6 +47,68 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     profileId: objectId.optional(),
   }),
   z.object({ action: z.literal("delete-annotation"), id: objectId }),
+  z.object({
+    action: z.literal("create-review-session"),
+    name: z.string().max(120).optional(),
+    targetProfileIds: z.array(objectId).min(1),
+    embeddingSpaceIds: z.array(z.string().min(1)).default([]),
+    runIds: z.array(z.string().min(1)).default([]),
+    rangeMode: z.enum(["fixed", "all_before"]).default("fixed"),
+    start: zDateOrString().optional(),
+    end: zDateOrString().optional(),
+    limit: z.number().int().min(1).max(100).default(100),
+    preferences: z.object({
+      autoPlay: z.boolean().default(true),
+      groupMode: z.boolean().default(true),
+      compactMode: z.boolean().default(true),
+    }).default({ autoPlay: true, groupMode: true, compactMode: true }),
+  }).refine(
+    (value) => value.rangeMode === "all_before" || Boolean(value.start && value.end),
+    "A fixed review session requires start and end",
+  ),
+  z.object({
+    action: z.literal("list-review-sessions"),
+    profileId: objectId.optional(),
+    limit: z.number().int().min(1).max(50).default(20),
+  }),
+  z.object({ action: z.literal("get-review-session"), sessionId: objectId }),
+  z.object({
+    action: z.literal("load-next-review-window"),
+    sessionId: objectId,
+    revision: z.number().int().positive(),
+  }),
+  z.object({
+    action: z.literal("update-review-position"),
+    sessionId: objectId,
+    revision: z.number().int().positive(),
+    activeSegmentId: objectId.nullable().optional(),
+    skipSegmentId: objectId.optional(),
+    preferences: z.object({
+      autoPlay: z.boolean().optional(),
+      groupMode: z.boolean().optional(),
+      compactMode: z.boolean().optional(),
+    }).optional(),
+  }),
+  z.object({
+    action: z.literal("commit-review-decision"),
+    sessionId: objectId,
+    revision: z.number().int().positive(),
+    clientRequestId: z.string().min(1).max(120),
+    segmentIds: z.array(objectId).min(1).max(100),
+    profileId: objectId.optional(),
+    excludedProfileIds: z.array(objectId).default([]),
+  }).refine(
+    (value) => Boolean(value.profileId) !== (value.excludedProfileIds.length > 0),
+    "Choose a profile or excluded profiles",
+  ),
+  z.object({
+    action: z.literal("undo-review-decision"),
+    decisionId: objectId,
+  }),
+  z.object({
+    action: z.literal("complete-review-session"),
+    sessionId: objectId,
+  }),
   z.object({
     action: z.literal("review-queue"),
     ...range,
@@ -133,6 +196,91 @@ function cosine(a: number[], b: number[]): number {
     bb += b[index] * b[index];
   }
   return aa && bb ? dot / Math.sqrt(aa * bb) : -1;
+}
+
+async function findReviewCandidates(
+  mongo: any,
+  start: Date,
+  end: Date,
+  limit: number,
+  cursor?: { start: Date | string; segmentId: string } | null,
+): Promise<any[]> {
+  const identityFilter = {
+    $or: [
+      { "speakerIdentity.state": "uncertain" },
+      { speakerIdentity: { $exists: false } },
+      { "speakerIdentity.identityState": { $exists: false } },
+    ],
+  };
+  const cursorFilter = cursor
+    ? {
+      $or: [
+        { start: { $gt: new Date(cursor.start) } },
+        {
+          start: new Date(cursor.start),
+          _id: { $gt: new ObjectId(cursor.segmentId) },
+        },
+      ],
+    }
+    : null;
+  const candidates = await mongo({
+    action: "find",
+    collection: "diarizations",
+    query: {
+      lifecycleStatus: "active",
+      start: { $lt: end },
+      end: { $gt: start },
+      $and: cursorFilter ? [identityFilter, cursorFilter] : [identityFilter],
+    },
+    options: {
+      sort: { start: 1, _id: 1 },
+      limit: Math.min(Math.max(limit * 10, limit), 5_000),
+      projection: { embedding: 0 },
+    },
+  }) as any[];
+  const candidateIds = candidates.map((segment) => segment._id);
+  if (candidateIds.length === 0) return [];
+  const annotations = await mongo({
+    action: "find",
+    collection: "speaker_annotations",
+    query: { segmentId: { $in: candidateIds } },
+    options: { projection: { segmentId: 1 }, limit: candidateIds.length },
+  }) as any[];
+  const annotated = new Set(annotations.map((item) => String(item.segmentId)));
+  return candidates.filter((segment) => !annotated.has(String(segment._id)));
+}
+
+async function hydrateReviewSession(
+  mongo: any,
+  session: any,
+): Promise<any> {
+  const window = session?.window ?? [];
+  const ids = window.map((item: any) => String(item.segmentId)).filter(
+    ObjectId.isValid,
+  ).map((id: string) => new ObjectId(id));
+  const segments = ids.length === 0 ? [] : await mongo({
+    action: "find",
+    collection: "diarizations",
+    query: { _id: { $in: ids }, lifecycleStatus: "active" },
+    options: { projection: { embedding: 0 }, limit: ids.length },
+  }) as any[];
+  const byId = new Map(segments.map((segment) => [String(segment._id), segment]));
+  return {
+    ...session,
+    segments: window.map((item: any) => byId.get(String(item.segmentId)))
+      .filter(Boolean),
+  };
+}
+
+function nextPendingSegmentId(window: any[], afterSegmentId?: string): string | null {
+  const after = afterSegmentId
+    ? window.findIndex((item) => String(item.segmentId) === afterSegmentId)
+    : -1;
+  for (let offset = 1; offset <= window.length; offset++) {
+    const item = window[(after + offset) % window.length];
+    if (item?.status === "pending") return String(item.segmentId);
+  }
+  return null;
 }
 
 export class SpeakerSegmentsResource
@@ -390,6 +538,515 @@ export class SpeakerSegmentsResource
           collection: "speaker_annotations",
           query: { _id: new ObjectId(input.id) },
         });
+      case "create-review-session": {
+        const now = new Date();
+        const snapshotStart = input.rangeMode === "all_before"
+          ? new Date(0)
+          : new Date(input.start!);
+        const requestedEnd = input.rangeMode === "all_before"
+          ? now
+          : new Date(input.end!);
+        const snapshotEnd = requestedEnd > now ? now : requestedEnd;
+        if (!(snapshotStart < snapshotEnd)) {
+          throw new Error("Review range must end after it starts");
+        }
+        const candidatePool = await findReviewCandidates(
+          mongo,
+          snapshotStart,
+          snapshotEnd,
+          Math.max(input.limit, 500),
+        );
+        const candidates = candidatePool.slice(0, input.limit);
+        const lastCandidate = candidates.at(-1);
+        const groups = groupReviewSegments(candidates);
+        const groupBySegment = new Map(
+          groups.flatMap((group) =>
+            group.segmentIds.map((segmentId) => [segmentId, group.groupId])
+          ),
+        );
+        const sessionId = new ObjectId();
+        const doc = {
+          _id: sessionId,
+          owner: auth.principal,
+          name: input.name ?? `Review ${snapshotEnd.toISOString().slice(0, 10)}`,
+          status: "active",
+          targetProfileIds: input.targetProfileIds.map((id) => new ObjectId(id)),
+          embeddingSpaceIds: input.embeddingSpaceIds,
+          runIds: input.runIds,
+          querySnapshot: {
+            identityState: "reviewable",
+            rangeMode: input.rangeMode,
+            start: snapshotStart,
+            end: snapshotEnd,
+            snapshotEnd,
+            sort: { start: 1, _id: 1 },
+          },
+          window: candidates.map((segment) => ({
+            segmentId: segment._id,
+            groupId: groupBySegment.get(String(segment._id)),
+            status: "pending",
+          })),
+          groups,
+          windowNumber: 1,
+          windowSize: input.limit,
+          loadedCount: candidates.length,
+          sessionLoadedCount: candidates.length,
+          reviewedCount: 0,
+          skippedCount: 0,
+          windowReviewedCount: 0,
+          windowSkippedCount: 0,
+          backlogEstimate: candidatePool.length,
+          backlogEstimateCapped: candidatePool.length >= 5_000,
+          hasMore: candidatePool.length > candidates.length,
+          nextCursor: lastCandidate
+            ? { start: lastCandidate.start, segmentId: String(lastCandidate._id) }
+            : null,
+          activeSegmentId: candidates[0]?._id ?? null,
+          grouping: {
+            version: "nearby-speaker-v1",
+            maxGapSeconds: 2,
+            maxDurationSeconds: 30,
+            maxSegments: 20,
+          },
+          preferences: input.preferences,
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+          lastOpenedAt: now,
+        };
+        await mongo({
+          action: "insertOne",
+          collection: "speaker_review_sessions",
+          doc,
+        });
+        return { ...doc, segments: candidates };
+      }
+      case "list-review-sessions":
+        return await mongo({
+          action: "find",
+          collection: "speaker_review_sessions",
+          query: {
+            owner: auth.principal,
+            status: { $ne: "abandoned" },
+            ...(input.profileId
+              ? { targetProfileIds: new ObjectId(input.profileId) }
+              : {}),
+          },
+          options: {
+            sort: { lastOpenedAt: -1, updatedAt: -1 },
+            limit: input.limit,
+            projection: { window: 0, groups: 0 },
+          },
+        });
+      case "get-review-session": {
+        const session = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: new ObjectId(input.sessionId), owner: auth.principal },
+        }) as any;
+        if (!session) throw new Error("Review session not found");
+        return await hydrateReviewSession(mongo, session);
+      }
+      case "load-next-review-window": {
+        const sessionId = new ObjectId(input.sessionId);
+        const session = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: {
+            _id: sessionId,
+            owner: auth.principal,
+            status: "active",
+            revision: input.revision,
+          },
+        }) as any;
+        if (!session) {
+          throw new Error("Review session changed elsewhere; reload to continue");
+        }
+        if ((session.window ?? []).some((item: any) => item.status === "pending")) {
+          throw new Error("Review or skip every item in this window first");
+        }
+        const snapshot = session.querySnapshot;
+        const candidatePool = await findReviewCandidates(
+          mongo,
+          new Date(snapshot.start),
+          new Date(snapshot.snapshotEnd ?? snapshot.end),
+          Math.max(Number(session.windowSize ?? 100), 500),
+          session.nextCursor,
+        );
+        const candidates = candidatePool.slice(0, Number(session.windowSize ?? 100));
+        const groups = groupReviewSegments(candidates, session.grouping);
+        const groupBySegment = new Map(
+          groups.flatMap((group) =>
+            group.segmentIds.map((segmentId) => [segmentId, group.groupId])
+          ),
+        );
+        const window = candidates.map((segment) => ({
+          segmentId: segment._id,
+          groupId: groupBySegment.get(String(segment._id)),
+          status: "pending",
+        }));
+        const lastCandidate = candidates.at(-1);
+        const completed = candidates.length === 0;
+        const result = await mongo({
+          action: "updateOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId, revision: input.revision },
+          update: {
+            $set: {
+              window,
+              groups,
+              activeSegmentId: candidates[0]?._id ?? null,
+              loadedCount: candidates.length,
+              sessionLoadedCount: Number(session.sessionLoadedCount ?? session.loadedCount ?? 0) +
+                candidates.length,
+              windowReviewedCount: 0,
+              windowSkippedCount: 0,
+              hasMore: candidatePool.length > candidates.length,
+              nextCursor: lastCandidate
+                ? { start: lastCandidate.start, segmentId: String(lastCandidate._id) }
+                : session.nextCursor,
+              status: completed ? "completed" : "active",
+              ...(completed ? { completedAt: new Date() } : {}),
+              updatedAt: new Date(),
+              lastOpenedAt: new Date(),
+            },
+            $inc: { revision: 1, windowNumber: 1 },
+          },
+        }) as any;
+        if (result.matchedCount !== 1) {
+          throw new Error("Review session changed elsewhere; reload to continue");
+        }
+        const updated = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId },
+        }) as any;
+        return await hydrateReviewSession(mongo, updated);
+      }
+      case "update-review-position": {
+        const sessionId = new ObjectId(input.sessionId);
+        const session = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: {
+            _id: sessionId,
+            owner: auth.principal,
+            status: "active",
+            revision: input.revision,
+          },
+        }) as any;
+        if (!session) {
+          throw new Error("Review session changed elsewhere; reload to continue");
+        }
+        const window = [...(session.window ?? [])];
+        let skippedDelta = 0;
+        if (input.skipSegmentId) {
+          const item = window.find((entry: any) =>
+            String(entry.segmentId) === input.skipSegmentId
+          );
+          if (!item) throw new Error("Skipped segment is not in this review window");
+          if (item.status === "reviewed") {
+            throw new Error("Undo the saved decision before skipping this segment");
+          }
+          if (item.status !== "skipped") skippedDelta = 1;
+          item.status = "skipped";
+        }
+        const validActive = input.activeSegmentId == null || window.some(
+          (item: any) => String(item.segmentId) === input.activeSegmentId,
+        );
+        if (!validActive) throw new Error("Active segment is not in this review window");
+        const preferences = {
+          ...(session.preferences ?? {}),
+          ...(input.preferences ?? {}),
+        };
+        const windowSkippedCount = window.filter((item: any) =>
+          item.status === "skipped"
+        ).length;
+        const skippedCount = Number(session.skippedCount ?? 0) + skippedDelta;
+        const result = await mongo({
+          action: "updateOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId, revision: input.revision },
+          update: {
+            $set: {
+              window,
+              preferences,
+              skippedCount,
+              windowSkippedCount,
+              ...(input.activeSegmentId !== undefined
+                ? {
+                  activeSegmentId: input.activeSegmentId
+                    ? new ObjectId(input.activeSegmentId)
+                    : null,
+                }
+                : {}),
+              updatedAt: new Date(),
+              lastOpenedAt: new Date(),
+            },
+            $inc: { revision: 1 },
+          },
+        }) as any;
+        if (result.matchedCount !== 1) {
+          throw new Error("Review session changed elsewhere; reload to continue");
+        }
+        const updated = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId },
+        }) as any;
+        return await hydrateReviewSession(mongo, updated);
+      }
+      case "commit-review-decision": {
+        const sessionId = new ObjectId(input.sessionId);
+        const existing = await mongo({
+          action: "findOne",
+          collection: "speaker_review_decisions",
+          query: { sessionId, clientRequestId: input.clientRequestId },
+        }) as any;
+        if (existing?.status === "committed") {
+          const session = await mongo({
+            action: "findOne",
+            collection: "speaker_review_sessions",
+            query: { _id: sessionId, owner: auth.principal },
+          }) as any;
+          return {
+            decision: existing,
+            session: await hydrateReviewSession(mongo, session),
+          };
+        }
+        const session = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: {
+            _id: sessionId,
+            owner: auth.principal,
+            status: "active",
+            revision: input.revision,
+          },
+        }) as any;
+        if (!session) {
+          throw new Error("Review session changed elsewhere; reload to continue");
+        }
+        const segmentIds = [...new Set(input.segmentIds)];
+        const allowed = new Set(
+          (session.window ?? []).map((item: any) => String(item.segmentId)),
+        );
+        if (segmentIds.some((id) => !allowed.has(id))) {
+          throw new Error("Every selected segment must belong to this review window");
+        }
+        const objectIds = segmentIds.map((id) => new ObjectId(id));
+        const segments = await mongo({
+          action: "find",
+          collection: "diarizations",
+          query: { _id: { $in: objectIds }, lifecycleStatus: "active" },
+          options: { projection: { embedding: 0 }, limit: objectIds.length },
+        }) as any[];
+        if (segments.length !== objectIds.length) {
+          throw new Error("One or more selected segments are no longer active");
+        }
+        const now = new Date();
+        const decisionId = existing?._id ?? new ObjectId();
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: { sessionId, clientRequestId: input.clientRequestId },
+          update: {
+            $setOnInsert: {
+              _id: decisionId,
+              sessionId,
+              clientRequestId: input.clientRequestId,
+              author: auth.principal,
+              segmentIds: objectIds,
+              originalGroups: session.groups,
+              profileId: input.profileId ? new ObjectId(input.profileId) : null,
+              excludedProfileIds: input.excludedProfileIds.map((id) => new ObjectId(id)),
+              source: segmentIds.length > 1 ? "review_batch" : "review_single",
+              status: "building",
+              createdAt: now,
+            },
+            $set: { updatedAt: now },
+          },
+          options: { upsert: true },
+        });
+        for (const segment of segments) {
+          await mongo({
+            action: "updateOne",
+            collection: "speaker_annotations",
+            query: { decisionId, segmentId: segment._id },
+            update: {
+              $setOnInsert: {
+                decisionId,
+                sessionId,
+                originalId: segment.original_id ?? segment.original,
+                segmentId: segment._id,
+                runId: segment.runId ?? null,
+                start: segment.start,
+                end: segment.end,
+                profileId: input.profileId ? new ObjectId(input.profileId) : null,
+                excludedProfileIds: input.excludedProfileIds.map((id) => new ObjectId(id)),
+                source: "manual",
+                author: auth.principal,
+                createdAt: now,
+              },
+              $set: { updatedAt: now },
+            },
+            options: { upsert: true },
+          });
+        }
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: { _id: decisionId },
+          update: {
+            $set: {
+              status: "committed",
+              annotationCount: segments.length,
+              committedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          },
+        });
+        const selected = new Set(segmentIds);
+        const selectedItems = (session.window ?? []).filter((item: any) =>
+          selected.has(String(item.segmentId))
+        );
+        const reviewedDelta = selectedItems.filter((item: any) =>
+          item.status !== "reviewed"
+        ).length;
+        const skippedToReviewed = selectedItems.filter((item: any) =>
+          item.status === "skipped"
+        ).length;
+        const window = (session.window ?? []).map((item: any) =>
+          selected.has(String(item.segmentId))
+            ? { ...item, status: "reviewed", decisionId }
+            : item
+        );
+        const windowReviewedCount = window.filter((item: any) =>
+          item.status === "reviewed"
+        ).length;
+        const windowSkippedCount = window.filter((item: any) =>
+          item.status === "skipped"
+        ).length;
+        const reviewedCount = Number(session.reviewedCount ?? 0) + reviewedDelta;
+        const skippedCount = Math.max(
+          0,
+          Number(session.skippedCount ?? 0) - skippedToReviewed,
+        );
+        const activeSegmentId = nextPendingSegmentId(window, segmentIds.at(-1));
+        const updated = await mongo({
+          action: "updateOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId, revision: input.revision },
+          update: {
+            $set: {
+              window,
+              reviewedCount,
+              skippedCount,
+              windowReviewedCount,
+              windowSkippedCount,
+              activeSegmentId: activeSegmentId ? new ObjectId(activeSegmentId) : null,
+              updatedAt: new Date(),
+              lastOpenedAt: new Date(),
+            },
+            $inc: { revision: 1 },
+          },
+        }) as any;
+        if (updated.matchedCount !== 1) {
+          throw new Error("Decision was saved; reload the session to refresh its position");
+        }
+        const latestSession = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId },
+        }) as any;
+        return {
+          decision: {
+            _id: decisionId,
+            status: "committed",
+            segmentIds: objectIds,
+          },
+          session: await hydrateReviewSession(mongo, latestSession),
+        };
+      }
+      case "undo-review-decision": {
+        const decisionId = new ObjectId(input.decisionId);
+        const decision = await mongo({
+          action: "findOne",
+          collection: "speaker_review_decisions",
+          query: { _id: decisionId, author: auth.principal, status: "committed" },
+        }) as any;
+        if (!decision) throw new Error("Committed review decision not found");
+        const session = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: decision.sessionId, owner: auth.principal },
+        }) as any;
+        if (!session) throw new Error("Review session not found");
+        await mongo({
+          action: "deleteMany",
+          collection: "speaker_annotations",
+          query: { decisionId },
+        });
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: { _id: decisionId, status: "committed" },
+          update: { $set: { status: "rolled_back", rolledBackAt: new Date(), updatedAt: new Date() } },
+        });
+        const restored = new Set((decision.segmentIds ?? []).map(String));
+        const window = (session.window ?? []).map((item: any) =>
+          restored.has(String(item.segmentId)) && String(item.decisionId) === input.decisionId
+            ? { ...item, status: "pending", decisionId: null }
+            : item
+        );
+        const firstRestored = (decision.segmentIds ?? [])[0] ?? null;
+        const windowReviewedCount = window.filter((item: any) =>
+          item.status === "reviewed"
+        ).length;
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_sessions",
+          query: { _id: session._id },
+          update: {
+            $set: {
+              window,
+              reviewedCount: Math.max(
+                0,
+                Number(session.reviewedCount ?? 0) -
+                  Number((decision.segmentIds ?? []).length),
+              ),
+              windowReviewedCount,
+              activeSegmentId: firstRestored,
+              updatedAt: new Date(),
+              lastOpenedAt: new Date(),
+            },
+            $inc: { revision: 1 },
+          },
+        });
+        const latestSession = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: session._id },
+        }) as any;
+        return await hydrateReviewSession(mongo, latestSession);
+      }
+      case "complete-review-session": {
+        const result = await mongo({
+          action: "updateOne",
+          collection: "speaker_review_sessions",
+          query: {
+            _id: new ObjectId(input.sessionId),
+            owner: auth.principal,
+            status: "active",
+          },
+          update: {
+            $set: { status: "completed", completedAt: new Date(), updatedAt: new Date() },
+            $inc: { revision: 1 },
+          },
+        }) as any;
+        if (result.matchedCount !== 1) throw new Error("Active review session not found");
+        return { success: true, sessionId: input.sessionId };
+      }
       case "review-queue": {
         const candidates = await mongo({
           action: "find",
