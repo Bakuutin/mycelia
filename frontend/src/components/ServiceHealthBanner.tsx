@@ -49,7 +49,7 @@ export function ServiceHealthBanner({
         <p className="font-medium">{service.label} is {service.status}</p>
         <p className="text-muted-foreground">{service.message}</p>
         {serviceId === "diarizator" && (
-          <p className="mt-1 font-mono text-xs">scripts/start-diarizator.sh</p>
+          <p className="mt-1 font-mono text-xs">cd diarizator &amp;&amp; docker compose --profile cpu up -d</p>
         )}
       </div>
     </div>

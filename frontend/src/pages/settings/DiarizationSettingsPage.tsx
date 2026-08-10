@@ -137,7 +137,7 @@ export default function DiarizationSettingsPage() {
           <div className="w-32 space-y-1"><Label htmlFor="diar-env-priority">Priority</Label><Input id="diar-env-priority" type="number" min={1} max={100} value={environmentPriority} onChange={(event) => setEnvironmentPriority(Number(event.target.value))} /></div>
           <Badge variant={environmentHealth?.status === "healthy" ? "secondary" : "destructive"}>{environmentHealth ? statusLabel[environmentHealth.status] : includeEnvironment ? "Not checked" : "Disabled"}</Badge>
         </div>
-        <p className="text-xs text-muted-foreground">{environmentHealth?.message ?? "Run scripts/start-diarizator.sh on this Mac, then refresh health."}</p>
+        <p className="text-xs text-muted-foreground">{environmentHealth?.message ?? "Start the CPU diarizator container on this Mac, then refresh health."}</p>
       </Card>
 
       <div className="flex items-center justify-between gap-3">

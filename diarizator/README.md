@@ -9,25 +9,27 @@ A minimal inference provider for speaker diarization with embeddings using Pyann
 - **Speaker Identification**: Optionally match Pyannote speaker centroids against known profiles without replacing diarization labels
 - **FastAPI Service**: Simple REST API for easy integration
 
-## Quick Start
+## Quick Start (Docker)
 
 ### Prerequisites
 
 - Docker and Docker Compose
 - Hugging Face account (for model access)
-- 8GB+ RAM, 10GB+ disk space
+- Hugging Face access accepted for both gated models listed below
+- 8GB Docker memory minimum for the CPU service; 10–12GB is recommended when
+  building and running the full local Mycelia stack together
+- 10GB+ disk space (GPU images are substantially larger than CPU images)
 
 ### 1. Configure Environment Variables
 
-Create a `.env` file:
+Create `diarizator/.env` (Compose reads this file):
 
 ```bash
 HF_TOKEN=your_huggingface_token_here
-COMPUTE_MODE=cpu  # or "gpu" for GPU acceleration
-PYTORCH_CUDA_VERSION=cpu  # or "cu126", "cu128" for GPU
 SPEAKER_SERVICE_HOST=0.0.0.0
 SPEAKER_SERVICE_PORT=8085
 DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
+AUDIO_BACKEND=soundfile
 ```
 
 Get your HF token from https://huggingface.co/settings/tokens
@@ -36,20 +38,130 @@ Accept the terms and conditions for:
 - https://huggingface.co/pyannote/speaker-diarization-community-1
 - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
 
-### 2. Start the Service
+The token is passed directly to Hugging Face by `Pipeline.from_pretrained`.
+Running `huggingface-cli login` is not required inside the container. A valid
+token still receives 401/403 until its account has accepted both gated model
+conditions.
+
+### 2A. Apple Silicon Mac (CPU, native arm64)
+
+Do not use the GPU profile on macOS: Docker Desktop cannot expose Apple GPU
+acceleration to this PyTorch/CUDA service. The CPU profile deliberately has no
+fixed `platform`, so Docker builds it natively as `linux/arm64` on an M-series
+Mac.
 
 ```bash
-# For CPU-only
+cd diarizator
 docker compose --profile cpu up --build -d
 
-# For GPU acceleration
-docker compose --profile gpu up --build -d
+# Follow the first model load. Ready means the log contains "Models ready".
+docker compose --profile cpu logs -f diarization-service
 ```
 
-### 3. Check Health
+The compatibility wrapper `scripts/start-diarizator.sh` runs the same CPU
+Compose command; Docker Compose is the canonical and documented launch path.
+
+Recommended Docker Desktop resources for Mycelia plus diarization:
+
+- memory: at least 10 GB, preferably 12 GB;
+- swap: 2–4 GB;
+- keep only the CPU profile active on a Mac.
+
+### 2B. Linux server with RTX 4090 (CUDA 12.6)
+
+Prerequisites on the server:
+
+1. Current NVIDIA driver with `nvidia-smi` working on the host.
+2. NVIDIA Container Toolkit configured for Docker.
+3. `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi`
+   succeeds before starting this service.
+
+Then:
 
 ```bash
-curl http://localhost:8085/health
+cd diarizator
+PYTORCH_CUDA_VERSION=cu126 docker compose --profile gpu up --build -d diarization-service-gpu
+
+docker compose --profile gpu logs -f diarization-service-gpu
+docker compose --profile gpu exec diarization-service-gpu \
+  uv run python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
+```
+
+The GPU image is intentionally `linux/amd64`; RTX 4090 is an NVIDIA Ada GPU
+and is served by the CUDA 12.6 PyTorch wheels. Do not build or run this image as
+the local Mac default.
+
+To stop either deployment:
+
+```bash
+docker compose --profile cpu down
+# or
+docker compose --profile gpu down
+```
+
+### 3. Connect Mycelia
+
+For Mycelia running in Docker on the same Mac, the default is already correct:
+
+```bash
+DIARIZATION_SERVER_URL=http://host.docker.internal:8085
+```
+
+For a remote RTX 4090 server, set the backend to the reachable protected URL,
+or add that URL in **Settings → Diarization** and give it a lower priority:
+
+```bash
+DIARIZATION_SERVER_URL=https://diarizator.example.com
+```
+
+Port 8085 has no application authentication. Do not expose it directly to the
+public internet; use a private network/VPN or an authenticated reverse proxy.
+
+### 4. Check Health
+
+Startup and readiness are different states. The container can be running while
+Pyannote is still downloading/loading models.
+
+```bash
+docker compose --profile cpu ps
+curl -fsS http://localhost:8085/health
+```
+
+Expected ready response is HTTP 200. In Mycelia, open **Jobs → External
+services & routing** or **Settings → Diarization**; the route must show
+`Running`, not only configured.
+
+### Troubleshooting
+
+`401/403 Cannot access gated repo`
+
+- Verify `HF_TOKEN` is in `diarizator/.env` (not only the repository root).
+- Sign in to Hugging Face with the same account as the token and accept both
+  model conditions.
+- Recreate the container after changing `.env`.
+
+```bash
+docker compose --profile cpu up -d --force-recreate diarization-service
+```
+
+`Exited (137)`
+
+- This means the process was killed; on Docker Desktop the common cause is
+  memory pressure. Increase Docker memory/swap and make sure the CUDA image is
+  not running on the Mac.
+
+`CUDA available: False` on the RTX 4090 server
+
+- Confirm the GPU profile was used, the image is `mycelia-diarizator:cu126`,
+  and the NVIDIA Container Toolkit smoke test above succeeds.
+
+Inspect the exact image architecture and dependency flavor:
+
+```bash
+docker image inspect mycelia-diarizator:cpu \
+  --format 'arch={{.Architecture}} env={{json .Config.Env}}'
+docker image inspect mycelia-diarizator:cu126 \
+  --format 'arch={{.Architecture}} env={{json .Config.Env}}'
 ```
 
 ## API Usage

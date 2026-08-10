@@ -279,7 +279,7 @@ async function probeDiarizator(
       latencyMs: Math.round(performance.now() - startedAt),
       message: `${
         error instanceof Error ? error.message : String(error)
-      } — start it with scripts/start-diarizator.sh`,
+      } — start the configured CPU or GPU Docker service`,
       checkedAt,
       usedBy,
     };

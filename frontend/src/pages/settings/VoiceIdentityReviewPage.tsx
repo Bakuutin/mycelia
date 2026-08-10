@@ -59,7 +59,7 @@ export default function VoiceIdentityReviewPage() {
     ? "Checking Diarizator…"
     : !diarizatorReady
     ? diarizatorHealth?.message ??
-      "Diarizator is unavailable. Start scripts/start-diarizator.sh first."
+      "Diarizator is unavailable. Start the CPU or GPU Docker service first."
     : null;
   const {
     data: queue = [],

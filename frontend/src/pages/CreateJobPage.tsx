@@ -51,7 +51,7 @@ export default function CreateJobPage() {
   const dependencyMessage = needsVoiceProfile && !isLoadingHealth &&
       !dependencyReady
     ? diarizatorHealth?.message ??
-      "Diarizator is unavailable. Start scripts/start-diarizator.sh first."
+      "Diarizator is unavailable. Start the CPU or GPU Docker service first."
     : null;
   const {
     data: speakerProfiles = [],
