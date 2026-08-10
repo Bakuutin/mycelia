@@ -36,6 +36,7 @@ import { parseJobError } from "@/lib/jobs";
 import { getJobErrorCode } from "@/lib/jobErrors";
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
 import { getDiarizationProgressView } from "@/lib/diarizationProgress";
+import { buildFreshDiarizationGeneration } from "@/lib/diarizationRerun";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
 
@@ -529,6 +530,47 @@ export default function JobDetailPage() {
   const rerunJobMutation = useMutation({
     mutationFn: async () => {
       if (!job) throw new Error("Job is not loaded");
+      if (
+        job.type === "diarization" && job.data?.mode === "build_generation"
+      ) {
+        const [health, runs] = await Promise.all([
+          api.callResource("jobs", {
+            action: "pipeline_health",
+            force: true,
+          }) as Promise<any>,
+          api.callResource("speaker-segments", {
+            action: "list-runs",
+          }) as Promise<Array<{
+            runId: string;
+            status: string;
+            generation: number;
+          }>>,
+        ]);
+        const diarizator = health.services?.find((service: any) =>
+          service.id === "diarizator"
+        );
+        if (diarizator?.status !== "healthy") {
+          throw new Error(
+            diarizator?.message ||
+              "A healthy diarizator is required to create a new generation.",
+          );
+        }
+        const plan = buildFreshDiarizationGeneration(
+          job.data,
+          runs,
+          diarizator.metadata ?? {},
+        );
+        await api.callResource("speaker-segments", plan.createRun);
+        const result = await api.callResource("jobs", {
+          action: "enqueue",
+          data: plan.jobData,
+          trigger: {
+            type: "manual",
+            reason: `Fresh generation from job ${job.id}`,
+          },
+        }) as { jobId: string };
+        return { ...result, freshGeneration: true, runId: plan.runId };
+      }
       return await api.callResource("jobs", {
         action: "enqueue",
         data: job.data,
@@ -536,11 +578,16 @@ export default function JobDetailPage() {
           type: "manual",
           reason: `rerun:${job.id}`,
         },
-      }) as { jobId: string };
+      }) as { jobId: string; freshGeneration?: boolean; runId?: string };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      toast.success("New job queued with the same input");
+      queryClient.invalidateQueries({ queryKey: ["speaker-runs"] });
+      toast.success(
+        result.freshGeneration
+          ? `New diarization generation ${result.runId} queued`
+          : "New job queued with the same input",
+      );
       navigate(`/jobs/${result.jobId}`);
     },
     onError: (error) => {
@@ -654,7 +701,12 @@ export default function JobDetailPage() {
               disabled={rerunJobMutation.isPending}
             >
               <Play className="h-4 w-4 mr-2" />
-              {rerunJobMutation.isPending ? "Queueing…" : "Run again"}
+              {rerunJobMutation.isPending
+                ? "Queueing…"
+                : job.type === "diarization" &&
+                    job.data?.mode === "build_generation"
+                ? "Start new generation"
+                : "Run again"}
             </Button>
           )}
           {["active", "waiting", "delayed"].includes(job.state) && (
@@ -987,7 +1039,7 @@ export default function JobDetailPage() {
                               variant="secondary"
                               className="font-mono text-xs"
                             >
-                              {linkedChunk._id}
+                              {String(linkedChunk._id)}
                             </Badge>
                           </div>
                         )}

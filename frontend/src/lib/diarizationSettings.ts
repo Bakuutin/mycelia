@@ -6,6 +6,53 @@ export type DiarizationProfile = {
   priority: number;
 };
 
+export type DiarizationRouteConfig = {
+  profiles: DiarizationProfile[];
+  includeEnvironment: boolean;
+  environmentPriority: number;
+};
+
+export function updateDiarizationRouteConfig(
+  config: DiarizationRouteConfig,
+  profileId: string,
+  changes: { enabled?: boolean; priority?: number },
+): DiarizationRouteConfig {
+  if (
+    changes.priority != null &&
+    (!Number.isInteger(changes.priority) || changes.priority < 1 ||
+      changes.priority > 100)
+  ) {
+    throw new Error("Diarizator priority must be an integer from 1 to 100.");
+  }
+
+  const next = profileId === "environment"
+    ? {
+      ...config,
+      includeEnvironment: changes.enabled ?? config.includeEnvironment,
+      environmentPriority: changes.priority ?? config.environmentPriority,
+    }
+    : {
+      ...config,
+      profiles: config.profiles.map((profile) =>
+        profile.id === profileId ? { ...profile, ...changes } : profile
+      ),
+    };
+
+  if (
+    profileId !== "environment" &&
+    !config.profiles.some((profile) => profile.id === profileId)
+  ) {
+    throw new Error("Diarizator route no longer exists.");
+  }
+  if (
+    !next.includeEnvironment &&
+    !next.profiles.some((profile) => profile.enabled)
+  ) {
+    throw new Error("Keep at least one diarizator route enabled.");
+  }
+  return next;
+}
+
 export function validateDiarizationRoutes(
   profiles: DiarizationProfile[],
   includeEnvironment: boolean,

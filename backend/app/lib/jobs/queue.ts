@@ -24,6 +24,7 @@ import {
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { selectTranscriptionProvider } from "@/lib/transcription/provider-routing.ts";
 import { buildDiarizatorJobSnapshot } from "@/lib/diarization/provider-routing.ts";
+import { assertDiarizationGenerationReady } from "@/lib/diarization/generation-preflight.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
@@ -372,6 +373,21 @@ export async function enqueueJob(
     throw new Error(
       `Job data is missing 'type' field after validation for job ID: ${jobId}. Check if the schema for this job type includes the 'type' field.`,
     );
+  }
+
+  if (
+    parsedData.type === "diarization" &&
+    parsedData.mode === "build_generation"
+  ) {
+    const run = parsedData.runId
+      ? await mongo({
+        action: "findOne",
+        collection: "diarization_runs",
+        query: { runId: parsedData.runId },
+        options: { projection: { runId: 1, status: 1 } },
+      })
+      : null;
+    assertDiarizationGenerationReady(parsedData, run);
   }
 
   // Do not create a stream of doomed jobs while a required remote provider is

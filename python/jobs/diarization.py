@@ -1,6 +1,7 @@
 """Diarization job - runs speaker diarization on audio chunks within a time range."""
 
 import logging
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 from pydantic import BaseModel
@@ -39,6 +40,7 @@ def process_diarization_job(
     sequences and calling the diarization server to identify speakers.
     """
     worker_id = get_worker_id()
+    started_at = time.monotonic()
     logger.info(f"Starting diarization job {job_id}, worker={worker_id}")
     
     # Build filters from time range
@@ -135,15 +137,31 @@ def process_diarization_job(
             errors += 1
             last_error = result.get("error") or "Unknown diarization error"
         
-        # Update progress periodically
-        if sequences_processed % 5 == 0:
-            progress_callback({
-                "stage": "processing",
-                "message": f"Processed {sequences_processed} sequences, {chunks_processed} chunks",
-                "sequences_processed": sequences_processed,
-                "chunks_processed": chunks_processed,
-                "segments_created": segments_created,
-            })
+        elapsed_seconds = max(time.monotonic() - started_at, 0.0)
+        chunks_remaining = max(pending_count - chunks_processed, 0)
+        chunks_per_second = (
+            chunks_processed / elapsed_seconds
+            if chunks_processed > 0 and elapsed_seconds > 0
+            else None
+        )
+        eta_seconds = (
+            chunks_remaining / chunks_per_second
+            if chunks_per_second and chunks_remaining > 0
+            else 0.0 if chunks_per_second else None
+        )
+        progress_callback({
+            "stage": "processing",
+            "message": f"Processed {sequences_processed} sequences, {chunks_processed} chunks",
+            "total_chunks": pending_count,
+            "sequences_processed": sequences_processed,
+            "chunks_processed": chunks_processed,
+            "chunks_remaining": chunks_remaining,
+            "segments_created": segments_created,
+            "errors": errors,
+            "elapsed_seconds": elapsed_seconds,
+            "chunks_per_second": chunks_per_second,
+            "eta_seconds": eta_seconds,
+        })
     
     if errors > 0 and chunks_processed == 0:
         if building_generation:

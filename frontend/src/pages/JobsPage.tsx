@@ -83,6 +83,10 @@ import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
 import { getDiarizationProgressView } from "@/lib/diarizationProgress";
+import {
+  type DiarizationRouteConfig,
+  updateDiarizationRouteConfig,
+} from "@/lib/diarizationSettings";
 import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
@@ -339,6 +343,11 @@ type InferenceRoutingConfig = {
       baseUrl: string;
       apiKey: string;
     }>;
+    includeEnvironment?: boolean;
+    environmentPriority?: number;
+  } | null;
+  diarizationProfiles?: {
+    profiles: DiarizationRouteConfig["profiles"];
     includeEnvironment?: boolean;
     environmentPriority?: number;
   } | null;
@@ -1367,6 +1376,9 @@ export default function JobsPage() {
     Record<string, string>
   >({});
   const [batchDrafts, setBatchDrafts] = useState<Record<string, string>>({});
+  const [diarizationPriorityDrafts, setDiarizationPriorityDrafts] = useState<
+    Record<string, string>
+  >({});
 
   const toggleHideEmpty = () => {
     const newParams = new URLSearchParams(searchParams);
@@ -1485,6 +1497,22 @@ export default function JobsPage() {
         route.model!,
       ]) ?? [],
     );
+  }, [pipelineHealth]);
+
+  useEffect(() => {
+    const routes = pipelineHealth?.services.find((service) =>
+      service.id === "diarizator"
+    )?.routes;
+    if (!routes) return;
+    setDiarizationPriorityDrafts((current) => {
+      const next = { ...current };
+      for (const route of routes) {
+        if (next[route.providerProfileId] === undefined) {
+          next[route.providerProfileId] = String(route.priority);
+        }
+      }
+      return next;
+    });
   }, [pipelineHealth]);
 
   const { data: inferenceRoutingConfig } = useQuery({
@@ -2359,6 +2387,59 @@ export default function JobsPage() {
               : current,
         );
       }
+    },
+  });
+
+  const updateDiarizationRouteMutation = useMutation({
+    mutationFn: async ({
+      profileId,
+      changes,
+    }: {
+      profileId: string;
+      changes: { enabled?: boolean; priority?: number };
+    }) => {
+      const config = await api.callResource("config", {
+        action: "get",
+      }) as InferenceRoutingConfig;
+      const current: DiarizationRouteConfig = {
+        profiles: config.diarizationProfiles?.profiles ?? [],
+        includeEnvironment:
+          config.diarizationProfiles?.includeEnvironment ?? true,
+        environmentPriority:
+          config.diarizationProfiles?.environmentPriority ?? 50,
+      };
+      const next = updateDiarizationRouteConfig(current, profileId, changes);
+      await api.callResource("config", {
+        action: "patch",
+        updates: { diarizationProfiles: next },
+      });
+      return await api.callResource("jobs", {
+        action: "pipeline_health",
+        force: true,
+      }) as PipelineHealth;
+    },
+    onSuccess: (health, { profileId, changes }) => {
+      queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
+      queryClient.setQueryData(["pipeline-health"], health);
+      if (changes.priority != null) {
+        setDiarizationPriorityDrafts((current) => ({
+          ...current,
+          [profileId]: String(changes.priority),
+        }));
+      }
+      setServiceTestResults((current) => ({
+        ...current,
+        diarizator:
+          "Diarizator routing saved. New jobs will use the first healthy route by numeric priority.",
+      }));
+    },
+    onError: (error) => {
+      setServiceTestResults((current) => ({
+        ...current,
+        diarizator: error instanceof Error
+          ? error.message
+          : "Failed to update diarizator routing",
+      }));
     },
   });
 
@@ -3373,30 +3454,100 @@ export default function JobsPage() {
                               <Link to="/settings/diarization">Configure</Link>
                             </Button>
                           </div>
-                          {service.routes?.map((route) => (
-                            <div
-                              key={route.providerProfileId}
-                              className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                            >
-                              <div className="min-w-0">
-                                <div className="font-medium">
-                                  {route.providerProfileName}
+                          {service.routes?.map((route) => {
+                            const priorityDraft =
+                              diarizationPriorityDrafts[
+                                route.providerProfileId
+                              ] ?? String(route.priority);
+                            const parsedPriority = Number(priorityDraft);
+                            const validPriority = Number.isInteger(
+                              parsedPriority,
+                            ) && parsedPriority >= 1 && parsedPriority <= 100;
+                            return (
+                              <div
+                                key={route.providerProfileId}
+                                className="space-y-2 rounded border bg-background p-2 text-xs"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium">
+                                      {route.providerProfileName}
+                                    </div>
+                                    <div className="break-all font-mono text-muted-foreground">
+                                      {route.baseUrl}
+                                    </div>
+                                  </div>
+                                  <Badge
+                                    variant={route.status === "healthy"
+                                      ? "secondary"
+                                      : route.status === "disabled"
+                                      ? "outline"
+                                      : "destructive"}
+                                  >
+                                    {route.status === "healthy"
+                                      ? "running"
+                                      : route.status}
+                                  </Badge>
                                 </div>
-                                <div className="break-all font-mono text-muted-foreground">
-                                  {route.baseUrl}
+                                <div className="flex flex-wrap items-end gap-2">
+                                  <div className="flex h-9 items-center gap-2 rounded border px-2">
+                                    <Switch
+                                      checked={route.enabled}
+                                      disabled={updateDiarizationRouteMutation.isPending}
+                                      onCheckedChange={(enabled) =>
+                                        updateDiarizationRouteMutation.mutate({
+                                          profileId: route.providerProfileId,
+                                          changes: { enabled },
+                                        })}
+                                      aria-label={`Enable ${route.providerProfileName}`}
+                                    />
+                                    <span>{route.enabled ? "On" : "Off"}</span>
+                                  </div>
+                                  <div className="w-28 space-y-1">
+                                    <Label
+                                      htmlFor={`diar-priority-${route.providerProfileId}`}
+                                      className="text-[11px]"
+                                    >
+                                      Priority 1–100
+                                    </Label>
+                                    <Input
+                                      id={`diar-priority-${route.providerProfileId}`}
+                                      type="number"
+                                      min={1}
+                                      max={100}
+                                      step={1}
+                                      value={priorityDraft}
+                                      onChange={(event) =>
+                                        setDiarizationPriorityDrafts((current) => ({
+                                          ...current,
+                                          [route.providerProfileId]:
+                                            event.target.value,
+                                        }))}
+                                      className="h-8"
+                                    />
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={!validPriority ||
+                                      updateDiarizationRouteMutation.isPending ||
+                                      parsedPriority === route.priority}
+                                    onClick={() =>
+                                      updateDiarizationRouteMutation.mutate({
+                                        profileId: route.providerProfileId,
+                                        changes: { priority: parsedPriority },
+                                      })}
+                                  >
+                                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                                    Save priority
+                                  </Button>
+                                </div>
+                                <div className="text-[11px] text-muted-foreground">
+                                  {route.message}
                                 </div>
                               </div>
-                              <Badge
-                                variant={route.status === "healthy"
-                                  ? "secondary"
-                                  : "destructive"}
-                              >
-                                {route.status === "healthy"
-                                  ? "running"
-                                  : route.status}
-                              </Badge>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
 

@@ -130,6 +130,36 @@ class DiarizationJobTest(TestCase):
         self.assertTrue(result["hasMore"])
         self.assertEqual(result["processed"], 2)
 
+    def test_reports_complete_progress_after_each_sequence(self):
+        updates = []
+
+        with (
+            patch("time.monotonic", side_effect=[100.0, 106.0]),
+            patch("jobs.diarization.count_pending_chunks", return_value=10),
+            patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={"status": "diarized", "chunks_diarized": 3, "segments": 4},
+            ),
+        ):
+            process_diarization_job(
+                "job-progress",
+                DiarizationJobData(limit=1),
+                updates.append,
+            )
+
+        progress = updates[-1]
+        self.assertEqual(progress["stage"], "processing")
+        self.assertEqual(progress["total_chunks"], 10)
+        self.assertEqual(progress["chunks_processed"], 3)
+        self.assertEqual(progress["chunks_remaining"], 7)
+        self.assertEqual(progress["sequences_processed"], 1)
+        self.assertEqual(progress["segments_created"], 4)
+        self.assertEqual(progress["errors"], 0)
+        self.assertEqual(progress["elapsed_seconds"], 6.0)
+        self.assertEqual(progress["chunks_per_second"], 0.5)
+        self.assertEqual(progress["eta_seconds"], 14.0)
+
     def test_zero_progress_errors_fail_the_job(self):
         with (
             patch("jobs.diarization.count_pending_chunks", return_value=3),
