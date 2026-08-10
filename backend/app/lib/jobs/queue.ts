@@ -342,7 +342,14 @@ export async function enqueueJob(
     }
   }
 
-  if (["diarization", "enrollment", "profileReenrollment"].includes(data.type)) {
+  const reuseDiarizatorRoute = options?.reuseHealthyRoute === true &&
+    data.type === "diarization" &&
+    typeof mergedData.diarizationServerUrl === "string" &&
+    Boolean(mergedData.routingContext?.providerProfileId);
+  if (
+    ["diarization", "enrollment", "profileReenrollment"].includes(data.type) &&
+    !reuseDiarizatorRoute
+  ) {
     const diarizator = (await getExternalServicesHealth()).find((service) =>
       service.id === "diarizator"
     );
@@ -393,7 +400,9 @@ export async function enqueueJob(
   // Do not create a stream of doomed jobs while a required remote provider is
   // down or still loading. Periodic/startup triggers will retry the underlying
   // domain work after the provider becomes healthy.
-  await assertJobServicesHealthy(parsedData.type);
+  if (!reuseDiarizatorRoute) {
+    await assertJobServicesHealthy(parsedData.type);
+  }
 
   const queue = getQueue(parsedData.type);
 

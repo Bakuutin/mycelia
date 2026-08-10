@@ -250,6 +250,7 @@ export async function startWorkers() {
             {
               priority: getContinuationPriority(job.data),
               trigger: { type: "auto", reason: "hasMore" },
+              reuseHealthyRoute: job.data.type === "diarization",
             },
           );
         } catch (error) {

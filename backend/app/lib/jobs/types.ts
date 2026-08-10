@@ -37,4 +37,6 @@ export interface EnqueueJobOptions {
     principal?: string;
   };
   restartedFromJobId?: string;
+  /** Internal hasMore continuation may reuse the route that just succeeded. */
+  reuseHealthyRoute?: boolean;
 }
