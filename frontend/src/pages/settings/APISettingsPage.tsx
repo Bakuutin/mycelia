@@ -10,8 +10,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Key, Plus, Copy, Check, Edit2, Save, X } from "lucide-react";
+import { Check, Copy, Edit2, Key, Plus, Save, X } from "lucide-react";
 import { ObjectId } from "bson";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 interface ApiKey {
   _id: ObjectId;
@@ -28,6 +29,7 @@ const defaultPolicyYaml = `- resource: "**"
   effect: allow`;
 
 const APISettingsPage = () => {
+  const { confirmAction } = useActionDialog();
   // --- Client config state ---
   const {
     apiEndpoint,
@@ -56,7 +58,9 @@ const APISettingsPage = () => {
   const [newKeyOwner, setNewKeyOwner] = useState("system");
   const [newKeyPolicies, setNewKeyPolicies] = useState(defaultPolicyYaml);
   const [creating, setCreating] = useState(false);
-  const [createdKey, setCreatedKey] = useState<{ clientId: string; apiKey: string } | null>(null);
+  const [createdKey, setCreatedKey] = useState<
+    { clientId: string; apiKey: string } | null
+  >(null);
   const [copiedClientId, setCopiedClientId] = useState(false);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
@@ -72,8 +76,15 @@ const APISettingsPage = () => {
     setTimeout(() => setIsSaved(false), 2000);
   };
 
-  const handleClear = () => {
-    if (confirm("Are you sure you want to reset your API credentials?")) {
+  const handleClear = async () => {
+    if (
+      await confirmAction({
+        title: "Reset API credentials?",
+        description: "The locally saved client ID and secret will be cleared.",
+        actionLabel: "Reset credentials",
+        destructive: true,
+      })
+    ) {
       clearSettings();
       setLocalEndpoint(useSettingsStore.getState().apiEndpoint);
       setLocalClientId("");
@@ -98,7 +109,9 @@ const APISettingsPage = () => {
         setExchangeResult(result.error || "Token invalid");
       }
     } catch (err) {
-      setExchangeResult(err instanceof Error ? err.message : "Connection failed");
+      setExchangeResult(
+        err instanceof Error ? err.message : "Connection failed",
+      );
     } finally {
       setIsExchanging(false);
     }
@@ -126,7 +139,7 @@ const APISettingsPage = () => {
     fetchApiKeys();
   }, []);
 
-  const currentKey = apiKeys.find(k => k._id.toString() === clientId);
+  const currentKey = apiKeys.find((k) => k._id.toString() === clientId);
 
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) {
@@ -150,14 +163,24 @@ const APISettingsPage = () => {
       setNewKeyPolicies(defaultPolicyYaml);
       await fetchApiKeys();
     } catch (err) {
-      setKeysError(err instanceof Error ? err.message : "Failed to create API key");
+      setKeysError(
+        err instanceof Error ? err.message : "Failed to create API key",
+      );
     } finally {
       setCreating(false);
     }
   };
 
   const handleRevoke = async (id: string, owner: string) => {
-    if (!confirm("Are you sure you want to revoke this API key?")) {
+    if (
+      !await confirmAction({
+        title: "Revoke this API key?",
+        description:
+          "Clients using this key will no longer be able to authenticate.",
+        actionLabel: "Revoke API key",
+        destructive: true,
+      })
+    ) {
       return;
     }
 
@@ -165,7 +188,9 @@ const APISettingsPage = () => {
       await callResource("apikeys", { action: "revoke", id, owner });
       await fetchApiKeys();
     } catch (err) {
-      setKeysError(err instanceof Error ? err.message : "Failed to revoke API key");
+      setKeysError(
+        err instanceof Error ? err.message : "Failed to revoke API key",
+      );
     }
   };
 
@@ -196,16 +221,20 @@ const APISettingsPage = () => {
       setEditedPolicies("");
       await fetchApiKeys();
     } catch (err) {
-      setKeysError(err instanceof Error ? err.message : "Failed to update API key policies");
+      setKeysError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update API key policies",
+      );
     } finally {
       setUpdating(false);
     }
   };
 
-  const copyToClipboard = async (text: string, type: 'clientId' | 'secret') => {
+  const copyToClipboard = async (text: string, type: "clientId" | "secret") => {
     try {
       await navigator.clipboard.writeText(text);
-      if (type === 'clientId') {
+      if (type === "clientId") {
         setCopiedClientId(true);
         setTimeout(() => setCopiedClientId(false), 2000);
       } else {
@@ -230,11 +259,15 @@ const APISettingsPage = () => {
         <div className="flex items-center gap-3 border rounded-lg px-4 py-3 bg-muted/50">
           <Key className="w-4 h-4 text-muted-foreground shrink-0" />
           <div className="text-sm">
-            <span className="text-muted-foreground">Session key: </span>
+            <span className="text-muted-foreground">Session key:</span>
             <span className="font-medium">{currentKey.name}</span>
-            <span className="text-muted-foreground"> ({currentKey.openPrefix}...)</span>
+            <span className="text-muted-foreground">
+              ({currentKey.openPrefix}...)
+            </span>
             {!currentKey.isActive && (
-              <span className="ml-2 text-destructive font-medium">inactive</span>
+              <span className="ml-2 text-destructive font-medium">
+                inactive
+              </span>
             )}
           </div>
         </div>
@@ -297,7 +330,8 @@ const APISettingsPage = () => {
                 </h3>
               </div>
               <p className="text-sm text-green-700 dark:text-green-300">
-                Save these credentials securely. You won't be able to see the secret again.
+                Save these credentials securely. You won't be able to see the
+                secret again.
               </p>
 
               <div className="space-y-3">
@@ -314,9 +348,12 @@ const APISettingsPage = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => copyToClipboard(createdKey.clientId, 'clientId')}
+                      onClick={() =>
+                        copyToClipboard(createdKey.clientId, "clientId")}
                     >
-                      {copiedClientId ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      {copiedClientId
+                        ? <Check className="w-4 h-4" />
+                        : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </div>
@@ -334,9 +371,12 @@ const APISettingsPage = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => copyToClipboard(createdKey.apiKey, 'secret')}
+                      onClick={() =>
+                        copyToClipboard(createdKey.apiKey, "secret")}
                     >
-                      {copiedSecret ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      {copiedSecret
+                        ? <Check className="w-4 h-4" />
+                        : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </div>
@@ -407,164 +447,202 @@ const APISettingsPage = () => {
           </Card>
         )}
 
-        {keysLoading ? (
-          <div className="border rounded-lg p-8 text-center">
-            <p className="text-muted-foreground">Loading API keys...</p>
-          </div>
-        ) : apiKeys.length === 0 ? (
-          <Card className="p-8 text-center border-dashed">
-            <Key className="w-12 h-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-            <p className="text-muted-foreground">
-              No API keys yet. Create one to get started.
-            </p>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {apiKeys.map((key) => {
-              const isActiveKey = clientId === key._id.toString();
-              return (
-              <Card key={key._id.toString()} className={`p-3 ${isActiveKey ? "ring-2 ring-primary" : ""}`}>
-                <details className="group" open={editingKeyId === key._id.toString()}>
-                  <summary className="list-none cursor-pointer">
-                    <div className="flex items-center gap-2">
-                      {/* Name column - fixed width */}
-                      <div className="w-[160px] shrink-0 truncate flex items-center gap-2">
-                        <h3 className="font-semibold text-sm truncate">{key.name}</h3>
-                        {isActiveKey && <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0">current</Badge>}
-                      </div>
+        {keysLoading
+          ? (
+            <div className="border rounded-lg p-8 text-center">
+              <p className="text-muted-foreground">Loading API keys...</p>
+            </div>
+          )
+          : apiKeys.length === 0
+          ? (
+            <Card className="p-8 text-center border-dashed">
+              <Key className="w-12 h-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+              <p className="text-muted-foreground">
+                No API keys yet. Create one to get started.
+              </p>
+            </Card>
+          )
+          : (
+            <div className="space-y-2">
+              {apiKeys.map((key) => {
+                const isActiveKey = clientId === key._id.toString();
+                return (
+                  <Card
+                    key={key._id.toString()}
+                    className={`p-3 ${
+                      isActiveKey ? "ring-2 ring-primary" : ""
+                    }`}
+                  >
+                    <details
+                      className="group"
+                      open={editingKeyId === key._id.toString()}
+                    >
+                      <summary className="list-none cursor-pointer">
+                        <div className="flex items-center gap-2">
+                          {/* Name column - fixed width */}
+                          <div className="w-[160px] shrink-0 truncate flex items-center gap-2">
+                            <h3 className="font-semibold text-sm truncate">
+                              {key.name}
+                            </h3>
+                            {isActiveKey && (
+                              <Badge
+                                variant="outline"
+                                className="shrink-0 text-[10px] px-1.5 py-0"
+                              >
+                                current
+                              </Badge>
+                            )}
+                          </div>
 
-                      {/* ID column - fixed width */}
-                      <div className="w-[120px] shrink-0 flex items-center gap-1 text-xs">
-                        <span className="text-muted-foreground">ID:</span>
-                        <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">
-                          {key._id.toString().slice(0, 8)}...
-                        </code>
-                      </div>
+                          {/* ID column - fixed width */}
+                          <div className="w-[120px] shrink-0 flex items-center gap-1 text-xs">
+                            <span className="text-muted-foreground">ID:</span>
+                            <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">
+                              {key._id.toString().slice(0, 8)}...
+                            </code>
+                          </div>
 
-                      {/* Secret column - fixed width */}
-                      <div className="w-[160px] shrink-0 flex items-center gap-1 text-xs">
-                        <span className="text-muted-foreground">Secret:</span>
-                        <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">
-                          {key.openPrefix}...
-                        </code>
-                      </div>
+                          {/* Secret column - fixed width */}
+                          <div className="w-[160px] shrink-0 flex items-center gap-1 text-xs">
+                            <span className="text-muted-foreground">
+                              Secret:
+                            </span>
+                            <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">
+                              {key.openPrefix}...
+                            </code>
+                          </div>
 
-                      {/* Owner column - fixed width */}
-                      <div className="w-[80px] shrink-0 flex items-center gap-1 text-xs">
-                        <span className="text-muted-foreground">Owner:</span>
-                        <span className="truncate">{key.owner}</span>
-                      </div>
+                          {/* Owner column - fixed width */}
+                          <div className="w-[80px] shrink-0 flex items-center gap-1 text-xs">
+                            <span className="text-muted-foreground">
+                              Owner:
+                            </span>
+                            <span className="truncate">{key.owner}</span>
+                          </div>
 
-                      {/* Date column - fixed width */}
-                      <div className="w-[90px] shrink-0 text-xs text-muted-foreground">
-                        {new Date(key.createdAt).toLocaleDateString()}
-                      </div>
+                          {/* Date column - fixed width */}
+                          <div className="w-[90px] shrink-0 text-xs text-muted-foreground">
+                            {new Date(key.createdAt).toLocaleDateString()}
+                          </div>
 
-                      {/* Spacer */}
-                      <div className="flex-1" />
+                          {/* Spacer */}
+                          <div className="flex-1" />
 
-                      {/* Details toggle - fixed width */}
-                      <div className="w-[60px] shrink-0">
-                        <span className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
-                          <span className="group-open:hidden">▶</span>
-                          <span className="hidden group-open:inline">▼</span>
-                          Details
-                        </span>
-                      </div>
+                          {/* Details toggle - fixed width */}
+                          <div className="w-[60px] shrink-0">
+                            <span className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                              <span className="group-open:hidden">▶</span>
+                              <span className="hidden group-open:inline">
+                                ▼
+                              </span>
+                              Details
+                            </span>
+                          </div>
 
-                      {/* Action column - fixed width */}
-                      <div className="w-[70px] shrink-0 flex justify-end">
-                        {key.isActive ? (
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRevoke(key._id.toString(), key.owner);
-                            }}
-                            title="Revoke this API key"
-                          >
-                            Revoke
-                          </Button>
-                        ) : (
-                          <span className="inline-flex items-center justify-center h-7 px-2 text-[11px] rounded-md bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                            Revoked
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </summary>
-
-                  {/* Expandable policies section */}
-                  <div className="pt-2 mt-2 border-t">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-medium text-muted-foreground">Policies</span>
-                      {key.isActive && editingKeyId !== key._id.toString() && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleStartEdit(key);
-                          }}
-                          title="Edit policies"
-                        >
-                          <Edit2 className="w-3 h-3 mr-1" />
-                          Edit
-                        </Button>
-                      )}
-                    </div>
-                    {editingKeyId === key._id.toString() ? (
-                      <div className="space-y-2">
-                        <textarea
-                          value={editedPolicies}
-                          onChange={(e) => setEditedPolicies(e.target.value)}
-                          className="flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-2 py-1.5 text-xs shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          placeholder={defaultPolicyYaml}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleUpdateKey(key._id.toString(), key.owner);
-                            }}
-                            disabled={updating}
-                          >
-                            <Save className="w-3 h-3 mr-1" />
-                            {updating ? "Saving..." : "Save"}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleCancelEdit();
-                            }}
-                            disabled={updating}
-                          >
-                            <X className="w-3 h-3 mr-1" />
-                            Cancel
-                          </Button>
+                          {/* Action column - fixed width */}
+                          <div className="w-[70px] shrink-0 flex justify-end">
+                            {key.isActive
+                              ? (
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRevoke(key._id.toString(), key.owner);
+                                  }}
+                                  title="Revoke this API key"
+                                >
+                                  Revoke
+                                </Button>
+                              )
+                              : (
+                                <span className="inline-flex items-center justify-center h-7 px-2 text-[11px] rounded-md bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                                  Revoked
+                                </span>
+                              )}
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <pre className="p-2 bg-muted rounded text-[11px] font-mono overflow-x-auto">
+                      </summary>
+
+                      {/* Expandable policies section */}
+                      <div className="pt-2 mt-2 border-t">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            Policies
+                          </span>
+                          {key.isActive &&
+                            editingKeyId !== key._id.toString() && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartEdit(key);
+                              }}
+                              title="Edit policies"
+                            >
+                              <Edit2 className="w-3 h-3 mr-1" />
+                              Edit
+                            </Button>
+                          )}
+                        </div>
+                        {editingKeyId === key._id.toString()
+                          ? (
+                            <div className="space-y-2">
+                              <textarea
+                                value={editedPolicies}
+                                onChange={(e) =>
+                                  setEditedPolicies(e.target.value)}
+                                className="flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-2 py-1.5 text-xs shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                placeholder={defaultPolicyYaml}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleUpdateKey(
+                                      key._id.toString(),
+                                      key.owner,
+                                    );
+                                  }}
+                                  disabled={updating}
+                                >
+                                  <Save className="w-3 h-3 mr-1" />
+                                  {updating ? "Saving..." : "Save"}
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCancelEdit();
+                                  }}
+                                  disabled={updating}
+                                >
+                                  <X className="w-3 h-3 mr-1" />
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          )
+                          : (
+                            <pre className="p-2 bg-muted rounded text-[11px] font-mono overflow-x-auto">
                         {key.policiesYaml}
-                      </pre>
-                    )}
-                  </div>
-                </details>
-              </Card>
-            );
-            })}
-          </div>
-        )}
+                            </pre>
+                          )}
+                      </div>
+                    </details>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
       </div>
     </div>
   );

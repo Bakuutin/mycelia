@@ -82,7 +82,10 @@ import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
+import { getDiarizationProgressView } from "@/lib/diarizationProgress";
 import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
+import { toast } from "sonner";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 type WorkerStatus = {
   checkedAt: string;
@@ -1110,8 +1113,9 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         counting: "Counting",
         processing: "Processing",
       };
+      const progressView = getDiarizationProgressView(progress);
       return (
-        <div className="space-y-1">
+        <div className="min-w-[220px] space-y-2">
           <Badge
             variant="secondary"
             className="bg-blue-500/10 text-blue-500 text-xs"
@@ -1119,10 +1123,20 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {stageLabels[progress.stage] ?? progress.stage}
           </Badge>
           <JobDateRange job={job} />
+          {progress.total_chunks != null && (
+            <div className="space-y-1">
+              <Progress value={progressView.percent} className="h-1.5" />
+              <div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
+                <span>{progressView.progressLabel}</span>
+                <span>{progressView.etaLabel}</span>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {progressView.remainingLabel}
+                {progressView.rateLabel ? ` · ${progressView.rateLabel}` : ""}
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            {progress.total_chunks != null && (
-              <span>{progress.total_chunks} total chunks</span>
-            )}
             {progress.sequences_processed != null && (
               <span>{progress.sequences_processed} sequences</span>
             )}
@@ -1308,6 +1322,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
 }
 
 export default function JobsPage() {
+  const { confirmAction, promptAction } = useActionDialog();
   const ALL_STATUSES = [
     "active",
     "waiting",
@@ -1574,7 +1589,9 @@ export default function JobsPage() {
     onSettled: refreshWorkerViews,
     onError: (error, workerType) => {
       applyOptimisticPause(workerType, false);
-      alert(error instanceof Error ? error.message : "Failed to pause worker");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to pause worker",
+      );
     },
   });
 
@@ -1592,7 +1609,9 @@ export default function JobsPage() {
     onSettled: refreshWorkerViews,
     onError: (error, workerType) => {
       applyOptimisticPause(workerType, true);
-      alert(error instanceof Error ? error.message : "Failed to resume worker");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to resume worker",
+      );
     },
   });
 
@@ -1604,7 +1623,9 @@ export default function JobsPage() {
     },
     onSettled: refreshWorkerViews,
     onError: (error) =>
-      alert(error instanceof Error ? error.message : "Failed to pause workers"),
+      toast.error(
+        error instanceof Error ? error.message : "Failed to pause workers",
+      ),
   });
 
   const resumeAllMutation = useMutation({
@@ -1615,7 +1636,7 @@ export default function JobsPage() {
     },
     onSettled: refreshWorkerViews,
     onError: (error) =>
-      alert(
+      toast.error(
         error instanceof Error ? error.message : "Failed to resume workers",
       ),
   });
@@ -1642,7 +1663,7 @@ export default function JobsPage() {
       queryClient.invalidateQueries({ queryKey: ["worker-status"] });
     },
     onError: (error) => {
-      alert(
+      toast.error(
         error instanceof Error ? error.message : "Failed to save interval",
       );
     },
@@ -1673,7 +1694,7 @@ export default function JobsPage() {
     },
     onSettled: refreshWorkerViews,
     onError: (error) =>
-      alert(
+      toast.error(
         error instanceof Error ? error.message : "Failed to set concurrency",
       ),
   });
@@ -1810,7 +1831,7 @@ export default function JobsPage() {
       }
     },
     onError: (error) =>
-      alert(
+      toast.error(
         error instanceof Error ? error.message : "Failed to set batch size",
       ),
   });
@@ -1822,13 +1843,15 @@ export default function JobsPage() {
         id: jobId,
       }) as { originalJobId: string; restartedJobId: string },
     onSuccess: (result) =>
-      alert(
+      toast.success(
         `Restarted ${result.originalJobId.slice(-6)} as ` +
           result.restartedJobId.slice(-6),
       ),
     onSettled: refreshWorkerViews,
     onError: (error) =>
-      alert(error instanceof Error ? error.message : "Failed to restart job"),
+      toast.error(
+        error instanceof Error ? error.message : "Failed to restart job",
+      ),
   });
 
   const forceStartMutation = useMutation({
@@ -1845,10 +1868,14 @@ export default function JobsPage() {
         count,
       }) as { workerType: string; startedCount: number },
     onSuccess: (result) =>
-      alert(`Started ${result.startedCount} ${result.workerType} job(s).`),
+      toast.success(
+        `Started ${result.startedCount} ${result.workerType} job(s).`,
+      ),
     onSettled: refreshWorkerViews,
     onError: (error) =>
-      alert(error instanceof Error ? error.message : "Failed to start jobs"),
+      toast.error(
+        error instanceof Error ? error.message : "Failed to start jobs",
+      ),
   });
 
   const resumePipelineMutation = useMutation({
@@ -1914,7 +1941,9 @@ export default function JobsPage() {
       refetchPipelineHealth();
     },
     onError: (error) => {
-      alert(error instanceof Error ? error.message : "Failed to launch job");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to launch job",
+      );
     },
   });
 
@@ -1966,7 +1995,7 @@ export default function JobsPage() {
       };
     },
     onSuccess: (result) => {
-      alert(
+      toast.success(
         result.handledCount > 0
           ? `Handled ${result.handledCount} failed ${result.workerType} job(s): queued ${result.queuedCount} recovery job(s) and dismissed ${result.dismissedCount} superseded failure(s). The original records remain in history.${
             result.errors.length > 0
@@ -1980,7 +2009,9 @@ export default function JobsPage() {
       refetchPipelineHealth();
     },
     onError: (error) => {
-      alert(error instanceof Error ? error.message : "Failed to retry job");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to retry job",
+      );
     },
   });
 
@@ -1998,7 +2029,7 @@ export default function JobsPage() {
       refetchPipelineHealth();
     },
     onError: (error) => {
-      alert(
+      toast.error(
         error instanceof Error ? error.message : "Failed to dismiss failure",
       );
     },
@@ -2015,7 +2046,7 @@ export default function JobsPage() {
       queryClient.setQueryData(["pipeline-health"], result);
     },
     onError: (error) => {
-      alert(
+      toast.error(
         error instanceof Error ? error.message : "Connection test failed",
       );
     },
@@ -2341,7 +2372,7 @@ export default function JobsPage() {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
-      alert(
+      toast.success(
         `Cleared ${
           result.cancelledCount ?? 0
         } queued ${result.workerType} job(s).`,
@@ -2349,7 +2380,7 @@ export default function JobsPage() {
     },
     onError: (error) => {
       console.error("Failed to clear worker queue:", error);
-      alert("Failed to clear worker queue");
+      toast.error("Failed to clear worker queue");
     },
   });
 
@@ -2371,7 +2402,7 @@ export default function JobsPage() {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
       refetchWorkerStatus();
-      alert(
+      toast.success(
         `Reset ${result.workerType}: cancelled ${result.cancelledCount} job(s), ` +
           `stopped ${result.terminatedCount} active process(es), cleared ` +
           `${result.claimsCleared} claim(s), and started one fresh job.`,
@@ -2379,7 +2410,7 @@ export default function JobsPage() {
     },
     onError: (error) => {
       console.error("Failed to reset worker:", error);
-      alert("Failed to reset worker");
+      toast.error("Failed to reset worker");
     },
   });
 
@@ -2572,7 +2603,7 @@ export default function JobsPage() {
     }
   };
 
-  const handleClearWorkerQueue = (
+  const handleClearWorkerQueue = async (
     workerType: string,
     active: number,
     waiting: number,
@@ -2586,19 +2617,21 @@ export default function JobsPage() {
       : "";
 
     if (
-      confirm(
-        `Clear the ${workerType} queue?\n\n` +
+      await confirmAction({
+        title: `Clear ${workerType} queue?`,
+        description:
           `${waiting} waiting and ${delayed} delayed job(s) will be cancelled.` +
           activeNotice +
-          "\n\n" +
-          "Other worker queues and completed job history will not be changed.",
-      )
+          "\n\nOther worker queues and completed job history will not be changed.",
+        actionLabel: "Clear queue",
+        destructive: true,
+      })
     ) {
       clearQueueMutation.mutate(workerType);
     }
   };
 
-  const handleResetWorker = (
+  const handleResetWorker = async (
     workerType: string,
     active: number,
     waiting: number,
@@ -2606,14 +2639,16 @@ export default function JobsPage() {
     staleClaims: number,
   ) => {
     if (
-      confirm(
-        `Reset and restart ${workerType}?\n\n` +
+      await confirmAction({
+        title: `Reset and restart ${workerType}?`,
+        description:
           `This will stop ${active} active job(s), cancel ${
             waiting + delayed
-          } queued job(s), ` +
-          `and clear ${staleClaims} stale claim(s).\n\n` +
+          } queued job(s), and clear ${staleClaims} stale claim(s).\n\n` +
           "Exactly one fresh job will then be started.",
-      )
+        actionLabel: "Reset and restart",
+        destructive: true,
+      })
     ) {
       resetWorkerMutation.mutate(workerType);
     }
@@ -3013,9 +3048,13 @@ export default function JobsPage() {
 
   const handleCancelAll = async () => {
     if (
-      !confirm(
-        "Clear all queued jobs? Active jobs will keep running so their locks and saved results remain consistent.",
-      )
+      !await confirmAction({
+        title: "Clear all queued jobs?",
+        description:
+          "Active jobs will keep running so their locks and saved results remain consistent.",
+        actionLabel: "Clear queued jobs",
+        destructive: true,
+      })
     ) {
       return;
     }
@@ -3027,22 +3066,25 @@ export default function JobsPage() {
       refetch();
     } catch (error) {
       console.error("Failed to cancel jobs:", error);
-      alert("Failed to cancel jobs");
+      toast.error("Failed to cancel jobs");
     }
   };
 
   const handleClearCompleted = async () => {
     const confirmText = "DELETE";
-    const userInput = prompt(
-      `⚠️ DEV ONLY - DESTRUCTIVE ACTION ⚠️\n\n` +
-        `This will permanently delete ALL completed, failed, and cancelled jobs from the database.\n\n` +
-        `This action cannot be undone and the data cannot be recovered.\n\n` +
-        `Type "${confirmText}" to confirm:`,
-    );
+    const userInput = await promptAction({
+      title: "Delete all finished job history?",
+      description:
+        "DEV ONLY — This permanently deletes every completed, failed, and cancelled job from the database. This cannot be undone.",
+      confirmationPhrase: confirmText,
+      inputLabel: `Type ${confirmText} to confirm`,
+      actionLabel: "Delete job history",
+      destructive: true,
+    });
 
     if (userInput !== confirmText) {
       if (userInput !== null) {
-        alert("Deletion cancelled - confirmation text did not match.");
+        toast.error("Deletion cancelled - confirmation text did not match.");
       }
       return;
     }
@@ -3055,7 +3097,7 @@ export default function JobsPage() {
       refetch();
     } catch (error) {
       console.error("Failed to clear completed jobs:", error);
-      alert("Failed to clear completed jobs");
+      toast.error("Failed to clear completed jobs");
     }
   };
 
@@ -3319,21 +3361,39 @@ export default function JobsPage() {
                         <div className="space-y-2 rounded-md border bg-muted/20 p-3">
                           <div className="flex items-center justify-between gap-2">
                             <div>
-                              <p className="text-xs font-medium">Diarizator routes</p>
-                              <p className="text-xs text-muted-foreground">New jobs use the first healthy enabled route by priority.</p>
+                              <p className="text-xs font-medium">
+                                Diarizator routes
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                New jobs use the first healthy enabled route by
+                                priority.
+                              </p>
                             </div>
                             <Button size="sm" variant="outline" asChild>
                               <Link to="/settings/diarization">Configure</Link>
                             </Button>
                           </div>
                           {service.routes?.map((route) => (
-                            <div key={route.providerProfileId} className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs">
+                            <div
+                              key={route.providerProfileId}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
+                            >
                               <div className="min-w-0">
-                                <div className="font-medium">{route.providerProfileName}</div>
-                                <div className="break-all font-mono text-muted-foreground">{route.baseUrl}</div>
+                                <div className="font-medium">
+                                  {route.providerProfileName}
+                                </div>
+                                <div className="break-all font-mono text-muted-foreground">
+                                  {route.baseUrl}
+                                </div>
                               </div>
-                              <Badge variant={route.status === "healthy" ? "secondary" : "destructive"}>
-                                {route.status === "healthy" ? "running" : route.status}
+                              <Badge
+                                variant={route.status === "healthy"
+                                  ? "secondary"
+                                  : "destructive"}
+                              >
+                                {route.status === "healthy"
+                                  ? "running"
+                                  : route.status}
                               </Badge>
                             </div>
                           ))}
@@ -3739,11 +3799,14 @@ export default function JobsPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
+                          onClick={async () => {
                             if (
-                              window.confirm(
-                                `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
-                              )
+                              await confirmAction({
+                                title: `Retry failed ${workerType} jobs?`,
+                                description:
+                                  `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
+                                actionLabel: "Retry failed jobs",
+                              })
                             ) {
                               retryFailedMutation.mutate({
                                 workerType,
@@ -3946,11 +4009,15 @@ export default function JobsPage() {
                                   ? runtime.staleJobs.map((staleJob) => (
                                     <DropdownMenuItem
                                       key={staleJob.id}
-                                      onClick={() => {
+                                      onClick={async () => {
                                         if (
-                                          confirm(
-                                            `Restart stale ${worker.type} job ${staleJob.id}? The original job will remain in history.`,
-                                          )
+                                          await confirmAction({
+                                            title:
+                                              `Restart stale ${worker.type} job?`,
+                                            description:
+                                              `Restart job ${staleJob.id}. The original job will remain in history.`,
+                                            actionLabel: "Restart job",
+                                          })
                                         ) {
                                           restartJobMutation.mutate(
                                             staleJob.id,

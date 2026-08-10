@@ -5,9 +5,11 @@ import type { Provider } from "@/types/llm";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Server, Plus, Settings, Trash2 } from "lucide-react";
+import { Plus, Server, Settings, Trash2 } from "lucide-react";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 const ProvidersSettingsPage = () => {
+  const { confirmAction } = useActionDialog();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +37,14 @@ const ProvidersSettingsPage = () => {
   }, []);
 
   const handleDelete = async (providerId: string) => {
-    if (!confirm("Are you sure you want to delete this provider?")) {
+    if (
+      !await confirmAction({
+        title: "Delete this provider?",
+        description: "It will no longer be available for inference routing.",
+        actionLabel: "Delete provider",
+        destructive: true,
+      })
+    ) {
       return;
     }
 
@@ -47,7 +56,9 @@ const ProvidersSettingsPage = () => {
       });
       setProviders(providers.filter((p) => p._id.toString() !== providerId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete provider");
+      setError(
+        err instanceof Error ? err.message : "Failed to delete provider",
+      );
     }
   };
 
@@ -84,7 +95,9 @@ const ProvidersSettingsPage = () => {
   }
 
   const llmProviders = providers.filter((p) => p.type === "llm");
-  const transcriptionProviders = providers.filter((p) => p.type === "transcription");
+  const transcriptionProviders = providers.filter((p) =>
+    p.type === "transcription"
+  );
 
   return (
     <div className="space-y-6">
@@ -122,7 +135,9 @@ const ProvidersSettingsPage = () => {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Link to={`/settings/providers/${provider._id.toString()}`}>
+                      <Link
+                        to={`/settings/providers/${provider._id.toString()}`}
+                      >
                         <Button variant="outline" size="sm">
                           <Settings className="w-4 h-4" />
                         </Button>
@@ -130,7 +145,8 @@ const ProvidersSettingsPage = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleDelete(provider._id.toString())}
+                        onClick={() =>
+                          handleDelete(provider._id.toString())}
                         className="text-red-500 hover:text-red-700"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -161,7 +177,9 @@ const ProvidersSettingsPage = () => {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Link to={`/settings/providers/${provider._id.toString()}`}>
+                      <Link
+                        to={`/settings/providers/${provider._id.toString()}`}
+                      >
                         <Button variant="outline" size="sm">
                           <Settings className="w-4 h-4" />
                         </Button>
@@ -169,7 +187,8 @@ const ProvidersSettingsPage = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleDelete(provider._id.toString())}
+                        onClick={() =>
+                          handleDelete(provider._id.toString())}
                         className="text-red-500 hover:text-red-700"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -196,7 +215,3 @@ const ProvidersSettingsPage = () => {
 };
 
 export default ProvidersSettingsPage;
-
-
-
-

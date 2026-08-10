@@ -31,6 +31,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 interface RelationshipsPanelProps {
   object: Object;
@@ -46,7 +47,10 @@ const renderIcon = (icon: any) => {
   return "";
 };
 
-export function RelationshipsPanel({ object, compact = false }: RelationshipsPanelProps) {
+export function RelationshipsPanel(
+  { object, compact = false }: RelationshipsPanelProps,
+) {
+  const { confirmAction } = useActionDialog();
   const { data: allRelationships = [] } = getRelationships(object._id);
   // Tag edges are rendered as chips in the page header (TagChips), not as
   // relationship rows.
@@ -79,12 +83,16 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
 
   const handleCreateRelationship = async () => {
     if (!newRelationship.name.trim()) {
-      setCreateError("Please enter a relationship name (e.g., 'knows', 'works with')");
+      setCreateError(
+        "Please enter a relationship name (e.g., 'knows', 'works with')",
+      );
       return;
     }
 
     if (!newRelationship.objectId) {
-      setCreateError("Please select the target object (right side) for this relationship");
+      setCreateError(
+        "Please select the target object (right side) for this relationship",
+      );
       return;
     }
 
@@ -121,9 +129,12 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
   };
 
   const handleDeleteRelationship = async (relationshipId: string) => {
-    const confirmed = globalThis.confirm
-      ? globalThis.confirm("Delete this relationship?")
-      : true;
+    const confirmed = await confirmAction({
+      title: "Delete this relationship?",
+      description: "The relationship object will be removed.",
+      actionLabel: "Delete relationship",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     try {
@@ -138,15 +149,27 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
       {/* Header with title, counts inline, and create button */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-3">
-          <h3 className={compact ? "text-sm font-semibold" : "text-lg font-semibold"}>Relationships</h3>
+          <h3
+            className={compact
+              ? "text-sm font-semibold"
+              : "text-lg font-semibold"}
+          >
+            Relationships
+          </h3>
           {/* Inline counts when compact */}
           {compact && referenceCounts && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="font-bold text-primary">{referenceCounts.referencesTo}</span>
+              <span className="font-bold text-primary">
+                {referenceCounts.referencesTo}
+              </span>
               <span className="text-muted-foreground text-[10px]">TO</span>
-              <span className="font-bold text-primary">{referenceCounts.referencesFrom}</span>
+              <span className="font-bold text-primary">
+                {referenceCounts.referencesFrom}
+              </span>
               <span className="text-muted-foreground text-[10px]">FROM</span>
-              <span className="font-bold text-primary">{referenceCounts.total}</span>
+              <span className="font-bold text-primary">
+                {referenceCounts.total}
+              </span>
               <span className="text-muted-foreground text-[10px]">Total</span>
             </div>
           )}
@@ -305,7 +328,9 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
                       ? <MoveHorizontal className="w-3 h-3" />
                       : <ArrowRight className="w-3 h-3" />}
                     <span className="text-xs">
-                      {newRelationship.symmetrical ? "Bidirectional" : "Directional"}
+                      {newRelationship.symmetrical
+                        ? "Bidirectional"
+                        : "Directional"}
                     </span>
                   </Button>
                 </TooltipTrigger>
@@ -389,7 +414,7 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
         </div>
       )}
       {relationships.length > 0 && (
-        <div className={`flex flex-col ${compact ? 'gap-1' : 'gap-2'}`}>
+        <div className={`flex flex-col ${compact ? "gap-1" : "gap-2"}`}>
           {relationships.map(({ other, relationship }) => {
             // Determine if current object is subject or object in the relationship
             const isCurrentObjectSubject =
@@ -403,29 +428,56 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
               : (isCurrentObjectSubject ? ArrowRight : ArrowLeft);
 
             return (
-              <div key={relationship._id.toString()} className={compact ? "py-0.5" : "p-1 space-y-2"}>
+              <div
+                key={relationship._id.toString()}
+                className={compact ? "py-0.5" : "p-1 space-y-2"}
+              >
                 {/* Horizontal relationship flow */}
                 <div className="flex items-center justify-between">
-                  <div className={`flex items-center flex-1 min-w-0 ${compact ? 'gap-1.5 text-xs' : 'gap-3'}`}>
+                  <div
+                    className={`flex items-center flex-1 min-w-0 ${
+                      compact ? "gap-1.5 text-xs" : "gap-3"
+                    }`}
+                  >
                     <Link
                       to={`/objects/${relationship._id.toString()}`}
-                      className={`flex items-center flex-shrink-0 ${compact ? 'gap-1' : 'gap-2'}`}
+                      className={`flex items-center flex-shrink-0 ${
+                        compact ? "gap-1" : "gap-2"
+                      }`}
                     >
                       <span className={compact ? "text-sm" : "text-md"}>
                         {renderIcon(relationship.icon)}
                       </span>
-                      <span className={`font-medium whitespace-nowrap ${compact ? 'text-xs' : ''}`}>
+                      <span
+                        className={`font-medium whitespace-nowrap ${
+                          compact ? "text-xs" : ""
+                        }`}
+                      >
                         {relationship.name}
                       </span>
 
-                      <ArrowComponent className={`text-muted-foreground flex-shrink-0 ${compact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+                      <ArrowComponent
+                        className={`text-muted-foreground flex-shrink-0 ${
+                          compact ? "w-3 h-3" : "w-4 h-4"
+                        }`}
+                      />
                     </Link>
                     <Link
                       to={`/objects/${other._id.toString()}`}
-                      className={`flex items-center min-w-0 ${compact ? 'gap-1' : 'gap-2'}`}
+                      className={`flex items-center min-w-0 ${
+                        compact ? "gap-1" : "gap-2"
+                      }`}
                     >
-                      <span className={compact ? "text-sm" : "text-md"}>{renderIcon(other.icon)}</span>
-                      <span className={`font-medium truncate ${compact ? 'text-xs' : ''}`}>{other.name}</span>
+                      <span className={compact ? "text-sm" : "text-md"}>
+                        {renderIcon(other.icon)}
+                      </span>
+                      <span
+                        className={`font-medium truncate ${
+                          compact ? "text-xs" : ""
+                        }`}
+                      >
+                        {other.name}
+                      </span>
                     </Link>
                   </div>
                   <Tooltip>
@@ -436,7 +488,9 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
                         onClick={() =>
                           handleDeleteRelationship(relationship._id.toString())}
                         disabled={deleteObjectMutation.isPending}
-                        className={`text-muted-foreground hover:text-destructive ${compact ? 'h-5 w-5' : 'h-8 w-8'}`}
+                        className={`text-muted-foreground hover:text-destructive ${
+                          compact ? "h-5 w-5" : "h-8 w-8"
+                        }`}
                       >
                         <Trash2 className={compact ? "w-3 h-3" : "w-4 h-4"} />
                       </Button>
@@ -450,42 +504,49 @@ export function RelationshipsPanel({ object, compact = false }: RelationshipsPan
                 {/* Relationship description and time ranges below - hide in compact mode */}
                 {!compact && (relationship.details ||
                   (relationship.timeRanges &&
-                    relationship.timeRanges.length > 0)) && (
-                  <div className="text-sm text-muted-foreground pl-2 space-y-1">
-                    {relationship.details && <div>{relationship.details}</div>}
-                    {relationship.timeRanges &&
-                      relationship.timeRanges.length > 0 && (
-                      <div className="space-y-1">
-                        {relationship.timeRanges.map((range, rangeIndex) => (
-                          <div key={rangeIndex} className="text-xs">
-                            {range.name && (
-                              <span className="font-medium">{range.name}:</span>
-                            )}
-                            <span>
-                              {formatTime(range.start, timeFormat)}
-                              {range.end
-                                ? <>→ {formatTime(range.end, timeFormat)}</>
-                                : (
-                                  <span className="ml-2 text-muted-foreground/70">
-                                    (ongoing -{" "}
-                                    {formatTimeRangeDuration(range.start, now)})
-                                  </span>
-                                )}
-                              {range.end && (
-                                <span className="ml-2 text-muted-foreground/70">
-                                  ({formatTimeRangeDuration(
-                                    range.start,
-                                    range.end,
-                                  )})
+                    relationship.timeRanges.length > 0)) &&
+                  (
+                    <div className="text-sm text-muted-foreground pl-2 space-y-1">
+                      {relationship.details && (
+                        <div>{relationship.details}</div>
+                      )}
+                      {relationship.timeRanges &&
+                        relationship.timeRanges.length > 0 && (
+                        <div className="space-y-1">
+                          {relationship.timeRanges.map((range, rangeIndex) => (
+                            <div key={rangeIndex} className="text-xs">
+                              {range.name && (
+                                <span className="font-medium">
+                                  {range.name}:
                                 </span>
                               )}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                              <span>
+                                {formatTime(range.start, timeFormat)}
+                                {range.end
+                                  ? <>→ {formatTime(range.end, timeFormat)}</>
+                                  : (
+                                    <span className="ml-2 text-muted-foreground/70">
+                                      (ongoing - {formatTimeRangeDuration(
+                                        range.start,
+                                        now,
+                                      )})
+                                    </span>
+                                  )}
+                                {range.end && (
+                                  <span className="ml-2 text-muted-foreground/70">
+                                    ({formatTimeRangeDuration(
+                                      range.start,
+                                      range.end,
+                                    )})
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
               </div>
             );
           })}

@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
 import { VoiceIdentityOperations } from "@/components/VoiceIdentityOperations";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 import {
   Collapsible,
   CollapsibleContent,
@@ -267,6 +268,7 @@ export function PipelineDetailSection({
 }
 
 export default function AudioPipelinePage() {
+  const { confirmAction } = useActionDialog();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(
     new Set(),
@@ -485,15 +487,18 @@ export default function AudioPipelinePage() {
     },
   });
 
-  const handleClearFailedVad = () => {
+  const handleClearFailedVad = async () => {
     const failedCount = stats?.vadJobs.failed ?? 0;
     if (failedCount === 0) return;
 
     if (
-      window.confirm(
-        `Clear ${failedCount} failed VAD job record(s)?\n\n` +
+      await confirmAction({
+        title: `Clear ${failedCount} failed VAD job record(s)?`,
+        description:
           "This permanently removes only failed VAD history. Active, waiting, delayed, completed, and other worker jobs are not changed. New VAD failures will appear here normally.",
-      )
+        actionLabel: "Clear failed history",
+        destructive: true,
+      })
     ) {
       clearFailedVadMutation.mutate();
     }

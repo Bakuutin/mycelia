@@ -1,12 +1,6 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  AlertTriangle,
-  Crosshair,
-  Info,
-  Pencil,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle, Crosshair, Info, Pencil, Trash2 } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -37,6 +31,7 @@ import {
   placeColor,
   segmentDurationMs,
 } from "@/types/location";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 const TYPE_ICON: Record<string, string> = {
   stay: "🏠",
@@ -67,6 +62,7 @@ export function GeotagsSheet({
   const [details, setDetails] = useState<LocationSegment | null>(null);
   const [editSegment, setEditSegment] = useState<LocationSegment | null>(null);
   const deleteSegment = useDeleteLocationSegment();
+  const { confirmAction } = useActionDialog();
 
   const { data, isLoading } = useGeotags(
     {
@@ -88,13 +84,17 @@ export function GeotagsSheet({
 
   const handleQuickDelete = async (segment: LocationSegment) => {
     const isManual = segment.type === "manual";
-    const ok = confirm(
-      isManual
-        ? `Remove manual location "${formatPlace(segment.place)}"?`
-        : `Delete geotag "${
-          formatPlace(segment.place)
-        }"?\n\nThis permanently deletes the GPS points behind it — re-importing the same file will NOT restore them.`,
-    );
+    const place = formatPlace(segment.place);
+    const ok = await confirmAction({
+      title: isManual
+        ? `Remove manual location "${place}"?`
+        : `Delete geotag "${place}"?`,
+      description: isManual
+        ? "The manual location will be removed."
+        : "This permanently deletes its underlying GPS points. Re-importing the same file will not restore them.",
+      actionLabel: isManual ? "Remove location" : "Delete geotag",
+      destructive: true,
+    });
     if (!ok) return;
     try {
       const result = await deleteSegment.mutateAsync(String(segment._id));
@@ -111,7 +111,10 @@ export function GeotagsSheet({
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent side="right" className="flex w-[26rem] flex-col sm:max-w-md">
+        <SheetContent
+          side="right"
+          className="flex w-[26rem] flex-col sm:max-w-md"
+        >
           <SheetHeader>
             <SheetTitle>Geotags</SheetTitle>
             <SheetDescription>
@@ -182,7 +185,7 @@ export function GeotagsSheet({
                   <div className="mt-0.5 text-xs text-muted-foreground">
                     {new Date(segment.start).toLocaleString()} ·{" "}
                     {formatDurationShort(segmentDurationMs(segment))}
-                    {sources.length > 0 && <> · {sources.join(", ")}</>}
+                    {sources.length > 0 && <>· {sources.join(", ")}</>}
                   </div>
                   <div className="mt-1 flex gap-0.5">
                     <Button

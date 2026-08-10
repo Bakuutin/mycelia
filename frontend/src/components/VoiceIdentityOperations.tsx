@@ -19,6 +19,7 @@ import {
   getRunComparison,
   validateOperationRange,
 } from "@/lib/voiceIdentityOperations";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 type Run = {
   runId: string;
@@ -45,6 +46,7 @@ type Calibration = {
 };
 
 export function VoiceIdentityOperations() {
+  const { promptAction } = useActionDialog();
   const queryClient = useQueryClient();
   const [hours, setHours] = useState(24 * 7);
   const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
@@ -199,9 +201,16 @@ export function VoiceIdentityOperations() {
       },
     ) => {
       if (action === "purge-superseded") {
-        const confirmation = window.prompt(
-          `Type PURGE ${runId} to delete only superseded diarization documents.`,
-        );
+        const phrase = `PURGE ${runId}`;
+        const confirmation = await promptAction({
+          title: `Purge superseded run ${runId}?`,
+          description:
+            "Only superseded diarization documents and embeddings will be deleted. Raw audio and transcripts are not affected.",
+          confirmationPhrase: phrase,
+          inputLabel: `Type ${phrase} to confirm`,
+          actionLabel: "Purge run",
+          destructive: true,
+        });
         if (!confirmation) return null;
         const value = await callResource("speaker-segments", {
           action,

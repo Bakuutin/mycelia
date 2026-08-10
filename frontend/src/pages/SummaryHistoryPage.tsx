@@ -48,6 +48,7 @@ import {
   type ModelArtifactType,
   normalizeModelArtifactResult,
 } from "@/lib/modelArtifacts";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 type HistoryView = "summaries" | "tasks" | "models";
 type DatePreset = "all" | "7d" | "30d" | "custom";
@@ -499,6 +500,7 @@ function ModelArtifactCard({ entry }: { entry: ModelArtifactEntry }) {
 }
 
 export default function SummaryHistoryPage() {
+  const { confirmAction } = useActionDialog();
   const [view, setView] = useState<HistoryView>("summaries");
   const [taskStatus, setTaskStatus] = useState<SummaryTaskStatus>("all");
   const [artifactType, setArtifactType] = useState<ModelArtifactType | "all">(
@@ -646,11 +648,13 @@ export default function SummaryHistoryPage() {
       setRerunResult("Choose a target model different from the source model.");
       return;
     }
-    const accepted = window.confirm(
-      `Append new summary versions for up to ${
+    const accepted = await confirmAction({
+      title: "Append new summary versions?",
+      description: `Create versions for up to ${
         Math.min(Number(limit), 100)
-      } conversations summarized by ${model}, using ${rerunTargetModel}? Existing summaries will be kept.`,
-    );
+      } conversations summarized by ${model}, using ${rerunTargetModel}. Existing summaries will be kept.`,
+      actionLabel: "Queue reruns",
+    });
     if (!accepted) return;
 
     setRerunPending(true);

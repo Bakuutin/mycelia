@@ -154,7 +154,9 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         realDevices = devices
-          .filter((device) => device.kind === "audioinput" && device.deviceId !== "")
+          .filter((device) =>
+            device.kind === "audioinput" && device.deviceId !== ""
+          )
           .map((device) => ({
             deviceId: device.deviceId,
             label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
@@ -192,7 +194,9 @@ export const useAudioRecording = (): AudioRecordingReturn => {
         await refreshDevices();
       } catch (err) {
         console.error("Failed to get microphone permission:", err);
-        alert("Microphone permission denied. Please enable it in your browser settings.");
+        toast.error(
+          "Microphone permission denied. Please enable it in your browser settings.",
+        );
       }
     }
   }, [canAccessMicrophone, refreshDevices]);
@@ -269,8 +273,15 @@ export const useAudioRecording = (): AudioRecordingReturn => {
       data?: Record<string, unknown>,
       payloadLength?: number,
     ) => {
-      if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
-        console.warn(`Cannot send Wyoming message "${type}": WebSocket is ${ws.readyState === WebSocket.CLOSING ? "CLOSING" : "CLOSED"}`);
+      if (
+        ws.readyState === WebSocket.CLOSING ||
+        ws.readyState === WebSocket.CLOSED
+      ) {
+        console.warn(
+          `Cannot send Wyoming message "${type}": WebSocket is ${
+            ws.readyState === WebSocket.CLOSING ? "CLOSING" : "CLOSED"
+          }`,
+        );
         return false;
       }
       const header: Record<string, unknown> = { type };

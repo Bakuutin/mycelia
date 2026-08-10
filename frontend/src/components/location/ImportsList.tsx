@@ -7,6 +7,7 @@ import {
   useLocationImports,
 } from "@/hooks/useLocationQueries";
 import type { LocationImport } from "@/types/location";
+import { useActionDialog } from "@/components/ActionDialogProvider";
 
 interface ImportsListProps {
   enabled?: boolean;
@@ -22,16 +23,23 @@ export function ImportsList({
 }: ImportsListProps) {
   const { data: imports, isLoading } = useLocationImports(enabled);
   const deleteImport = useDeleteLocationImport();
+  const { confirmAction } = useActionDialog();
 
   const handleDelete = async (imp: LocationImport) => {
-    const ok = confirm(
-      `Delete import "${imp.filename}" and its ${imp.pointCount} GPS points? Segments for that period will be rebuilt without them.`,
-    );
+    const ok = await confirmAction({
+      title: `Delete import "${imp.filename}"?`,
+      description:
+        `${imp.pointCount} GPS points will be deleted. Segments for that period will be rebuilt without them.`,
+      actionLabel: "Delete import",
+      destructive: true,
+    });
     if (!ok) return;
     try {
       const result = await deleteImport.mutateAsync(String(imp._id));
       toast.success(
-        `Import deleted (${result?.deletedPoints ?? imp.pointCount} points removed).`,
+        `Import deleted (${
+          result?.deletedPoints ?? imp.pointCount
+        } points removed).`,
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete");
