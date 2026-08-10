@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,10 +17,30 @@ interface WaveformPlayerProps {
   audioUrl: string;
   duration?: number;
   className?: string;
+  autoPlay?: boolean;
+  onEnded?: () => void;
+  ariaLabel?: string;
 }
 
-export function WaveformPlayer(
-  { audioUrl, duration: initialDuration, className }: WaveformPlayerProps,
+export interface WaveformPlayerHandle {
+  play: () => Promise<void>;
+  pause: () => void;
+  togglePlayback: () => void;
+}
+
+export const WaveformPlayer = forwardRef<
+  WaveformPlayerHandle,
+  WaveformPlayerProps
+>(function WaveformPlayer(
+  {
+    audioUrl,
+    duration: initialDuration,
+    className,
+    autoPlay = false,
+    onEnded,
+    ariaLabel = "Play audio segment",
+  },
+  ref,
 ) {
   const playbackId = useId();
   const [isLoading, setIsLoading] = useState(true);
@@ -26,6 +54,45 @@ export function WaveformPlayer(
   const blobUrlRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
+  const onEndedRef = useRef(onEnded);
+
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
+
+  const playAudio = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    useAudioPlaybackStore.getState().acquire(
+      playbackId,
+      () => audio.pause(),
+    );
+    try {
+      await audio.play();
+    } catch {
+      setIsPlaying(false);
+      useAudioPlaybackStore.getState().release(playbackId);
+    }
+  }, [playbackId]);
+
+  const pauseAudio = useCallback(() => {
+    audioRef.current?.pause();
+  }, []);
+
+  const togglePlayback = useCallback(() => {
+    if (!audioRef.current) return;
+    if (audioRef.current.paused) {
+      void playAudio();
+    } else {
+      pauseAudio();
+    }
+  }, [pauseAudio, playAudio]);
+
+  useImperativeHandle(ref, () => ({
+    play: playAudio,
+    pause: pauseAudio,
+    togglePlayback,
+  }), [pauseAudio, playAudio, togglePlayback]);
 
   // Load audio and extract waveform data
   useEffect(() => {
@@ -57,6 +124,7 @@ export function WaveformPlayer(
           setIsPlaying(false);
           setCurrentTime(0);
           useAudioPlaybackStore.getState().release(playbackId);
+          onEndedRef.current?.();
         });
         audio.addEventListener("play", () => setIsPlaying(true));
         audio.addEventListener("pause", () => {
@@ -116,6 +184,12 @@ export function WaveformPlayer(
       }
     };
   }, [audioUrl, playbackId]);
+
+  useEffect(() => {
+    if (!isLoading && autoPlay) {
+      void playAudio();
+    }
+  }, [autoPlay, isLoading, playAudio]);
 
   // Draw waveform
   useEffect(() => {
@@ -186,20 +260,6 @@ export function WaveformPlayer(
     };
   }, [isPlaying, updateTime]);
 
-  const togglePlayback = () => {
-    if (!audioRef.current) return;
-
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      useAudioPlaybackStore.getState().acquire(
-        playbackId,
-        () => audioRef.current?.pause(),
-      );
-      void audioRef.current.play();
-    }
-  };
-
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!audioRef.current || !canvasRef.current) return;
 
@@ -239,6 +299,7 @@ export function WaveformPlayer(
         className="h-8 w-8 shrink-0"
         onClick={togglePlayback}
         disabled={isLoading}
+        aria-label={isPlaying ? `Pause ${ariaLabel}` : ariaLabel}
       >
         {isLoading
           ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -260,6 +321,6 @@ export function WaveformPlayer(
       </span>
     </div>
   );
-}
+});
 
 export default WaveformPlayer;
