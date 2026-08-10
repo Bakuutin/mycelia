@@ -11,6 +11,12 @@ import {
   projectAnnotationState,
 } from "./run-lifecycle.ts";
 import { groupReviewSegments } from "./review-sessions.ts";
+import {
+  chooseCalibrationThresholds,
+  cosineSimilarity,
+  evaluateCalibration,
+  splitCalibrationRecordings,
+} from "./calibration.ts";
 
 const objectId = z.string().refine(ObjectId.isValid, "Invalid ObjectId");
 const range = { start: zDateOrString(), end: zDateOrString() };
@@ -126,6 +132,13 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     profileId: objectId.optional(),
   }),
   z.object({
+    action: z.literal("calibration-preview"),
+    profileId: objectId,
+    calibrationRecordingIds: z.array(z.string()).default([]),
+    validationRecordingIds: z.array(z.string()).default([]),
+    targetPrecision: z.number().min(0.5).max(1).default(0.98),
+  }),
+  z.object({
     action: z.literal("identity-status"),
     profileId: objectId,
   }),
@@ -184,19 +197,6 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
 ]);
 
 type SpeakerSegmentsRequest = z.input<typeof speakerSegmentsRequestSchema>;
-
-function cosine(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return -1;
-  let dot = 0;
-  let aa = 0;
-  let bb = 0;
-  for (let index = 0; index < a.length; index++) {
-    dot += a[index] * b[index];
-    aa += a[index] * a[index];
-    bb += b[index] * b[index];
-  }
-  return aa && bb ? dot / Math.sqrt(aa * bb) : -1;
-}
 
 async function findReviewCandidates(
   mongo: any,
@@ -281,6 +281,196 @@ function nextPendingSegmentId(window: any[], afterSegmentId?: string): string | 
     if (item?.status === "pending") return String(item.segmentId);
   }
   return null;
+}
+
+async function computeCalibrationPreview(
+  mongo: any,
+  profileId: string,
+  requestedCalibrationIds: string[],
+  requestedValidationIds: string[],
+  targetPrecision: number,
+): Promise<any> {
+  const profileObjectId = new ObjectId(profileId);
+  const profile = await mongo({
+    action: "findOne",
+    collection: "speaker_profiles",
+    query: { _id: profileObjectId },
+  }) as any;
+  if (!profile?.embedding?.length || !profile.embeddingSpaceId) {
+    throw new Error("Re-enroll this profile before calibration");
+  }
+  const annotations = await mongo({
+    action: "find",
+    collection: "speaker_annotations",
+    query: {
+      $or: [
+        { profileId: profileObjectId },
+        { excludedProfileIds: profileObjectId },
+      ],
+    },
+    options: {
+      sort: { updatedAt: -1, createdAt: -1 },
+      limit: 20_000,
+      projection: {
+        segmentId: 1,
+        originalId: 1,
+        profileId: 1,
+        excludedProfileIds: 1,
+      },
+    },
+  }) as any[];
+  const latestBySegment = new Map<string, any>();
+  for (const annotation of annotations) {
+    const segmentId = String(annotation.segmentId ?? "");
+    if (ObjectId.isValid(segmentId) && !latestBySegment.has(segmentId)) {
+      latestBySegment.set(segmentId, annotation);
+    }
+  }
+  const segmentIds = [...latestBySegment.keys()].map((id) => new ObjectId(id));
+  const segments = segmentIds.length === 0 ? [] : await mongo({
+    action: "find",
+    collection: "diarizations",
+    query: { _id: { $in: segmentIds }, embedding: { $exists: true } },
+    options: {
+      projection: {
+        embedding: 1,
+        embeddingSpaceId: 1,
+        original_id: 1,
+        original: 1,
+        start: 1,
+        end: 1,
+      },
+      limit: segmentIds.length,
+    },
+  }) as any[];
+  const segmentById = new Map(segments.map((segment) => [String(segment._id), segment]));
+  const examples: Array<{
+    segmentId: string;
+    recordingId: string;
+    label: "positive" | "negative";
+    score: number;
+    start: Date;
+    end: Date;
+  }> = [];
+  let incompatible = 0;
+  for (const [segmentId, annotation] of latestBySegment) {
+    const segment = segmentById.get(segmentId);
+    if (!segment?.embedding || segment.embeddingSpaceId !== profile.embeddingSpaceId) {
+      incompatible += 1;
+      continue;
+    }
+    const isPositive = String(annotation.profileId ?? "") === profileId;
+    const isNegative = (annotation.excludedProfileIds ?? []).some((id: unknown) =>
+      String(id) === profileId
+    );
+    if (!isPositive && !isNegative) continue;
+    examples.push({
+      segmentId,
+      recordingId: String(annotation.originalId ?? segment.original_id ?? segment.original),
+      label: isPositive ? "positive" : "negative",
+      score: cosineSimilarity(profile.embedding, segment.embedding),
+      start: new Date(segment.start),
+      end: new Date(segment.end),
+    });
+  }
+  const recordingMap = new Map<string, any>();
+  for (const example of examples) {
+    const row = recordingMap.get(example.recordingId) ?? {
+      id: example.recordingId,
+      positive: 0,
+      negative: 0,
+      total: 0,
+      start: example.start,
+      end: example.end,
+    };
+    row[example.label] += 1;
+    row.total += 1;
+    if (example.start < row.start) row.start = example.start;
+    if (example.end > row.end) row.end = example.end;
+    recordingMap.set(example.recordingId, row);
+  }
+  const recordings = [...recordingMap.values()].sort((a, b) =>
+    b.total - a.total || a.id.localeCompare(b.id)
+  );
+  const automaticSplit = requestedCalibrationIds.length === 0 &&
+    requestedValidationIds.length === 0;
+  const split = automaticSplit
+    ? splitCalibrationRecordings(recordings)
+    : {
+      calibrationRecordingIds: requestedCalibrationIds,
+      validationRecordingIds: requestedValidationIds,
+    };
+  const calibrationSet = new Set(split.calibrationRecordingIds);
+  const validationSet = new Set(split.validationRecordingIds);
+  const overlap = split.validationRecordingIds.filter((id: string) => calibrationSet.has(id));
+  const calibrationExamples = examples.filter((item) => calibrationSet.has(item.recordingId));
+  const validationExamples = examples.filter((item) => validationSet.has(item.recordingId));
+  const thresholds = chooseCalibrationThresholds(calibrationExamples, targetPrecision);
+  const calibrationMetrics = thresholds
+    ? evaluateCalibration(
+      calibrationExamples,
+      thresholds.positiveThreshold,
+      thresholds.negativeThreshold,
+    )
+    : null;
+  const validationMetrics = thresholds
+    ? evaluateCalibration(
+      validationExamples,
+      thresholds.positiveThreshold,
+      thresholds.negativeThreshold,
+    )
+    : null;
+  const positive = examples.filter((item) => item.label === "positive").length;
+  const negative = examples.length - positive;
+  const blockers: string[] = [];
+  if (positive < 40) blockers.push(`${40 - positive} more compatible target labels needed`);
+  if (negative < 40) blockers.push(`${40 - negative} more compatible not-target labels needed`);
+  if (examples.length < 100) blockers.push(`${100 - examples.length} more compatible labels needed in total`);
+  if (recordings.length < 2) blockers.push("Label at least two different source recordings");
+  if (overlap.length > 0) blockers.push("Calibration and validation recordings overlap");
+  if (calibrationExamples.every((item) => item.label !== "positive") ||
+    calibrationExamples.every((item) => item.label !== "negative")) {
+    blockers.push("Calibration set needs both target and not-target examples");
+  }
+  if (validationExamples.every((item) => item.label !== "positive") ||
+    validationExamples.every((item) => item.label !== "negative")) {
+    blockers.push("Validation set needs both target and not-target examples");
+  }
+  if (!thresholds) blockers.push("No threshold pair reaches the target precision on calibration audio");
+  if (thresholds && (!validationMetrics || validationMetrics.identified === 0 ||
+    validationMetrics.positivePrecision < targetPrecision)) {
+    blockers.push(`Validation auto-match precision is below ${Math.round(targetPrecision * 100)}%`);
+  }
+  return {
+    profile: {
+      id: profileId,
+      name: profile.name,
+      revision: profile.revision ?? 1,
+      embeddingSpaceId: profile.embeddingSpaceId,
+    },
+    counts: {
+      positive,
+      negative,
+      total: examples.length,
+      recordings: recordings.length,
+      incompatible,
+    },
+    recordings,
+    ...split,
+    automaticSplit,
+    targetPrecision,
+    thresholds,
+    calibrationMetrics,
+    validationMetrics,
+    scoreDistribution: {
+      calibrationPositive: calibrationExamples.filter((item) => item.label === "positive").map((item) => item.score),
+      calibrationNegative: calibrationExamples.filter((item) => item.label === "negative").map((item) => item.score),
+      validationPositive: validationExamples.filter((item) => item.label === "positive").map((item) => item.score),
+      validationNegative: validationExamples.filter((item) => item.label === "negative").map((item) => item.score),
+    },
+    blockers: [...new Set(blockers)],
+    canValidate: blockers.length === 0,
+  };
 }
 
 export class SpeakerSegmentsResource
@@ -1111,7 +1301,7 @@ export class SpeakerSegmentsResource
         }) as any[];
         return candidates.map((segment) => ({
           segment,
-          score: cosine(source.embedding, segment.embedding),
+          score: cosineSimilarity(source.embedding, segment.embedding),
         })).sort((a, b) => b.score - a.score).slice(0, input.topN);
       }
       case "list-calibrations":
@@ -1121,6 +1311,14 @@ export class SpeakerSegmentsResource
           query: input.profileId ? { profileId: input.profileId } : {},
           options: { sort: { createdAt: -1 } },
         });
+      case "calibration-preview":
+        return await computeCalibrationPreview(
+          mongo,
+          input.profileId,
+          input.calibrationRecordingIds,
+          input.validationRecordingIds,
+          input.targetPrecision,
+        );
       case "identity-status": {
         const profileId = new ObjectId(input.profileId);
         const [annotations, calibrations, identityCounts, latestJobs] = await Promise.all([
@@ -1227,35 +1425,50 @@ export class SpeakerSegmentsResource
         };
       }
       case "save-calibration": {
-        if (input.negativeThreshold >= input.positiveThreshold) {
-          throw new Error(
-            "Negative threshold must be lower than positive threshold",
-          );
-        }
         const calibrationIds = new Set(input.calibrationRecordingIds);
         if (input.validationRecordingIds.some((id) => calibrationIds.has(id))) {
           throw new Error(
             "Calibration and validation must use different recordings",
           );
         }
+        const preview = await computeCalibrationPreview(
+          mongo,
+          input.profileId,
+          input.calibrationRecordingIds,
+          input.validationRecordingIds,
+          0.98,
+        );
+        if (preview.profile.revision !== input.profileRevision ||
+          preview.profile.embeddingSpaceId !== input.embeddingSpaceId) {
+          throw new Error("Profile revision changed; refresh the calibration preview");
+        }
+        if (!preview.thresholds) {
+          throw new Error("Calibration data does not produce a safe threshold pair");
+        }
         if (input.status === "validated") {
-          if (input.metrics.precision < 0.98) {
-            throw new Error(
-              "Validated auto-Sky precision must be at least 98%",
-            );
-          }
-          if (
-            input.metrics.sky < 40 || input.metrics.notSky < 40 ||
-            input.metrics.sky + input.metrics.notSky +
-                  input.metrics.borderline < 100
-          ) {
-            throw new Error(
-              "Validation requires at least 100 labels including 40 Sky and 40 not-Sky",
-            );
+          if (!preview.canValidate) {
+            throw new Error(`Calibration is blocked: ${preview.blockers.join("; ")}`);
           }
         }
         const now = new Date();
-        const { action: _action, ...record } = input;
+        const { action: _action, metrics: _clientMetrics, ...inputRecord } = input;
+        const record = {
+          ...inputRecord,
+          positiveThreshold: preview.thresholds.positiveThreshold,
+          negativeThreshold: preview.thresholds.negativeThreshold,
+          metrics: {
+            precision: preview.validationMetrics.positivePrecision,
+            recall: preview.validationMetrics.positiveRecall,
+            sky: preview.counts.positive,
+            notSky: preview.counts.negative,
+            borderline: preview.calibrationMetrics.uncertain +
+              preview.validationMetrics.uncertain,
+          },
+          calibrationMetrics: preview.calibrationMetrics,
+          validationMetrics: preview.validationMetrics,
+          targetPrecision: preview.targetPrecision,
+          serverComputed: true,
+        };
         await mongo({
           action: "updateOne",
           collection: "speaker_calibrations",

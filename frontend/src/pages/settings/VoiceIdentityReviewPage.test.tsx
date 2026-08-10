@@ -33,6 +33,79 @@ const emptyStatus = {
   calibrations: [],
   classification: { identified: 0, unknown: 0, uncertain: 0, unclassified: 2 },
 };
+const emptyPreview = {
+  profile: {
+    id: profile._id,
+    name: "Sky",
+    revision: 3,
+    embeddingSpaceId: "space-v1",
+  },
+  counts: {
+    positive: 0,
+    negative: 0,
+    total: 0,
+    recordings: 0,
+    incompatible: 0,
+  },
+  recordings: [],
+  calibrationRecordingIds: [],
+  validationRecordingIds: [],
+  automaticSplit: true,
+  thresholds: null,
+  calibrationMetrics: null,
+  validationMetrics: null,
+  blockers: ["100 more compatible labels needed in total"],
+  canValidate: false,
+};
+const readyPreview = {
+  ...emptyPreview,
+  counts: {
+    positive: 55,
+    negative: 53,
+    total: 108,
+    recordings: 3,
+    incompatible: 0,
+  },
+  recordings: [
+    {
+      id: "66b000000000000000000011",
+      positive: 30,
+      negative: 25,
+      total: 55,
+      start: "2026-08-09T10:00:00.000Z",
+      end: "2026-08-09T10:30:00.000Z",
+    },
+  ],
+  calibrationRecordingIds: ["66b000000000000000000011"],
+  validationRecordingIds: ["66b000000000000000000012"],
+  thresholds: { positiveThreshold: 0.72, negativeThreshold: 0.41 },
+  calibrationMetrics: {
+    total: 60,
+    positives: 30,
+    negatives: 30,
+    identified: 25,
+    rejected: 20,
+    uncertain: 15,
+    positivePrecision: 1,
+    positiveRecall: 0.83,
+    negativePrecision: 1,
+    negativeRecall: 0.67,
+  },
+  validationMetrics: {
+    total: 48,
+    positives: 25,
+    negatives: 23,
+    identified: 20,
+    rejected: 15,
+    uncertain: 13,
+    positivePrecision: 0.985,
+    positiveRecall: 0.8,
+    negativePrecision: 1,
+    negativeRecall: 0.65,
+  },
+  blockers: [],
+  canValidate: true,
+};
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -63,6 +136,9 @@ describe("VoiceIdentityReviewPage", () => {
       }
       if (input.action === "identity-status") {
         return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(emptyPreview);
       }
       if (input.action === "list-review-sessions") {
         sessionListCalls += 1;
@@ -158,6 +234,9 @@ describe("VoiceIdentityReviewPage", () => {
       if (input.action === "identity-status") {
         return Promise.resolve(emptyStatus);
       }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(emptyPreview);
+      }
       if (input.action === "list-review-sessions") {
         return Promise.resolve([session]);
       }
@@ -202,5 +281,30 @@ describe("VoiceIdentityReviewPage", () => {
       action: "undo-review-decision",
       decisionId,
     });
+  });
+
+  it("shows server-computed calibration metrics instead of editable confidence fields", async () => {
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile]);
+      if (resource === "jobs") return Promise.resolve({ services: [] });
+      if (input.action === "identity-status") {
+        return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(readyPreview);
+      }
+      if (input.action === "list-review-sessions") return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    await screen.findByText("98.5%");
+    expect(screen.getByText("0.720")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/positive threshold/i)).not
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: /save validated calibration/i,
+    })).toBeEnabled();
   });
 });

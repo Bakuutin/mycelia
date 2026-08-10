@@ -87,6 +87,51 @@ type ReviewSessionSummary = Omit<
   "window" | "groups" | "segments"
 >;
 
+type CalibrationPreview = {
+  profile: {
+    id: string;
+    name: string;
+    revision: number;
+    embeddingSpaceId: string;
+  };
+  counts: {
+    positive: number;
+    negative: number;
+    total: number;
+    recordings: number;
+    incompatible: number;
+  };
+  recordings: Array<{
+    id: string;
+    positive: number;
+    negative: number;
+    total: number;
+    start: Date | string;
+    end: Date | string;
+  }>;
+  calibrationRecordingIds: string[];
+  validationRecordingIds: string[];
+  automaticSplit: boolean;
+  thresholds: { positiveThreshold: number; negativeThreshold: number } | null;
+  calibrationMetrics: CalibrationMetrics | null;
+  validationMetrics: CalibrationMetrics | null;
+  blockers: string[];
+  canValidate: boolean;
+};
+
+type CalibrationMetrics = {
+  total: number;
+  positives: number;
+  negatives: number;
+  identified: number;
+  rejected: number;
+  uncertain: number;
+  positivePrecision: number;
+  positiveRecall: number;
+  negativePrecision: number;
+  negativeRecall: number;
+};
+
 type IdentityStatus = {
   labels: {
     sky: number;
@@ -117,9 +162,6 @@ type IdentityStatus = {
 
 export default function VoiceIdentityReviewPage() {
   const queryClient = useQueryClient();
-  const [positive, setPositive] = useState(0.7);
-  const [negative, setNegative] = useState(0.35);
-  const [precision, setPrecision] = useState(0.98);
   const [calibrationRecordings, setCalibrationRecordings] = useState("");
   const [validationRecordings, setValidationRecordings] = useState("");
   const [history, setHistory] = useState<ReviewHistoryEntry[]>([]);
@@ -476,26 +518,28 @@ export default function VoiceIdentityReviewPage() {
           "Primary profile has no embedding provenance; re-enroll it first",
         );
       }
-      const split = (value: string) =>
-        value.split(",").map((item) => item.trim()).filter(Boolean);
+      if (
+        !calibrationPreview?.thresholds || !calibrationPreview.validationMetrics
+      ) {
+        throw new Error("Run a valid calibration preview first");
+      }
       return await callResource("speaker-segments", {
         action: "save-calibration",
         calibrationId: `sky-r${primary.revision ?? 1}-${Date.now()}`,
         profileId,
         profileRevision: primary.revision ?? 1,
         embeddingSpaceId: primary.embeddingSpaceId,
-        positiveThreshold: positive,
-        negativeThreshold: negative,
+        positiveThreshold: calibrationPreview.thresholds.positiveThreshold,
+        negativeThreshold: calibrationPreview.thresholds.negativeThreshold,
         metrics: {
-          precision,
-          sky: identityStatus?.labels.sky ?? 0,
-          notSky: identityStatus?.labels.notSky ?? 0,
-          borderline: reviewSession?.window.filter((item) =>
-            item.status !== "reviewed"
-          ).length ?? 0,
+          precision: calibrationPreview.validationMetrics.positivePrecision,
+          recall: calibrationPreview.validationMetrics.positiveRecall,
+          sky: calibrationPreview.counts.positive,
+          notSky: calibrationPreview.counts.negative,
+          borderline: calibrationPreview.validationMetrics.uncertain,
         },
-        calibrationRecordingIds: split(calibrationRecordings),
-        validationRecordingIds: split(validationRecordings),
+        calibrationRecordingIds: effectiveCalibrationIds,
+        validationRecordingIds: effectiveValidationIds,
         status: "validated",
         allowLegacyCompatibility: primary.embeddingSpaceId === "legacy-unknown",
       });
@@ -526,17 +570,60 @@ export default function VoiceIdentityReviewPage() {
   const validationIds = validationRecordings.split(",").map((value) =>
     value.trim()
   ).filter(Boolean);
-  const canValidate = Boolean(primary?.embeddingSpaceId) &&
-    labels.sky >= 40 && labels.notSky >= 40 && labels.total >= 100 &&
-    calibrationIds.length > 0 && validationIds.length > 0 &&
-    !validationIds.some((id) => calibrationIds.includes(id)) &&
-    precision >= 0.98 && negative < positive;
-  const labelGateReady = labels.sky >= 40 && labels.notSky >= 40 &&
-    labels.total >= 100;
+  const {
+    data: calibrationPreview,
+    isLoading: calibrationPreviewLoading,
+    isFetching: calibrationPreviewFetching,
+    isError: calibrationPreviewIsError,
+    error: calibrationPreviewError,
+    refetch: refetchCalibrationPreview,
+  } = useQuery<CalibrationPreview>({
+    queryKey: [
+      "speaker-calibration-preview",
+      profileId,
+      calibrationIds,
+      validationIds,
+    ],
+    enabled: Boolean(profileId && primary?.embeddingSpaceId),
+    queryFn: () =>
+      callResource("speaker-segments", {
+        action: "calibration-preview",
+        profileId,
+        calibrationRecordingIds: calibrationIds,
+        validationRecordingIds: validationIds,
+        targetPrecision: 0.98,
+      }) as Promise<CalibrationPreview>,
+    staleTime: 10_000,
+  });
+  const effectiveCalibrationIds = calibrationIds.length === 0 &&
+      validationIds.length === 0
+    ? calibrationPreview?.calibrationRecordingIds ?? []
+    : calibrationIds;
+  const effectiveValidationIds = calibrationIds.length === 0 &&
+      validationIds.length === 0
+    ? calibrationPreview?.validationRecordingIds ?? []
+    : validationIds;
+  const canValidate = Boolean(calibrationPreview?.canValidate);
+  const calibrationLabelCounts = calibrationPreview?.counts
+    ? {
+      sky: calibrationPreview.counts.positive,
+      notSky: calibrationPreview.counts.negative,
+      total: calibrationPreview.counts.total,
+      recordings: calibrationPreview.counts.recordings,
+    }
+    : labels;
+  const labelGateReady = calibrationLabelCounts.sky >= 40 &&
+    calibrationLabelCounts.notSky >= 40 && calibrationLabelCounts.total >= 100;
   const missingLabelRequirements = [
-    labels.sky < 40 ? `${40 - labels.sky} more Sky` : null,
-    labels.notSky < 40 ? `${40 - labels.notSky} more not-Sky` : null,
-    labels.total < 100 ? `${100 - labels.total} more total` : null,
+    calibrationLabelCounts.sky < 40
+      ? `${40 - calibrationLabelCounts.sky} more compatible Sky`
+      : null,
+    calibrationLabelCounts.notSky < 40
+      ? `${40 - calibrationLabelCounts.notSky} more compatible not-Sky`
+      : null,
+    calibrationLabelCounts.total < 100
+      ? `${100 - calibrationLabelCounts.total} more compatible total`
+      : null,
   ].filter(Boolean) as string[];
   const windowItems = reviewSession?.window ?? [];
   const segmentById = useMemo(
@@ -634,8 +721,12 @@ export default function VoiceIdentityReviewPage() {
     id: string,
     target: "calibration" | "validation" | "unused",
   ) => {
-    const nextCalibration = calibrationIds.filter((value) => value !== id);
-    const nextValidation = validationIds.filter((value) => value !== id);
+    const nextCalibration = effectiveCalibrationIds.filter((value) =>
+      value !== id
+    );
+    const nextValidation = effectiveValidationIds.filter((value) =>
+      value !== id
+    );
     if (target === "calibration") nextCalibration.push(id);
     if (target === "validation") nextValidation.push(id);
     setCalibrationRecordings(nextCalibration.join(","));
@@ -725,39 +816,46 @@ export default function VoiceIdentityReviewPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base">2. Label examples</CardTitle>
             <CardDescription>
-              Use “This is me” and “Not me” below. Counts update automatically.
+              Compatible “This is me” and “Not me” labels. Counts update
+              automatically.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div>
               <div className="flex justify-between">
                 <span>Sky</span>
-                <strong>{labels.sky} / 40</strong>
+                <strong>{calibrationLabelCounts.sky} / 40</strong>
               </div>
               <Progress
                 className="mt-1"
-                value={Math.min(100, labels.sky / 40 * 100)}
+                value={Math.min(100, calibrationLabelCounts.sky / 40 * 100)}
               />
             </div>
             <div>
               <div className="flex justify-between">
                 <span>not-Sky</span>
-                <strong>{labels.notSky} / 40</strong>
+                <strong>{calibrationLabelCounts.notSky} / 40</strong>
               </div>
               <Progress
                 className="mt-1"
-                value={Math.min(100, labels.notSky / 40 * 100)}
+                value={Math.min(
+                  100,
+                  calibrationLabelCounts.notSky / 40 * 100,
+                )}
               />
             </div>
             <div>
               <div className="flex justify-between">
                 <span>Total</span>
-                <strong>{labels.total} / 100</strong>
+                <strong>{calibrationLabelCounts.total} / 100</strong>
               </div>
-              <Progress className="mt-1" value={Math.min(100, labels.total)} />
+              <Progress
+                className="mt-1"
+                value={Math.min(100, calibrationLabelCounts.total)}
+              />
             </div>
             <p className="text-xs text-muted-foreground">
-              Across {labels.recordings} recordings
+              Across {calibrationLabelCounts.recordings} recordings
             </p>
           </CardContent>
         </Card>
@@ -785,16 +883,23 @@ export default function VoiceIdentityReviewPage() {
               </p>
             )}
             {labelGateReady && !latestCalibration && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  calibrationSectionRef.current?.scrollIntoView({
-                    behavior: "smooth",
-                  })}
-              >
-                Configure validation split
-              </Button>
+              <div className="space-y-2">
+                {calibrationPreview?.blockers.slice(0, 2).map((blocker) => (
+                  <p key={blocker} className="text-xs text-amber-600">
+                    {blocker}
+                  </p>
+                ))}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    calibrationSectionRef.current?.scrollIntoView({
+                      behavior: "smooth",
+                    })}
+                >
+                  Review validation details
+                </Button>
+              </div>
             )}
             {latestCalibration && (
               <Link
@@ -1201,123 +1306,259 @@ export default function VoiceIdentityReviewPage() {
       </Card>
       <Card ref={calibrationSectionRef}>
         <CardHeader>
-          <CardTitle>3. Validate Sky calibration</CardTitle>
-          <CardDescription>
-            Label counts are taken from your manual review automatically. Choose
-            two non-overlapping sets of source recording IDs: one for choosing
-            thresholds and another for checking that Sky precision is at least
-            98%.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          <label className="text-sm">
-            Positive threshold<Input
-              type="number"
-              step="0.01"
-              value={positive}
-              onChange={(e) => setPositive(Number(e.target.value))}
-            />
-          </label>
-          <label className="text-sm">
-            Negative threshold<Input
-              type="number"
-              step="0.01"
-              value={negative}
-              onChange={(e) => setNegative(Number(e.target.value))}
-            />
-          </label>
-          <label className="text-sm">
-            Validation precision (0–1)<Input
-              type="number"
-              step="0.001"
-              value={precision}
-              onChange={(e) => setPrecision(Number(e.target.value))}
-            />
-          </label>
-          <div className="rounded-md border bg-muted/30 p-3 text-sm md:col-span-2">
-            <p className="font-medium">Labels from review</p>
-            <p className="text-muted-foreground">
-              {labels.sky} Sky · {labels.notSky} not-Sky ·{" "}
-              {windowItems.filter((item) => item.status !== "reviewed").length}
-              {" "}
-              currently reviewable
-            </p>
-          </div>
-          <div className="space-y-3 md:col-span-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <p className="text-sm font-medium">Split labeled recordings</p>
+              <CardTitle>3. Validate Sky calibration</CardTitle>
+              <CardDescription>
+                Backend computes thresholds from one set of recordings, then
+                measures them on different audio. Nothing here is a manually
+                entered confidence percentage.
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={calibrationPreviewFetching}
+              onClick={() => void refetchCalibrationPreview()}
+            >
+              <RefreshCw
+                className={`mr-1 h-4 w-4 ${
+                  calibrationPreviewFetching ? "animate-spin" : ""
+                }`}
+              />
+              Recalculate
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 text-sm md:grid-cols-3">
+            <div className="rounded-md border p-3">
+              <strong>1. Labels</strong>
               <p className="text-xs text-muted-foreground">
-                Put each source in exactly one set. Calibration chooses
-                thresholds; validation checks them on audio the threshold
-                selection never saw.
+                Only clear reviewed speech with a compatible embedding is used.
               </p>
             </div>
-            {(labels.byRecording?.length ?? 0) === 0
-              ? (
-                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  No labeled recordings yet. Label segments above or open the
-                  Timeline, then this selector will fill automatically.
-                </div>
-              )
-              : labels.byRecording?.slice(0, 20).map((recording) => {
-                const selected = calibrationIds.includes(recording.id)
-                  ? "calibration"
-                  : validationIds.includes(recording.id)
-                  ? "validation"
-                  : "unused";
-                return (
-                  <div
-                    key={recording.id}
-                    className="flex flex-wrap items-center gap-2 rounded-md border p-3 text-sm"
-                  >
-                    <Link
-                      className="min-w-0 flex-1 truncate font-mono text-primary hover:underline"
-                      to={`/timeline?originalId=${recording.id}`}
-                    >
-                      {recording.id}
-                    </Link>
-                    <span className="text-xs text-muted-foreground">
-                      {recording.sky} Sky · {recording.notSky} not-Sky
-                    </span>
-                    {(["calibration", "validation", "unused"] as const).map((
-                      target,
-                    ) => (
-                      <Button
-                        key={target}
-                        type="button"
-                        size="sm"
-                        variant={selected === target ? "default" : "outline"}
-                        onClick={() => chooseRecordingSet(recording.id, target)}
-                      >
-                        {target === "calibration"
-                          ? "Calibration"
-                          : target === "validation"
-                          ? "Validation"
-                          : "Unused"}
-                      </Button>
-                    ))}
-                  </div>
-                );
-              })}
-          </div>
-          <Button
-            className="md:col-span-3"
-            onClick={() => saveCalibration.mutate()}
-            disabled={saveCalibration.isPending || !canValidate}
-          >
-            {saveCalibration.isPending
-              ? "Saving…"
-              : "Validate calibration and unlock classification"}
-          </Button>
-          {!canValidate && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm md:col-span-3">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <span>
-                Complete the missing prerequisites above. The button unlocks
-                only after 100 real labels (40/40 minimum), separate recording
-                sets, valid thresholds, and ≥98% validation precision.
-              </span>
+            <div className="rounded-md border p-3">
+              <strong>2. Fit thresholds</strong>
+              <p className="text-xs text-muted-foreground">
+                Calibration recordings choose the safest Me / uncertain / Not me
+                borders.
+              </p>
             </div>
+            <div className="rounded-md border p-3">
+              <strong>3. Check unseen audio</strong>
+              <p className="text-xs text-muted-foreground">
+                Validation recordings must independently reach ≥98% auto-match
+                precision.
+              </p>
+            </div>
+          </div>
+
+          {calibrationPreviewLoading && (
+            <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />Computing scores from
+              reviewed embeddings…
+            </div>
+          )}
+          {calibrationPreviewIsError && (
+            <div className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+              Calibration preview failed:{" "}
+              {calibrationPreviewError instanceof Error
+                ? calibrationPreviewError.message
+                : "unknown error"}
+            </div>
+          )}
+
+          {calibrationPreview && (
+            <>
+              <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+                <div className="rounded-md border p-3">
+                  <strong>{calibrationPreview.counts.positive}</strong>
+                  <br />compatible Sky labels
+                </div>
+                <div className="rounded-md border p-3">
+                  <strong>{calibrationPreview.counts.negative}</strong>
+                  <br />compatible not-Sky labels
+                </div>
+                <div className="rounded-md border p-3">
+                  <strong>{calibrationPreview.counts.recordings}</strong>
+                  <br />source recordings
+                </div>
+                <div className="rounded-md border p-3">
+                  <strong>{calibrationPreview.counts.incompatible}</strong>
+                  <br />excluded: old/missing embedding
+                </div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-4">
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    Auto “Sky” at
+                  </span>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {calibrationPreview.thresholds?.positiveThreshold.toFixed(
+                      3,
+                    ) ?? "—"}
+                  </p>
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    Auto “not Sky” at
+                  </span>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {calibrationPreview.thresholds?.negativeThreshold.toFixed(
+                      3,
+                    ) ?? "—"}
+                  </p>
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    Validation precision
+                  </span>
+                  <p
+                    className={`text-xl font-semibold tabular-nums ${
+                      (calibrationPreview.validationMetrics
+                          ?.positivePrecision ?? 0) >= 0.98
+                        ? "text-green-600"
+                        : "text-amber-600"
+                    }`}
+                  >
+                    {calibrationPreview.validationMetrics
+                      ? `${
+                        (calibrationPreview.validationMetrics
+                          .positivePrecision * 100).toFixed(1)
+                      }%`
+                      : "—"}
+                  </p>
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    Validation coverage
+                  </span>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {calibrationPreview.validationMetrics
+                      ? `${calibrationPreview.validationMetrics.identified}/${calibrationPreview.validationMetrics.total}`
+                      : "—"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium">Recording split</p>
+                    <p className="text-xs text-muted-foreground">
+                      Dates and label mix identify each source; the raw ID is
+                      only a secondary reference.
+                      {calibrationPreview.automaticSplit
+                        ? " The split below was balanced automatically."
+                        : " You changed the automatic split."}
+                    </p>
+                  </div>
+                  {!calibrationPreview.automaticSplit && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setCalibrationRecordings("");
+                        setValidationRecordings("");
+                      }}
+                    >
+                      Reset automatic split
+                    </Button>
+                  )}
+                </div>
+                {calibrationPreview.recordings.length === 0
+                  ? (
+                    <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                      No compatible reviewed segments yet. Continue the review
+                      session above.
+                    </div>
+                  )
+                  : calibrationPreview.recordings.map((recording) => {
+                    const selected =
+                      effectiveCalibrationIds.includes(recording.id)
+                        ? "calibration"
+                        : effectiveValidationIds.includes(recording.id)
+                        ? "validation"
+                        : "unused";
+                    return (
+                      <div
+                        key={recording.id}
+                        className="grid gap-2 rounded-md border p-3 text-sm md:grid-cols-[minmax(14rem,1fr)_auto_auto] md:items-center"
+                      >
+                        <div className="min-w-0">
+                          <Link
+                            className="font-medium text-primary hover:underline"
+                            to={`/timeline?originalId=${recording.id}`}
+                          >
+                            {new Date(recording.start).toLocaleString()} —{" "}
+                            {new Date(recording.end).toLocaleTimeString()}
+                          </Link>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {recording.id}
+                          </p>
+                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {recording.positive} Sky · {recording.negative}{" "}
+                          not-Sky · {recording.total} total
+                        </span>
+                        <div className="flex gap-1">
+                          {(["calibration", "validation", "unused"] as const)
+                            .map((target) => (
+                              <Button
+                                key={target}
+                                type="button"
+                                size="sm"
+                                variant={selected === target
+                                  ? "default"
+                                  : "outline"}
+                                onClick={() =>
+                                  chooseRecordingSet(recording.id, target)}
+                              >
+                                {target === "calibration"
+                                  ? "Fit"
+                                  : target === "validation"
+                                  ? "Check"
+                                  : "Unused"}
+                              </Button>
+                            ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {calibrationPreview.blockers.length > 0 && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+                  <div className="flex items-center gap-2 font-medium">
+                    <AlertCircle className="h-4 w-4 text-amber-600" />What is
+                    still needed
+                  </div>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+                    {calibrationPreview.blockers.map((blocker) => (
+                      <li key={blocker}>{blocker}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <Button
+                className="w-full"
+                onClick={() => saveCalibration.mutate()}
+                disabled={saveCalibration.isPending || !canValidate}
+              >
+                {saveCalibration.isPending
+                  ? "Saving server-verified calibration…"
+                  : canValidate
+                  ? "Save validated calibration and unlock classification"
+                  : "Calibration is not ready yet"}
+              </Button>
+              <p className="text-center text-xs text-muted-foreground">
+                The backend recalculates the split metrics during save; the
+                browser cannot submit a made-up precision value.
+              </p>
+            </>
           )}
         </CardContent>
       </Card>
