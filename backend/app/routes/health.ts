@@ -26,8 +26,11 @@ export async function healthHandler(_req: Request, res: Response) {
 
 export async function readinessHandler(_req: Request, res: Response) {
   const status = getServiceReadiness();
+  const mode = Deno.env.get("BACKEND_TASK") ?? "start";
   res.status(status === "ready" ? 200 : 503).json({
     status,
+    mode,
+    reload: mode === "dev" ? "watch" : "manual",
     startedAt: serviceStartedAt.toISOString(),
     timestamp: new Date().toISOString(),
   });

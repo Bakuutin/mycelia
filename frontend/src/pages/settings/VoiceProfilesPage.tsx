@@ -57,7 +57,10 @@ import {
 import { toast } from "sonner";
 import { WaveformPlayer } from "@/components/audio/WaveformPlayer";
 import { useJobsListener } from "@/hooks/useJobsListener";
-import { buildAttachSampleOperations } from "@/lib/voiceProfiles";
+import {
+  buildAttachSampleOperations,
+  summarizeVoiceSamples,
+} from "@/lib/voiceProfiles";
 import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
 
 const VOICE_SAMPLES_BUCKET = "voice_samples";
@@ -113,6 +116,9 @@ interface VoiceSample {
     duration?: number;
     uploaded_at?: string;
     profile_id?: string;
+    source?: string;
+    source_start?: string;
+    source_end?: string;
   };
   length: number;
 }
@@ -129,6 +135,9 @@ interface EnrollmentJobData {
 const VoiceProfilesPage = () => {
   const queryClient = useQueryClient();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [sampleTargetProfile, setSampleTargetProfile] = useState<
+    SpeakerProfile | null
+  >(null);
   const [newProfileName, setNewProfileName] = useState("");
   const [isPrimary, setIsPrimary] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -557,11 +566,23 @@ const VoiceProfilesPage = () => {
 
     // If using a saved sample, enroll directly
     if (selectedSampleId) {
+      if (sampleTargetProfile) {
+        const operations = buildAttachSampleOperations(selectedSampleId, {
+          id: getProfileId(sampleTargetProfile),
+          name: sampleTargetProfile.name,
+          isPrimary: sampleTargetProfile.is_primary,
+        });
+        await callResource("mongo", operations.link);
+        await queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+      }
       enrollMutation.mutate({
         type: "enrollment",
         name: newProfileName.trim(),
         is_primary: isPrimary,
         sample_file_id: selectedSampleId,
+        profile_id: sampleTargetProfile
+          ? getProfileId(sampleTargetProfile)
+          : undefined,
       });
       return;
     }
@@ -590,6 +611,11 @@ const VoiceProfilesPage = () => {
         metadata: {
           speaker_name: newProfileName.trim(),
           duration: recordingDuration,
+          profile_id: sampleTargetProfile
+            ? getProfileId(sampleTargetProfile)
+            : undefined,
+          source: recordedBlob instanceof File ? "file_upload" : "microphone",
+          uploaded_at: new Date().toISOString(),
         },
       });
 
@@ -603,6 +629,9 @@ const VoiceProfilesPage = () => {
         name: newProfileName.trim(),
         is_primary: isPrimary,
         sample_file_id: uploadResult.file_id,
+        profile_id: sampleTargetProfile
+          ? getProfileId(sampleTargetProfile)
+          : undefined,
       });
     } catch (error) {
       toast.error("Failed to save audio", {
@@ -617,7 +646,16 @@ const VoiceProfilesPage = () => {
     setRecordedBlob(null);
     setRecordingDuration(0);
     setSelectedSampleId(null);
+    setSampleTargetProfile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const openAddSampleDialog = (profile: SpeakerProfile) => {
+    resetForm();
+    setSampleTargetProfile(profile);
+    setNewProfileName(profile.name);
+    setIsPrimary(profile.is_primary);
+    setIsDialogOpen(true);
   };
 
   const openEditDialog = (profile: SpeakerProfile) => {
@@ -639,14 +677,11 @@ const VoiceProfilesPage = () => {
     });
   };
 
-  const toggleProfileExpanded = (profileId: string) => {
+  const setProfileExpanded = (profileId: string, open: boolean) => {
     setExpandedProfiles((prev) => {
       const next = new Set(prev);
-      if (next.has(profileId)) {
-        next.delete(profileId);
-      } else {
-        next.add(profileId);
-      }
+      if (open) next.add(profileId);
+      else next.delete(profileId);
       return next;
     });
   };
@@ -668,16 +703,22 @@ const VoiceProfilesPage = () => {
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button onClick={() => resetForm()}>
               <Plus className="w-4 h-4 mr-2" />
               Add Profile
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Enroll Voice Profile</DialogTitle>
+              <DialogTitle>
+                {sampleTargetProfile
+                  ? `Add sample to ${sampleTargetProfile.name}`
+                  : "Enroll Voice Profile"}
+              </DialogTitle>
               <DialogDescription>
-                Record 10-30 seconds of clear speech or upload an audio file.
+                {sampleTargetProfile
+                  ? "The sample is saved permanently and the profile embedding is rebuilt in the background."
+                  : "Record 10-30 seconds of clear speech or upload an audio file."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
@@ -688,6 +729,7 @@ const VoiceProfilesPage = () => {
                   placeholder="e.g., Me, Wife, Bob"
                   value={newProfileName}
                   onChange={(e) => setNewProfileName(e.target.value)}
+                  disabled={Boolean(sampleTargetProfile)}
                 />
               </div>
 
@@ -696,6 +738,7 @@ const VoiceProfilesPage = () => {
                   id="primary"
                   checked={isPrimary}
                   onCheckedChange={setIsPrimary}
+                  disabled={Boolean(sampleTargetProfile)}
                 />
                 <Label htmlFor="primary">This is my voice</Label>
               </div>
@@ -856,7 +899,7 @@ const VoiceProfilesPage = () => {
                 {enrollMutation.isPending && (
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 )}
-                Enroll Voice
+                {sampleTargetProfile ? "Add and rebuild" : "Enroll Voice"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -894,6 +937,13 @@ const VoiceProfilesPage = () => {
               const profileId = getProfileId(profile);
               const profileSamples = getProfileSamples(profileId);
               const isExpanded = expandedProfiles.has(profileId);
+              const sampleSummary = summarizeVoiceSamples(
+                savedSamples === undefined ? undefined : profileSamples,
+                {
+                  count: profile.sample_count,
+                  duration: profile.total_duration,
+                },
+              );
 
               return (
                 <Card key={profileId}>
@@ -915,13 +965,21 @@ const VoiceProfilesPage = () => {
                             )}
                           </CardTitle>
                           <CardDescription>
-                            {profile.sample_count}{" "}
-                            sample{profile.sample_count !== 1 ? "s" : ""} •{" "}
-                            {Math.round(profile.total_duration)}s total
+                            {sampleSummary.count}{" "}
+                            sample{sampleSummary.count !== 1 ? "s" : ""} •{" "}
+                            {Math.round(sampleSummary.duration)}s saved
                           </CardDescription>
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openAddSampleDialog(profile)}
+                        >
+                          <Plus className="mr-1 h-4 w-4" />
+                          Add sample
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -968,7 +1026,8 @@ const VoiceProfilesPage = () => {
                   {profileSamples.length > 0 && (
                     <Collapsible
                       open={isExpanded}
-                      onOpenChange={() => toggleProfileExpanded(profileId)}
+                      onOpenChange={(open) =>
+                        setProfileExpanded(profileId, open)}
                     >
                       <CollapsibleTrigger asChild>
                         <Button
@@ -990,7 +1049,35 @@ const VoiceProfilesPage = () => {
                               key={getSampleId(sample)}
                               className="flex items-center gap-2 p-2 border rounded"
                             >
-                              <div className="flex-1">
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                                  <span className="max-w-64 truncate font-medium text-foreground">
+                                    {sample.filename.split("/").at(-1) ??
+                                      sample.filename}
+                                  </span>
+                                  <span>
+                                    {formatDuration(
+                                      sample.metadata?.duration || 0,
+                                    )}
+                                  </span>
+                                  {sample.metadata?.source && (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px]"
+                                    >
+                                      {sample.metadata.source.replaceAll(
+                                        "_",
+                                        " ",
+                                      )}
+                                    </Badge>
+                                  )}
+                                  {sample.metadata?.source_start && (
+                                    <span>
+                                      {new Date(sample.metadata.source_start)
+                                        .toLocaleString()}
+                                    </span>
+                                  )}
+                                </div>
                                 <WaveformPlayer
                                   audioUrl={`/api/files/${
                                     getSampleId(sample)

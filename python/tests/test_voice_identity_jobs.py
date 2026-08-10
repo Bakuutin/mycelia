@@ -57,6 +57,28 @@ class EnrollmentJobTest(TestCase):
         self.assertEqual(link_request["update"]["$set"]["metadata.profile_id"], profile_id)
         self.assertEqual(result["profile_id"], profile_id)
 
+    def test_selected_diarizator_url_is_passed_to_embedding_extraction(self):
+        with (
+            patch("jobs.enrollment._get_audio_from_gridfs", return_value=b"wav"),
+            patch(
+                "jobs.enrollment._extract_embedding",
+                return_value={"embedding": [1.0], "duration": 1.0},
+            ) as extract,
+            patch("jobs.enrollment.create_or_update_profile", return_value={"_id": ObjectId()}),
+            patch("jobs.enrollment.call_resource", return_value={"matchedCount": 1}),
+        ):
+            process_enrollment_job(
+                "job-route",
+                EnrollmentJobData(
+                    name="Sky",
+                    sample_file_id=str(ObjectId()),
+                    diarizationServerUrl="https://voice.example",
+                ),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(extract.call_args.args[3], "https://voice.example")
+
     def test_missing_sample_link_fails_the_job(self):
         profile_id = str(ObjectId())
         profile = {"_id": ObjectId(profile_id), "name": "Sky"}

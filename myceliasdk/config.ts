@@ -152,6 +152,39 @@ export const zTranscriptionProfilesConfig = z.object({
   }
 });
 
+export const zDiarizationProviderProfile = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  baseUrl: z.string().url(),
+  enabled: z.boolean().default(true),
+  priority: z.number().int().min(1).max(100).default(50),
+});
+
+export const zDiarizationProfilesConfig = z.object({
+  profiles: z.array(zDiarizationProviderProfile).max(8).default([]),
+  includeEnvironment: z.boolean().optional().default(true),
+  environmentPriority: z.number().int().min(1).max(100).optional().default(50),
+}).superRefine((value, context) => {
+  if (!value.includeEnvironment && !value.profiles.some((profile) => profile.enabled)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["profiles"],
+      message: "At least one diarization route must be enabled",
+    });
+  }
+  const ids = new Set<string>();
+  for (const [index, profile] of value.profiles.entries()) {
+    if (ids.has(profile.id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["profiles", index, "id"],
+        message: `Duplicate diarization provider profile id: ${profile.id}`,
+      });
+    }
+    ids.add(profile.id);
+  }
+});
+
 // Deprecated: use llm and transcription instead
 export const zInferenceProviderConfig = zProviderConfig;
 
@@ -191,6 +224,7 @@ export const zServerConfig = z.object({
   llmProfiles: zLlmProfilesConfig.optional().nullable(),
   transcription: zTranscriptionProviderConfig.optional().nullable(),
   transcriptionProfiles: zTranscriptionProfilesConfig.optional().nullable(),
+  diarizationProfiles: zDiarizationProfilesConfig.optional().nullable(),
   // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({

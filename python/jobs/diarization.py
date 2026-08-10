@@ -24,6 +24,7 @@ class DiarizationJobData(BaseModel):
     mode: str = "missing"
     runId: Optional[str] = None
     cursor: Optional[datetime] = None
+    diarizationServerUrl: Optional[str] = None
 
 
 def process_diarization_job(
@@ -122,6 +123,7 @@ def process_diarization_job(
             lifecycle_status="building" if building_generation else "active",
             mark_chunks=not building_generation,
             expected_embedding_space_id=(run or {}).get("embeddingSpaceId") if building_generation else None,
+            server_url=data.diarizationServerUrl,
         )
         if building_generation:
             cursor = max(cursor or sequence.start, sequence.last["start"])

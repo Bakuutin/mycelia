@@ -476,6 +476,7 @@ def diarize_sequence(
     lifecycle_status: str = "active",
     mark_chunks: bool = True,
     expected_embedding_space_id: Optional[str] = None,
+    server_url: Optional[str] = None,
 ):
     """
     Combine chunks to WAV, call diarization API, and save results to MongoDB.
@@ -514,8 +515,9 @@ def diarize_sequence(
         # Call diarization API
         request_data, request_params = _build_diarization_request_fields(clusters_param)
         
+        effective_server_url = (server_url or DIARIZATION_SERVER_URL).rstrip('/')
         response = requests.post(
-            f'{DIARIZATION_SERVER_URL}/diarize',
+            f'{effective_server_url}/diarize',
             files={'file': ('audio.wav', wav_file, 'audio/wav')},
             data=request_data if request_data else None,
             params=request_params if request_params else None,
@@ -665,7 +667,7 @@ def diarize_sequence(
         end_time = time.time()
         release_sequence(sequence, worker_id)
         log_info(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout')
-        log_info(f'  → Increase timeout or check diarization server at {DIARIZATION_SERVER_URL}')
+        log_info(f'  → Increase timeout or check diarization server at {server_url or DIARIZATION_SERVER_URL}')
         return {
             "status": "error",
             "error": "Diarization request timed out",

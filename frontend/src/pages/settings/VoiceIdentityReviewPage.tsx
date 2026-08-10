@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 
 export default function VoiceIdentityReviewPage() {
   const queryClient = useQueryClient();
@@ -24,10 +25,10 @@ export default function VoiceIdentityReviewPage() {
   const [borderlineCount, setBorderlineCount] = useState(20);
   const [calibrationRecordings, setCalibrationRecordings] = useState("");
   const [validationRecordings, setValidationRecordings] = useState("");
-  const range = {
+  const [range] = useState(() => ({
     start: new Date(Date.now() - 14 * 86_400_000),
     end: new Date(),
-  };
+  }));
 
   const { data: profiles = [] } = useQuery<any[]>({
     queryKey: ["speaker_profiles"],
@@ -41,7 +42,33 @@ export default function VoiceIdentityReviewPage() {
   });
   const primary = profiles.find((profile) => profile.is_primary);
   const profileId = normalizeObjectId(primary?._id);
-  const { data: queue = [], isLoading } = useQuery<any[]>({
+  const { data: pipelineHealth, isLoading: isLoadingHealth } = useQuery<any>({
+    queryKey: ["pipeline-health", "voice-identity"],
+    queryFn: () =>
+      callResource("jobs", {
+        action: "pipeline_health",
+        force: true,
+      }),
+    refetchInterval: 30_000,
+  });
+  const diarizatorHealth = pipelineHealth?.services?.find((service: any) =>
+    service.id === "diarizator"
+  );
+  const diarizatorReady = diarizatorHealth?.status === "healthy";
+  const reenrollUnavailableReason = isLoadingHealth
+    ? "Checking Diarizator…"
+    : !diarizatorReady
+    ? diarizatorHealth?.message ??
+      "Diarizator is unavailable. Start scripts/start-diarizator.sh first."
+    : null;
+  const {
+    data: queue = [],
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    refetch,
+  } = useQuery<any[]>({
     queryKey: ["speaker-review", range.start.getTime(), range.end.getTime()],
     queryFn: () =>
       callResource("speaker-segments", {
@@ -50,6 +77,7 @@ export default function VoiceIdentityReviewPage() {
         state: "uncertain",
         limit: 100,
       }) as Promise<any[]>,
+    staleTime: 30_000,
   });
 
   const label = useMutation({
@@ -160,24 +188,68 @@ export default function VoiceIdentityReviewPage() {
             validation recordings.
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => reenroll.mutate()}
-          disabled={!profileId || reenroll.isPending}
-        >
-          Re-enroll Sky from saved samples
-        </Button>
+        <div className="max-w-md space-y-1 text-right">
+          <Button
+            variant="outline"
+            onClick={() => reenroll.mutate()}
+            disabled={!profileId || reenroll.isPending || !diarizatorReady}
+            title={reenrollUnavailableReason ?? undefined}
+          >
+            {reenroll.isPending
+              ? "Queueing re-enrollment…"
+              : "Re-enroll Sky from saved samples"}
+          </Button>
+          {reenrollUnavailableReason && (
+            <p className="text-xs text-destructive">
+              {reenrollUnavailableReason}
+            </p>
+          )}
+        </div>
       </div>
       <Card>
         <CardHeader>
           <CardTitle>Uncertain segments — last 14 days</CardTitle>
           <CardDescription>
-            {isLoading
-              ? "Loading…"
-              : `${queue.length} segments ready for review`}
+            Up to 100 uncertain identity decisions from the active diarization
+            run. This is a database lookup, not audio processing.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
+          {isLoading && (
+            <div className="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading review queue… normally this takes under 5 seconds.
+            </div>
+          )}
+          {isError && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4" />
+              <span className="flex-1">
+                Could not load the review queue:{" "}
+                {error instanceof Error ? error.message : "unknown error"}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void refetch()}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />Retry
+              </Button>
+            </div>
+          )}
+          {!isLoading && !isError && queue.length === 0 && (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              No uncertain segments in this range. If classification has not run
+              yet, re-enroll Sky, validate calibration, then run Classify
+              existing.
+            </div>
+          )}
+          {!isLoading && !isError && queue.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {queue.length} segments ready for review
+              {isFetching ? " · refreshing…" : ""}
+            </p>
+          )}
           {queue.map((segment) => {
             const id = normalizeObjectId(segment._id)!;
             return (

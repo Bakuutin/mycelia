@@ -42,6 +42,22 @@ echo "Syncing diarizator dependencies (uv sync)..."
 cd "${diarizator_dir}"
 uv sync --extra cpu
 
+# Persist the same token in the Hugging Face cache without exposing it in the
+# command line or logs. Pipeline.from_pretrained still receives HF_TOKEN
+# explicitly; this login also covers nested gated model downloads.
+uv run python -c 'import os; from huggingface_hub import login; login(token=os.environ["HF_TOKEN"], add_to_git_credential=False, skip_if_logged_in=False)'
+
+if ! uv run python -c 'import os; from huggingface_hub import HfApi; HfApi(token=os.environ["HF_TOKEN"]).model_info("pyannote/speaker-diarization-community-1")' >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+HF_TOKEN is valid, but its Hugging Face account cannot access the gated model.
+Log in with the same account and accept the model conditions here:
+  https://huggingface.co/pyannote/speaker-diarization-community-1
+  https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
+Then run scripts/start-diarizator.sh again. Creating a new token is not required.
+EOF
+  exit 1
+fi
+
 echo
 echo "Starting diarizator on port ${port} (CPU mode)."
 echo "Smoke check:            curl http://localhost:${port}/health"

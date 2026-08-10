@@ -6,16 +6,18 @@ import {
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
-  Maximize2,
-  CircleOff,
   CalendarPlus,
+  CircleOff,
   MapPin,
-  Wand2,
+  Maximize2,
   Play,
+  UserRoundPlus,
+  Wand2,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
 import { RunJobDialog } from "@/components/dialogs/RunJobDialog";
 import { AssignLocationDialog } from "@/components/location/AssignLocationDialog";
+import { AddTimelineVoiceSampleDialog } from "@/components/voice/AddTimelineVoiceSampleDialog";
 
 interface TimelineSelectionActionsProps {
   startDate: Date;
@@ -37,6 +39,7 @@ export function TimelineSelectionActions({
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isRunJobOpen, setIsRunJobOpen] = useState(false);
   const [isSetLocationOpen, setIsSetLocationOpen] = useState(false);
+  const [isAddVoiceSampleOpen, setIsAddVoiceSampleOpen] = useState(false);
 
   return (
     <div className="flex items-start gap-3 mr-auto">
@@ -78,6 +81,30 @@ export function TimelineSelectionActions({
       <RunJobDialog
         open={isRunJobOpen}
         onOpenChange={setIsRunJobOpen}
+        startDate={startDate}
+        endDate={endDate}
+      />
+
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setIsAddVoiceSampleOpen(true)}
+            >
+              <UserRoundPlus className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Save selected audio as a voice profile sample</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Voice sample</span>
+      </div>
+      <AddTimelineVoiceSampleDialog
+        open={isAddVoiceSampleOpen}
+        onOpenChange={setIsAddVoiceSampleOpen}
         startDate={startDate}
         endDate={endDate}
       />

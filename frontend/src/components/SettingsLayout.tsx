@@ -48,6 +48,12 @@ const SettingsLayout = () => {
       description: "Manage local and remote STT servers",
     },
     {
+      name: "Diarization",
+      path: "/settings/diarization",
+      icon: AudioLines,
+      description: "Manage local and remote speaker services",
+    },
+    {
       name: "Prompts",
       path: "/settings/prompts",
       icon: ScrollText,

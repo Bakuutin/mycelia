@@ -30,7 +30,7 @@ def test_rebuilds_profile_in_one_embedding_space() -> None:
     with (
         patch("jobs.profile_reenrollment.get_profile_by_id", return_value={"_id": profile_id, "revision": 1}),
         patch("jobs.profile_reenrollment._get_audio_from_gridfs", return_value=b"wav"),
-        patch("jobs.profile_reenrollment._extract_embedding", side_effect=lambda _audio: next(embeddings)),
+        patch("jobs.profile_reenrollment._extract_embedding", side_effect=lambda _audio, **_kwargs: next(embeddings)),
         patch("jobs.profile_reenrollment.call_resource", side_effect=resource),
     ):
         result = process_profile_reenrollment_job("job-1", ProfileReenrollmentJobData(profileId=str(profile_id)), lambda _progress: None)

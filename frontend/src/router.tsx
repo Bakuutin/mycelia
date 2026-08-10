@@ -9,6 +9,7 @@ import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
 import APISettingsPage from "./pages/settings/APISettingsPage";
 import InferenceSettingsPage from "./pages/settings/InferenceSettingsPage";
 import TranscriptionSettingsPage from "./pages/settings/TranscriptionSettingsPage";
+import DiarizationSettingsPage from "./pages/settings/DiarizationSettingsPage";
 import PromptsPage from "./pages/settings/PromptsPage";
 import FeatureFlagsPage from "./pages/settings/FeatureFlagsPage";
 import AccessLogPage from "./pages/settings/AccessLogPage";
@@ -173,6 +174,10 @@ export const router = createBrowserRouter([
           {
             path: "speech-to-text",
             element: <TranscriptionSettingsPage />,
+          },
+          {
+            path: "diarization",
+            element: <DiarizationSettingsPage />,
           },
           {
             path: "prompts",

@@ -11,6 +11,7 @@ export const schema = z.object({
   mode: z.enum(["missing", "build_generation"]).default("missing"),
   runId: z.string().min(1).optional(),
   cursor: zDateOrString().optional(),
+  diarizationServerUrl: z.string().url().optional(),
 });
 
 const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||

@@ -27,6 +27,7 @@ export const schema = z.object({
   start: z.number().optional(),
   /** End time for segment extraction (optional) */
   end: z.number().optional(),
+  diarizationServerUrl: z.string().url().optional(),
 }).refine(
   (data) =>
     data.audio_chunk_id || data.audio_data_base64 || data.sample_file_id,

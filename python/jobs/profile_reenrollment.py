@@ -16,6 +16,7 @@ from speaker_identification.profiles import get_profile_by_id
 
 class ProfileReenrollmentJobData(BaseModel):
     profileId: str
+    diarizationServerUrl: str | None = None
 
 
 def process_profile_reenrollment_job(
@@ -39,7 +40,10 @@ def process_profile_reenrollment_job(
     durations = []
     spaces = set()
     for index, sample in enumerate(samples):
-        result = _extract_embedding(_get_audio_from_gridfs(str(sample["_id"])))
+        result = _extract_embedding(
+            _get_audio_from_gridfs(str(sample["_id"])),
+            server_url=data.diarizationServerUrl,
+        )
         embeddings.append(np.asarray(result["embedding"], dtype=np.float32))
         durations.append(float(result["duration"]))
         spaces.add(result.get("embeddingSpaceId", "legacy-unknown"))

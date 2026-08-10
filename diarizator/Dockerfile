@@ -30,6 +30,11 @@ COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 # Install dependencies and package
 RUN uv sync --no-dev --extra ${PYTORCH_CUDA_VERSION}
 
+# Include the application package in the image. Local Compose bind-mounts this
+# directory for development, but registry/Portainer deployments must be
+# self-contained.
+COPY src/simple_speaker_recognition/ src/simple_speaker_recognition/
+
 # Create directories
 RUN mkdir -p /app/debug /models
 
@@ -42,4 +47,4 @@ EXPOSE 8085
 
 # Run the service
 # Use shell form to allow environment variable expansion
-CMD uv run --extra ${PYTORCH_CUDA_VERSION} --no-dev simple-speaker-service 
+CMD uv run --extra ${PYTORCH_CUDA_VERSION} --no-dev simple-speaker-service

@@ -81,10 +81,7 @@ import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
-import {
-  classifyJobFailure,
-  JobErrorStats,
-} from "@/components/JobErrorStats";
+import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
 
 type WorkerStatus = {
   checkedAt: string;
@@ -132,6 +129,7 @@ type ExternalServiceHealth = {
   routes?: Array<{
     providerProfileId: string;
     providerProfileName: string;
+    baseUrl?: string;
     status:
       | "disabled"
       | "healthy"
@@ -807,7 +805,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         <div className="space-y-1">
           <JobDateRange job={job} />
           {(result.chunksProcessed ?? 0) > 0 &&
-              (result.conversationsCreated ?? 0) === 0 && (
+            (result.conversationsCreated ?? 0) === 0 && (
             <Badge
               variant="secondary"
               className="bg-sky-500/10 text-sky-500 text-xs"
@@ -1037,8 +1035,8 @@ function JobProgressCell({ job }: { job: JobInfo }) {
               Empty
             </Badge>
             <div className="text-xs text-muted-foreground">
-              {result.message || "No conversations missing summaries"} · no LLM
-              calls
+              {result.message || "No conversations missing summaries"}{" "}
+              · no LLM calls
             </div>
           </div>
         );
@@ -1390,6 +1388,16 @@ export default function JobsPage() {
     },
   });
 
+  const { data: backendReadiness } = useQuery<{
+    status: string;
+    mode: string;
+    reload: string;
+  }>({
+    queryKey: ["backend-readiness"],
+    queryFn: () => api.get("/readiness"),
+    refetchInterval: 30_000,
+  });
+
   const { data: workerStatus, refetch: refetchWorkerStatus } = useQuery({
     queryKey: ["worker-status"],
     queryFn: async () => {
@@ -1692,7 +1700,10 @@ export default function JobsPage() {
   // Current per-worker batch overrides. Transcription stores its batch in
   // config.transcription; everything else uses workers.<type>.defaultOverrides.
   const { data: workerBatchSizes } = useQuery({
-    queryKey: ["worker-batch-sizes", Object.keys(batchCapableWorkers).sort().join(",")],
+    queryKey: [
+      "worker-batch-sizes",
+      Object.keys(batchCapableWorkers).sort().join(","),
+    ],
     enabled: Object.keys(batchCapableWorkers).length > 0,
     queryFn: async () => {
       const result: Record<string, number | undefined> = {};
@@ -2374,8 +2385,7 @@ export default function JobsPage() {
   // Removed workers whose historical jobs stay visible; the backend jobs
   // list includes them in its default type set.
   const legacyTypes = useMemo(
-    () =>
-      LEGACY_JOB_TYPES.filter((type) => !(schemas && type in schemas)),
+    () => LEGACY_JOB_TYPES.filter((type) => !(schemas && type in schemas)),
     [schemas],
   );
   const allTypes = useMemo(
@@ -2627,7 +2637,9 @@ export default function JobsPage() {
       }
     }
     const sorted = (map: Map<string, number>) =>
-      [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      [...map.entries()].sort((a, b) =>
+        b[1] - a[1] || a[0].localeCompare(b[0])
+      );
     return {
       providers: sorted(providers),
       models: sorted(models),
@@ -3060,6 +3072,13 @@ export default function JobsPage() {
             </span>
             Live
           </div>
+          <Badge variant="outline" title="Frontend code reload mode">
+            Frontend: {import.meta.env.DEV ? "dev · HMR" : "prod · rebuild"}
+          </Badge>
+          <Badge variant="outline" title="Backend code reload mode">
+            Backend: {backendReadiness?.mode ?? "checking"} ·{" "}
+            {backendReadiness?.reload ?? "…"}
+          </Badge>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -3295,6 +3314,31 @@ export default function JobsPage() {
                           : service.message}
                       </div>
 
+                      {service.id === "diarizator" && (
+                        <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-medium">Diarizator routes</p>
+                              <p className="text-xs text-muted-foreground">New jobs use the first healthy enabled route by priority.</p>
+                            </div>
+                            <Button size="sm" variant="outline" asChild>
+                              <Link to="/settings/diarization">Configure</Link>
+                            </Button>
+                          </div>
+                          {service.routes?.map((route) => (
+                            <div key={route.providerProfileId} className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs">
+                              <div className="min-w-0">
+                                <div className="font-medium">{route.providerProfileName}</div>
+                                <div className="break-all font-mono text-muted-foreground">{route.baseUrl}</div>
+                              </div>
+                              <Badge variant={route.status === "healthy" ? "secondary" : "destructive"}>
+                                {route.status === "healthy" ? "running" : route.status}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       {service.id === "llm" && (
                         <div className="space-y-2 rounded-md border bg-muted/20 p-3">
                           {service.routes?.length
@@ -3317,82 +3361,86 @@ export default function JobsPage() {
                                       )
                                       .map(([workerType]) => workerType);
                                     return (
-                                    <div
-                                      key={route.providerProfileId}
-                                      className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                                    >
-                                      <div className="flex min-w-0 items-center gap-2">
-                                        <Switch
-                                          checked={route.enabled}
-                                          disabled={setLlmRouteEnabledMutation
-                                            .isPending}
-                                          onCheckedChange={(enabled) =>
-                                            setLlmRouteEnabledMutation.mutate({
-                                              profileId:
-                                                route.providerProfileId,
-                                              enabled,
-                                            })}
-                                          aria-label={`Enable ${route.providerProfileName} LLM route`}
-                                        />
-                                        <div className="min-w-0">
-                                          <div className="truncate font-medium">
-                                            {route.providerProfileName}
-                                          </div>
-                                          <div className="text-muted-foreground">
-                                            {route.enabled
-                                              ? "Enabled for new requests"
-                                              : "Disabled for new requests"}
-                                          </div>
-                                          {!route.enabled &&
-                                            pinnedWorkers.length > 0 && (
-                                            <div className="text-red-500">
-                                              {pinnedWorkers.length}{" "}
-                                              task route(s) pinned to this
-                                              provider will fail:{" "}
-                                              {pinnedWorkers.join(", ")} —{" "}
-                                              <Link
-                                                to="/settings/inference"
-                                                className="underline"
-                                              >
-                                                Configure routing
-                                              </Link>
+                                      <div
+                                        key={route.providerProfileId}
+                                        className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
+                                      >
+                                        <div className="flex min-w-0 items-center gap-2">
+                                          <Switch
+                                            checked={route.enabled}
+                                            disabled={setLlmRouteEnabledMutation
+                                              .isPending}
+                                            onCheckedChange={(enabled) =>
+                                              setLlmRouteEnabledMutation.mutate(
+                                                {
+                                                  profileId:
+                                                    route.providerProfileId,
+                                                  enabled,
+                                                },
+                                              )}
+                                            aria-label={`Enable ${route.providerProfileName} LLM route`}
+                                          />
+                                          <div className="min-w-0">
+                                            <div className="truncate font-medium">
+                                              {route.providerProfileName}
                                             </div>
-                                          )}
+                                            <div className="text-muted-foreground">
+                                              {route.enabled
+                                                ? "Enabled for new requests"
+                                                : "Disabled for new requests"}
+                                            </div>
+                                            {!route.enabled &&
+                                              pinnedWorkers.length > 0 && (
+                                              <div className="text-red-500">
+                                                {pinnedWorkers.length}{" "}
+                                                task route(s) pinned to this
+                                                provider will fail:{" "}
+                                                {pinnedWorkers.join(", ")} —
+                                                {" "}
+                                                <Link
+                                                  to="/settings/inference"
+                                                  className="underline"
+                                                >
+                                                  Configure routing
+                                                </Link>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <span className="font-mono text-muted-foreground">
+                                          P{route.priority} ·{" "}
+                                          {route.model || "unknown"}
+                                          {typeof route.concurrency === "number"
+                                            ? ` · ${route.concurrency} req${
+                                              route.concurrency === 1 ? "" : "s"
+                                            }`
+                                            : ""}
+                                        </span>
+                                        <div className="flex items-center gap-2">
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() =>
+                                              makeLlmPrimaryMutation.mutate(
+                                                route.providerProfileId,
+                                              )}
+                                            disabled={makeLlmPrimaryMutation
+                                              .isPending}
+                                            title="Give this route the highest priority"
+                                          >
+                                            Make primary
+                                          </Button>
+                                          <Badge
+                                            variant="secondary"
+                                            className={route.status ===
+                                                "disabled"
+                                              ? "bg-muted text-muted-foreground"
+                                              : undefined}
+                                          >
+                                            {route.status}
+                                          </Badge>
                                         </div>
                                       </div>
-                                      <span className="font-mono text-muted-foreground">
-                                        P{route.priority} ·{" "}
-                                        {route.model || "unknown"}
-                                        {typeof route.concurrency === "number"
-                                          ? ` · ${route.concurrency} req${
-                                            route.concurrency === 1 ? "" : "s"
-                                          }`
-                                          : ""}
-                                      </span>
-                                      <div className="flex items-center gap-2">
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          onClick={() =>
-                                            makeLlmPrimaryMutation.mutate(
-                                              route.providerProfileId,
-                                            )}
-                                          disabled={makeLlmPrimaryMutation
-                                            .isPending}
-                                          title="Give this route the highest priority"
-                                        >
-                                          Make primary
-                                        </Button>
-                                        <Badge
-                                          variant="secondary"
-                                          className={route.status === "disabled"
-                                            ? "bg-muted text-muted-foreground"
-                                            : undefined}
-                                        >
-                                          {route.status}
-                                        </Badge>
-                                      </div>
-                                    </div>
                                     );
                                   })}
                                 </div>
@@ -3793,9 +3841,8 @@ export default function JobsPage() {
                       workerStatus?.workers[worker.type]?.paused ?? false;
                     // Only the row being toggled waits; a slow pause request
                     // must not freeze the other workers' checkboxes.
-                    const isMutating =
-                      (pauseWorkerMutation.isPending &&
-                        pauseWorkerMutation.variables === worker.type) ||
+                    const isMutating = (pauseWorkerMutation.isPending &&
+                      pauseWorkerMutation.variables === worker.type) ||
                       (resumeWorkerMutation.isPending &&
                         resumeWorkerMutation.variables === worker.type);
                     const stats = jobTypeStats.find((s) =>
@@ -4256,9 +4303,9 @@ export default function JobsPage() {
                                 </div>
                                 <div className="text-[10px] text-muted-foreground">
                                   {Number(
-                                        intervalDrafts[worker.type] ??
-                                          runtime?.triggerIntervalSeconds ?? 1,
-                                      ) === 0
+                                      intervalDrafts[worker.type] ??
+                                        runtime?.triggerIntervalSeconds ?? 1,
+                                    ) === 0
                                     ? "schedule off"
                                     : `every ${
                                       intervalDrafts[worker.type] ??
@@ -4842,10 +4889,12 @@ export default function JobsPage() {
                                     requested !== resolved
                                   ? (
                                     <>
-                                      {/* Only aliases stay clickable on the
+                                      {
+                                        /* Only aliases stay clickable on the
                                           requested side: the model filter
                                           matches executed models, and a
-                                          fallen-back request never executed. */}
+                                          fallen-back request never executed. */
+                                      }
                                       {requested === "small" ||
                                           requested === "medium" ||
                                           requested === "large"

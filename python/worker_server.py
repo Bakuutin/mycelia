@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import logging
+import threading
 from contextvars import copy_context
 from dataclasses import dataclass
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
@@ -29,6 +30,14 @@ class JobDefinition:
 
 # Job registry - add new jobs here
 JOB_REGISTRY: Dict[str, JobDefinition] = {}
+
+# Silero VAD keeps recurrent state on a shared model instance. Concurrent VAD
+# requests corrupt that state and duplicate the model's peak memory usage.
+JOB_LOCKS: Dict[str, threading.Lock] = {"vad": threading.Lock()}
+
+
+def get_job_lock(job_type: str) -> Optional[threading.Lock]:
+    return JOB_LOCKS.get(job_type)
 
 
 def register_job(name: str, data_model: Type[BaseModel], processor: Callable):
@@ -122,11 +131,19 @@ async def process_job(
 
     def run_processor():
         try:
-            result = job_def.processor(
-                job_id,
-                data,
-                lambda progress: update_progress(job_id, progress),
-            )
+            def invoke_processor():
+                return job_def.processor(
+                    job_id,
+                    data,
+                    lambda progress: update_progress(job_id, progress),
+                )
+
+            job_lock = get_job_lock(job_type)
+            if job_lock:
+                with job_lock:
+                    result = invoke_processor()
+            else:
+                result = invoke_processor()
             logger.info(f"{job_type} job {job_id} completed: {result}")
             return result
         except Exception as e:

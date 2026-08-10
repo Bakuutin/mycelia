@@ -4,6 +4,40 @@ export interface VoiceProfileAttachTarget {
   isPrimary: boolean;
 }
 
+export interface VoiceSampleSummaryInput {
+  metadata?: { duration?: number };
+}
+
+export function summarizeVoiceSamples(
+  samples: VoiceSampleSummaryInput[] | undefined,
+  fallback: { count: number; duration: number },
+) {
+  if (!samples) return fallback;
+  return {
+    count: samples.length,
+    duration: samples.reduce(
+      (total, sample) => total + (sample.metadata?.duration ?? 0),
+      0,
+    ),
+  };
+}
+
+export function buildTimelineSampleMetadata(
+  profile: VoiceProfileAttachTarget,
+  start: Date,
+  end: Date,
+) {
+  return {
+    speaker_name: profile.name,
+    profile_id: profile.id,
+    duration: Math.max(0, (end.getTime() - start.getTime()) / 1000),
+    source: "timeline_selection",
+    source_start: start.toISOString(),
+    source_end: end.toISOString(),
+    uploaded_at: new Date().toISOString(),
+  };
+}
+
 export function buildAttachSampleOperations(
   sampleId: string,
   profile: VoiceProfileAttachTarget,

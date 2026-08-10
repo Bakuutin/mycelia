@@ -1,0 +1,172 @@
+import { useEffect, useMemo, useState } from "react";
+import { callResource } from "@/lib/api";
+import {
+  type DiarizationProfile,
+  validateDiarizationRoutes,
+} from "@/lib/diarizationSettings";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Loader2, Plus, RefreshCw, Save, Server, Trash2 } from "lucide-react";
+
+type RouteHealth = {
+  providerProfileId: string;
+  providerProfileName: string;
+  baseUrl?: string;
+  status: "healthy" | "loading" | "unavailable" | "misconfigured" | "disabled";
+  enabled: boolean;
+  priority: number;
+  latencyMs?: number;
+  message: string;
+};
+
+const statusLabel: Record<RouteHealth["status"], string> = {
+  healthy: "Running",
+  loading: "Loading model",
+  unavailable: "Down",
+  misconfigured: "Misconfigured",
+  disabled: "Disabled",
+};
+
+const emptyProfile = (): DiarizationProfile => ({
+  id: `diarizator-${Date.now()}`,
+  name: "Remote diarizator",
+  baseUrl: "https://",
+  enabled: true,
+  priority: 50,
+});
+
+export default function DiarizationSettingsPage() {
+  const [profiles, setProfiles] = useState<DiarizationProfile[]>([]);
+  const [includeEnvironment, setIncludeEnvironment] = useState(true);
+  const [environmentPriority, setEnvironmentPriority] = useState(50);
+  const [health, setHealth] = useState<RouteHealth[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const refreshHealth = async () => {
+    setRefreshing(true);
+    try {
+      const pipeline = await callResource("jobs", { action: "pipeline_health", force: true });
+      const service = pipeline?.services?.find((item: { id: string }) => item.id === "diarizator");
+      setHealth(service?.routes ?? []);
+    } catch (error) {
+      setMessage({ ok: false, text: error instanceof Error ? error.message : "Health check failed" });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const config = await callResource("config", { action: "get" });
+        setProfiles(config?.diarizationProfiles?.profiles ?? []);
+        setIncludeEnvironment(config?.diarizationProfiles?.includeEnvironment ?? true);
+        setEnvironmentPriority(config?.diarizationProfiles?.environmentPriority ?? 50);
+        await refreshHealth();
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const healthById = useMemo(
+    () => new Map(health.map((route) => [route.providerProfileId, route])),
+    [health],
+  );
+
+  const save = async () => {
+    const normalized = profiles.map((profile) => ({
+      ...profile,
+      name: profile.name.trim(),
+      baseUrl: profile.baseUrl.trim().replace(/\/+$/, ""),
+    }));
+    const error = validateDiarizationRoutes(normalized, includeEnvironment);
+    if (error) return setMessage({ ok: false, text: error });
+    setSaving(true);
+    setMessage(null);
+    try {
+      await callResource("config", {
+        action: "patch",
+        updates: {
+          diarizationProfiles: {
+            profiles: normalized,
+            includeEnvironment,
+            environmentPriority,
+          },
+        },
+      });
+      setProfiles(normalized);
+      setMessage({ ok: true, text: "Diarizator routing saved. New jobs will snapshot the first healthy route by priority." });
+      await refreshHealth();
+    } catch (error) {
+      setMessage({ ok: false, text: error instanceof Error ? error.message : "Failed to save" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+
+  const environmentHealth = healthById.get("environment");
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-2xl font-bold"><Server className="h-6 w-6" />Diarization servers</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Choose local or remote speaker diarization services. Health here is the same gate used when a job starts.</p>
+        </div>
+        <Button variant="outline" onClick={() => void refreshHealth()} disabled={refreshing}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />Refresh health
+        </Button>
+      </div>
+
+      <Card className="space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <Switch checked={includeEnvironment} onCheckedChange={setIncludeEnvironment} aria-label="Use environment diarizator" />
+          <div className="min-w-56 flex-1">
+            <p className="font-medium">Local / environment route</p>
+            <p className="text-xs text-muted-foreground">{environmentHealth?.baseUrl ?? "http://host.docker.internal:8085"} · DIARIZATION_SERVER_URL · deployment managed</p>
+          </div>
+          <div className="w-32 space-y-1"><Label htmlFor="diar-env-priority">Priority</Label><Input id="diar-env-priority" type="number" min={1} max={100} value={environmentPriority} onChange={(event) => setEnvironmentPriority(Number(event.target.value))} /></div>
+          <Badge variant={environmentHealth?.status === "healthy" ? "secondary" : "destructive"}>{environmentHealth ? statusLabel[environmentHealth.status] : includeEnvironment ? "Not checked" : "Disabled"}</Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">{environmentHealth?.message ?? "Run scripts/start-diarizator.sh on this Mac, then refresh health."}</p>
+      </Card>
+
+      <div className="flex items-center justify-between gap-3">
+        <div><h3 className="font-semibold">Configured remote servers ({profiles.length})</h3><p className="text-xs text-muted-foreground">Lower priority numbers are preferred; an unhealthy route is skipped.</p></div>
+        <Button variant="outline" onClick={() => profiles.length < 8 && setProfiles([...profiles, emptyProfile()])} disabled={profiles.length >= 8}><Plus className="mr-2 h-4 w-4" />Add server</Button>
+      </div>
+
+      {profiles.length === 0 && <Card className="p-5 text-sm text-muted-foreground">No remote diarizators configured. The local environment route is currently {includeEnvironment ? "enabled" : "disabled"}.</Card>}
+      {profiles.map((profile, index) => {
+        const routeHealth = healthById.get(profile.id);
+        const update = (next: Partial<DiarizationProfile>) => setProfiles(profiles.map((item, itemIndex) => itemIndex === index ? { ...item, ...next } : item));
+        return (
+          <Card key={profile.id} className="space-y-4 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <label className="flex items-center gap-2 text-sm"><Switch checked={profile.enabled} onCheckedChange={(enabled) => update({ enabled })} />Enabled</label>
+              <div className="flex items-center gap-2"><Badge variant={routeHealth?.status === "healthy" ? "secondary" : routeHealth ? "destructive" : "outline"}>{routeHealth ? statusLabel[routeHealth.status] : "Save to test"}</Badge><Button size="icon" variant="ghost" aria-label={`Delete ${profile.name}`} onClick={() => setProfiles(profiles.filter((_, itemIndex) => itemIndex !== index))}><Trash2 className="h-4 w-4" /></Button></div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-6">
+              <div className="space-y-2 md:col-span-2"><Label>Name</Label><Input value={profile.name} onChange={(event) => update({ name: event.target.value })} /></div>
+              <div className="space-y-2 md:col-span-3"><Label>Base URL</Label><Input value={profile.baseUrl} placeholder="https://diarizator.example.com" onChange={(event) => update({ baseUrl: event.target.value })} /></div>
+              <div className="space-y-2"><Label>Priority</Label><Input type="number" min={1} max={100} value={profile.priority} onChange={(event) => update({ priority: Number(event.target.value) })} /></div>
+            </div>
+            {routeHealth && <p className="text-xs text-muted-foreground">{routeHealth.message}{routeHealth.latencyMs != null ? ` · ${routeHealth.latencyMs} ms` : ""}</p>}
+          </Card>
+        );
+      })}
+
+      {message && <div className={`rounded-md border p-3 text-sm ${message.ok ? "border-green-500/40 bg-green-500/10" : "border-destructive/40 bg-destructive/10"}`}>{message.text}</div>}
+      <Button onClick={() => void save()} disabled={saving}><Save className="mr-2 h-4 w-4" />{saving ? "Saving…" : "Save routing"}</Button>
+    </div>
+  );
+}

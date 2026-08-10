@@ -29,6 +29,7 @@ export interface ExternalServiceHealth {
   routes?: Array<{
     providerProfileId: string;
     providerProfileName: string;
+    baseUrl?: string;
     status: ExternalServiceStatus;
     enabled: boolean;
     model?: string;

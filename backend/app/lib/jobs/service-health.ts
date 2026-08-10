@@ -6,6 +6,12 @@ import {
   getEnabledLlmProviders,
   type ResolvedLlmProvider,
 } from "@/lib/llm/provider-routing.ts";
+import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
+import {
+  resolveDiarizatorRoutes,
+  selectDiarizatorRoute,
+  type ResolvedDiarizatorRoute,
+} from "@/lib/diarization/provider-routing.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import {
   classifyServiceResponse,
@@ -222,19 +228,16 @@ async function probeProvider(input: {
   }
 }
 
-function getDiarizatorBaseUrl(): string {
-  return Deno.env.get("DIARIZATION_SERVER_URL") ??
-    "http://host.docker.internal:8085";
-}
-
 // The diarizator exposes only GET /health — probeProvider's /models + apiKey
 // contract doesn't fit, so it gets a dedicated probe.
-async function probeDiarizator(): Promise<ExternalServiceHealth> {
+async function probeDiarizator(
+  route: ResolvedDiarizatorRoute,
+): Promise<ExternalServiceHealth> {
   const usedBy = Object.entries(JOB_SERVICE_DEPENDENCIES)
     .filter(([, dependencies]) => dependencies.includes("diarizator"))
     .map(([workerType]) => workerType);
   const checkedAt = new Date().toISOString();
-  const baseUrl = getDiarizatorBaseUrl();
+  const baseUrl = route.baseUrl;
   const healthUrl = `${baseUrl.trim().replace(/\/+$/, "")}/health`;
   const startedAt = performance.now();
   try {
@@ -254,6 +257,9 @@ async function probeDiarizator(): Promise<ExternalServiceHealth> {
       ...classifyServiceResponse(response.status, body),
       configured: true,
       baseUrl,
+      source: route.source,
+      providerProfileId: route.id,
+      providerProfileName: route.name,
       httpStatus: response.status,
       latencyMs: Math.round(performance.now() - startedAt),
       checkedAt,
@@ -267,6 +273,9 @@ async function probeDiarizator(): Promise<ExternalServiceHealth> {
       status: "unavailable",
       configured: true,
       baseUrl,
+      source: route.source,
+      providerProfileId: route.id,
+      providerProfileName: route.name,
       latencyMs: Math.round(performance.now() - startedAt),
       message: `${
         error instanceof Error ? error.message : String(error)
@@ -282,14 +291,16 @@ export async function getExternalServicesHealth(
 ): Promise<ExternalServiceHealth[]> {
   const transcriptionResource = new TranscriptionResource();
   const llmResource = new LLMResource();
-  const [sttProviders, llmProviders] = await Promise.all([
+  const [sttProviders, llmProviders, serverConfig] = await Promise.all([
     transcriptionResource.getInferenceProviders().catch(() => []),
     llmResource.getInferenceProviders().catch(() =>
       [] as ResolvedLlmProvider[]
     ),
+    getServerConfig().catch(() => undefined),
   ]);
+  const diarizatorRoutes = resolveDiarizatorRoutes(serverConfig);
   const fingerprint = JSON.stringify({
-    diarizator: getDiarizatorBaseUrl(),
+    diarizator: diarizatorRoutes,
     stt: sttProviders.map((provider) => ({
       id: provider.id,
       enabled: provider.enabled,
@@ -498,7 +509,68 @@ export async function getExternalServicesHealth(
       : undefined,
   };
 
-  const diarizatorService = await probeDiarizator();
+  const enabledDiarizatorRoutes = diarizatorRoutes.filter((route) =>
+    route.enabled
+  );
+  const diarizatorRouteHealth = await Promise.all(
+    enabledDiarizatorRoutes.map((route) => probeDiarizator(route)),
+  );
+  const healthyDiarizatorIds = new Set(
+    diarizatorRouteHealth
+      .filter((route) => route.status === "healthy")
+      .map((route) => route.providerProfileId!),
+  );
+  const selectedDiarizator = selectDiarizatorRoute(
+    diarizatorRoutes,
+    healthyDiarizatorIds,
+  );
+  const representativeDiarizator = selectedDiarizator
+    ? diarizatorRouteHealth.find((route) =>
+      route.providerProfileId === selectedDiarizator.id
+    )!
+    : diarizatorRouteHealth.find((route) => route.status === "loading") ??
+      diarizatorRouteHealth[0];
+  const diarizatorService: ExternalServiceHealth = representativeDiarizator
+    ? {
+      ...representativeDiarizator,
+      label: enabledDiarizatorRoutes.length > 1
+        ? `Diarizator (${enabledDiarizatorRoutes.length} routes)`
+        : "Diarizator (speaker service)",
+      status: selectedDiarizator ? "healthy" : representativeDiarizator.status,
+      configured: enabledDiarizatorRoutes.length > 0,
+      message: selectedDiarizator
+        ? `Using ${selectedDiarizator.name}; ${healthyDiarizatorIds.size}/${enabledDiarizatorRoutes.length} enabled routes healthy`
+        : representativeDiarizator.message,
+      routes: diarizatorRoutes.map((route) => {
+        const health = diarizatorRouteHealth.find((candidate) =>
+          candidate.providerProfileId === route.id
+        );
+        return {
+          providerProfileId: route.id,
+          providerProfileName: route.name,
+          baseUrl: route.baseUrl,
+          status: route.enabled ? health?.status ?? "unavailable" : "disabled",
+          enabled: route.enabled,
+          priority: route.priority,
+          latencyMs: health?.latencyMs,
+          message: route.enabled
+            ? health?.message ?? "Route health is unavailable"
+            : "Disabled for new diarization jobs; no health probe was sent.",
+        };
+      }),
+    }
+    : {
+      id: "diarizator",
+      label: "Diarizator (speaker service)",
+      status: "misconfigured",
+      configured: false,
+      message: "No diarization route is configured",
+      checkedAt: new Date().toISOString(),
+      usedBy: Object.entries(JOB_SERVICE_DEPENDENCIES)
+        .filter(([, dependencies]) => dependencies.includes("diarizator"))
+        .map(([workerType]) => workerType),
+      routes: [],
+    };
 
   const services = [sttService, llmService, diarizatorService];
 

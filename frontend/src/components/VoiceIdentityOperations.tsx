@@ -13,6 +13,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { Label } from "@/components/ui/label";
+import {
+  getRunComparison,
+  validateOperationRange,
+} from "@/lib/voiceIdentityOperations";
 
 type Run = {
   runId: string;
@@ -20,6 +26,7 @@ type Run = {
   generation: number;
   embeddingSpaceId: string;
   range?: { start: Date; end: Date };
+  replacesRunId?: string;
 };
 
 type Profile = {
@@ -40,13 +47,28 @@ type Calibration = {
 export function VoiceIdentityOperations() {
   const queryClient = useQueryClient();
   const [hours, setHours] = useState(24 * 7);
-  const range = useMemo(
+  const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
+  const [customStart, setCustomStart] = useState(
+    () => new Date(Date.now() - 24 * 3_600_000),
+  );
+  const [customEnd, setCustomEnd] = useState(() => new Date());
+  const [actionResult, setActionResult] = useState<
+    {
+      title: string;
+      value: unknown;
+    } | null
+  >(null);
+  const presetRange = useMemo(
     () => ({
       start: new Date(Date.now() - hours * 3_600_000),
       end: new Date(),
     }),
     [hours],
   );
+  const range = rangeMode === "custom"
+    ? { start: customStart, end: customEnd }
+    : presetRange;
+  const rangeError = validateOperationRange(range.start, range.end);
 
   const { data: runs = [] } = useQuery<Run[]>({
     queryKey: ["speaker-runs"],
@@ -181,20 +203,49 @@ export function VoiceIdentityOperations() {
           `Type PURGE ${runId} to delete only superseded diarization documents.`,
         );
         if (!confirmation) return null;
-        return await callResource("speaker-segments", {
+        const value = await callResource("speaker-segments", {
           action,
           runId,
           confirmation,
         });
+        return { kind: action, runId, value };
       }
-      const result = await callResource("speaker-segments", { action, runId });
-      if (action === "compare-run" || action === "preview-purge") {
-        window.alert(JSON.stringify(result, null, 2));
+      if (action === "compare-run") {
+        const run = runs.find((item) => item.runId === runId);
+        if (!run) throw new Error("Run not found");
+        const comparison = getRunComparison(run, runs);
+        if (!comparison.enabled || !comparison.baseline) {
+          throw new Error(comparison.reason);
+        }
+        const [selected, baseline] = await Promise.all([
+          callResource("speaker-segments", { action, runId }),
+          callResource("speaker-segments", {
+            action,
+            runId: comparison.baseline.runId,
+          }),
+        ]);
+        return {
+          kind: "comparison",
+          runId,
+          baselineRunId: comparison.baseline.runId,
+          selected,
+          baseline,
+        };
       }
-      return result;
+      const value = await callResource("speaker-segments", { action, runId });
+      return { kind: action, runId, value };
     },
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ["speaker-runs"] }),
+    onSuccess: (result) => {
+      if (result) {
+        setActionResult({
+          title: result.kind === "comparison"
+            ? `Comparison: ${result.runId} vs ${result.baselineRunId}`
+            : `${result.kind}: ${result.runId}`,
+          value: result,
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["speaker-runs"] });
+    },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "Run action failed"),
   });
@@ -214,35 +265,73 @@ export function VoiceIdentityOperations() {
             <Button
               key={value}
               size="sm"
-              variant={hours === value ? "default" : "outline"}
-              onClick={() => setHours(value)}
+              variant={rangeMode === "preset" && hours === value
+                ? "default"
+                : "outline"}
+              onClick={() => {
+                setHours(value);
+                setRangeMode("preset");
+              }}
             >
               {value === 24 ? "24 hours" : `${value / 24} days`}
             </Button>
           ))}
+          <Button
+            size="sm"
+            variant={rangeMode === "custom" ? "default" : "outline"}
+            onClick={() => setRangeMode("custom")}
+          >
+            Custom range
+          </Button>
           <span className="ml-auto text-xs text-muted-foreground">
             Primary: {primary?.name ?? "none"} · calibration:{" "}
             {calibration?.calibrationId ?? "not validated"}
           </span>
         </div>
+        {rangeMode === "custom" && (
+          <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Start</Label>
+              <DateTimePicker
+                value={customStart}
+                onChange={(date) => date && setCustomStart(date)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>End</Label>
+              <DateTimePicker
+                value={customEnd}
+                onChange={(date) => date && setCustomEnd(date)}
+              />
+            </div>
+          </div>
+        )}
+        <div className="text-xs text-muted-foreground">
+          Selected: {range.start.toLocaleString()} →{" "}
+          {range.end.toLocaleString()}
+          {rangeError && (
+            <span className="ml-2 text-destructive">{rangeError}</span>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button
             onClick={() => operation.mutate("classify")}
-            disabled={operation.isPending || !calibration}
+            disabled={operation.isPending || !calibration ||
+              Boolean(rangeError)}
           >
             Classify existing
           </Button>
           <Button
             variant="outline"
             onClick={() => operation.mutate("missing")}
-            disabled={operation.isPending}
+            disabled={operation.isPending || Boolean(rangeError)}
           >
             Diarize missing
           </Button>
           <Button
             variant="outline"
             onClick={() => operation.mutate("rediarize")}
-            disabled={operation.isPending}
+            disabled={operation.isPending || Boolean(rangeError)}
           >
             Re-diarize range
           </Button>
@@ -253,83 +342,113 @@ export function VoiceIdentityOperations() {
           </Link>
         </div>
         <div className="space-y-2">
-          {runs.slice(0, 8).map((run) => (
-            <div
-              key={run.runId}
-              className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm"
-            >
-              <span className="font-mono text-xs">{run.runId}</span>
-              <Badge variant="outline">{run.status}</Badge>
-              <span className="text-xs text-muted-foreground">
-                gen {run.generation} · {run.embeddingSpaceId}
-              </span>
-              <div className="ml-auto flex gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    runAction.mutate({
-                      action: "compare-run",
-                      runId: run.runId,
-                    })}
-                >
-                  Compare
-                </Button>
-                {run.status === "ready" && (
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      runAction.mutate({
-                        action: "activate-run",
-                        runId: run.runId,
-                      })}
-                  >
-                    Activate
-                  </Button>
-                )}
-                {run.status === "superseded" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      runAction.mutate({
-                        action: "activate-run",
-                        runId: run.runId,
-                      })}
-                  >
-                    Rollback to
-                  </Button>
-                )}
-                {(run.status === "superseded" || run.status === "failed") && (
+          {runs.slice(0, 8).map((run) => {
+            const comparison = getRunComparison(run, runs);
+            return (
+              <div
+                key={run.runId}
+                className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm"
+              >
+                <span className="font-mono text-xs">{run.runId}</span>
+                <Badge variant="outline">{run.status}</Badge>
+                <span className="text-xs text-muted-foreground">
+                  gen {run.generation} · {run.embeddingSpaceId}
+                </span>
+                <div className="ml-auto flex gap-1">
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={() =>
                       runAction.mutate({
-                        action: "preview-purge",
+                        action: "compare-run",
                         runId: run.runId,
                       })}
+                    disabled={runAction.isPending || !comparison.enabled}
+                    title={comparison.reason}
                   >
-                    Preview purge
+                    {runAction.isPending &&
+                        runAction.variables?.runId === run.runId
+                      ? "Working…"
+                      : comparison.baseline
+                      ? `Compare with ${comparison.baseline.runId}`
+                      : "Compare unavailable"}
                   </Button>
-                )}
-                {run.status === "superseded" && (
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() =>
-                      runAction.mutate({
-                        action: "purge-superseded",
-                        runId: run.runId,
-                      })}
-                  >
-                    Purge
-                  </Button>
-                )}
+                  {run.status === "ready" && (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        runAction.mutate({
+                          action: "activate-run",
+                          runId: run.runId,
+                        })}
+                    >
+                      Activate
+                    </Button>
+                  )}
+                  {run.status === "superseded" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        runAction.mutate({
+                          action: "activate-run",
+                          runId: run.runId,
+                        })}
+                    >
+                      Rollback to
+                    </Button>
+                  )}
+                  {(run.status === "superseded" || run.status === "failed") && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        runAction.mutate({
+                          action: "preview-purge",
+                          runId: run.runId,
+                        })}
+                    >
+                      Preview purge
+                    </Button>
+                  )}
+                  {run.status === "superseded" && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() =>
+                        runAction.mutate({
+                          action: "purge-superseded",
+                          runId: run.runId,
+                        })}
+                    >
+                      Purge
+                    </Button>
+                  )}
+                </div>
+                <div className="w-full text-xs text-muted-foreground">
+                  {comparison.reason}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+        {actionResult && (
+          <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{actionResult.title}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setActionResult(null)}
+              >
+                Close
+              </Button>
+            </div>
+            <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">
+              {JSON.stringify(actionResult.value, null, 2)}
+            </pre>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -4,4 +4,5 @@
 !pyproject.blackwell.toml
 !.env
 !src
+!src/**
 !scripts

@@ -100,6 +100,10 @@ services:
     env_file:
       - .env
     environment:
+      # Keep the process-visible mode aligned with the command selected above.
+      # Otherwise an env_file value such as BACKEND_TASK=start makes readiness
+      # diagnostics report production even when Compose launched `deno task dev`.
+      BACKEND_TASK: ${BACKEND_TASK:-start}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000

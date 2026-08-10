@@ -31,6 +31,7 @@ class EnrollmentJobData(BaseModel):
     sample_file_id: Optional[str] = None  # If enrolling from saved voice sample in GridFS
     start: Optional[float] = None  # Start time for segment extraction
     end: Optional[float] = None  # End time for segment extraction
+    diarizationServerUrl: Optional[str] = None
 
 
 def _get_audio_from_chunk(chunk_id: str) -> bytes:
@@ -115,7 +116,7 @@ def _get_audio_from_gridfs(file_id: str, bucket: str = "voice_samples") -> bytes
         raise ValueError(f"Unexpected GridFS download result type: {type(result)}")
 
 
-def _extract_embedding(audio_data: bytes, start: Optional[float] = None, end: Optional[float] = None) -> Dict[str, Any]:
+def _extract_embedding(audio_data: bytes, start: Optional[float] = None, end: Optional[float] = None, server_url: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract speaker embedding from audio using the diarizator service.
     
@@ -123,7 +124,7 @@ def _extract_embedding(audio_data: bytes, start: Optional[float] = None, end: Op
         Dict with 'embedding' (list of floats), 'dimension', and 'duration'
     """
     # Build URL with query params
-    url = f"{DIARIZATION_SERVER_URL}/embed"
+    url = f"{(server_url or DIARIZATION_SERVER_URL).rstrip('/')}/embed"
     params = {}
     if start is not None:
         params["start"] = start
@@ -195,7 +196,9 @@ def process_enrollment_job(
     
     # Extract embedding
     try:
-        embed_result = _extract_embedding(audio_data, data.start, data.end)
+        embed_result = _extract_embedding(
+            audio_data, data.start, data.end, data.diarizationServerUrl
+        )
     except Exception as e:
         logger.error(f"Failed to extract embedding: {e}")
         raise

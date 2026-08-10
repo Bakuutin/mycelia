@@ -340,6 +340,23 @@ export async function enqueueJob(
     }
   }
 
+  if (["diarization", "enrollment", "profileReenrollment"].includes(data.type)) {
+    const diarizator = (await getExternalServicesHealth()).find((service) =>
+      service.id === "diarizator"
+    );
+    if (diarizator?.status !== "healthy" || !diarizator.baseUrl) {
+      throw new Error(
+        `No healthy diarizator route is available. ${diarizator?.message ?? "Configure one in Settings → Diarization."}`,
+      );
+    }
+    mergedData.diarizationServerUrl = diarizator.baseUrl;
+    mergedData.routingContext = {
+      ...(mergedData.routingContext ?? {}),
+      providerProfileId: diarizator.providerProfileId,
+      resolvedAt: new Date().toISOString(),
+    };
+  }
+
   const parsedData = jobRegistry.validateJobData(mergedData);
 
   if (!parsedData.type) {

@@ -1,16 +1,23 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Form from "@rjsf/shadcn";
 import validator from "@rjsf/validator-ajv8";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ArrowLeft, Play } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { prepareJobLaunchSchema } from "@/lib/jobLaunchDefaults";
 
 export default function CreateJobPage() {
   const navigate = useNavigate();
@@ -26,6 +33,47 @@ export default function CreateJobPage() {
       return response as Record<string, any>;
     },
   });
+  const needsVoiceProfile = selectedType === "profileReenrollment";
+  const { data: pipelineHealth, isLoading: isLoadingHealth } = useQuery<any>({
+    queryKey: ["pipeline-health", "job-launch", selectedType],
+    enabled: needsVoiceProfile,
+    queryFn: () =>
+      api.callResource("jobs", {
+        action: "pipeline_health",
+        force: true,
+      }),
+  });
+  const diarizatorHealth = pipelineHealth?.services?.find((service: any) =>
+    service.id === "diarizator"
+  );
+  const dependencyReady = !needsVoiceProfile ||
+    diarizatorHealth?.status === "healthy";
+  const dependencyMessage = needsVoiceProfile && !isLoadingHealth &&
+      !dependencyReady
+    ? diarizatorHealth?.message ??
+      "Diarizator is unavailable. Start scripts/start-diarizator.sh first."
+    : null;
+  const {
+    data: speakerProfiles = [],
+    isLoading: isLoadingProfiles,
+    isError: isProfilesError,
+  } = useQuery<any[]>({
+    queryKey: ["speaker_profiles"],
+    enabled: needsVoiceProfile,
+    queryFn: () =>
+      api.callResource("mongo", {
+        action: "find",
+        collection: "speaker_profiles",
+        query: {},
+        options: { sort: { is_primary: -1, name: 1 } },
+      }) as Promise<any[]>,
+  });
+
+  const launchSchema = useMemo(() => {
+    if (!selectedType || !schemas?.[selectedType]?.input) return null;
+    const { $schema, ...schema } = schemas[selectedType].input;
+    return prepareJobLaunchSchema(schema, selectedType, speakerProfiles);
+  }, [schemas, selectedType, speakerProfiles]);
 
   const enqueueMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -47,7 +95,9 @@ export default function CreateJobPage() {
     },
     onError: (error) => {
       console.error("Failed to enqueue job:", error);
-      toast.error("Failed to enqueue job");
+      toast.error("Failed to enqueue job", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
     },
   });
 
@@ -85,20 +135,27 @@ export default function CreateJobPage() {
           <CardTitle>Select Job Type</CardTitle>
         </CardHeader>
         <CardContent>
-          <Select onValueChange={handleTypeChange} value={selectedType || undefined}>
+          <Select
+            onValueChange={handleTypeChange}
+            value={selectedType || undefined}
+          >
             <SelectTrigger className="w-[300px]">
               <SelectValue placeholder="Select a job type..." />
             </SelectTrigger>
             <SelectContent>
-              {isLoadingSchemas ? (
-                <SelectItem value="loading" disabled>Loading schemas...</SelectItem>
-              ) : (
-                jobTypes.map((type) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
+              {isLoadingSchemas
+                ? (
+                  <SelectItem value="loading" disabled>
+                    Loading schemas...
                   </SelectItem>
-                ))
-              )}
+                )
+                : (
+                  jobTypes.map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {type}
+                    </SelectItem>
+                  ))
+                )}
             </SelectContent>
           </Select>
         </CardContent>
@@ -107,37 +164,72 @@ export default function CreateJobPage() {
       {selectedType && schemas?.[selectedType] && (
         <Card>
           <CardHeader>
-            <CardTitle className="capitalize">{selectedType} Configuration</CardTitle>
+            <CardTitle className="capitalize">
+              {selectedType} Configuration
+            </CardTitle>
           </CardHeader>
           <CardContent>
+            {needsVoiceProfile && isLoadingProfiles && (
+              <p className="text-sm text-muted-foreground">
+                Loading known voice profiles…
+              </p>
+            )}
+            {needsVoiceProfile && isProfilesError && (
+              <p className="text-sm text-destructive">
+                Could not load voice profiles. Refresh the page and try again.
+              </p>
+            )}
+            {needsVoiceProfile && !isLoadingProfiles && !isProfilesError &&
+              speakerProfiles.length === 0 && (
+              <p className="text-sm text-destructive">
+                No voice profiles exist yet. Create one in Voice Profiles first.
+              </p>
+            )}
+            {needsVoiceProfile && isLoadingHealth && (
+              <p className="text-sm text-muted-foreground">
+                Checking Diarizator health…
+              </p>
+            )}
+            {dependencyMessage && (
+              <p className="text-sm text-destructive">{dependencyMessage}</p>
+            )}
             <div className="rjsf-container">
-              <Form
-                schema={(() => {
-                  // Strip $schema to avoid AJV8 draft 2020-12 compatibility issues
-                  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                  const { $schema, ...rest } = schemas[selectedType].input;
-                  return rest;
-                })()}
-                validator={validator}
-                onSubmit={(data: any) => onSubmit(data.formData)}
-                disabled={enqueueMutation.isPending}
-                noHtml5Validate={true}
-                showErrorList={false}
-                liveValidate={false}
-              >
-                <div className="mt-6">
-                  <Button type="submit" disabled={enqueueMutation.isPending} className="w-full sm:w-auto">
-                    {enqueueMutation.isPending ? (
-                      "Launching..."
-                    ) : (
-                      <>
-                        <Play className="h-4 w-4 mr-2" />
-                        Launch Job
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </Form>
+              {launchSchema && (!needsVoiceProfile ||
+                (!isLoadingProfiles && !isProfilesError &&
+                  speakerProfiles.length > 0)) &&
+                (
+                  <Form
+                    schema={launchSchema}
+                    validator={validator}
+                    uiSchema={selectedType === "profileReenrollment"
+                      ? { type: { "ui:widget": "hidden" } }
+                      : undefined}
+                    onSubmit={(data: any) => onSubmit(data.formData)}
+                    disabled={enqueueMutation.isPending || !dependencyReady}
+                    noHtml5Validate={true}
+                    showErrorList={false}
+                    liveValidate={false}
+                  >
+                    <div className="mt-6">
+                      <Button
+                        type="submit"
+                        disabled={enqueueMutation.isPending || !dependencyReady}
+                        className="w-full sm:w-auto"
+                      >
+                        {enqueueMutation.isPending
+                          ? (
+                            "Launching..."
+                          )
+                          : (
+                            <>
+                              <Play className="h-4 w-4 mr-2" />
+                              Launch Job
+                            </>
+                          )}
+                      </Button>
+                    </div>
+                  </Form>
+                )}
             </div>
           </CardContent>
         </Card>
@@ -145,4 +237,3 @@ export default function CreateJobPage() {
     </div>
   );
 }
-
