@@ -1,2 +1,0 @@
-[console_scripts]
-simple-speaker-service = simple_speaker_recognition.api.service:main

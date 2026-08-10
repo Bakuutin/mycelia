@@ -10,6 +10,7 @@ python/conversations-to-reextract.jsonl
 *.local.*
 .docker
 **/.venv
+*.egg-info/
 **/.DS_Store
 .ruff_cache
 *.ipynb
