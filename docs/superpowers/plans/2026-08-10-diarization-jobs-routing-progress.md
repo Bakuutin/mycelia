@@ -46,7 +46,7 @@ The production change that makes this test fail is removal of the read grant req
 Run:
 
 ```bash
-cd backend && deno test workers/diarization.test.ts
+cd backend && deno test --allow-env workers/diarization.test.ts
 ```
 
 Expected: FAIL because the production capability does not contain the read grant.
@@ -66,7 +66,7 @@ Do not replace the three explicit actions with `action: "*"`.
 Run:
 
 ```bash
-cd backend && deno test workers/diarization.test.ts
+cd backend && deno test --allow-env workers/diarization.test.ts
 cd backend && deno check workers/diarization.ts
 ```
 
@@ -390,7 +390,7 @@ Call the helper in `enqueueJob` after schema validation but before writing the M
 - [ ] **Step 6: Run focused suites and build**
 
 ```bash
-cd backend && deno test app/lib/jobs/generation-preflight.test.ts workers/diarization.test.ts
+cd backend && deno test --allow-env app/lib/jobs/generation-preflight.test.ts workers/diarization.test.ts
 cd frontend && deno task test --run src/lib/diarizationGeneration.test.ts src/lib/diarizationProgress.test.ts
 docker compose build frontend
 ```
@@ -416,7 +416,7 @@ git commit -m "fix: create fresh runs for generation retries"
 - [ ] **Step 1: Run all focused automated checks**
 
 ```bash
-cd backend && deno test workers/diarization.test.ts app/lib/diarization/provider-routing.test.ts app/lib/jobs/generation-preflight.test.ts
+cd backend && deno test --allow-env workers/diarization.test.ts app/lib/diarization/provider-routing.test.ts app/lib/jobs/generation-preflight.test.ts
 cd python && uv run pytest -q tests/test_voice_identity_jobs.py tests/test_diarization_worker.py
 cd frontend && deno task test --run src/lib/diarizationSettings.test.ts src/lib/diarizationProgress.test.ts src/lib/diarizationGeneration.test.ts src/lib/jobRouting.test.ts
 docker compose --profile diarization config --quiet
