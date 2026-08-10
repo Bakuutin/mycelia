@@ -8,7 +8,11 @@ from bson import ObjectId
 
 path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from jobs.diarization import DiarizationJobData, process_diarization_job  # noqa: E402
+from jobs.diarization import (  # noqa: E402
+    DiarizationJobData,
+    campaign_rate_estimate,
+    process_diarization_job,
+)
 from jobs.enrollment import EnrollmentJobData, process_enrollment_job  # noqa: E402
 from jobs.speaker_matching import (  # noqa: E402
     SpeakerMatchingJobData,
@@ -109,10 +113,33 @@ class EnrollmentJobTest(TestCase):
 
 
 class DiarizationJobTest(TestCase):
+    def test_empty_campaign_is_finalized_instead_of_left_running(self):
+        with (
+            patch("jobs.diarization.count_pending_chunks", return_value=0),
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign") as update_campaign,
+        ):
+            result = process_diarization_job(
+                "job-empty",
+                DiarizationJobData(),
+                lambda _progress: None,
+            )
+
+        self.assertFalse(result["hasMore"])
+        self.assertEqual(update_campaign.call_args.args[1]["status"], "completed")
+
+    def test_campaign_eta_uses_recent_batch_rates_and_requires_two_samples(self):
+        self.assertIsNone(campaign_rate_estimate([2.0]))
+        estimate = campaign_rate_estimate([1.0, 3.0, 5.0])
+        self.assertGreater(estimate, 1.0)
+        self.assertLess(estimate, 5.0)
+
     def test_job_limits_work_and_reports_continuation(self):
         sequence = object()
 
         with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign") as update_campaign,
             patch("jobs.diarization.count_pending_chunks", return_value=10),
             patch("jobs.diarization.get_diarization_sequences", return_value=[sequence]) as get_sequences,
             patch(
@@ -129,12 +156,17 @@ class DiarizationJobTest(TestCase):
         self.assertEqual(get_sequences.call_args.kwargs["limit"], 1)
         self.assertTrue(result["hasMore"])
         self.assertEqual(result["processed"], 2)
+        self.assertTrue(result["campaignId"].startswith("diarization-"))
+        campaign_updates = [call.args[1] for call in update_campaign.call_args_list]
+        self.assertTrue(any(update.get("batchNumber") == 1 for update in campaign_updates))
+        self.assertTrue(any(update.get("estimatedBatches") == 2 for update in campaign_updates))
 
     def test_reports_complete_progress_after_each_sequence(self):
         updates = []
 
         with (
             patch("time.monotonic", side_effect=[100.0, 106.0]),
+            patch("jobs.diarization._campaign_call", return_value=None),
             patch("jobs.diarization.count_pending_chunks", return_value=10),
             patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
             patch(
@@ -158,15 +190,64 @@ class DiarizationJobTest(TestCase):
         self.assertEqual(progress["errors"], 0)
         self.assertEqual(progress["elapsed_seconds"], 6.0)
         self.assertEqual(progress["chunks_per_second"], 0.5)
-        self.assertEqual(progress["eta_seconds"], 14.0)
+        self.assertIsNone(progress["eta_seconds"])
+        self.assertEqual(progress["eta_confidence"], "low")
+
+    def test_structured_sequence_errors_are_returned(self):
+        structured = {
+            "category": "invalid_audio",
+            "message": "bad opus",
+            "originalId": str(ObjectId()),
+            "start": datetime.now(tz=UTC),
+            "end": datetime.now(tz=UTC),
+            "route": "https://diar.example",
+            "attempt": 1,
+            "retryable": True,
+        }
+        with (
+            patch("jobs.diarization.count_pending_chunks", return_value=2),
+            patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={
+                    "status": "error",
+                    "chunks_diarized": 1,
+                    "segments": 0,
+                    "error": "bad opus",
+                    "errorDetail": structured,
+                },
+            ),
+        ):
+            result = process_diarization_job(
+                "job-errors",
+                DiarizationJobData(limit=1),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(result["errorCount"], 1)
+        self.assertEqual(result["errors"], [structured])
+        self.assertEqual(result["failedSequences"], 1)
 
     def test_zero_progress_errors_fail_the_job(self):
+        structured = {
+            "message": "boom",
+            "retryable": True,
+            "retryAt": datetime.now(tz=UTC),
+        }
         with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign") as update_campaign,
             patch("jobs.diarization.count_pending_chunks", return_value=3),
             patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
             patch(
                 "jobs.diarization.diarize_sequence",
-                return_value={"status": "error", "chunks_diarized": 0, "segments": 0, "error": "boom"},
+                return_value={
+                    "status": "error",
+                    "chunks_diarized": 0,
+                    "segments": 0,
+                    "error": "boom",
+                    "errorDetail": structured,
+                },
             ),
         ):
             with self.assertRaisesRegex(RuntimeError, "boom"):
@@ -175,6 +256,10 @@ class DiarizationJobTest(TestCase):
                     DiarizationJobData(limit=1),
                     lambda _progress: None,
                 )
+
+        final_update = update_campaign.call_args.args[1]
+        self.assertEqual(final_update["status"], "interrupted")
+        self.assertEqual(final_update["errors"], [structured])
 
 
 class SpeakerMatchingJobTest(TestCase):

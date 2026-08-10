@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from sys import path
 from unittest import TestCase, main
@@ -15,6 +16,11 @@ from diarization_worker import (  # noqa: E402
     _build_diarization_request_fields,
     _clip_continuation_segment,
     _reconcile_speaker_labels,
+    _classify_diarization_error,
+    _segment_identity_key,
+    _failure_retry_state,
+    _get_overlap_segments,
+    diarize_sequence,
     mark_as_diarized,
 )
 
@@ -117,6 +123,69 @@ class DiarizationWorkerTest(TestCase):
 
         self.assertIsNone(duplicate)
         self.assertEqual(crossing, (boundary, boundary + timedelta(seconds=2)))
+
+    def test_overlap_lookup_accepts_direct_mongo_resource_arrays(self):
+        sequence = _sequence()
+        sequence.is_continuation = True
+        segment = {"speaker": "SPEAKER_00", "embedding": [1.0, 0.0]}
+
+        with patch("diarization_worker.call_resource", return_value=[segment]):
+            self.assertEqual(_get_overlap_segments(sequence), [segment])
+
+    def test_timeout_errors_are_structured_and_retryable(self):
+        sequence = _sequence()
+
+        error = _classify_diarization_error(
+            sequence,
+            "https://diar.example",
+            TimeoutError("request timed out"),
+            attempt=2,
+        )
+
+        self.assertEqual(error["category"], "timeout")
+        self.assertTrue(error["retryable"])
+        self.assertEqual(error["attempt"], 2)
+        self.assertEqual(error["originalId"], str(sequence.original_id))
+        self.assertEqual(error["route"], "https://diar.example")
+
+    def test_generation_segment_identity_is_stable(self):
+        sequence = _sequence()
+
+        first = _segment_identity_key("run-7", sequence, 3)
+        second = _segment_identity_key("run-7", sequence, 3)
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, _segment_identity_key("run-7", sequence, 4))
+
+    def test_failure_retry_budget_stops_after_three_attempts(self):
+        first = _failure_retry_state(1)
+        third = _failure_retry_state(3)
+
+        self.assertEqual(first["status"], "will_retry")
+        self.assertEqual(first["delaySeconds"], 60)
+        self.assertEqual(third["status"], "needs_attention")
+        self.assertIsNone(third["delaySeconds"])
+
+    def test_generation_failure_does_not_block_missing_diarization(self):
+        sequence = _sequence()
+
+        with (
+            patch("diarization_worker.claim_sequence", return_value=(True, None)),
+            patch("diarization_worker.combine_chunks_to_wav", return_value=(BytesIO(b"wav"), 16000)),
+            patch("diarization_worker.requests.post", side_effect=TimeoutError("timed out")),
+            patch("diarization_worker.release_sequence"),
+            patch("diarization_worker._record_sequence_failure") as record_failure,
+        ):
+            result = diarize_sequence(
+                sequence,
+                "worker-1",
+                run_id="run-1",
+                mark_chunks=False,
+                server_url="https://diar.example",
+            )
+
+        self.assertEqual(result["status"], "error")
+        record_failure.assert_not_called()
 
 
 if __name__ == "__main__":

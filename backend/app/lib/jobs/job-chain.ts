@@ -26,8 +26,30 @@ export function getContinuationJobData(
   if (data.type === "summarization") {
     return { type: "summarization" };
   }
-  if (typeof result?.cursor === "string" && result.cursor.length > 0) {
-    return { ...data, cursor: result.cursor };
+  const continuation = { ...data };
+  if (
+    data.type === "diarization" &&
+    typeof result?.campaignId === "string" && result.campaignId.length > 0
+  ) {
+    continuation.campaignId = result.campaignId;
   }
-  return data;
+  if (typeof result?.cursor === "string" && result.cursor.length > 0) {
+    const parsedCursor = new Date(result.cursor);
+    continuation.cursor = Number.isNaN(parsedCursor.getTime())
+      ? result.cursor
+      : parsedCursor.toISOString();
+  }
+  return Object.keys(continuation).length === Object.keys(data).length &&
+      Object.entries(continuation).every(([key, value]) => data[key] === value)
+    ? data
+    : continuation;
+}
+
+export function getContinuationPriority(
+  data: Record<string, unknown>,
+): number | undefined {
+  if (data.type !== "diarization") return undefined;
+  if (data.originalId) return 1;
+  if (data.mode === "build_generation") return 5;
+  return 10;
 }

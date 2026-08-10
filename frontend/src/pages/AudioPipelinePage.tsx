@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import {
@@ -111,6 +111,7 @@ interface AudioSession {
 }
 
 interface PipelineStats {
+  warnings?: string[];
   totalSessions: number;
   totalChunks: number;
   chunksVadProcessed: number;
@@ -274,6 +275,7 @@ export default function AudioPipelinePage() {
     new Set(),
   );
   const [sessionLimit, setSessionLimit] = useState(DEFAULT_SESSION_LIMIT);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
   const {
     data: sessionsData,
@@ -291,7 +293,7 @@ export default function AudioPipelinePage() {
       signal.addEventListener("abort", cancelRequest, { once: true });
       const timeoutId = setTimeout(
         () => requestController.abort(),
-        20_000,
+        15_000,
       );
 
       let response: Response;
@@ -308,7 +310,7 @@ export default function AudioPipelinePage() {
       } catch (error) {
         if (requestController.signal.aborted && !signal.aborted) {
           throw new Error(
-            "Pipeline statistics took longer than 20 seconds. Retry after the database finishes its current work.",
+            "Pipeline statistics took longer than 15 seconds. The database is busy; diarization continues in the background.",
           );
         }
         throw error;
@@ -429,9 +431,18 @@ export default function AudioPipelinePage() {
         stats,
       };
     },
-    retry: 1,
+    retry: false,
     refetchInterval: autoRefresh ? 30_000 : false,
   });
+
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingTimedOut(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setLoadingTimedOut(true), 16_000);
+    return () => window.clearTimeout(timeout);
+  }, [isLoading]);
 
   const sessions = sessionsData?.sessions;
   const hasMoreSessions = sessionsData?.hasMore ?? false;
@@ -456,7 +467,7 @@ export default function AudioPipelinePage() {
   ) ?? [];
   const stagesWithErrors = stats?.stages?.filter((stage) => stage.errors > 0) ??
     [];
-  const pipelineHealth = isError && !stats
+  const pipelineHealth = (isError || loadingTimedOut) && !stats
     ? "error"
     : !stats
     ? "loading"
@@ -665,7 +676,7 @@ export default function AudioPipelinePage() {
                   : pipelineHealth === "error"
                   ? pipelineError instanceof Error
                     ? pipelineError.message
-                    : "Pipeline statistics could not be loaded."
+                    : "Pipeline statistics are not responding. Diarization continues independently; retry this dashboard."
                   : blockedStages.length > 0
                   ? `${blockedStages.map((stage) => stage.label).join(", ")} ${
                     blockedStages.length === 1 ? "is" : "are"
@@ -688,6 +699,18 @@ export default function AudioPipelinePage() {
           </Link>
         </CardContent>
       </Card>
+
+      {(stats?.warnings?.length ?? 0) > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <p className="font-medium text-amber-800">
+            Some counters are temporarily unavailable
+          </p>
+          <p className="text-muted-foreground">
+            The database stopped expensive dashboard scans to protect running
+            workers. Refresh later; job execution is unaffected.
+          </p>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -1134,7 +1157,16 @@ export default function AudioPipelinePage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {isLoading
+          {isLoading && loadingTimedOut
+            ? (
+              <div className="space-y-3 p-8 text-center text-muted-foreground">
+                <p>Source details are taking too long to load. Background workers are unaffected.</p>
+                <Button variant="outline" onClick={() => void refetch()}>
+                  Retry dashboard
+                </Button>
+              </div>
+            )
+            : isLoading
             ? (
               <div className="p-8 text-center text-muted-foreground">
                 Loading sessions...

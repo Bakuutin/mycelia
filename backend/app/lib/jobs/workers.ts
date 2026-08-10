@@ -9,7 +9,11 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { workerPauseManager } from "./worker-pause-manager.ts";
 import { env } from "#/env.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
-import { getContinuationJobData, shouldContinueJobChain } from "./job-chain.ts";
+import {
+  getContinuationJobData,
+  getContinuationPriority,
+  shouldContinueJobChain,
+} from "./job-chain.ts";
 import {
   getWorkerConcurrencyRange,
   normalizeWorkerConcurrency,
@@ -18,6 +22,7 @@ import {
   getJobServiceDependencies,
   invalidateExternalServicesHealthCache,
 } from "./service-health.ts";
+import { isCancelledJobRecord } from "./job-state.ts";
 
 const workers = new Map<string, Worker>();
 
@@ -60,6 +65,12 @@ export async function startWorkers() {
         options: { limit: 1 },
       });
       const existingJob = existingJobs[0];
+      if (isCancelledJobRecord(existingJob)) {
+        console.warn(
+          `[${jobType}] Ignoring stale active event for cancelled job ${jobId}`,
+        );
+        return;
+      }
       const isRestart = (existingJob?.attempts ?? 0) > 0 ||
         existingJob?.finishedAt != null;
 
@@ -232,8 +243,12 @@ export async function startWorkers() {
         );
         try {
           await enqueueJob(
-            getContinuationJobData(job.data, job.returnvalue) as typeof job.data,
+            getContinuationJobData(
+              job.data,
+              job.returnvalue,
+            ) as typeof job.data,
             {
+              priority: getContinuationPriority(job.data),
               trigger: { type: "auto", reason: "hasMore" },
             },
           );

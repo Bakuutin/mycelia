@@ -7,6 +7,7 @@ import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import {
   assertPurgeAllowed,
   buildActivationUpdates,
+  getObservedRunStatus,
   projectAnnotationState,
 } from "./run-lifecycle.ts";
 
@@ -14,6 +15,11 @@ const objectId = z.string().refine(ObjectId.isValid, "Invalid ObjectId");
 const range = { start: zDateOrString(), end: zDateOrString() };
 
 export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("coverage"),
+    ...range,
+    bucketMs: z.number().int().min(1_000).max(86_400_000),
+  }),
   z.object({
     action: z.literal("list"),
     ...range,
@@ -43,7 +49,7 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("review-queue"),
     ...range,
-    state: z.enum(["matched", "rejected", "uncertain"]).default("uncertain"),
+    state: z.enum(["matched", "rejected", "uncertain", "reviewable"]).default("reviewable"),
     limit: z.number().int().min(1).max(1000).default(100),
   }),
   z.object({
@@ -55,6 +61,10 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("list-calibrations"),
     profileId: objectId.optional(),
+  }),
+  z.object({
+    action: z.literal("identity-status"),
+    profileId: objectId,
   }),
   z.object({
     action: z.literal("save-calibration"),
@@ -78,6 +88,11 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("list-runs") }),
   z.object({
+    action: z.literal("list-campaigns"),
+    runId: z.string().optional(),
+    limit: z.number().int().min(1).max(100).default(20),
+  }),
+  z.object({
     action: z.literal("create-run"),
     runId: z.string().min(1),
     mode: z.enum(["missing", "rediarize"]),
@@ -95,6 +110,7 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     errors: z.array(z.any()).default([]),
   }),
   z.object({ action: z.literal("compare-run"), runId: z.string().min(1) }),
+  z.object({ action: z.literal("mark-run-failed"), runId: z.string().min(1) }),
   z.object({ action: z.literal("activate-run"), runId: z.string().min(1) }),
   z.object({ action: z.literal("preview-purge"), runId: z.string().min(1) }),
   z.object({
@@ -135,6 +151,94 @@ export class SpeakerSegmentsResource
     const mongo = await getMongoResource(auth);
 
     switch (input.action) {
+      case "coverage": {
+        const [rows, buildingRuns] = await Promise.all([
+          mongo({
+            action: "aggregate",
+            collection: "audio_chunks",
+            pipeline: [
+              {
+                $match: {
+                  "vad.has_speech": true,
+                  start: { $gte: input.start, $lt: input.end },
+                },
+              },
+              {
+                $project: {
+                  bucket: {
+                    $multiply: [{
+                      $floor: {
+                        $divide: [{ $toLong: "$start" }, input.bucketMs],
+                      },
+                    }, input.bucketMs],
+                  },
+                  state: {
+                    $switch: {
+                      branches: [
+                        {
+                          case: {
+                            $eq: [
+                              "$diarizationFailure.status",
+                              "needs_attention",
+                            ],
+                          },
+                          then: "needs_attention",
+                        },
+                        {
+                          case: {
+                            $ne: [{ $ifNull: ["$processing_by", null] }, null],
+                          },
+                          then: "processing",
+                        },
+                        {
+                          case: {
+                            $ne: [{ $ifNull: ["$diarized_at", null] }, null],
+                          },
+                          then: "diarized",
+                        },
+                      ],
+                      default: "pending",
+                    },
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: { bucket: "$bucket", state: "$state" },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { "_id.bucket": 1 } },
+            ],
+          }),
+          mongo({
+            action: "find",
+            collection: "diarization_runs",
+            query: {
+              status: "building",
+              "range.start": { $lt: input.end },
+              "range.end": { $gt: input.start },
+            },
+            options: { projection: { runId: 1, range: 1, generation: 1 } },
+          }),
+        ]) as [any[], any[]];
+        const buckets = new Map<number, Record<string, number>>();
+        for (const row of rows) {
+          const time = Number(row._id.bucket);
+          const counts = buckets.get(time) ?? {};
+          counts[String(row._id.state)] = Number(row.count);
+          buckets.set(time, counts);
+        }
+        return {
+          bucketMs: input.bucketMs,
+          buckets: [...buckets.entries()].map(([start, counts]) => ({
+            start,
+            end: start + input.bucketMs,
+            counts,
+          })),
+          buildingRuns,
+        };
+      }
       case "list": {
         const query: Record<string, unknown> = {
           lifecycleStatus: "active",
@@ -282,21 +386,45 @@ export class SpeakerSegmentsResource
           collection: "speaker_annotations",
           query: { _id: new ObjectId(input.id) },
         });
-      case "review-queue":
-        return await mongo({
+      case "review-queue": {
+        const candidates = await mongo({
           action: "find",
           collection: "diarizations",
           query: {
             lifecycleStatus: "active",
             start: { $lt: input.end },
             end: { $gt: input.start },
-            "speakerIdentity.state": input.state,
+            ...(input.state === "reviewable"
+              ? {
+                $or: [
+                  { "speakerIdentity.state": "uncertain" },
+                  { speakerIdentity: { $exists: false } },
+                  { "speakerIdentity.identityState": { $exists: false } },
+                ],
+              }
+              : { "speakerIdentity.state": input.state }),
           },
           options: {
-            sort: { "speakerIdentity.primaryScore": 1 },
-            limit: input.limit,
+            sort: input.state === "reviewable"
+              ? { start: -1 }
+              : { "speakerIdentity.primaryScore": 1 },
+            limit: Math.min(input.limit * 3, 3000),
+            projection: {
+              embedding: 0,
+            },
           },
-        });
+        }) as any[];
+        const candidateIds = candidates.map((segment) => segment._id);
+        const annotations = candidateIds.length === 0 ? [] : await mongo({
+          action: "find",
+          collection: "speaker_annotations",
+          query: { segmentId: { $in: candidateIds } },
+          options: { projection: { segmentId: 1 }, limit: candidateIds.length },
+        }) as any[];
+        const annotated = new Set(annotations.map((item) => String(item.segmentId)));
+        return candidates.filter((segment) => !annotated.has(String(segment._id)))
+          .slice(0, input.limit);
+      }
       case "similar": {
         const source = await mongo({
           action: "findOne",
@@ -332,6 +460,111 @@ export class SpeakerSegmentsResource
           query: input.profileId ? { profileId: input.profileId } : {},
           options: { sort: { createdAt: -1 } },
         });
+      case "identity-status": {
+        const profileId = new ObjectId(input.profileId);
+        const [annotations, calibrations, identityCounts, latestJobs] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: "speaker_annotations",
+            query: {
+              $or: [
+                { profileId },
+                { excludedProfileIds: profileId },
+              ],
+            },
+            options: {
+              projection: {
+                originalId: 1,
+                profileId: 1,
+                excludedProfileIds: 1,
+              },
+              limit: 10_000,
+            },
+          }),
+          mongo({
+            action: "find",
+            collection: "speaker_calibrations",
+            query: { profileId: input.profileId },
+            options: { sort: { createdAt: -1 }, limit: 10 },
+          }),
+          mongo({
+            action: "aggregate",
+            collection: "diarizations",
+            pipeline: [
+              { $match: { lifecycleStatus: "active" } },
+              {
+                $group: {
+                  _id: "$speakerIdentity.identityState",
+                  count: { $sum: 1 },
+                },
+              },
+            ],
+            options: { maxTimeMS: 10_000 },
+          }),
+          mongo({
+            action: "find",
+            collection: "jobs",
+            query: { type: "speakerIdentity" },
+            options: {
+              sort: { updatedAt: -1, createdAt: -1 },
+              projection: {
+                state: 1,
+                progress: 1,
+                result: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                failedReason: 1,
+              },
+              limit: 1,
+            },
+          }),
+        ]) as [any[], any[], any[], any[]];
+        const recordings = new Map<string, { id: string; sky: number; notSky: number }>();
+        let sky = 0;
+        let notSky = 0;
+        for (const annotation of annotations) {
+          const recordingId = annotation.originalId ? String(annotation.originalId) : null;
+          const isSky = String(annotation.profileId ?? "") === input.profileId;
+          const isNotSky = (annotation.excludedProfileIds ?? []).some(
+            (id: unknown) => String(id) === input.profileId
+          );
+          if (isSky) sky += 1;
+          if (isNotSky) notSky += 1;
+          if (recordingId) {
+            const row = recordings.get(recordingId) ?? {
+              id: recordingId,
+              sky: 0,
+              notSky: 0,
+            };
+            if (isSky) row.sky += 1;
+            if (isNotSky) row.notSky += 1;
+            recordings.set(recordingId, row);
+          }
+        }
+        const classified = Object.fromEntries(
+          identityCounts.map((row) => [row._id ?? "unclassified", row.count]),
+        );
+        return {
+          labels: {
+            sky,
+            notSky,
+            total: sky + notSky,
+            recordings: recordings.size,
+            byRecording: [...recordings.values()].map((row) => ({
+              ...row,
+              total: row.sky + row.notSky,
+            })).sort((a, b) => b.total - a.total),
+          },
+          calibrations,
+          classification: {
+            identified: classified.identified ?? 0,
+            unknown: classified.unknown ?? 0,
+            uncertain: classified.uncertain ?? 0,
+            unclassified: classified.unclassified ?? 0,
+          },
+          latestJob: latestJobs[0] ?? null,
+        };
+      }
       case "save-calibration": {
         if (input.negativeThreshold >= input.positiveThreshold) {
           throw new Error(
@@ -374,12 +607,33 @@ export class SpeakerSegmentsResource
         });
         return { ...record, updatedAt: now };
       }
-      case "list-runs":
+      case "list-runs": {
+        const [runs, campaigns] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: "diarization_runs",
+            query: {},
+            options: { sort: { createdAt: -1 } },
+          }),
+          mongo({
+            action: "find",
+            collection: "diarization_campaigns",
+            query: {},
+            options: { sort: { updatedAt: -1 }, limit: 100 },
+          }),
+        ]) as [any[], any[]];
+        return runs.map((run) => ({
+          ...run,
+          status: getObservedRunStatus(run, campaigns),
+          campaign: campaigns.find((campaign) => campaign.runId === run.runId),
+        }));
+      }
+      case "list-campaigns":
         return await mongo({
           action: "find",
-          collection: "diarization_runs",
-          query: {},
-          options: { sort: { createdAt: -1 } },
+          collection: "diarization_campaigns",
+          query: input.runId ? { runId: input.runId } : {},
+          options: { sort: { updatedAt: -1 }, limit: input.limit },
         });
       case "create-run": {
         const existing = await mongo({
@@ -456,6 +710,26 @@ export class SpeakerSegmentsResource
           stats: stats ?? null,
           identityDistribution: distribution,
         };
+      }
+      case "mark-run-failed": {
+        const result = await mongo({
+          action: "updateOne",
+          collection: "diarization_runs",
+          query: { runId: input.runId, status: "building" },
+          update: {
+            $set: {
+              status: "failed",
+              failedAt: new Date(),
+              failureReason: "Marked failed by operator after interruption",
+            },
+          },
+        });
+        if ((result as any).matchedCount !== 1) {
+          throw new Error(
+            "Only a building/interrupted run can be marked failed",
+          );
+        }
+        return { success: true, runId: input.runId };
       }
       case "activate-run": {
         const run = await mongo({

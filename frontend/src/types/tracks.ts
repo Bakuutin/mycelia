@@ -7,6 +7,7 @@ export type TrackId =
   | "transcriptions"
   | "audio-chunks"
   | "diarizations"
+  | "diarization-coverage"
   | "objects"
   | "locations";
 

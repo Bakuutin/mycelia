@@ -14,6 +14,7 @@ const DEFAULTS = {
   // interval just resumes it after a broken link (timeout/crash/restart).
   tagger: { debounceMs: 5000, interval: 900 },
   location_processing: { debounceMs: 3000, interval: 0 },
+  diarization: { debounceMs: 5000, interval: 300 },
 } as const;
 
 // Fast mode values (for testing)
@@ -26,6 +27,7 @@ const FAST = {
   conversation_extractor_merged: { debounceMs: 1000, interval: 0 },
   tagger: { debounceMs: 1000, interval: 60 },
   location_processing: { debounceMs: 500, interval: 0 },
+  diarization: { debounceMs: 1000, interval: 60 },
 } as const;
 
 type WorkerName = keyof typeof DEFAULTS;
@@ -48,7 +50,9 @@ export function getTriggerTiming(workerName: WorkerName): TriggerTiming {
   const fast = FAST[workerName];
 
   // Check for explicit overrides
-  if (env.JOB_DEBOUNCE_MS !== undefined || env.JOB_INTERVAL_SECONDS !== undefined) {
+  if (
+    env.JOB_DEBOUNCE_MS !== undefined || env.JOB_INTERVAL_SECONDS !== undefined
+  ) {
     return {
       debounceMs: env.JOB_DEBOUNCE_MS ?? defaults.debounceMs,
       interval: env.JOB_INTERVAL_SECONDS ?? defaults.interval,

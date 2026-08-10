@@ -3,7 +3,8 @@ export type DiarizationRunStatus =
   | "ready"
   | "active"
   | "superseded"
-  | "failed";
+  | "failed"
+  | "interrupted";
 
 export function assertPurgeAllowed(
   run: { status: DiarizationRunStatus },
@@ -11,6 +12,23 @@ export function assertPurgeAllowed(
   if (run.status !== "superseded" && run.status !== "failed") {
     throw new Error(`Cannot purge a ${run.status} diarization run`);
   }
+}
+
+export function getObservedRunStatus(
+  run: { runId?: string; status: DiarizationRunStatus; createdAt?: Date },
+  campaigns: Array<{ runId?: string; status?: string }>,
+  now = new Date(),
+): DiarizationRunStatus {
+  if (run.status !== "building") return run.status;
+  const hasLiveCampaign = campaigns.some((campaign) =>
+    campaign.runId === run.runId &&
+    ["counting", "running"].includes(campaign.status ?? "")
+  );
+  if (hasLiveCampaign) return "building";
+  const createdAt = run.createdAt ? new Date(run.createdAt) : now;
+  return now.getTime() - createdAt.getTime() >= 20 * 60_000
+    ? "interrupted"
+    : "building";
 }
 
 export function buildActivationUpdates(newRunId: string, oldRunId?: string) {

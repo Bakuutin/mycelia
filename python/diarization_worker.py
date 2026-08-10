@@ -4,6 +4,7 @@ import os
 import argparse
 import math
 import re
+import hashlib
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
@@ -202,7 +203,9 @@ def _get_overlap_segments(sequence: 'DiarizationSequence') -> list[dict]:
             "sort": {"start": 1},
         },
     })
-    return result.get('data', []) if result else []
+    if isinstance(result, list):
+        return result
+    return result.get('data', []) if isinstance(result, dict) else []
 
 
 def _get_existing_speaker_labels(original_id: ObjectId) -> set[str]:
@@ -227,6 +230,96 @@ def _clip_continuation_segment(
     if end <= overlap_end:
         return None
     return max(start, overlap_end), end
+
+
+def _segment_identity_key(
+    run_id: str,
+    sequence: 'DiarizationSequence',
+    segment_index: int,
+) -> str:
+    """Stable key used to make generation writes safe to resume."""
+    raw = (
+        f"{run_id}:{sequence.original_id}:{sequence.min_index}:"
+        f"{sequence.max_index}:{segment_index}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _classify_diarization_error(
+    sequence: 'DiarizationSequence',
+    route: str,
+    error: Exception,
+    *,
+    attempt: int = 1,
+    http_status: Optional[int] = None,
+) -> dict[str, Any]:
+    message = str(error)
+    lowered = message.lower()
+    status = http_status
+    if status is None and isinstance(error, requests.exceptions.HTTPError):
+        status = error.response.status_code if error.response is not None else None
+
+    if isinstance(error, (requests.exceptions.Timeout, TimeoutError)) or "timed out" in lowered:
+        category = "timeout"
+    elif isinstance(error, requests.exceptions.ConnectionError):
+        category = "provider_network"
+    elif status == 413:
+        category = "payload_too_large"
+    elif "embedding space" in lowered:
+        category = "embedding_space_mismatch"
+    elif any(token in lowered for token in ("decode", "codec", "audio", "opus", "wav")):
+        category = "invalid_audio"
+    elif any(token in lowered for token in ("forbidden", "unauthorized", "permission", "mongo")):
+        category = "persistence_auth"
+    elif status is not None:
+        category = "provider_http"
+    else:
+        category = "unknown"
+
+    retryable = category in {
+        "timeout", "provider_network", "provider_http", "invalid_audio", "unknown"
+    } and attempt < 3
+    return {
+        "originalId": str(sequence.original_id),
+        "start": sequence.start,
+        "end": sequence.last.get("start", sequence.start),
+        "category": category,
+        "message": message,
+        "httpStatus": status,
+        "route": route,
+        "attempt": attempt,
+        "retryable": retryable,
+        "status": "will_retry" if retryable else "needs_attention",
+    }
+
+
+def _failure_retry_state(attempt: int) -> dict[str, Any]:
+    delays = (60, 300, 1800)
+    if attempt >= 3:
+        return {"status": "needs_attention", "delaySeconds": None}
+    return {
+        "status": "will_retry",
+        "delaySeconds": delays[max(attempt - 1, 0)],
+    }
+
+
+def _record_sequence_failure(
+    sequence: 'DiarizationSequence',
+    detail: dict[str, Any],
+) -> None:
+    retry = _failure_retry_state(int(detail.get("attempt", 1)))
+    retry_at = (
+        datetime.now(tz=UTC) + timedelta(seconds=retry["delaySeconds"])
+        if retry["delaySeconds"] is not None
+        else None
+    )
+    detail.update({"status": retry["status"], "retryAt": retry_at})
+    call_resource('mongo', {
+        "action": "updateMany",
+        "collection": "audio_chunks",
+        "query": {"_id": {"$in": [chunk["_id"] for chunk in sequence.chunks]}},
+        "update": {"$set": {"diarizationFailure": detail}},
+    })
 
 
 class DiarizationSequence(BaseModel):
@@ -271,7 +364,15 @@ def _build_pending_chunk_filters(
                     {'processing_by': None}
                 ]
             },
-            {'vad.has_speech': True}
+            {'vad.has_speech': True},
+            {'diarizationFailure.status': {'$ne': 'needs_attention'}},
+            {
+                '$or': [
+                    {'diarizationFailure.retryAt': {'$exists': False}},
+                    {'diarizationFailure.retryAt': None},
+                    {'diarizationFailure.retryAt': {'$lte': datetime.now(tz=UTC)}},
+                ]
+            },
         ]
     if not include_diarized:
         required.insert(0,
@@ -486,6 +587,10 @@ def diarize_sequence(
     chunks_count = len(sequence.chunks)
     chunks_marked = 0
     original_id = str(sequence.original_id)
+    failure_attempt = max(
+        [int(chunk.get('diarizationFailure', {}).get('attempt', 0)) for chunk in sequence.chunks]
+        or [0]
+    ) + 1
 
     payload_bytes = 0
     payload_duration = 0.0
@@ -540,7 +645,7 @@ def diarize_sequence(
             previous_segments,
             reserved_labels=reserved_labels,
         )
-        for segment in segments:
+        for segment_index, segment in enumerate(segments):
             segment['speaker'] = speaker_label_mapping.get(segment['speaker'], segment['speaker'])
 
         if not segments:
@@ -612,6 +717,10 @@ def diarize_sequence(
                 "embeddingSpaceId": embedding_space_id,
                 "lifecycleStatus": lifecycle_status,
             }
+            if run_id != "legacy-v0":
+                diar_doc["segmentKey"] = _segment_identity_key(
+                    run_id, sequence, segment_index
+                )
 
             # Add matched_speaker if cluster was matched
             cluster_id = segment.get('cluster_id')
@@ -627,11 +736,20 @@ def diarize_sequence(
                 matched_segments += 1
 
             # Save segment to diarizations collection
-            call_resource('mongo', {
-                "action": "insertOne",
-                "collection": "diarizations",
-                "doc": diar_doc
-            })
+            if run_id == "legacy-v0":
+                call_resource('mongo', {
+                    "action": "insertOne",
+                    "collection": "diarizations",
+                    "doc": diar_doc
+                })
+            else:
+                call_resource('mongo', {
+                    "action": "updateOne",
+                    "collection": "diarizations",
+                    "query": {"runId": run_id, "segmentKey": diar_doc["segmentKey"]},
+                    "update": {"$setOnInsert": diar_doc},
+                    "options": {"upsert": True},
+                })
             saved_segments += 1
 
         # Mark chunks as diarized
@@ -668,9 +786,18 @@ def diarize_sequence(
         release_sequence(sequence, worker_id)
         log_info(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: ReadTimeout')
         log_info(f'  → Increase timeout or check diarization server at {server_url or DIARIZATION_SERVER_URL}')
+        detail = _classify_diarization_error(
+            sequence,
+            server_url or DIARIZATION_SERVER_URL,
+            TimeoutError("Diarization request timed out"),
+            attempt=failure_attempt,
+        )
+        if mark_chunks:
+            _record_sequence_failure(sequence, detail)
         return {
             "status": "error",
             "error": "Diarization request timed out",
+            "errorDetail": detail,
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
@@ -694,9 +821,19 @@ def diarize_sequence(
             f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
             f'ERROR: {status_code} {http_err} {extra_context}'.rstrip()
         )
+        detail = _classify_diarization_error(
+            sequence,
+            server_url or DIARIZATION_SERVER_URL,
+            http_err,
+            attempt=failure_attempt,
+            http_status=status_code,
+        )
+        if mark_chunks:
+            _record_sequence_failure(sequence, detail)
         return {
             "status": "error",
             "error": f"HTTP {status_code}: {http_err}",
+            "errorDetail": detail,
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
@@ -707,9 +844,18 @@ def diarize_sequence(
         end_time = time.time()
         release_sequence(sequence, worker_id)
         log_info(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  ERROR: {str(e)}')
+        detail = _classify_diarization_error(
+            sequence,
+            server_url or DIARIZATION_SERVER_URL,
+            e,
+            attempt=failure_attempt,
+        )
+        if mark_chunks:
+            _record_sequence_failure(sequence, detail)
         return {
             "status": "error",
             "error": str(e),
+            "errorDetail": detail,
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
@@ -747,6 +893,7 @@ def mark_as_diarized(seq: DiarizationSequence, worker_id: Optional[str] = None) 
         "query": query,
         "update": {
             '$set': update_fields,
+            '$unset': {'diarizationFailure': ''},
         }
     })
 

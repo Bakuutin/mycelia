@@ -1,12 +1,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { TrackId, ObjectCategory, ObjectsLayoutMode } from "@/types/tracks";
+import type {
+  ObjectCategory,
+  ObjectsLayoutMode,
+  TrackId,
+} from "@/types/tracks";
 
 const DEFAULT_VISIBLE_TRACKS: TrackId[] = [
   "voice-detection",
   "data-presence",
   "transcriptions",
   "audio-chunks",
+  "diarization-coverage",
   "diarizations",
   "objects",
 ];
@@ -18,6 +23,7 @@ const DEFAULT_HEIGHTS: Record<TrackId, number> = {
   "data-presence": 20,
   "transcriptions": 40,
   "audio-chunks": 40,
+  "diarization-coverage": 32,
   "diarizations": 40,
   "objects": 120,
   "locations": 28,
@@ -95,12 +101,15 @@ export const useTrackVisibilityStore = create<TrackVisibilityState>()(
           if (isVisible) {
             return {
               visibleObjectCategories: state.visibleObjectCategories.filter(
-                (c: ObjectCategory) => c !== category
+                (c: ObjectCategory) => c !== category,
               ),
             };
           } else {
             return {
-              visibleObjectCategories: [...state.visibleObjectCategories, category],
+              visibleObjectCategories: [
+                ...state.visibleObjectCategories,
+                category,
+              ],
             };
           }
         });
@@ -108,6 +117,6 @@ export const useTrackVisibilityStore = create<TrackVisibilityState>()(
     }),
     {
       name: "track-visibility",
-    }
-  )
+    },
+  ),
 );

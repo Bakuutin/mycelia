@@ -1,31 +1,38 @@
 export { BaseTrack } from "./BaseTrack";
 export { TrackHeader } from "./TrackHeader";
 export {
-  VoiceDetectionTrack,
   VOICE_DETECTION_CONFIG,
+  VoiceDetectionTrack,
 } from "./VoiceDetectionTrack";
-export { DataPresenceTrack, DATA_PRESENCE_CONFIG } from "./DataPresenceTrack";
+export { DATA_PRESENCE_CONFIG, DataPresenceTrack } from "./DataPresenceTrack";
 export {
-  TranscriptionsTrack,
+  AUDIO_CHUNKS_CONFIG,
   AudioChunksTrack,
+  DIARIZATION_COVERAGE_CONFIG,
+  DiarizationCoverageTrack,
+  DIARIZATIONS_CONFIG,
   DiarizationsTrack,
   TRANSCRIPTIONS_CONFIG,
-  AUDIO_CHUNKS_CONFIG,
-  DIARIZATIONS_CONFIG,
+  TranscriptionsTrack,
 } from "./HistogramTrack";
-export { LocationTrack, LOCATIONS_CONFIG } from "./LocationTrack";
+export { LOCATIONS_CONFIG, LocationTrack } from "./LocationTrack";
 
 import type { Track } from "@/types/tracks";
-import { LocationTrack, LOCATIONS_CONFIG } from "./LocationTrack";
-import { VoiceDetectionTrack, VOICE_DETECTION_CONFIG } from "./VoiceDetectionTrack";
-import { DataPresenceTrack, DATA_PRESENCE_CONFIG } from "./DataPresenceTrack";
+import { LOCATIONS_CONFIG, LocationTrack } from "./LocationTrack";
 import {
-  TranscriptionsTrack,
+  VOICE_DETECTION_CONFIG,
+  VoiceDetectionTrack,
+} from "./VoiceDetectionTrack";
+import { DATA_PRESENCE_CONFIG, DataPresenceTrack } from "./DataPresenceTrack";
+import {
+  AUDIO_CHUNKS_CONFIG,
   AudioChunksTrack,
+  DIARIZATION_COVERAGE_CONFIG,
+  DiarizationCoverageTrack,
+  DIARIZATIONS_CONFIG,
   DiarizationsTrack,
   TRANSCRIPTIONS_CONFIG,
-  AUDIO_CHUNKS_CONFIG,
-  DIARIZATIONS_CONFIG,
+  TranscriptionsTrack,
 } from "./HistogramTrack";
 
 // Registry of all available tracks (excluding Objects which is handled separately)
@@ -34,6 +41,10 @@ export const TRACK_REGISTRY: Track[] = [
   { config: DATA_PRESENCE_CONFIG, component: DataPresenceTrack },
   { config: TRANSCRIPTIONS_CONFIG, component: TranscriptionsTrack },
   { config: AUDIO_CHUNKS_CONFIG, component: AudioChunksTrack },
+  {
+    config: DIARIZATION_COVERAGE_CONFIG,
+    component: DiarizationCoverageTrack,
+  },
   { config: DIARIZATIONS_CONFIG, component: DiarizationsTrack },
   { config: LOCATIONS_CONFIG, component: LocationTrack },
 ];

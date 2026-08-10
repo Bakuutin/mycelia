@@ -98,6 +98,7 @@ const findBaseOptions = z.object({
   limit: z.number().optional(),
   skip: z.number().optional(),
   hint: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+  maxTimeMS: z.number().int().positive().optional(),
 }).optional();
 
 const findSchema = z.object({
@@ -139,6 +140,10 @@ const countSchema = z.object({
   action: z.literal("count"),
   collection: z.string(),
   query: z.record(z.string(), z.any()),
+  options: z.object({
+    maxTimeMS: z.number().int().positive().optional(),
+    hint: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+  }).optional(),
 });
 
 const insertOneSchema = z.object({
@@ -478,7 +483,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
         case "deleteMany":
           return collection.deleteMany(input.query);
         case "count":
-          return collection.countDocuments(input.query);
+          return collection.countDocuments(input.query, input.options);
         case "aggregate":
           return collection.aggregate(input.pipeline, input.options).toArray();
         case "bulkWrite": {

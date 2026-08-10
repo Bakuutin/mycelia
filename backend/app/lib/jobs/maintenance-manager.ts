@@ -54,9 +54,12 @@ export class MaintenanceManager {
     if (this.running) return;
     this.running = true;
     try {
+      // Waiting jobs have no running process to protect and are cheap to
+      // recover. Do this before the potentially expensive orphan sweep so a
+      // large retained active history cannot starve queue recovery.
+      await this.cancelMissingWaitingJobs();
       await this.cancelMissingActiveJobs();
       await this.cancelLongRunningJobs();
-      await this.cancelMissingWaitingJobs();
       await this.releaseCompletedSummarizationClaims();
       await this.releaseStaleAudioClaims();
     } finally {

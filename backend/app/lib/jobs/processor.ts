@@ -7,6 +7,7 @@ import { EJSON, ObjectId } from "bson";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { assertJobServicesHealthy } from "./service-health.ts";
 import { getJobTimeoutMinutes, getJobTimeoutMs } from "./job-timeouts.ts";
+import { isCancelledJobRecord } from "./job-state.ts";
 
 const activeChildren = new Map<string, Deno.ChildProcess>();
 
@@ -35,6 +36,17 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
   const jobType = job.data.type;
   const jobTimeoutMs = getJobTimeoutMs(jobType, job.data);
   const capability = jobRegistry.getOrThrow(jobType);
+
+  const cancellationMongo = await getMongoResource(await getServerAuth());
+  const cancellationRecord = await cancellationMongo({
+    action: "findOne",
+    collection: "jobs",
+    query: { _id: new ObjectId(job.id) },
+    options: { projection: { state: 1 } },
+  });
+  if (isCancelledJobRecord(cancellationRecord)) {
+    throw new Error(`Job ${job.id} was cancelled before execution`);
+  }
 
   // Re-check at execution time because a provider may have gone down after the
   // job entered the queue. This prevents expensive worker startup and a doomed

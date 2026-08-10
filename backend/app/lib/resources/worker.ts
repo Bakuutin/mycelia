@@ -16,6 +16,7 @@ import {
   getExternalServicesHealth,
 } from "@/lib/jobs/service-health.ts";
 import { cancelRunningJob } from "@/lib/jobs/processor.ts";
+import { diarizationCampaignIdForJob } from "@/lib/jobs/job-state.ts";
 import {
   cancelActiveWorkerJob,
   getWorkerRuntimeStatus,
@@ -757,6 +758,25 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         collection: "objects",
         query: { "_summarizationClaim.jobId": id },
         update: { $unset: { _summarizationClaim: "" } },
+      });
+    }
+
+    if (jobType === "diarization") {
+      await mongo({
+        action: "updateOne",
+        collection: "diarization_campaigns",
+        query: {
+          campaignId: diarizationCampaignIdForJob(id, jobDoc.data),
+          status: { $in: ["counting", "running"] },
+        },
+        update: {
+          $set: {
+            status: "interrupted",
+            interruptedAt: new Date(),
+            interruptionReason: "Job cancelled by operator",
+            updatedAt: new Date(),
+          },
+        },
       });
     }
 

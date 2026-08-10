@@ -13,6 +13,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, sift } from "@/lib/mongo/core.server.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { normalizeWorkerConcurrency } from "./worker-concurrency.ts";
+import { getContinuationPriority } from "./job-chain.ts";
 
 // Logging helper for consistent format
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -20,6 +21,17 @@ const log = (level: string, msg: string, data?: Record<string, unknown>) => {
   const dataStr = data ? ` ${JSON.stringify(data)}` : "";
   console.log(`[TRIGGER-MGR] ${timestamp} ${level}: ${msg}${dataStr}`);
 };
+
+export async function buildTriggeredJobData(
+  capability: JobRegistryEntry,
+  payload: unknown,
+  reason: string,
+  mongo: (input: any) => Promise<any>,
+): Promise<Record<string, unknown>> {
+  return await capability.getTriggerJobData?.(payload, reason, { mongo }) ?? {
+    type: capability.manifest.name,
+  };
+}
 
 export class TriggerManager {
   private isRunning = false;
@@ -67,10 +79,13 @@ export class TriggerManager {
       sources: triggers.sources?.map((s) => s.name),
     });
 
-    const handleTrigger = debounce(async (reason: string) => {
-      log("DEBUG", `Debounced trigger fired`, { jobName: name, reason });
-      await this.checkAndTrigger(cap, reason);
-    }, debounceMs);
+    const handleTrigger = debounce(
+      async (reason: string, payload?: unknown) => {
+        log("DEBUG", `Debounced trigger fired`, { jobName: name, reason });
+        await this.checkAndTrigger(cap, reason, undefined, payload);
+      },
+      debounceMs,
+    );
 
     this.debouncers.set(name, handleTrigger);
 
@@ -78,7 +93,7 @@ export class TriggerManager {
       await this.setupRedisTrigger(
         cap,
         source,
-        (_payload) => handleTrigger(source.name),
+        (payload) => handleTrigger(source.name, payload),
       );
     }
 
@@ -197,6 +212,7 @@ export class TriggerManager {
     cap: JobRegistryEntry,
     reason: string,
     triggerOptions: { requireIdle?: boolean } | undefined = undefined,
+    payload?: unknown,
   ) {
     const jobName = cap.manifest.name;
     try {
@@ -271,7 +287,14 @@ export class TriggerManager {
         ? Math.min(maxConcurrency - activeJobs, pendingWork)
         : maxConcurrency - activeJobs;
       log("INFO", `Enqueuing jobs`, { jobName, reason, freeSlots });
+      const triggeredJobData = await buildTriggeredJobData(
+        implementation,
+        payload,
+        reason,
+        mongo,
+      );
       const enqueueOptions: EnqueueJobOptions = {
+        priority: getContinuationPriority(triggeredJobData),
         trigger: {
           type: "auto",
           reason,
@@ -279,9 +302,10 @@ export class TriggerManager {
       };
       let enqueued = 0;
       for (let index = 0; index < freeSlots; index += 1) {
-        await enqueueJob({
-          type: jobName,
-        } as any, enqueueOptions);
+        await enqueueJob(
+          triggeredJobData as any,
+          enqueueOptions,
+        );
         enqueued += 1;
       }
       log("INFO", `Jobs enqueued successfully`, {

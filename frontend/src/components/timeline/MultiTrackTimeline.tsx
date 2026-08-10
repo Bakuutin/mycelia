@@ -11,6 +11,8 @@ import {
   AudioChunksTrack,
   DATA_PRESENCE_CONFIG,
   DataPresenceTrack,
+  DIARIZATION_COVERAGE_CONFIG,
+  DiarizationCoverageTrack,
   DIARIZATIONS_CONFIG,
   DiarizationsTrack,
   TRANSCRIPTIONS_CONFIG,
@@ -41,6 +43,7 @@ const TRACK_COMPONENTS: Record<TrackId, React.ComponentType<any>> = {
   "data-presence": DataPresenceTrack,
   "transcriptions": TranscriptionsTrack,
   "audio-chunks": AudioChunksTrack,
+  "diarization-coverage": DiarizationCoverageTrack,
   "diarizations": DiarizationsTrack,
   "objects": () => null, // Handled separately
   "locations": () => null, // Handled separately
@@ -51,6 +54,7 @@ const TRACK_CONFIGS: Record<TrackId, { label: string; color: string }> = {
   "data-presence": DATA_PRESENCE_CONFIG,
   "transcriptions": TRANSCRIPTIONS_CONFIG,
   "audio-chunks": AUDIO_CHUNKS_CONFIG,
+  "diarization-coverage": DIARIZATION_COVERAGE_CONFIG,
   "diarizations": DIARIZATIONS_CONFIG,
   "objects": { label: "Objects", color: "#6b7280" },
   "locations": LOCATIONS_CONFIG,
@@ -62,6 +66,7 @@ const HISTOGRAM_TRACK_IDS: TrackId[] = [
   "data-presence",
   "transcriptions",
   "audio-chunks",
+  "diarization-coverage",
   "diarizations",
 ];
 

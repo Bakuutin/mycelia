@@ -29,6 +29,15 @@ export class NetworkJobCapability<
     interval?: number;
   };
   maxConcurrency?: number;
+  hasPendingWork?: (context: {
+    mongo: (input: any) => Promise<any>;
+    reason: string;
+  }) => Promise<boolean | number>;
+  getTriggerJobData?: (
+    payload: unknown,
+    reason: string,
+    context: { mongo: (input: any) => Promise<any> },
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
   constructor(options: {
     name: string;
@@ -41,6 +50,15 @@ export class NetworkJobCapability<
       interval?: number;
     };
     maxConcurrency?: number;
+    hasPendingWork?: (context: {
+      mongo: (input: any) => Promise<any>;
+      reason: string;
+    }) => Promise<boolean | number>;
+    getTriggerJobData?: (
+      payload: unknown,
+      reason: string,
+      context: { mongo: (input: any) => Promise<any> },
+    ) => Record<string, unknown> | Promise<Record<string, unknown>>;
   }) {
     this.name = options.name;
     this.schema = options.schema;
@@ -48,6 +66,8 @@ export class NetworkJobCapability<
     this.url = options.url;
     this.triggers = options.triggers;
     this.maxConcurrency = options.maxConcurrency;
+    this.hasPendingWork = options.hasPendingWork;
+    this.getTriggerJobData = options.getTriggerJobData;
   }
 
   get inputSchema() {
@@ -80,7 +100,9 @@ export class NetworkJobCapability<
   getHeaders(_input: Input): Record<string, string> {
     const jwt = Deno.env.get("MYCELIA_JWT");
     if (!jwt) {
-      throw new Error("MYCELIA_JWT not found in environment. This worker must be run in an isolated process.");
+      throw new Error(
+        "MYCELIA_JWT not found in environment. This worker must be run in an isolated process.",
+      );
     }
 
     return {
@@ -93,15 +115,21 @@ export class NetworkJobCapability<
     const url = this.getUrl(input);
     const jobId = (input as any).id;
     const data = (input as any).data || input;
-    
+
     // Log time-related parameters if present
     const timeInfo: string[] = [];
-    if (data.start) timeInfo.push(`start=${new Date(data.start).toISOString()}`);
+    if (data.start) {
+      timeInfo.push(`start=${new Date(data.start).toISOString()}`);
+    }
     if (data.end) timeInfo.push(`end=${new Date(data.end).toISOString()}`);
     if (data.originalId) timeInfo.push(`originalId=${data.originalId}`);
     if (data.limit) timeInfo.push(`limit=${data.limit}`);
-    
-    console.log(`[${this.name}] Job ${jobId}: delegating to ${url}${timeInfo.length > 0 ? ` (${timeInfo.join(', ')})` : ''}`);
+
+    console.log(
+      `[${this.name}] Job ${jobId}: delegating to ${url}${
+        timeInfo.length > 0 ? ` (${timeInfo.join(", ")})` : ""
+      }`,
+    );
 
     let response: Response;
     try {
@@ -117,14 +145,19 @@ export class NetworkJobCapability<
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.log(`[${this.name}] Job ${jobId}: worker FAILED (${response.status})`);
+      console.log(
+        `[${this.name}] Job ${jobId}: worker FAILED (${response.status})`,
+      );
       throw new Error(
         `Network capability failed for ${url} (${response.status}): ${errorText}`,
       );
     }
-    
+
     const result = await response.json();
-    console.log(`[${this.name}] Job ${jobId}: worker completed`, JSON.stringify(result));
+    console.log(
+      `[${this.name}] Job ${jobId}: worker completed`,
+      JSON.stringify(result),
+    );
     return result;
   }
 }

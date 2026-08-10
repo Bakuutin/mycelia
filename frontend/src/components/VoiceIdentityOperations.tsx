@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import {
   getRunComparison,
   validateOperationRange,
@@ -23,11 +24,29 @@ import { useActionDialog } from "@/components/ActionDialogProvider";
 
 type Run = {
   runId: string;
-  status: "building" | "ready" | "active" | "superseded" | "failed";
+  status:
+    | "building"
+    | "interrupted"
+    | "ready"
+    | "active"
+    | "superseded"
+    | "failed";
   generation: number;
   embeddingSpaceId: string;
   range?: { start: Date; end: Date };
   replacesRunId?: string;
+  campaign?: {
+    campaignId: string;
+    status: string;
+    processedChunks?: number;
+    totalChunks?: number;
+    pendingChunks?: number;
+    etaSeconds?: number | null;
+    batchNumber?: number;
+    estimatedBatches?: number;
+    errorCount?: number;
+    currentJobId?: string;
+  };
 };
 
 type Profile = {
@@ -135,8 +154,15 @@ export function VoiceIdentityOperations() {
       if (kind === "missing") {
         return await callResource("jobs", {
           action: "enqueue",
-          data: { type: "diarization", mode: "missing", ...range, limit: 4 },
+          data: {
+            type: "diarization",
+            mode: "missing",
+            ...range,
+            limit: 4,
+            batchSize: 4,
+          },
           trigger: { type: "manual", reason: "Diarize missing speech chunks" },
+          priority: 3,
         });
       }
       const health = await callResource("jobs", {
@@ -174,11 +200,13 @@ export function VoiceIdentityOperations() {
           runId,
           ...range,
           limit: 4,
+          batchSize: 4,
         },
         trigger: {
           type: "manual",
           reason: `Build diarization generation ${runId}`,
         },
+        priority: 5,
       });
     },
     onSuccess: () => {
@@ -194,6 +222,7 @@ export function VoiceIdentityOperations() {
       { action, runId }: {
         action:
           | "compare-run"
+          | "mark-run-failed"
           | "activate-run"
           | "preview-purge"
           | "purge-superseded";
@@ -394,6 +423,19 @@ export function VoiceIdentityOperations() {
                       Activate
                     </Button>
                   )}
+                  {run.status === "interrupted" && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() =>
+                        runAction.mutate({
+                          action: "mark-run-failed",
+                          runId: run.runId,
+                        })}
+                    >
+                      Mark failed
+                    </Button>
+                  )}
                   {run.status === "superseded" && (
                     <Button
                       size="sm"
@@ -437,6 +479,47 @@ export function VoiceIdentityOperations() {
                 <div className="w-full text-xs text-muted-foreground">
                   {comparison.reason}
                 </div>
+                {run.campaign && (
+                  <div className="w-full space-y-1.5 rounded bg-muted/30 p-2">
+                    <div className="flex justify-between gap-3 text-xs">
+                      <span>
+                        {run.campaign.processedChunks ?? 0} /{" "}
+                        {run.campaign.totalChunks ?? "?"} chunks
+                      </span>
+                      <span>
+                        {run.campaign.status}
+                        {run.campaign.batchNumber
+                          ? ` · batch ${run.campaign.batchNumber}/${
+                            run.campaign.estimatedBatches ?? "?"
+                          }`
+                          : ""}
+                        {run.campaign.errorCount
+                          ? ` · ${run.campaign.errorCount} errors`
+                          : ""}
+                      </span>
+                    </div>
+                    <Progress
+                      className="h-1.5"
+                      value={run.campaign.totalChunks
+                        ? ((run.campaign.processedChunks ?? 0) /
+                          run.campaign.totalChunks) * 100
+                        : 0}
+                    />
+                    <div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
+                      <span className="font-mono">
+                        {run.campaign.campaignId}
+                      </span>
+                      {run.campaign.currentJobId && (
+                        <Link
+                          className="text-primary hover:underline"
+                          to={`/jobs/${run.campaign.currentJobId}`}
+                        >
+                          Current job
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

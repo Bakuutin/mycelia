@@ -45,6 +45,19 @@ describe("diarization run comparison readiness", () => {
       reason: expect.stringContaining("ready"),
     });
   });
+
+  it("explains that an interrupted run must be replaced", () => {
+    const next = {
+      runId: "diar-6",
+      status: "interrupted" as const,
+      generation: 6,
+      replacesRunId: "legacy-v0",
+    };
+    expect(getRunComparison(next, [legacy, next])).toMatchObject({
+      enabled: false,
+      reason: expect.stringContaining("interrupted"),
+    });
+  });
 });
 
 describe("custom diarization range", () => {

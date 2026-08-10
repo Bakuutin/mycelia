@@ -1,6 +1,12 @@
 export interface ComparableDiarizationRun {
   runId: string;
-  status: "building" | "ready" | "active" | "superseded" | "failed";
+  status:
+    | "building"
+    | "interrupted"
+    | "ready"
+    | "active"
+    | "superseded"
+    | "failed";
   generation: number;
   replacesRunId?: string;
 }
@@ -46,6 +52,14 @@ export function getRunComparison(
       baseline,
       reason:
         "Failed runs cannot be compared until they are rebuilt successfully.",
+    };
+  }
+  if (run.status === "interrupted") {
+    return {
+      enabled: false,
+      baseline,
+      reason:
+        "This generation was interrupted before safe resume support. Mark it failed and build a fresh generation.",
     };
   }
   return {

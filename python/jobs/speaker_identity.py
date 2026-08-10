@@ -91,7 +91,7 @@ def process_speaker_identity_job(
     positive = float(calibration["positiveThreshold"])
     negative = float(calibration["negativeThreshold"])
     allow_legacy = bool(calibration.get("allowLegacyCompatibility", False))
-    matcher_version = "tri-state-cosine-v1"
+    matcher_version = "profile-candidates-v2"
 
     query: Dict[str, Any] = {
         "runId": data.runId,
@@ -122,9 +122,15 @@ def process_speaker_identity_job(
 
     operations = []
     counts = {"matched": 0, "rejected": 0, "uncertain": 0}
+    incompatible_skipped = 0
     for segment in segments:
         segment_space = segment.get("embeddingSpaceId")
         profile_space = profile.get("embeddingSpaceId")
+        if segment_space != profile_space or (
+            segment_space in UNKNOWN_SPACES and not allow_legacy
+        ):
+            incompatible_skipped += 1
+            continue
         score = _cosine(segment["embedding"], profile["embedding"])
         state = classify_identity(
             score,
@@ -135,14 +141,26 @@ def process_speaker_identity_job(
             allow_legacy_compatibility=allow_legacy,
         )
         counts[state] += 1
+        rounded_score = round(score, 6)
+        identity_state = {
+            "matched": "identified",
+            "rejected": "unknown",
+            "uncertain": "uncertain",
+        }[state]
+        candidate = {
+            "profileId": profile["_id"],
+            "name": profile.get("name"),
+            "score": rounded_score,
+            "profileRevision": data.profileRevision,
+            "calibrationId": data.calibrationId,
+        }
         decision = {
             "state": state,
-            "primaryScore": round(score, 6),
-            "topCandidate": {
-                "profileId": profile["_id"],
-                "name": profile.get("name"),
-                "score": round(score, 6),
-            },
+            "identityState": identity_state,
+            "primaryScore": rounded_score,
+            "topCandidate": candidate,
+            "candidates": [candidate],
+            "topTwoMargin": None,
             "thresholds": {"positive": positive, "negative": negative},
             "profileId": profile["_id"] if state == "matched" else None,
             "profileRevision": data.profileRevision,
@@ -178,11 +196,17 @@ def process_speaker_identity_job(
 
     processed = len(segments)
     cursor = str(segments[-1]["_id"]) if segments else data.cursor
-    progress_callback({"stage": "identity", "processed": processed, **counts})
+    progress_callback({
+        "stage": "identity",
+        "processed": processed,
+        "incompatibleSkipped": incompatible_skipped,
+        **counts,
+    })
     return {
         "processed": processed,
         "hasMore": processed == data.limit,
         "cursor": cursor,
+        "incompatibleSkipped": incompatible_skipped,
         **counts,
         "duration": round(time.time() - started, 2),
     }

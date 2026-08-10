@@ -540,11 +540,13 @@ export default function JobDetailPage() {
           }) as Promise<any>,
           api.callResource("speaker-segments", {
             action: "list-runs",
-          }) as Promise<Array<{
-            runId: string;
-            status: string;
-            generation: number;
-          }>>,
+          }) as Promise<
+            Array<{
+              runId: string;
+              status: string;
+              generation: number;
+            }>
+          >,
         ]);
         const diarizator = health.services?.find((service: any) =>
           service.id === "diarizator"
@@ -755,6 +757,16 @@ export default function JobDetailPage() {
                         ? ` · ${job.progress.segments_created} segments`
                         : ""}
                     </div>
+                    {job.progress?.campaignId && (
+                      <div className="font-mono text-xs text-muted-foreground">
+                        Campaign {job.progress.campaignId}
+                        {job.progress.batchNumber
+                          ? ` · batch ${job.progress.batchNumber}/${
+                            job.progress.estimatedBatches ?? "?"
+                          }`
+                          : ""}
+                      </div>
+                    )}
                   </>
                 )}
             </CardContent>
@@ -772,14 +784,20 @@ export default function JobDetailPage() {
               <div className="text-sm text-muted-foreground mb-1">State</div>
               {job.state === "completed" &&
                   (job.result?.success === false ||
-                    (Array.isArray(job.result?.errors) &&
-                      job.result.errors.length > 0))
+                    (job.result?.errorCount ??
+                        (Array.isArray(job.result?.errors)
+                          ? job.result.errors.length
+                          : job.result?.errors ?? 0)) > 0)
                 ? (
                   <Badge className="bg-amber-500/15 text-amber-500 border-amber-500/30">
-                    completed · {Array.isArray(job.result?.errors)
-                      ? job.result.errors.length
-                      : ""} error{Array.isArray(job.result?.errors) &&
-                        job.result.errors.length === 1
+                    completed · {job.result?.errorCount ??
+                      (Array.isArray(job.result?.errors)
+                        ? job.result.errors.length
+                        : job.result?.errors ?? 0)}{" "}
+                    error{(job.result?.errorCount ??
+                        (Array.isArray(job.result?.errors)
+                          ? job.result.errors.length
+                          : job.result?.errors ?? 0)) === 1
                       ? ""
                       : "s"}
                   </Badge>
@@ -1454,11 +1472,14 @@ export default function JobDetailPage() {
                   label: "Segments Created",
                   value: r.segments_created ?? 0,
                 },
-                ...(r.errors != null && r.errors > 0
+                ...((r.errorCount ??
+                    (Array.isArray(r.errors) ? r.errors.length : r.errors) ??
+                    0) > 0
                   ? [{
                     icon: AlertTriangle as LucideIcon,
                     label: "Errors",
-                    value: r.errors,
+                    value: r.errorCount ??
+                      (Array.isArray(r.errors) ? r.errors.length : r.errors),
                   }]
                   : []),
               ],
@@ -1639,12 +1660,41 @@ export default function JobDetailPage() {
                     </div>
                     <div className="bg-red-500/5 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
                       {config.errors.map((err: any, idx: number) => (
-                        <div key={idx} className="text-xs text-red-400">
+                        <div
+                          key={idx}
+                          className="space-y-1 rounded border border-red-500/20 p-2 text-xs text-red-400"
+                        >
                           {typeof err === "string" ? err : (
                             <>
-                              <span className="font-medium">{err.type}:</span>
-                              {" "}
-                              {err.message}
+                              <div>
+                                <span className="font-medium">
+                                  {err.category ?? err.type ?? "unknown"}:
+                                </span>{" "}
+                                {err.message}
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-muted-foreground">
+                                {err.route && <span>{err.route}</span>}
+                                {err.attempt && (
+                                  <span>attempt {err.attempt}/3</span>
+                                )}
+                                <span>
+                                  {err.retryable
+                                    ? "Will retry automatically"
+                                    : "Action required"}
+                                </span>
+                                {err.start && err.end && (
+                                  <Link
+                                    className="text-primary hover:underline"
+                                    to={`/timeline?start=${
+                                      new Date(err.start).getTime()
+                                    }&end=${
+                                      new Date(err.end).getTime() + 60_000
+                                    }`}
+                                  >
+                                    Open on Timeline
+                                  </Link>
+                                )}
+                              </div>
                             </>
                           )}
                         </div>

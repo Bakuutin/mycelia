@@ -90,6 +90,7 @@ import {
 import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
+import { DiarizationLaunchDialog } from "@/components/DiarizationLaunchDialog";
 
 type WorkerStatus = {
   checkedAt: string;
@@ -385,7 +386,8 @@ const WORKER_PIPELINE = [
   },
   {
     type: "diarization",
-    description: "Splits transcribed speech into per-speaker segments",
+    description:
+      "Automatically drains speech without diarization in resumable sequence batches",
   },
   {
     type: "speakerMatching",
@@ -1090,6 +1092,9 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   // --- Diarization ---
   if (job.type === "diarization") {
     if (isCompleted) {
+      const diarizationErrorCount = result.errorCount ??
+        (Array.isArray(result.errors) ? result.errors.length : result.errors) ??
+        0;
       if (result.message && (result.sequences_processed ?? 0) === 0) {
         return (
           <span className="text-xs text-muted-foreground">
@@ -1110,8 +1115,10 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.segments_created != null && (
               <span>{result.segments_created} segments</span>
             )}
-            {result.errors != null && result.errors > 0 && (
-              <span className="text-red-400">{result.errors} errors</span>
+            {diarizationErrorCount > 0 && (
+              <span className="text-red-400">
+                {diarizationErrorCount} errors
+              </span>
             )}
           </div>
         </div>
@@ -2403,10 +2410,10 @@ export default function JobsPage() {
       }) as InferenceRoutingConfig;
       const current: DiarizationRouteConfig = {
         profiles: config.diarizationProfiles?.profiles ?? [],
-        includeEnvironment:
-          config.diarizationProfiles?.includeEnvironment ?? true,
-        environmentPriority:
-          config.diarizationProfiles?.environmentPriority ?? 50,
+        includeEnvironment: config.diarizationProfiles?.includeEnvironment ??
+          true,
+        environmentPriority: config.diarizationProfiles?.environmentPriority ??
+          50,
       };
       const next = updateDiarizationRouteConfig(current, profileId, changes);
       await api.callResource("config", {
@@ -3455,10 +3462,9 @@ export default function JobsPage() {
                             </Button>
                           </div>
                           {service.routes?.map((route) => {
-                            const priorityDraft =
-                              diarizationPriorityDrafts[
-                                route.providerProfileId
-                              ] ?? String(route.priority);
+                            const priorityDraft = diarizationPriorityDrafts[
+                              route.providerProfileId
+                            ] ?? String(route.priority);
                             const parsedPriority = Number(priorityDraft);
                             const validPriority = Number.isInteger(
                               parsedPriority,
@@ -3493,7 +3499,8 @@ export default function JobsPage() {
                                   <div className="flex h-9 items-center gap-2 rounded border px-2">
                                     <Switch
                                       checked={route.enabled}
-                                      disabled={updateDiarizationRouteMutation.isPending}
+                                      disabled={updateDiarizationRouteMutation
+                                        .isPending}
                                       onCheckedChange={(enabled) =>
                                         updateDiarizationRouteMutation.mutate({
                                           profileId: route.providerProfileId,
@@ -3518,7 +3525,9 @@ export default function JobsPage() {
                                       step={1}
                                       value={priorityDraft}
                                       onChange={(event) =>
-                                        setDiarizationPriorityDrafts((current) => ({
+                                        setDiarizationPriorityDrafts((
+                                          current,
+                                        ) => ({
                                           ...current,
                                           [route.providerProfileId]:
                                             event.target.value,
@@ -3530,7 +3539,8 @@ export default function JobsPage() {
                                     size="sm"
                                     variant="outline"
                                     disabled={!validPriority ||
-                                      updateDiarizationRouteMutation.isPending ||
+                                      updateDiarizationRouteMutation
+                                        .isPending ||
                                       parsedPriority === route.priority}
                                     onClick={() =>
                                       updateDiarizationRouteMutation.mutate({
@@ -4092,23 +4102,27 @@ export default function JobsPage() {
                         </TableCell>
                         <TableCell className="py-1">
                           <div className="flex items-center">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Link to={`/jobs/new?type=${worker.type}`}>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    aria-label={`Run ${worker.type} job`}
-                                  >
-                                    <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
-                                  </Button>
-                                </Link>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Run {worker.type} job
-                              </TooltipContent>
-                            </Tooltip>
+                            {worker.type === "diarization"
+                              ? <DiarizationLaunchDialog />
+                              : (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Link to={`/jobs/new?type=${worker.type}`}>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        aria-label={`Run ${worker.type} job`}
+                                      >
+                                        <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                                      </Button>
+                                    </Link>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    Run {worker.type} job
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -4343,6 +4357,8 @@ export default function JobsPage() {
                                   aria-label={`${worker.type} batch size`}
                                   title={worker.type === "transcription"
                                     ? "Audio sequences per STT request"
+                                    : worker.type === "diarization"
+                                    ? "Speech sequences processed per diarization job"
                                     : "Items per LLM call"}
                                 />
                                 <Button
@@ -4373,7 +4389,11 @@ export default function JobsPage() {
                                     setWorkerBatchMutation.variables
                                         ?.workerType === worker.type
                                   ? "applying…"
-                                  : `batch ${
+                                  : `${
+                                    worker.type === "diarization"
+                                      ? "sequences/job"
+                                      : "batch"
+                                  } ${
                                     getEffectiveBatchSize(worker.type) ?? "—"
                                   }`}
                                 {` · allowed ${

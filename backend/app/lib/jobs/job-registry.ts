@@ -1,7 +1,14 @@
 import type { Job } from "bullmq";
 import { fromJSONSchema } from "zod";
 import type { JobData, JobResult } from "./types.ts";
-import { Registry, RegistryEntry, CapabilityManifest, discoverCapabilities, TriggerSource, Triggers } from "@/utils/registries.ts";
+import {
+  CapabilityManifest,
+  discoverCapabilities,
+  Registry,
+  RegistryEntry,
+  Triggers,
+  TriggerSource,
+} from "@/utils/registries.ts";
 import { Policy } from "@/lib/auth/resources.ts";
 
 /**
@@ -15,12 +22,13 @@ export interface JobTriggerSource extends TriggerSource {
  * A job capability represents a worker that can process a specific job type.
  * Each capability defines its own name, processor, and data schema.
  */
-export interface JobCapability<T = Job<JobData>> extends Omit<CapabilityManifest, 'inputSchema' | 'outputSchema'> {
+export interface JobCapability<T = Job<JobData>>
+  extends Omit<CapabilityManifest, "inputSchema" | "outputSchema"> {
   inputSchema: any; // Should be serializable JSON Schema
   outputSchema: any; // Should be serializable JSON Schema
   use: (job: T) => Promise<JobResult>;
   policies: Policy[];
-  triggers?: Omit<Triggers, 'sources'> & {
+  triggers?: Omit<Triggers, "sources"> & {
     sources: JobTriggerSource[];
   };
   /**
@@ -35,6 +43,12 @@ export interface JobCapability<T = Job<JobData>> extends Omit<CapabilityManifest
     mongo: (input: any) => Promise<any>;
     reason: string;
   }) => Promise<boolean | number>;
+  /** Build job data from a trigger payload (for example, scope work to one source). */
+  getTriggerJobData?: (
+    payload: unknown,
+    reason: string,
+    context: { mongo: (input: any) => Promise<any> },
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
   maxConcurrency?: number;
   /** Extra `host:port` entries appended to the job subprocess --allow-net. */
   allowedHosts?: string[];
@@ -72,8 +86,14 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
    * Get JSON schemas and policies for all registered jobs.
    * Returns { workerName: { input: inputSchema, output: outputSchema, policies: Policy[] } }
    */
-  getJobSchemas(): Record<string, { input: any; output: any; policies: any[] }> {
-    const schemas: Record<string, { input: any; output: any; policies: any[] }> = {};
+  getJobSchemas(): Record<
+    string,
+    { input: any; output: any; policies: any[] }
+  > {
+    const schemas: Record<
+      string,
+      { input: any; output: any; policies: any[] }
+    > = {};
     for (const capability of this.list()) {
       try {
         schemas[capability.manifest.name] = {
@@ -82,7 +102,10 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
           policies: capability.manifest.policies || [],
         };
       } catch (err: any) {
-        console.error(`Failed to convert schema for job type ${capability.manifest.name}:`, err.message);
+        console.error(
+          `Failed to convert schema for job type ${capability.manifest.name}:`,
+          err.message,
+        );
         throw err;
       }
     }
@@ -97,7 +120,7 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
     if (!data || typeof data !== "object" || !("type" in data)) {
       throw new Error("Job data must have a 'type' field");
     }
-    
+
     const jobType = (data as { type: string }).type;
     const capability = this.get(jobType);
 
@@ -166,8 +189,10 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
     if (entry.use) return entry;
 
     const mod = await import(entry.path.href);
-    const capability = (mod.default && typeof mod.default === "object") ? mod.default : mod;
-    
+    const capability = (mod.default && typeof mod.default === "object")
+      ? mod.default
+      : mod;
+
     // Merge implementation into the entry
     Object.assign(entry, capability);
     return entry;
@@ -177,7 +202,9 @@ export class JobRegistry extends Registry<JobRegistryEntry> {
    * Load all implementations for all registered capabilities.
    */
   async loadAllImplementations(): Promise<void> {
-    await Promise.all(this.list().map((c) => this.loadImplementation(c.manifest.name)));
+    await Promise.all(
+      this.list().map((c) => this.loadImplementation(c.manifest.name)),
+    );
   }
 }
 
@@ -201,8 +228,12 @@ export async function discoverJobWorkers(): Promise<void> {
   });
 
   for (const discovered of capabilities) {
-      jobRegistry.register(discovered);
+    jobRegistry.register(discovered);
   }
 
-  console.log(`Discovered ${jobRegistry.list().length} job worker(s): ${jobRegistry.getJobTypes().join(", ")}`);
+  console.log(
+    `Discovered ${jobRegistry.list().length} job worker(s): ${
+      jobRegistry.getJobTypes().join(", ")
+    }`,
+  );
 }

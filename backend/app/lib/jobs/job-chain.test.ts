@@ -1,9 +1,26 @@
 import { expect } from "@std/expect";
-import { getContinuationJobData, shouldContinueJobChain } from "./job-chain.ts";
+import {
+  getContinuationJobData,
+  getContinuationPriority,
+  shouldContinueJobChain,
+} from "./job-chain.ts";
 
 Deno.test("job chaining continues only after measurable progress", () => {
   expect(shouldContinueJobChain({ hasMore: true, processed: 1 })).toBe(true);
   expect(shouldContinueJobChain({ hasMore: true, processed: 25 })).toBe(true);
+});
+
+Deno.test("diarization priority keeps live recordings ahead of historical work", () => {
+  expect(getContinuationPriority({
+    type: "diarization",
+    originalId: "recording-1",
+  })).toBe(1);
+  expect(getContinuationPriority({
+    type: "diarization",
+    mode: "build_generation",
+  })).toBe(5);
+  expect(getContinuationPriority({ type: "diarization", mode: "missing" }))
+    .toBe(10);
 });
 
 Deno.test("job chaining stops when work is exhausted or no progress was made", () => {
@@ -32,5 +49,28 @@ Deno.test("cursor-based workers advance their continuation cursor", () => {
   expect(getContinuationJobData(data, { cursor: "new" })).toEqual({
     type: "speakerIdentity",
     cursor: "new",
+  });
+});
+
+Deno.test("diarization continuation adopts the campaign created by the first batch", () => {
+  expect(getContinuationJobData(
+    { type: "diarization", mode: "missing", limit: 4 },
+    { campaignId: "campaign-1", cursor: "2026-08-10T00:00:00Z" },
+  )).toEqual({
+    type: "diarization",
+    mode: "missing",
+    limit: 4,
+    campaignId: "campaign-1",
+    cursor: "2026-08-10T00:00:00.000Z",
+  });
+});
+
+Deno.test("diarization continuation normalizes Python UTC offsets", () => {
+  expect(getContinuationJobData(
+    { type: "diarization", mode: "missing" },
+    { campaignId: "campaign-1", cursor: "2026-08-10T00:00:00.123000+00:00" },
+  )).toMatchObject({
+    campaignId: "campaign-1",
+    cursor: "2026-08-10T00:00:00.123Z",
   });
 });
