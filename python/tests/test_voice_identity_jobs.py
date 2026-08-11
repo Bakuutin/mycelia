@@ -284,6 +284,53 @@ class DiarizationJobTest(TestCase):
         self.assertEqual(final_update["status"], "interrupted")
         self.assertEqual(final_update["errors"], [structured])
 
+    def test_provider_network_failure_interrupts_partial_batch_for_watchdog_retry(self):
+        retry_at = datetime.now(tz=UTC)
+        structured = {
+            "category": "provider_network",
+            "message": "connection refused",
+            "retryable": True,
+            "retryAt": retry_at,
+        }
+        sequences = [object(), object(), object()]
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign") as update_campaign,
+            patch("jobs.diarization.count_pending_chunks", return_value=6),
+            patch("jobs.diarization.get_diarization_sequences", return_value=sequences),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                side_effect=[
+                    {"status": "diarized", "chunks_diarized": 2, "segments": 3},
+                    {
+                        "status": "error",
+                        "chunks_diarized": 0,
+                        "segments": 0,
+                        "error": "connection refused",
+                        "errorDetail": structured,
+                    },
+                    {"status": "diarized", "chunks_diarized": 2, "segments": 3},
+                ],
+            ) as diarize,
+        ):
+            result = process_diarization_job(
+                "job-provider-down",
+                DiarizationJobData(limit=3),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(diarize.call_count, 2)
+        self.assertEqual(result["processed"], 2)
+        self.assertFalse(result["hasMore"])
+        self.assertTrue(result["retryScheduled"])
+        self.assertEqual(result["successfulSequences"], 1)
+        self.assertEqual(result["failedSequences"], 1)
+        final_update = update_campaign.call_args.args[1]
+        self.assertEqual(final_update["status"], "interrupted")
+        self.assertEqual(final_update["nextRetryAt"], retry_at)
+        self.assertIsNone(final_update["finishedAt"])
+
 
 class SpeakerMatchingJobTest(TestCase):
     def test_time_range_is_applied_and_continuation_uses_camel_case(self):

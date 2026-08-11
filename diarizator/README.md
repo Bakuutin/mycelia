@@ -74,6 +74,17 @@ Recommended Docker Desktop resources for Mycelia plus diarization:
 - swap: 2–4 GB;
 - keep only the CPU profile active on a Mac.
 
+The main Mycelia Compose stack defaults to two 10-second audio chunks per
+diarization request (`DIARIZATION_MAX_SEQUENCE_CHUNKS=2`). This preserves the
+one-chunk overlap used for speaker continuity while avoiding a confirmed Docker
+Desktop OOM when six chunks are combined under an 8 GB VM.
+After assigning 10–12 GB to Docker, or when the worker targets a sufficiently
+large remote/GPU service, increase throughput explicitly:
+
+```bash
+DIARIZATION_MAX_SEQUENCE_CHUNKS=6
+```
+
 ### 2B. Linux server with RTX 4090 (CUDA 12.6)
 
 Prerequisites on the server:

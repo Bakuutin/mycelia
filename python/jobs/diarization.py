@@ -254,6 +254,7 @@ def process_diarization_job(
     last_error: Optional[str] = None
     cursor: Optional[datetime] = data.cursor
     elapsed_seconds = 0.0
+    provider_unavailable = False
     
     # Get and process sequences
     for sequence in get_diarization_sequences(
@@ -283,10 +284,13 @@ def process_diarization_job(
             detail = result.get("errorDetail")
             if isinstance(detail, dict):
                 error_details.append(detail)
+                provider_unavailable = bool(detail.get("retryable")) and detail.get(
+                    "category"
+                ) in {"provider_network", "timeout"}
             # A generation cursor must never advance past failed source audio.
             # The next continuation can safely retry because segment writes are
             # idempotent inside a run.
-            if building_generation:
+            if building_generation or provider_unavailable:
                 break
         else:
             successful_sequences += 1
@@ -347,18 +351,19 @@ def process_diarization_job(
             "lastCursor": cursor,
         })
     
+    retryable_failure = any(
+        bool(detail.get("retryable")) for detail in error_details
+    )
+    next_retry_at = next(
+        (detail.get("retryAt") for detail in error_details if detail.get("retryAt")),
+        None,
+    )
     if errors > 0 and chunks_processed == 0:
-        retryable_failure = any(
-            bool(detail.get("retryable")) for detail in error_details
-        )
         _update_campaign(campaign_id, {
             "status": "interrupted" if building_generation or retryable_failure else "failed",
             "errorCount": cumulative_errors + errors,
             "errors": (previous_errors + error_details)[-100:],
-            "nextRetryAt": next(
-                (detail.get("retryAt") for detail in error_details if detail.get("retryAt")),
-                None,
-            ),
+            "nextRetryAt": next_retry_at,
             "lastCursor": cursor,
         })
         raise RuntimeError(last_error or "Diarization made no progress")
@@ -373,12 +378,18 @@ def process_diarization_job(
         if remaining is not None
         else sequences_processed >= effective_batch_size and errors == 0
     )
-    if building_generation and not has_more:
+    if provider_unavailable:
+        # Avoid a hot continuation loop while the selected service is down.
+        # The historical watchdog resumes interrupted campaigns once their
+        # persisted sequence retryAt becomes eligible again.
+        has_more = False
+    if building_generation and not has_more and not provider_unavailable:
         now = datetime.now().astimezone()
         call_resource("mongo", {"action": "updateMany", "collection": "diarizations", "query": {"runId": data.runId}, "update": {"$set": {"lifecycleStatus": "ready"}}})
         call_resource("mongo", {"action": "updateOne", "collection": "diarization_runs", "query": {"runId": data.runId, "status": "building"}, "update": {"$set": {"status": "ready", "readyAt": now, "coverage": {"chunks": cumulative_chunks + chunks_processed, "segments": cumulative_segments + segments_created}, "errors": cumulative_errors + errors}}})
     final_status = (
-        "running" if has_more
+        "interrupted" if provider_unavailable
+        else "running" if has_more
         else "completed_with_errors" if cumulative_errors + errors > 0
         else "completed"
     )
@@ -399,7 +410,12 @@ def process_diarization_job(
         "pendingChunks": remaining,
         "errorCount": cumulative_errors + errors,
         "errors": (previous_errors + error_details)[-100:],
-        "finishedAt": datetime.now().astimezone() if not has_more else None,
+        "nextRetryAt": next_retry_at if provider_unavailable else None,
+        "finishedAt": (
+            None
+            if provider_unavailable or has_more
+            else datetime.now().astimezone()
+        ),
         "lastCursor": cursor,
         "rateSamples": final_rate_samples,
     })
@@ -416,6 +432,7 @@ def process_diarization_job(
         "failedSequences": failed_sequences,
         "processed": chunks_processed,
         "hasMore": has_more,
+        "retryScheduled": provider_unavailable,
         "cursor": cursor.isoformat() if cursor else None,
         "campaignId": campaign_id,
         "batchNumber": batch_number,
