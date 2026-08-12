@@ -164,6 +164,9 @@ class DiarizationJobTest(TestCase):
             patch("jobs.diarization._campaign_call", return_value=None),
             patch("jobs.diarization._update_campaign") as update_campaign,
             patch("jobs.diarization.count_pending_chunks", return_value=10),
+            # Batch estimation reads a deployment-tuned constant; pinning it
+            # keeps the expected batch count independent of the local .env.
+            patch("jobs.diarization.MAX_SEQUENCE_CHUNKS", 6),
             patch("jobs.diarization.get_diarization_sequences", return_value=[sequence]) as get_sequences,
             patch(
                 "jobs.diarization.diarize_sequence",
