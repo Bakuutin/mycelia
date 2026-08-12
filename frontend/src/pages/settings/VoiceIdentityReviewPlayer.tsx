@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowDown,
@@ -26,7 +26,14 @@ type ReviewCommand =
   | "play"
   | "previous"
   | "next"
-  | "undo";
+  | "undo"
+  | "edit"
+  | { type: "profile"; index: number };
+
+export type VoiceIdentityProfileOption = {
+  id: string;
+  name: string;
+};
 
 export interface VoiceIdentityReviewSegment {
   _id: unknown;
@@ -56,10 +63,16 @@ interface VoiceIdentityReviewPlayerProps {
   canPrevious: boolean;
   canNext: boolean;
   canUndo: boolean;
+  canEdit: boolean;
+  editingLabel?: string | null;
+  alternateProfiles: VoiceIdentityProfileOption[];
   onDecision: (decision: VoiceIdentityDecision) => void;
+  onAssignProfile: (profileId: string) => void;
   onPrevious: () => void;
   onNext: () => void;
   onUndo: () => void;
+  onEdit: () => void;
+  onCancelEdit: () => void;
   onAutoPlayChange: (enabled: boolean) => void;
 }
 
@@ -67,6 +80,9 @@ const SWIPE_DISTANCE_PX = 72;
 const SWIPE_MAX_VERTICAL_PX = 48;
 
 export function getReviewShortcut(key: string): ReviewCommand | null {
+  if (/^[1-9]$/.test(key)) {
+    return { type: "profile", index: Number(key) - 1 };
+  }
   switch (key) {
     case " ":
     case "Spacebar":
@@ -85,6 +101,9 @@ export function getReviewShortcut(key: string): ReviewCommand | null {
     case "s":
     case "S":
       return "skip";
+    case "e":
+    case "E":
+      return "edit";
     default:
       return null;
   }
@@ -144,14 +163,23 @@ export function VoiceIdentityReviewPlayer({
   canPrevious,
   canNext,
   canUndo,
+  canEdit,
+  editingLabel,
+  alternateProfiles,
   onDecision,
+  onAssignProfile,
   onPrevious,
   onNext,
   onUndo,
+  onEdit,
+  onCancelEdit,
   onAutoPlayChange,
 }: VoiceIdentityReviewPlayerProps) {
   const playerRef = useRef<WaveformPlayerHandle>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [selectedProfileId, setSelectedProfileId] = useState(
+    alternateProfiles[0]?.id ?? "",
+  );
   const id = normalizeObjectId(segment._id);
   const duration = durationSeconds(segment);
   const audioUrl = buildAudioUrl(segment);
@@ -166,6 +194,14 @@ export function VoiceIdentityReviewPlayer({
   };
 
   useEffect(() => {
+    if (
+      !alternateProfiles.some((profile) => profile.id === selectedProfileId)
+    ) {
+      setSelectedProfileId(alternateProfiles[0]?.id ?? "");
+    }
+  }, [alternateProfiles, selectedProfileId]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         isInteractiveTarget(event.target) ||
@@ -173,9 +209,23 @@ export function VoiceIdentityReviewPlayer({
       ) return;
       const command = getReviewShortcut(event.key);
       if (!command) return;
+      if (typeof command === "object") {
+        if (pending) return;
+        const profile = alternateProfiles[command.index];
+        if (profile) {
+          event.preventDefault();
+          stopThen(() => onAssignProfile(profile.id));
+        }
+        return;
+      }
       if (command === "play") {
         event.preventDefault();
         playerRef.current?.togglePlayback();
+        return;
+      }
+      if (command === "edit" && canEdit) {
+        event.preventDefault();
+        stopThen(onEdit);
         return;
       }
       if (pending) return;
@@ -193,13 +243,17 @@ export function VoiceIdentityReviewPlayer({
         stopThen(onUndo);
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    globalThis.addEventListener("keydown", handleKeyDown);
+    return () => globalThis.removeEventListener("keydown", handleKeyDown);
   }, [
     canNext,
     canPrevious,
     canUndo,
+    canEdit,
+    alternateProfiles,
     onDecision,
+    onAssignProfile,
+    onEdit,
     onNext,
     onPrevious,
     onUndo,
@@ -295,17 +349,23 @@ export function VoiceIdentityReviewPlayer({
               disabled={pending}
               onClick={() => stopThen(() => onDecision("not-me"))}
             >
-              <ArrowLeft className="mr-2 h-5 w-5" />Not me
+              <ArrowLeft className="mr-2 h-5 w-5" />Not Sky
             </Button>
             <Button
               size="lg"
               variant="ghost"
               className="h-14 px-4 text-muted-foreground"
               disabled={pending}
-              onClick={() => stopThen(() => onDecision("skip"))}
-              title="Keep this segment unlabeled and continue (S)"
+              onClick={() =>
+                stopThen(() =>
+                  editingLabel ? onCancelEdit() : onDecision("skip")
+                )}
+              title={editingLabel
+                ? "Cancel correction"
+                : "Keep this segment unlabeled and continue (S)"}
             >
-              <SkipForward className="mr-1 h-4 w-4" />Skip
+              <SkipForward className="mr-1 h-4 w-4" />
+              {editingLabel ? "Cancel" : "Skip"}
             </Button>
             <Button
               size="lg"
@@ -313,12 +373,42 @@ export function VoiceIdentityReviewPlayer({
               disabled={pending}
               onClick={() => stopThen(() => onDecision("me"))}
             >
-              This is me<ArrowRight className="ml-2 h-5 w-5" />
+              Sky<ArrowRight className="ml-2 h-5 w-5" />
             </Button>
           </div>
 
+          {alternateProfiles.length > 0 && (
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="sr-only" htmlFor="voice-review-other-profile">
+                Assign another profile
+              </label>
+              <select
+                id="voice-review-other-profile"
+                className="h-10 rounded-md border bg-background px-3 text-sm"
+                value={selectedProfileId}
+                onChange={(event) => setSelectedProfileId(event.target.value)}
+              >
+                {alternateProfiles.map((profile, index) => (
+                  <option key={profile.id} value={profile.id}>
+                    {index < 9 ? `${index + 1} · ` : ""}
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                disabled={pending || !selectedProfileId}
+                onClick={() =>
+                  stopThen(() => onAssignProfile(selectedProfileId))}
+              >
+                Assign profile
+              </Button>
+            </div>
+          )}
+
           <p className="text-center text-xs text-muted-foreground">
-            Swipe left/right or use ← / → · S skips · Space plays · U undoes
+            Swipe or use ← Not Sky · → Sky · S skips · 1–9 profiles · Space
+            plays · U undoes · E edits
           </p>
         </div>
 

@@ -39,6 +39,15 @@ type ReviewWindowItem = {
   groupId?: string;
   status: "pending" | "skipped" | "reviewed";
   decisionId?: unknown;
+  decisionSummary?: {
+    decisionId: string;
+    profileId: string | null;
+    profileName: string | null;
+    excludedProfileIds: string[];
+    excludedProfileNames: string[];
+    source: "manual";
+    updatedAt: Date | string | null;
+  };
 };
 
 type ReviewGroup = {
@@ -184,6 +193,7 @@ export default function VoiceIdentityReviewPage() {
   const [validationRecordings, setValidationRecordings] = useState("");
   const [history, setHistory] = useState<ReviewHistoryEntry[]>([]);
   const [playOnMount, setPlayOnMount] = useState(false);
+  const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     () => {
       try {
@@ -228,6 +238,14 @@ export default function VoiceIdentityReviewPage() {
   const reviewProfile = profiles.find((profile) =>
     normalizeObjectId(profile._id) === reviewProfileId
   );
+  const alternateProfiles = profiles
+    .filter((profile) => normalizeObjectId(profile._id) !== reviewProfileId)
+    .map((profile) => ({
+      id: normalizeObjectId(profile._id) ?? "",
+      name: String(profile.name ?? "Unnamed profile"),
+    }))
+    .filter((profile) => profile.id)
+    .sort((a, b) => a.name.localeCompare(b.name));
   const { data: identityStatus, refetch: refetchIdentityStatus } = useQuery<
     IdentityStatus
   >({
@@ -437,32 +455,61 @@ export default function VoiceIdentityReviewPage() {
 
   const label = useMutation({
     mutationFn: async (
-      { clientRequestId, segmentIds, state }: {
+      {
+        clientRequestId,
+        segmentIds,
+        profileId,
+        excludedProfileIds,
+        replacesDecisionId,
+      }: {
         clientRequestId: string;
         segmentIds: string[];
-        state: "me" | "not-me";
+        profileId?: string;
+        excludedProfileIds: string[];
+        replacesDecisionId?: string;
       },
     ) => {
       if (!reviewProfileId || !reviewSession || !selectedSessionId) {
         throw new Error("Review session or profile is missing");
       }
       return await callResource("speaker-segments", {
-        action: "commit-review-decision",
+        action: replacesDecisionId
+          ? "revise-review-decision"
+          : "commit-review-decision",
         sessionId: selectedSessionId,
         revision: reviewSession.revision,
         clientRequestId,
         segmentIds,
-        ...(state === "me"
-          ? { profileId: reviewProfileId, excludedProfileIds: [] }
-          : { excludedProfileIds: [reviewProfileId] }),
+        ...(profileId ? { profileId } : {}),
+        excludedProfileIds,
+        ...(replacesDecisionId ? { replacesDecisionId } : {}),
       }) as { decision: { _id: unknown }; session: ReviewSession };
     },
-    onSuccess: ({ decision, session }) => {
+    onSuccess: ({ decision, session }, variables) => {
       const decisionId = normalizeObjectId(decision._id);
       queryClient.setQueryData(sessionQueryKey, session);
-      if (decisionId) setHistory((current) => [...current, { decisionId }]);
-      setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
+      if (variables.replacesDecisionId) {
+        const replacedDecisionStillCurrent = session.window.some((item) =>
+          normalizeObjectId(item.decisionId) === variables.replacesDecisionId
+        );
+        if (!replacedDecisionStillCurrent) {
+          setHistory((current) =>
+            current.filter((entry) =>
+              entry.decisionId !== variables.replacesDecisionId
+            )
+          );
+        }
+        setEditingSegmentId(null);
+        setPlayOnMount(false);
+        toast.success("Speaker label corrected");
+      } else {
+        if (decisionId) setHistory((current) => [...current, { decisionId }]);
+        setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
+      }
       void refetchIdentityStatus();
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker-calibration-preview"],
+      });
       void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
     },
     onError: (error) => {
@@ -476,11 +523,17 @@ export default function VoiceIdentityReviewPage() {
   });
 
   const undo = useMutation({
-    mutationFn: async (entry: ReviewHistoryEntry) =>
-      await callResource("speaker-segments", {
+    mutationFn: async (entry: ReviewHistoryEntry) => {
+      if (!selectedSessionId || !reviewSession) {
+        throw new Error("Review session is not loaded");
+      }
+      return await callResource("speaker-segments", {
         action: "undo-review-decision",
+        sessionId: selectedSessionId,
+        revision: reviewSession.revision,
         decisionId: entry.decisionId,
-      }) as ReviewSession,
+      }) as ReviewSession;
+    },
     onSuccess: (session) => {
       queryClient.setQueryData(sessionQueryKey, session);
       setHistory((current) => current.slice(0, -1));
@@ -652,6 +705,15 @@ export default function VoiceIdentityReviewPage() {
       ? `${100 - calibrationLabelCounts.total} more compatible total`
       : null,
   ].filter(Boolean) as string[];
+  const readinessState = latestCalibration
+    ? "Validated"
+    : !labelGateReady
+    ? "Need labels"
+    : calibrationPreview?.blockers.length
+    ? "Split blocked"
+    : "Minimum reached";
+  const hasWeakRecordingDiversity = labelGateReady &&
+    calibrationLabelCounts.recordings <= 3;
   const windowItems = reviewSession?.window ?? [];
   const segmentById = useMemo(
     () =>
@@ -667,27 +729,39 @@ export default function VoiceIdentityReviewPage() {
     normalizeObjectId(
       windowItems.find((item) => item.status === "pending")?.segmentId,
     );
+  const reviewId = editingSegmentId ?? activeId;
   const activeIndex = Math.max(
     0,
     windowItems.findIndex((item) =>
       normalizeObjectId(item.segmentId) === activeId
     ),
   );
-  const activeSegment = activeId ? segmentById.get(activeId) : undefined;
-  const groupMode = reviewSession?.preferences?.groupMode !== false;
-  const activeGroup = reviewSession?.groups.find((group) =>
-    group.segmentIds.includes(activeId ?? "")
+  const reviewIndex = Math.max(
+    0,
+    windowItems.findIndex((item) =>
+      normalizeObjectId(item.segmentId) === reviewId
+    ),
   );
+  const reviewItem = windowItems[reviewIndex];
+  const activeSegment = reviewId ? segmentById.get(reviewId) : undefined;
+  const groupMode = reviewSession?.preferences?.groupMode !== false;
+  const activeGroup = editingSegmentId
+    ? undefined
+    : reviewSession?.groups.find((group) =>
+      group.segmentIds.includes(activeId ?? "")
+    );
   const decisionSegmentIds =
-    (groupMode && activeGroup
+    (editingSegmentId
+      ? [editingSegmentId]
+      : groupMode && activeGroup
       ? activeGroup.segmentIds
-      : activeId
-      ? [activeId]
+      : reviewId
+      ? [reviewId]
       : []).filter((id) => {
         const item = windowItems.find((candidate) =>
           normalizeObjectId(candidate.segmentId) === id
         );
-        return item?.status !== "reviewed";
+        return Boolean(editingSegmentId) || item?.status !== "reviewed";
       });
   const playerSegment = activeSegment && groupMode && activeGroup
     ? {
@@ -724,9 +798,41 @@ export default function VoiceIdentityReviewPage() {
   };
   const openReviewSegment = (id: string) => {
     if (reviewPending || id === activeId) return;
+    setEditingSegmentId(null);
     useAudioPlaybackStore.getState().stopActive();
     setPlayOnMount(false);
     updatePosition.mutate({ activeSegmentId: id });
+  };
+  const beginEdit = (item: ReviewWindowItem) => {
+    const id = normalizeObjectId(item.segmentId);
+    if (
+      !id || item.status !== "reviewed" || !item.decisionSummary ||
+      reviewPending
+    ) {
+      return;
+    }
+    useAudioPlaybackStore.getState().stopActive();
+    setPlayOnMount(false);
+    setEditingSegmentId(id);
+  };
+  const cancelEdit = () => {
+    useAudioPlaybackStore.getState().stopActive();
+    setEditingSegmentId(null);
+    setPlayOnMount(false);
+  };
+  const saveAssignment = (assignment: {
+    profileId?: string;
+    excludedProfileIds: string[];
+  }) => {
+    if (reviewPending || decisionSegmentIds.length === 0) return;
+    label.mutate({
+      clientRequestId: crypto.randomUUID(),
+      segmentIds: decisionSegmentIds,
+      ...assignment,
+      ...(editingSegmentId && reviewItem?.decisionSummary
+        ? { replacesDecisionId: reviewItem.decisionSummary.decisionId }
+        : {}),
+    });
   };
   const skipActive = () => {
     if (!activeId || reviewPending) return;
@@ -887,7 +993,11 @@ export default function VoiceIdentityReviewPage() {
           </CardContent>
         </Card>
         <Card
-          className={latestCalibration ? "border-green-500/30" : "border-muted"}
+          className={latestCalibration
+            ? "border-green-500/30"
+            : readinessState === "Split blocked"
+            ? "border-amber-500/30"
+            : "border-muted"}
         >
           <CardHeader className="pb-2">
             <CardTitle className="text-base">
@@ -899,23 +1009,37 @@ export default function VoiceIdentityReviewPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p>
-              {latestCalibration
-                ? `Validated · ${latestCalibration.calibrationId}`
-                : "Not validated yet"}
-            </p>
+            <p className="font-medium">{readinessState}</p>
+            {latestCalibration && (
+              <p className="text-xs text-green-700 dark:text-green-400">
+                Pilot ready · {latestCalibration.calibrationId}
+              </p>
+            )}
             {!labelGateReady && (
               <p className="text-xs text-muted-foreground">
                 Still needed: {missingLabelRequirements.join(" · ")}
               </p>
             )}
+            {hasWeakRecordingDiversity && (
+              <p className="text-xs text-amber-600">
+                Only {calibrationLabelCounts.recordings}{" "}
+                source recordings. The formal label minimum is reached, but
+                conditions are not diverse; add distinct recordings if
+                validation fails.
+              </p>
+            )}
             {labelGateReady && !latestCalibration && (
               <div className="space-y-2">
-                {calibrationPreview?.blockers.slice(0, 2).map((blocker) => (
+                {calibrationPreview?.blockers.map((blocker) => (
                   <p key={blocker} className="text-xs text-amber-600">
                     {blocker}
                   </p>
                 ))}
+                {canValidate && (
+                  <p className="text-xs text-muted-foreground">
+                    Fit/Check split is ready for validation.
+                  </p>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
@@ -1213,7 +1337,7 @@ export default function VoiceIdentityReviewPage() {
                   }-${activeGroup?.groupId ?? "single"}`}
                   segment={playerSegment}
                   profileName={reviewProfile?.name ?? "target profile"}
-                  position={activeIndex + 1}
+                  position={reviewIndex + 1}
                   remaining={windowItems.filter((item) =>
                     item.status === "pending"
                   ).length}
@@ -1225,23 +1349,44 @@ export default function VoiceIdentityReviewPage() {
                     reviewSession.status !== "active"}
                   autoPlayNext={autoPlayNext}
                   playOnMount={playOnMount}
-                  canPrevious={activeIndex > 0}
-                  canNext={activeIndex < windowItems.length - 1}
+                  canPrevious={!editingSegmentId && activeIndex > 0}
+                  canNext={!editingSegmentId &&
+                    activeIndex < windowItems.length - 1}
                   canUndo={history.length > 0}
+                  canEdit={reviewItem?.status === "reviewed" &&
+                    Boolean(reviewItem.decisionSummary) && !editingSegmentId}
+                  editingLabel={editingSegmentId
+                    ? reviewItem?.decisionSummary?.profileName ?? "Not Sky"
+                    : null}
+                  alternateProfiles={alternateProfiles}
                   onDecision={(state) => {
                     if (reviewPending) return;
-                    if (state === "skip") skipActive();
-                    else {
-                      label.mutate({
-                        clientRequestId: crypto.randomUUID(),
-                        segmentIds: decisionSegmentIds,
-                        state,
-                      });
+                    if (state === "skip") {
+                      if (editingSegmentId) cancelEdit();
+                      else skipActive();
+                    } else if (state === "me") {
+                      if (reviewProfileId) {
+                        saveAssignment({
+                          profileId: reviewProfileId,
+                          excludedProfileIds: [],
+                        });
+                      }
+                    } else if (reviewProfileId) {
+                      saveAssignment({ excludedProfileIds: [reviewProfileId] });
                     }
+                  }}
+                  onAssignProfile={(assignedProfileId) => {
+                    if (!reviewProfileId) return;
+                    saveAssignment({
+                      profileId: assignedProfileId,
+                      excludedProfileIds: [reviewProfileId],
+                    });
                   }}
                   onPrevious={() => moveReview(-1)}
                   onNext={() => moveReview(1)}
                   onUndo={undoLast}
+                  onEdit={() => reviewItem && beginEdit(reviewItem)}
+                  onCancelEdit={cancelEdit}
                   onAutoPlayChange={setAutoPlayPreference}
                 />
               )}
@@ -1265,6 +1410,32 @@ export default function VoiceIdentityReviewPage() {
                     ? windowItems[index - 1]?.groupId
                     : null;
                   const score = segment.speakerIdentity?.primaryScore;
+                  const manualLabel = item.decisionSummary?.profileId
+                    ? item.decisionSummary.profileName ?? "Deleted profile"
+                    : item.decisionSummary?.excludedProfileIds.includes(
+                        reviewProfileId ?? "",
+                      )
+                    ? "Not Sky"
+                    : null;
+                  const modelProfile = profiles.find((profile) =>
+                    normalizeObjectId(profile._id) ===
+                      normalizeObjectId(
+                        (segment.speakerIdentity as any)?.profileId,
+                      )
+                  );
+                  const identityLabel = manualLabel
+                    ? `${manualLabel} · Manual`
+                    : item.status === "skipped"
+                    ? "Skipped"
+                    : item.status === "reviewed"
+                    ? "Reviewed · Manual"
+                    : segment.speakerIdentity?.state === "matched"
+                    ? `${modelProfile?.name ?? "Matched profile"} · Model`
+                    : segment.speakerIdentity?.state === "rejected"
+                    ? "Not Sky · Model"
+                    : segment.speakerIdentity?.state === "uncertain"
+                    ? "Uncertain · Model"
+                    : "Pending";
                   return (
                     <div key={id}>
                       {item.groupId !== previousGroupId && group && (
@@ -1280,49 +1451,62 @@ export default function VoiceIdentityReviewPage() {
                           </span>
                         </div>
                       )}
-                      <button
-                        type="button"
-                        className={`grid h-10 w-full grid-cols-[2.5rem_8rem_4rem_minmax(7rem,1fr)_7rem] items-center gap-2 border-b px-3 text-left text-xs transition-colors ${
-                          id === activeId
+                      <div
+                        className={`flex min-w-[48rem] items-center border-b transition-colors ${
+                          id === reviewId
                             ? "bg-sky-500/10 ring-1 ring-inset ring-sky-500/40"
                             : "hover:bg-muted/50"
                         }`}
-                        onClick={() => {
-                          openReviewSegment(id);
-                        }}
                       >
-                        <span className="tabular-nums text-muted-foreground">
-                          #{index + 1}
-                        </span>
-                        <span className="tabular-nums">
-                          {new Date(segment.start).toLocaleString()}
-                        </span>
-                        <span
-                          className={duration < 1
-                            ? "font-medium text-amber-600"
-                            : ""}
+                        <button
+                          type="button"
+                          className="grid h-10 flex-1 grid-cols-[2.5rem_8rem_4rem_minmax(7rem,1fr)_10rem] items-center gap-2 px-3 text-left text-xs"
+                          onClick={() => openReviewSegment(id)}
                         >
-                          {duration.toFixed(1)}s
-                        </span>
-                        <span className="truncate text-muted-foreground">
-                          {(segment as any).speaker ?? "speaker unknown"}
-                          {duration < 1
-                            ? " · very short; skip if unclear/noise"
-                            : ""}
-                        </span>
-                        <span
-                          className={item.status === "reviewed"
-                            ? "text-green-600"
-                            : item.status === "skipped"
-                            ? "text-amber-600"
-                            : "text-muted-foreground"}
+                          <span className="tabular-nums text-muted-foreground">
+                            #{index + 1}
+                          </span>
+                          <span className="tabular-nums">
+                            {new Date(segment.start).toLocaleString()}
+                          </span>
+                          <span
+                            className={duration < 1
+                              ? "font-medium text-amber-600"
+                              : ""}
+                          >
+                            {duration.toFixed(1)}s
+                          </span>
+                          <span className="truncate text-muted-foreground">
+                            {(segment as any).speaker ?? "speaker unknown"}
+                            {duration < 1
+                              ? " · very short; skip if unclear/noise"
+                              : ""}
+                          </span>
+                          <span
+                            className={item.decisionSummary
+                              ? "font-medium text-green-600"
+                              : item.status === "skipped"
+                              ? "text-amber-600"
+                              : "text-muted-foreground"}
+                          >
+                            {identityLabel}
+                            {!item.decisionSummary && typeof score === "number"
+                              ? ` · ${Math.round(score * 100)}%`
+                              : ""}
+                          </span>
+                        </button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="mr-2 h-8"
+                          aria-label={`Edit segment ${index + 1}`}
+                          disabled={item.status !== "reviewed" ||
+                            !item.decisionSummary || reviewPending}
+                          onClick={() => beginEdit(item)}
                         >
-                          {item.status}
-                          {typeof score === "number"
-                            ? ` · ${Math.round(score * 100)}%`
-                            : ""}
-                        </span>
-                      </button>
+                          Edit
+                        </Button>
+                      </div>
                     </div>
                   );
                 })}

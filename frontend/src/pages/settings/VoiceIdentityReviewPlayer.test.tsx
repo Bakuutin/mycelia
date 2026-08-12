@@ -50,10 +50,18 @@ function renderPlayer(overrides: Record<string, unknown> = {}) {
     canPrevious: false,
     canNext: true,
     canUndo: true,
+    canEdit: false,
+    alternateProfiles: [
+      { id: "66b000000000000000000020", name: "Belka" },
+      { id: "66b000000000000000000030", name: "david bowie" },
+    ],
     onDecision: vi.fn(),
+    onAssignProfile: vi.fn(),
     onPrevious: vi.fn(),
     onNext: vi.fn(),
     onUndo: vi.fn(),
+    onEdit: vi.fn(),
+    onCancelEdit: vi.fn(),
     onAutoPlayChange: vi.fn(),
     ...overrides,
   };
@@ -102,6 +110,39 @@ describe("VoiceIdentityReviewPlayer", () => {
     document.body.focus();
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(props.onDecision).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows edit while reviewed actions are pending-disabled", () => {
+    const { props } = renderPlayer({ pending: true, canEdit: true });
+
+    document.body.focus();
+    fireEvent.keyDown(window, { key: "e" });
+    expect(props.onEdit).toHaveBeenCalledOnce();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(props.onDecision).not.toHaveBeenCalled();
+  });
+
+  it("assigns visible alternate profiles by button or numbered shortcut", () => {
+    const { props } = renderPlayer({ canEdit: true });
+
+    fireEvent.change(screen.getByLabelText("Assign another profile"), {
+      target: { value: "66b000000000000000000030" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Assign profile" }));
+    expect(props.onAssignProfile).toHaveBeenNthCalledWith(
+      1,
+      "66b000000000000000000030",
+    );
+
+    document.body.focus();
+    fireEvent.keyDown(window, { key: "1" });
+    expect(props.onAssignProfile).toHaveBeenNthCalledWith(
+      2,
+      "66b000000000000000000020",
+    );
+    fireEvent.keyDown(window, { key: "e" });
+    expect(props.onEdit).toHaveBeenCalledOnce();
+    expect(getReviewShortcut("2")).toEqual({ type: "profile", index: 1 });
   });
 
   it("maps horizontal swipes and ignores vertical movement", () => {
