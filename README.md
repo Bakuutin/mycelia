@@ -250,26 +250,6 @@ non-empty profile key. See
 [Local STT with Argmax and Whisper](docs/LOCAL_STT.md) for startup, Docker
 networking, and model-specific examples.
 
-### Google services and credentials
-
-A Google AI Studio / Gemini API key can be used for a Gemini LLM preset and
-Gemini image understanding, but it is **not** a Google Cloud Speech-to-Text
-credential. Cloud STT requires its API to be enabled and Application Default
-Credentials or a service account; do not paste a Gemini key into an STT profile.
-Mycelia does not yet include the Google-specific authentication and long-audio
-adapter, so Cloud STT should not be added as an OpenAI-compatible route until
-that adapter exists.
-
-Potential Google integrations include
-[Cloud Speech-to-Text](https://cloud.google.com/speech-to-text/pricing),
-[Cloud Vision OCR](https://cloud.google.com/vision/pricing),
-[Cloud Natural Language](https://cloud.google.com/natural-language/pricing), and
-[Gemini multimodal models](https://ai.google.dev/gemini-api/docs/pricing). The
-Google Cloud free program and product quotas can change; verify the current
-[Google Cloud Free Program](https://cloud.google.com/free) before relying on a
-quota. Keep all credentials in environment or secret storage and never commit
-them.
-
 #### Debugging conversation re-extraction
 
 The scripts in `scripts/debug/` find and optionally enqueue historical
