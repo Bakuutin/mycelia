@@ -12,10 +12,27 @@ vi.mock("./VoiceIdentityReviewPlayer", () => ({
       <span>active:{String(props.segment._id)}</span>
       <span data-testid="play-on-mount">{String(props.playOnMount)}</span>
       <span>session:{props.sessionAnswered}/{props.sessionTotal}</span>
-      <button onClick={() => props.onDecision("me")}>This is me</button>
-      <button onClick={() => props.onDecision("not-me")}>Not me</button>
-      <button onClick={() => props.onDecision("skip")}>Skip</button>
-      <button onClick={props.onUndo} disabled={!props.canUndo}>Undo</button>
+      <span>editing:{props.editingLabel ?? "no"}</span>
+      <button type="button" onClick={() => props.onDecision("me")}>Sky</button>
+      <button type="button" onClick={() => props.onDecision("not-me")}>
+        Not Sky
+      </button>
+      <button type="button" onClick={() => props.onDecision("skip")}>
+        Skip
+      </button>
+      <button
+        type="button"
+        onClick={() => props.onAssignProfile?.("66b000000000000000000020")}
+      >
+        Assign Belka
+      </button>
+      <button type="button" onClick={props.onEdit} disabled={!props.canEdit}>
+        Edit active
+      </button>
+      <button type="button" onClick={props.onCancelEdit}>Cancel edit</button>
+      <button type="button" onClick={props.onUndo} disabled={!props.canUndo}>
+        Undo
+      </button>
     </div>
   ),
 }));
@@ -259,7 +276,7 @@ describe("VoiceIdentityReviewPage", () => {
 
     await screen.findByText(`active:${first._id}`);
     expect(screen.getByText("session:0/2")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "This is me" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sky" }));
 
     await screen.findByText(`active:${second._id}`);
     expect(screen.getByText("session:1/2")).toBeInTheDocument();
@@ -280,7 +297,161 @@ describe("VoiceIdentityReviewPage", () => {
     expect(mockCallResource).toHaveBeenCalledWith("speaker-segments", {
       action: "undo-review-decision",
       decisionId,
+      sessionId,
+      revision: 2,
     });
+  });
+
+  it("shows manual profile labels and revises one reviewed segment without changing counts", async () => {
+    const belka = {
+      _id: "66b000000000000000000020",
+      name: "Belka",
+      is_primary: false,
+      revision: 1,
+      embeddingSpaceId: "legacy-unknown",
+    };
+    const first = {
+      _id: "66b000000000000000000001",
+      original_id: "66b000000000000000000011",
+      start: "2026-08-10T10:00:00.000Z",
+      end: "2026-08-10T10:00:05.000Z",
+      speaker: "SPEAKER_00",
+    };
+    const second = {
+      _id: "66b000000000000000000002",
+      original_id: "66b000000000000000000012",
+      start: "2026-08-10T10:01:00.000Z",
+      end: "2026-08-10T10:01:04.000Z",
+      speaker: "SPEAKER_01",
+    };
+    const sessionId = "66b000000000000000000050";
+    const oldDecisionId = "66b000000000000000000099";
+    const newDecisionId = "66b000000000000000000100";
+    const session = {
+      _id: sessionId,
+      name: "Review 2026-08-10",
+      status: "active",
+      revision: 3,
+      targetProfileIds: [profile._id],
+      window: [
+        {
+          segmentId: first._id,
+          groupId: "g1",
+          status: "reviewed",
+          decisionId: oldDecisionId,
+          decisionSummary: {
+            decisionId: oldDecisionId,
+            profileId: belka._id,
+            profileName: "Belka",
+            excludedProfileIds: [profile._id],
+            excludedProfileNames: ["Sky"],
+            source: "manual",
+            updatedAt: "2026-08-12T08:00:00.000Z",
+          },
+        },
+        { segmentId: second._id, groupId: "g2", status: "pending" },
+      ],
+      groups: [
+        {
+          groupId: "g1",
+          segmentIds: [first._id],
+          start: first.start,
+          end: first.end,
+          durationSeconds: 5,
+        },
+        {
+          groupId: "g2",
+          segmentIds: [second._id],
+          start: second.start,
+          end: second.end,
+          durationSeconds: 4,
+        },
+      ],
+      segments: [first, second],
+      activeSegmentId: second._id,
+      loadedCount: 2,
+      reviewedCount: 1,
+      skippedCount: 0,
+      backlogEstimate: 2,
+      preferences: { autoPlay: true, groupMode: true, compactMode: true },
+      querySnapshot: {
+        rangeMode: "fixed",
+        start: first.start,
+        end: second.end,
+      },
+    };
+    const revised = {
+      ...session,
+      revision: 4,
+      window: [
+        {
+          ...session.window[0],
+          decisionId: newDecisionId,
+          decisionSummary: {
+            decisionId: newDecisionId,
+            profileId: null,
+            profileName: null,
+            excludedProfileIds: [profile._id],
+            excludedProfileNames: ["Sky"],
+            source: "manual",
+            updatedAt: "2026-08-12T08:05:00.000Z",
+          },
+        },
+        session.window[1],
+      ],
+    };
+
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile, belka]);
+      if (resource === "jobs") {
+        return Promise.resolve({
+          services: [{ id: "diarizator", status: "healthy" }],
+        });
+      }
+      if (input.action === "identity-status") {
+        return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(emptyPreview);
+      }
+      if (input.action === "list-review-sessions") {
+        return Promise.resolve([session]);
+      }
+      if (input.action === "get-review-session") {
+        return Promise.resolve(session);
+      }
+      if (input.action === "revise-review-decision") {
+        return Promise.resolve({
+          decision: { _id: newDecisionId },
+          session: revised,
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    await screen.findByText("Belka · Manual");
+    fireEvent.click(screen.getByRole("button", { name: "Edit segment 1" }));
+    await screen.findByText(`active:${first._id}`);
+    expect(screen.getByText("editing:Belka")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Not Sky" }));
+
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith(
+        "speaker-segments",
+        expect.objectContaining({
+          action: "revise-review-decision",
+          sessionId,
+          revision: 3,
+          segmentIds: [first._id],
+          replacesDecisionId: oldDecisionId,
+          excludedProfileIds: [profile._id],
+        }),
+      )
+    );
+    expect(await screen.findByText("Not Sky · Manual")).toBeInTheDocument();
+    expect(screen.getByText("session:1/2")).toBeInTheDocument();
   });
 
   it("shows server-computed calibration metrics instead of editable confidence fields", async () => {
@@ -299,6 +470,7 @@ describe("VoiceIdentityReviewPage", () => {
 
     renderPage();
 
+    await screen.findByText("Minimum reached");
     await screen.findByText("98.5%");
     expect(screen.getByText("0.720")).toBeInTheDocument();
     expect(screen.queryByLabelText(/positive threshold/i)).not
@@ -306,5 +478,61 @@ describe("VoiceIdentityReviewPage", () => {
     expect(screen.getByRole("button", {
       name: /save validated calibration/i,
     })).toBeEnabled();
+  });
+
+  it("shows split blockers and warns when the minimum spans only three recordings", async () => {
+    const blockedPreview = {
+      ...readyPreview,
+      blockers: [
+        "Validation set needs both target and not-target examples",
+        "No threshold pair reaches the target precision on calibration audio",
+        "Validation auto-match precision is below 98%",
+      ],
+      canValidate: false,
+    };
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile]);
+      if (resource === "jobs") return Promise.resolve({ services: [] });
+      if (input.action === "identity-status") {
+        return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(blockedPreview);
+      }
+      if (input.action === "list-review-sessions") return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    await screen.findByText("Split blocked");
+    for (const blocker of blockedPreview.blockers) {
+      expect(screen.getAllByText(blocker).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText(/Only 3 source recordings/i)).toBeInTheDocument();
+  });
+
+  it("marks a validated calibration as ready for the 24-hour pilot", async () => {
+    const calibratedStatus = {
+      ...emptyStatus,
+      calibrations: [{ calibrationId: "sky-r3", status: "validated" }],
+    };
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile]);
+      if (resource === "jobs") return Promise.resolve({ services: [] });
+      if (input.action === "identity-status") {
+        return Promise.resolve(calibratedStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(readyPreview);
+      }
+      if (input.action === "list-review-sessions") return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    await screen.findByText("Validated");
+    expect(screen.getByText(/Pilot ready/i)).toBeInTheDocument();
   });
 });

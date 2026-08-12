@@ -27,6 +27,136 @@ export type ReviewGroupingOptions = {
   maxSegments?: number;
 };
 
+export type ReviewDecisionSummary = {
+  decisionId: string;
+  profileId: string | null;
+  profileName: string | null;
+  excludedProfileIds: string[];
+  excludedProfileNames: string[];
+  source: "manual";
+  updatedAt: Date | string | null;
+};
+
+export function latestReviewAnnotationsBySegment<
+  T extends {
+    segmentId?: unknown;
+    updatedAt?: Date | string | null;
+    createdAt?: Date | string | null;
+  },
+>(annotations: T[]): T[] {
+  const sorted = [...annotations].sort((a, b) => {
+    const aTime = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
+    const bTime = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
+    return bTime - aTime;
+  });
+  const latest = new Map<string, T>();
+  for (const annotation of sorted) {
+    const segmentId = String(annotation.segmentId ?? "");
+    if (segmentId && !latest.has(segmentId)) latest.set(segmentId, annotation);
+  }
+  return [...latest.values()];
+}
+
+export function applyReviewDecisionRevision<
+  T extends { segmentId: unknown; status: string; decisionId?: unknown },
+>(
+  window: T[],
+  input: {
+    segmentIds: string[];
+    replacesDecisionId: string;
+    decisionId: unknown;
+  },
+): T[] {
+  const selected = new Set(input.segmentIds);
+  for (const segmentId of selected) {
+    const item = window.find((candidate) =>
+      String(candidate.segmentId) === segmentId
+    );
+    if (
+      !item || item.status !== "reviewed" ||
+      String(item.decisionId ?? "") !== input.replacesDecisionId
+    ) {
+      throw new Error("Review decision changed elsewhere; reload to continue");
+    }
+  }
+  return window.map((item) =>
+    selected.has(String(item.segmentId))
+      ? { ...item, decisionId: input.decisionId }
+      : item
+  );
+}
+
+export function restoreReviewDecision<
+  T extends { segmentId: unknown; status: string; decisionId?: unknown },
+>(
+  window: T[],
+  input: { segmentIds: unknown[]; decisionId: string },
+): { window: T[]; restoredCount: number; firstRestored: unknown | null } {
+  const selected = new Set(input.segmentIds.map(String));
+  const restoredItems = window.filter((item) =>
+    selected.has(String(item.segmentId)) &&
+    String(item.decisionId ?? "") === input.decisionId
+  );
+  if (restoredItems.length === 0) {
+    throw new Error("Review decision is no longer current; reload to continue");
+  }
+  return {
+    window: window.map((item) =>
+      restoredItems.includes(item)
+        ? { ...item, status: "pending", decisionId: null }
+        : item
+    ),
+    restoredCount: restoredItems.length,
+    firstRestored: restoredItems[0]?.segmentId ?? null,
+  };
+}
+
+export function attachReviewDecisionSummaries<
+  T extends { decisionId?: unknown },
+>(
+  window: T[],
+  decisions: Array<{
+    _id: unknown;
+    profileId?: unknown;
+    excludedProfileIds?: unknown[];
+    source?: unknown;
+    updatedAt?: Date | string | null;
+  }>,
+  profiles: Array<{ _id: unknown; name?: string | null }>,
+): Array<T & { decisionSummary?: ReviewDecisionSummary }> {
+  const profileNames = new Map(
+    profiles.map((
+      profile,
+    ) => [String(profile._id), profile.name ?? "Deleted profile"]),
+  );
+  const decisionsById = new Map(
+    decisions.map((decision) => [String(decision._id), decision]),
+  );
+  return window.map((item) => {
+    const decisionId = String(item.decisionId ?? "");
+    const decision = decisionsById.get(decisionId);
+    if (!decision) return item;
+    const profileId = decision.profileId ? String(decision.profileId) : null;
+    const excludedProfileIds = (decision.excludedProfileIds ?? []).map(String);
+    return {
+      ...item,
+      decisionSummary: {
+        decisionId,
+        profileId,
+        profileName: profileId
+          ? profileNames.get(profileId) ?? "Deleted profile"
+          : null,
+        excludedProfileIds,
+        excludedProfileNames: excludedProfileIds.map((id) =>
+          profileNames.get(id) ?? "Deleted profile"
+        ),
+        source: "manual" as const,
+        updatedAt: decision.updatedAt ?? null,
+      },
+    };
+  });
+}
+
 const DEFAULT_GROUPING = {
   maxGapSeconds: 2,
   maxDurationSeconds: 30,
