@@ -35,6 +35,11 @@ DIARIZATION_SERVER_URL = os.environ.get('DIARIZATION_SERVER_URL', 'http://localh
 MAX_SEQUENCE_CHUNKS = max(1, int(os.environ.get('DIARIZATION_MAX_SEQUENCE_CHUNKS', '6')))
 SPEAKER_SIMILARITY_THRESHOLD = float(os.environ.get('SPEAKER_SIMILARITY_THRESHOLD', '0.35'))
 DIARIZATION_CONTINUITY_THRESHOLD = float(os.environ.get('DIARIZATION_CONTINUITY_THRESHOLD', '0.75'))
+# Gaps inside a sequence are padded with silence before inference, so a
+# recording that paused would otherwise bill minutes of GPU time for nothing.
+MAX_SEQUENCE_GAP = timedelta(
+    seconds=float(os.environ.get('DIARIZATION_MAX_GAP_SECONDS', '60'))
+)
 
 # Cache for speaker profiles (refreshed periodically)
 _speaker_profiles_cache: list = []
@@ -447,8 +452,13 @@ def get_diarization_sequences(limit=10, filters=None, max_sequence_length=MAX_SE
 
         seq = sequences_by_id.get(original_id)
 
-        # If sequence exists but chunk index is not consecutive, yield the sequence and start new one
-        if seq and seq.max_index + 1 != chunk['index']:
+        # Break the sequence when the chunks stop being consecutive, or when
+        # the recording paused long enough that joining them would send mostly
+        # silence to the diarizer.
+        if seq and (
+            seq.max_index + 1 != chunk['index']
+            or start - seq.last['start'] > MAX_SEQUENCE_GAP
+        ):
             assert chunk not in seq.chunks
             yield seq
             yielded += 1

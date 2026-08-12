@@ -22,6 +22,7 @@ from diarization_worker import (  # noqa: E402
     _failure_retry_state,
     _get_overlap_segments,
     diarize_sequence,
+    get_diarization_sequences,
     mark_as_diarized,
 )
 
@@ -245,6 +246,25 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(result["status"], "diarized")
         self.assertEqual(len(segment_keys), 3)
         self.assertEqual(len(set(segment_keys)), 3)
+
+    def test_sequences_split_on_a_long_silent_gap(self):
+        original_id = ObjectId()
+        base = datetime(2024, 1, 1, tzinfo=UTC)
+        chunks = [
+            {"_id": ObjectId(), "original_id": original_id, "index": index, "start": start}
+            for index, start in enumerate([
+                base,
+                base + timedelta(seconds=10),
+                base + timedelta(seconds=300),
+            ])
+        ]
+
+        with patch("diarization_worker.mongo_cursor", return_value=iter(chunks)):
+            sequences = list(
+                get_diarization_sequences(limit=None, max_sequence_length=6)
+            )
+
+        self.assertEqual([len(sequence.chunks) for sequence in sequences], [2, 1])
 
     def test_sequence_segments_are_persisted_in_one_write(self):
         sequence = _sequence()
