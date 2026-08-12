@@ -184,6 +184,45 @@ class DiarizationJobTest(TestCase):
         self.assertTrue(any(update.get("batchNumber") == 1 for update in campaign_updates))
         self.assertTrue(any(update.get("estimatedBatches") == 2 for update in campaign_updates))
 
+    def test_one_failed_sequence_does_not_end_a_campaign_of_unknown_size(self):
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign"),
+            patch(
+                "jobs.diarization.count_pending_chunks",
+                side_effect=TimeoutError("count timed out"),
+            ),
+            patch(
+                "jobs.diarization.get_diarization_sequences",
+                return_value=[object(), object()],
+            ),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                side_effect=[
+                    {"status": "diarized", "chunks_diarized": 2, "segments": 3},
+                    {
+                        "status": "error",
+                        "error": "audio decode failed",
+                        "chunks_diarized": 0,
+                        "segments": 0,
+                        "errorDetail": {
+                            "category": "invalid_audio",
+                            "retryable": True,
+                        },
+                    },
+                ],
+            ),
+        ):
+            result = process_diarization_job(
+                "job-partial-failure",
+                DiarizationJobData(limit=2),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(result["successfulSequences"], 1)
+        self.assertEqual(result["failedSequences"], 1)
+        self.assertTrue(result["hasMore"])
+
     def test_reports_complete_progress_after_each_sequence(self):
         updates = []
 

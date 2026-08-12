@@ -373,10 +373,14 @@ def process_diarization_job(
         if total_chunks is not None
         else None
     )
+    # A failed sequence carries its own retry schedule, and the job chain
+    # already refuses to continue a batch that made no progress. Ending the
+    # campaign on any error stranded the rest of the backlog instead.
     has_more = (
         remaining > 0
         if remaining is not None
-        else sequences_processed >= effective_batch_size and errors == 0
+        else sequences_processed >= effective_batch_size
+        and successful_sequences > 0
     )
     if provider_unavailable:
         # Avoid a hot continuation loop while the selected service is down.
