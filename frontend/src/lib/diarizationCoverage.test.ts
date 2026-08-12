@@ -3,6 +3,7 @@ import {
   coverageBucketMs,
   coverageColor,
   dominantCoverageState,
+  hasActiveDiarizationCoverage,
 } from "./diarizationCoverage";
 
 describe("diarization coverage", () => {
@@ -25,5 +26,20 @@ describe("diarization coverage", () => {
 
     expect(coverageBucketMs(month, 1_000)).toBe(3 * 60 * 60 * 1_000);
     expect(coverageBucketMs(month, 980)).toBe(3 * 60 * 60 * 1_000);
+  });
+
+  it("polls only while coverage has active work", () => {
+    expect(hasActiveDiarizationCoverage({
+      buckets: [{ counts: { processing: 1 } }],
+      buildingRuns: [],
+    })).toBe(true);
+    expect(hasActiveDiarizationCoverage({
+      buckets: [{ counts: { diarized: 20, pending: 2 } }],
+      buildingRuns: [],
+    })).toBe(false);
+    expect(hasActiveDiarizationCoverage({
+      buckets: [],
+      buildingRuns: [{ runId: "building" }],
+    })).toBe(true);
   });
 });

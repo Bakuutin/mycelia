@@ -17,6 +17,10 @@ import {
   evaluateCalibration,
   splitCalibrationRecordings,
 } from "./calibration.ts";
+import {
+  buildDiarizationCoveragePipeline,
+  TIMELINE_SPEAKER_SEGMENT_PROJECTION,
+} from "./timeline-queries.ts";
 
 const objectId = z.string().refine(ObjectId.isValid, "Invalid ObjectId");
 const range = { start: zDateOrString(), end: zDateOrString() };
@@ -32,6 +36,7 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     ...range,
     profileId: objectId.optional(),
     state: z.enum(["matched", "rejected", "uncertain"]).optional(),
+    view: z.enum(["full", "timeline"]).default("full"),
     limit: z.number().int().min(1).max(5000).default(1000),
   }),
   z.object({
@@ -500,60 +505,11 @@ export class SpeakerSegmentsResource
           mongo({
             action: "aggregate",
             collection: "audio_chunks",
-            pipeline: [
-              {
-                $match: {
-                  "vad.has_speech": true,
-                  start: { $gte: input.start, $lt: input.end },
-                },
-              },
-              {
-                $project: {
-                  bucket: {
-                    $multiply: [{
-                      $floor: {
-                        $divide: [{ $toLong: "$start" }, input.bucketMs],
-                      },
-                    }, input.bucketMs],
-                  },
-                  state: {
-                    $switch: {
-                      branches: [
-                        {
-                          case: {
-                            $eq: [
-                              "$diarizationFailure.status",
-                              "needs_attention",
-                            ],
-                          },
-                          then: "needs_attention",
-                        },
-                        {
-                          case: {
-                            $ne: [{ $ifNull: ["$processing_by", null] }, null],
-                          },
-                          then: "processing",
-                        },
-                        {
-                          case: {
-                            $ne: [{ $ifNull: ["$diarized_at", null] }, null],
-                          },
-                          then: "diarized",
-                        },
-                      ],
-                      default: "pending",
-                    },
-                  },
-                },
-              },
-              {
-                $group: {
-                  _id: { bucket: "$bucket", state: "$state" },
-                  count: { $sum: 1 },
-                },
-              },
-              { $sort: { "_id.bucket": 1 } },
-            ],
+            pipeline: buildDiarizationCoveragePipeline(
+              input.start,
+              input.end,
+              input.bucketMs,
+            ),
             options: {
               hint: "audio_chunks_diarization_coverage_v1",
               maxTimeMS: 8_000,
@@ -600,6 +556,9 @@ export class SpeakerSegmentsResource
           options: {
             sort: { start: 1 },
             limit: input.state || input.profileId ? 5000 : input.limit,
+            ...(input.view === "timeline"
+              ? { projection: TIMELINE_SPEAKER_SEGMENT_PROJECTION }
+              : {}),
           },
         }) as any[];
         const originalIds = [

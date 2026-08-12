@@ -18,24 +18,25 @@ histograms:
    aggregation projection.
 2. Project only Timeline-required segment fields from `diarizations`; never
    return embeddings from the list action.
-3. Derive padded, bucket-aligned query ranges and debounce viewport changes by
-   300 ms. Small movement inside the padded range reuses the same React Query
-   key and cache entry.
+3. Derive bucket-aligned query ranges padded by the smaller of half a viewport
+   or two buckets, then debounce viewport changes by 300 ms. Small movement
+   inside the padded range reuses the same React Query key and cache entry
+   without doubling large speaker queries.
 4. Keep the previous result visible while a replacement range loads.
-5. Poll coverage every 15 seconds only while the returned data reports an
-   active building run or processing bucket.
+5. Poll coverage every 15 seconds only while the returned data reports an active
+   building run or processing bucket.
 
 ## Data flow
 
 The SVG continues to render against the immediate D3 scale. Network inputs are
-separate: the current visible domain is converted to a stable query window,
-then debounced before it enters the query key. Returned segments and coverage
-buckets may extend outside the viewport; SVG clipping naturally hides them.
+separate: the current visible domain is converted to a stable query window, then
+debounced before it enters the query key. Returned segments and coverage buckets
+may extend outside the viewport; SVG clipping naturally hides them.
 
 The server keeps the existing endpoints and response shapes. Coverage uses the
 existing `audio_chunks_diarization_coverage_v1` index. Speaker list results keep
-`_id`, time bounds, original recording identifiers, and `speakerIdentity`,
-which are sufficient for annotation projection and Timeline navigation.
+`_id`, time bounds, original recording identifiers, and `speakerIdentity`, which
+are sufficient for annotation projection and Timeline navigation.
 
 ## Error and freshness behavior
 

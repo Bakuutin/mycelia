@@ -53,3 +53,13 @@ export function coverageColor(state: DiarizationCoverageState): string {
     needs_attention: "#dc2626",
   }[state];
 }
+
+export function hasActiveDiarizationCoverage(data?: {
+  buckets?: Array<{ counts?: Record<string, number> }>;
+  buildingRuns?: unknown[];
+}): boolean {
+  return (data?.buildingRuns?.length ?? 0) > 0 ||
+    (data?.buckets ?? []).some((bucket) =>
+      (bucket.counts?.processing ?? 0) > 0
+    );
+}

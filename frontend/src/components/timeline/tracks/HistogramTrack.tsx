@@ -9,7 +9,11 @@ import {
   coverageBucketMs,
   coverageColor,
   dominantCoverageState,
+  hasActiveDiarizationCoverage,
 } from "@/lib/diarizationCoverage";
+import { useTimelineQueryRange } from "@/hooks/useTimelineQueryRange";
+
+const SPEAKER_TRACK_QUERY_ALIGNMENT_MS = 5 * 60_000;
 
 // Config for each histogram track type
 export const TRANSCRIPTIONS_CONFIG: TrackConfig = {
@@ -148,15 +152,27 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
     props.scale,
   ]);
   const [start, end] = rescaledScale.domain() as [Date, Date];
+  const queryRange = useTimelineQueryRange(
+    start,
+    end,
+    SPEAKER_TRACK_QUERY_ALIGNMENT_MS,
+  );
   const { data } = useQuery({
-    queryKey: ["speaker-track", start.getTime(), end.getTime()],
+    queryKey: [
+      "speaker-track",
+      queryRange.start.getTime(),
+      queryRange.end.getTime(),
+    ],
     queryFn: () =>
       callResource("speaker-segments", {
         action: "list",
-        start,
-        end,
+        start: queryRange.start,
+        end: queryRange.end,
+        view: "timeline",
         limit: 5000,
       }) as Promise<{ segments: any[] }>,
+    staleTime: 60_000,
+    placeholderData: (previousData) => previousData,
   });
   const segments = data?.segments ?? [];
   const farZoom =
@@ -246,19 +262,21 @@ export const DiarizationCoverageTrack = memo(
       end.getTime() - start.getTime(),
       props.width,
     );
+    const queryRange = useTimelineQueryRange(start, end, bucketMs);
+    const queryBucketMs = queryRange.alignmentMs;
     const { data, isLoading, isError, refetch } = useQuery({
       queryKey: [
         "diarization-coverage",
-        start.getTime(),
-        end.getTime(),
-        bucketMs,
+        queryRange.start.getTime(),
+        queryRange.end.getTime(),
+        queryBucketMs,
       ],
       queryFn: () =>
         callResource("speaker-segments", {
           action: "coverage",
-          start,
-          end,
-          bucketMs,
+          start: queryRange.start,
+          end: queryRange.end,
+          bucketMs: queryBucketMs,
         }) as Promise<{
           buckets: Array<{
             start: number;
@@ -271,7 +289,16 @@ export const DiarizationCoverageTrack = memo(
           }>;
         }>,
       staleTime: 10_000,
-      refetchInterval: 15_000,
+      placeholderData: (previousData) => previousData,
+      refetchInterval: (query) => {
+        const current = query.state.data as
+          | {
+            buckets?: Array<{ counts?: Record<string, number> }>;
+            buildingRuns?: unknown[];
+          }
+          | undefined;
+        return hasActiveDiarizationCoverage(current) ? 15_000 : false;
+      },
       retry: 1,
     });
     return (
