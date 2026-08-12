@@ -214,9 +214,12 @@ class DiarizationWorkerTest(TestCase):
 
         def mongo(_resource, request):
             if request.get("collection") == "diarizations":
-                if request["action"] == "updateOne":
-                    segment_keys.append(request["query"]["segmentKey"])
-                    return {"upsertedCount": 1}
+                if request["action"] == "bulkWrite":
+                    segment_keys.extend(
+                        operation["updateOne"]["filter"]["segmentKey"]
+                        for operation in request["operations"]
+                    )
+                    return {"upsertedCount": len(request["operations"])}
                 return []
             if request["action"] in ("find", "aggregate"):
                 return []
@@ -242,6 +245,41 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(result["status"], "diarized")
         self.assertEqual(len(segment_keys), 3)
         self.assertEqual(len(set(segment_keys)), 3)
+
+    def test_sequence_segments_are_persisted_in_one_write(self):
+        sequence = _sequence()
+        writes = []
+
+        def mongo(_resource, request):
+            if request.get("collection") == "diarizations":
+                if request["action"] in ("find", "aggregate"):
+                    return []
+                writes.append(request)
+                return {}
+            if request["action"] in ("find", "aggregate"):
+                return []
+            if request["action"] == "count":
+                return 0
+            return {}
+
+        with (
+            patch("diarization_worker.claim_sequence", return_value=(True, None)),
+            patch("diarization_worker.combine_chunks_to_wav", return_value=(BytesIO(b"wav"), 16000)),
+            patch("diarization_worker.requests.post", return_value=_diarize_response()),
+            patch("diarization_worker.release_sequence"),
+            patch("diarization_worker.call_resource", side_effect=mongo),
+        ):
+            result = diarize_sequence(
+                sequence,
+                "worker-1",
+                mark_chunks=False,
+                server_url="https://diar.example",
+            )
+
+        self.assertEqual(result["segments"], 3)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0]["action"], "bulkWrite")
+        self.assertEqual(len(writes[0]["operations"]), 3)
 
 
 if __name__ == "__main__":

@@ -672,7 +672,7 @@ def diarize_sequence(
         profile_lookup = {str(p["_id"]): p for p in speaker_profiles} if speaker_profiles else {}
 
         # Save each segment as a separate document
-        saved_segments = 0
+        segment_operations: list[dict] = []
         matched_segments = 0
         overlap_end = sequence.chunks[1]['start'] if sequence.is_continuation and len(sequence.chunks) > 1 else None
         for segment_index, segment in enumerate(segments):
@@ -728,22 +728,29 @@ def diarize_sequence(
                 }
                 matched_segments += 1
 
-            # Save segment to diarizations collection
             if run_id == "legacy-v0":
-                call_resource('mongo', {
-                    "action": "insertOne",
-                    "collection": "diarizations",
-                    "doc": diar_doc
-                })
+                segment_operations.append({"insertOne": {"document": diar_doc}})
             else:
-                call_resource('mongo', {
-                    "action": "updateOne",
-                    "collection": "diarizations",
-                    "query": {"runId": run_id, "segmentKey": diar_doc["segmentKey"]},
-                    "update": {"$setOnInsert": diar_doc},
-                    "options": {"upsert": True},
+                segment_operations.append({
+                    "updateOne": {
+                        "filter": {
+                            "runId": run_id,
+                            "segmentKey": diar_doc["segmentKey"],
+                        },
+                        "update": {"$setOnInsert": diar_doc},
+                        "upsert": True,
+                    },
                 })
-            saved_segments += 1
+
+        # One round trip per sequence: a partial write followed by a crash
+        # would leave chunks unmarked and be redone from the start.
+        saved_segments = len(segment_operations)
+        if segment_operations:
+            call_resource('mongo', {
+                "action": "bulkWrite",
+                "collection": "diarizations",
+                "operations": segment_operations,
+            })
 
         # Mark chunks as diarized
         if mark_chunks:
