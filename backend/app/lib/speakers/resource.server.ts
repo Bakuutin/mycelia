@@ -2133,16 +2133,48 @@ export class SpeakerSegmentsResource
             "Only a ready or retained superseded run can be activated",
           );
         }
-        const activeRuns = await mongo({
-          action: "find",
-          collection: "diarization_runs",
-          query: {
-            status: "active",
-            runId: { $ne: input.runId },
-            "range.start": { $lt: run.range.end },
-            "range.end": { $gt: run.range.start },
-          },
-        }) as any[];
+        const windowStart = new Date(run.range.start);
+        const windowEnd = new Date(run.range.end);
+        // Superseded runs are discovered from the segments they actually own.
+        // A run document's recorded range goes stale — legacy-v0 keeps
+        // accumulating segments long after migration 0035 wrote its range — so
+        // an overlap test against that field leaves live coverage active.
+        const supersededRunIds = ((await mongo({
+          action: "aggregate",
+          collection: "diarizations",
+          pipeline: [
+            {
+              $match: {
+                lifecycleStatus: "active",
+                runId: { $ne: input.runId },
+                start: { $lt: windowEnd },
+                end: { $gt: windowStart },
+              },
+            },
+            { $group: { _id: "$runId" } },
+          ],
+        })) as Array<{ _id?: string }>)
+          .map((row) => row._id)
+          .filter((runId): runId is string => Boolean(runId));
+
+        // Supersede before activating. Without a transaction one of the two
+        // states is visible mid-flight: a brief gap renders as missing
+        // coverage, whereas a brief overlap reports two generations as active
+        // for the same instant and doubles every downstream count.
+        if (supersededRunIds.length > 0) {
+          await mongo({
+            action: "updateMany",
+            collection: "diarizations",
+            query: {
+              runId: { $in: supersededRunIds },
+              lifecycleStatus: "active",
+              start: { $lt: windowEnd },
+              end: { $gt: windowStart },
+            },
+            update: { $set: { lifecycleStatus: "superseded" } },
+          });
+        }
+
         const [activation] = buildActivationUpdates(input.runId);
         await mongo({
           action: "updateMany",
@@ -2156,24 +2188,19 @@ export class SpeakerSegmentsResource
           query: { runId: activation.runId },
           update: { $set: { status: "active", activatedAt: new Date() } },
         });
-        for (const oldRun of activeRuns) {
-          await mongo({
-            action: "updateMany",
+        for (const oldRunId of supersededRunIds) {
+          // Whether the old generation is finished is answered by what is left
+          // of it, not by comparing two recorded ranges.
+          const remainingActive = await mongo({
+            action: "count",
             collection: "diarizations",
-            query: {
-              runId: oldRun.runId,
-              start: { $lt: run.range.end },
-              end: { $gt: run.range.start },
-            },
-            update: { $set: { lifecycleStatus: "superseded" } },
-          });
-          const fullyReplaced =
-            new Date(run.range.start) <= new Date(oldRun.range.start) &&
-            new Date(run.range.end) >= new Date(oldRun.range.end);
+            query: { runId: oldRunId, lifecycleStatus: "active" },
+          }) as number;
+          const fullyReplaced = remainingActive === 0;
           await mongo({
             action: "updateOne",
             collection: "diarization_runs",
-            query: { runId: oldRun.runId },
+            query: { runId: oldRunId },
             update: fullyReplaced
               ? {
                 $set: {
