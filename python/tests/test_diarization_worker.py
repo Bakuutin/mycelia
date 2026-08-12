@@ -129,6 +129,15 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(mapping["SPEAKER_01"], "SPEAKER_00")
         self.assertEqual(mapping["SPEAKER_02"], "SPEAKER_03")
 
+    def test_segments_without_embeddings_do_not_reuse_a_reserved_label(self):
+        mapping = _reconcile_speaker_labels(
+            [{"speaker": "SPEAKER_00", "embedding": None}],
+            [],
+            reserved_labels={"SPEAKER_00"},
+        )
+
+        self.assertNotEqual(mapping["SPEAKER_00"], "SPEAKER_00")
+
     def test_continuation_segments_are_deduplicated_and_clipped(self):
         boundary = datetime.now(tz=UTC)
 
@@ -169,6 +178,18 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(error["attempt"], 2)
         self.assertEqual(error["originalId"], str(sequence.original_id))
         self.assertEqual(error["route"], "https://diar.example")
+
+    def test_server_errors_are_not_reported_as_invalid_audio(self):
+        detail = _classify_diarization_error(
+            _sequence(),
+            "https://diar.example",
+            RuntimeError(
+                "500 Server Error for url: https://diar.example/diarize (audio.wav)"
+            ),
+            http_status=500,
+        )
+
+        self.assertEqual(detail["category"], "provider_http")
 
     def test_generation_segment_identity_is_stable(self):
         sequence = _sequence()

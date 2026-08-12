@@ -132,8 +132,13 @@ def _reconcile_speaker_labels(
     """Map request-local Pyannote labels to stable labels from the overlap."""
     current_groups: dict[str, list[list[float]]] = {}
     previous_groups: dict[str, list[list[float]]] = {}
+    # Every speaker in the response needs a mapping, including one whose
+    # segments carry no embedding: leaving it on its request-local label would
+    # silently merge it into whichever speaker already holds that label.
+    current_speakers: dict[str, None] = {}
 
     for segment in segments:
+        current_speakers.setdefault(segment['speaker'], None)
         if segment.get('embedding'):
             current_groups.setdefault(segment['speaker'], []).append(segment['embedding'])
     for segment in previous_segments:
@@ -141,7 +146,7 @@ def _reconcile_speaker_labels(
             previous_groups.setdefault(segment['speaker'], []).append(segment['embedding'])
 
     if not previous_groups and not reserved_labels:
-        return {speaker: speaker for speaker in current_groups}
+        return {speaker: speaker for speaker in current_speakers}
 
     current_centroids = {
         speaker: centroid
@@ -178,7 +183,7 @@ def _reconcile_speaker_labels(
             numeric_labels.append(int(match.group(1)))
     next_speaker_number = max(numeric_labels, default=-1) + 1
 
-    for current_speaker in current_groups:
+    for current_speaker in current_speakers:
         if current_speaker not in mapping:
             while f'SPEAKER_{next_speaker_number:02d}' in existing_labels:
                 next_speaker_number += 1
@@ -272,6 +277,10 @@ def _classify_diarization_error(
         category = "payload_too_large"
     elif "embedding space" in lowered:
         category = "embedding_space_mismatch"
+    # A server fault often quotes the filename it was given, so the message
+    # keywords below must not outrank an explicit 5xx.
+    elif status is not None and status >= 500:
+        category = "provider_http"
     elif any(token in lowered for token in ("decode", "codec", "audio", "opus", "wav")):
         category = "invalid_audio"
     elif any(token in lowered for token in ("forbidden", "unauthorized", "permission", "mongo")):
