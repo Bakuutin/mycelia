@@ -383,6 +383,106 @@ Deno.test(
 );
 
 Deno.test(
+  "Timeline view returns a bounded compact relationship response",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+    const subject = await objectsResource({
+      action: "create",
+      object: { name: "Subject", icon: { text: "👤" } },
+    });
+    const target = await objectsResource({
+      action: "create",
+      object: { name: "Target", icon: { text: "📍" } },
+    });
+
+    await objectsResource({
+      action: "create",
+      object: {
+        name: "Older event",
+        isEvent: true,
+        timeRanges: [{
+          start: new Date("2026-08-01T10:00:00.000Z"),
+          end: new Date("2026-08-01T11:00:00.000Z"),
+        }],
+      },
+    });
+    await objectsResource({
+      action: "create",
+      object: {
+        name: "Recent relationship",
+        details: "Visible in the selected-object card",
+        isRelationship: true,
+        relationship: {
+          subject: subject.insertedId.toString(),
+          object: target.insertedId.toString(),
+          symmetrical: false,
+        },
+        timeRanges: [{
+          start: new Date("2026-08-02T10:00:00.000Z"),
+          end: new Date("2026-08-02T11:00:00.000Z"),
+        }],
+        largeInternalPayload: "x".repeat(10_000),
+      },
+    });
+
+    const result = await (objectsResource as any)({
+      action: "list",
+      view: "timeline",
+      options: {
+        includeRelationships: true,
+        hasTimeRanges: true,
+        limit: 1,
+        sort: { earliestStart: -1, duration: -1 },
+        timeRangeFilter: {
+          start: "2026-08-01T00:00:00.000Z",
+          end: "2026-08-03T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.objects).toHaveLength(1);
+    expect(result.objects[0].name).toBe("Recent relationship");
+    expect(result.objects[0].details).toBe(
+      "Visible in the selected-object card",
+    );
+    expect(result.objects[0].largeInternalPayload).toBeUndefined();
+    expect(result.objects[0].subjectObject).toEqual({
+      _id: subject.insertedId,
+      name: "Subject",
+      icon: { text: "👤" },
+    });
+    expect(result.objects[0].objectObject).toEqual({
+      _id: target.insertedId,
+      name: "Target",
+      icon: { text: "📍" },
+    });
+  }),
+);
+
+Deno.test(
+  "full object list keeps the legacy array response",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
+    const objectsResource = await getObjectsResource(admin);
+    await objectsResource({
+      action: "create",
+      object: {
+        name: "Legacy list object",
+        timeRanges: [{ start: new Date("2026-08-01T10:00:00.000Z") }],
+      },
+    });
+
+    const result = await objectsResource({
+      action: "list",
+      options: { hasTimeRanges: true, includeRelationships: true },
+    });
+
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0].name).toBe("Legacy list object");
+  }),
+);
+
+Deno.test(
   "getRelationships returns relationships for an object",
   withFixtures(["Admin", "Mongo"], async (admin: Auth) => {
     const objectsResource = await getObjectsResource(admin);

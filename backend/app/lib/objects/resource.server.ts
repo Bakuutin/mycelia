@@ -4,6 +4,11 @@ import { Resource } from "@/lib/auth/resources.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
+import {
+  buildTimelineObjectsPipeline,
+  resolveTimelineObjectLimit,
+  TIMELINE_OBJECT_MAX_TIME_MS,
+} from "./timeline-query.ts";
 
 const zIcon = z.union([
   z.object({
@@ -124,6 +129,9 @@ const getObjectSchema = z.object({
 const listObjectsSchema = z.object({
   action: z.literal("list").describe(
     "List/search objects with filtering and pagination"
+  ),
+  view: z.enum(["full", "timeline"]).optional().describe(
+    "Use the bounded compact Timeline response instead of the legacy full array"
   ),
   filters: z.record(z.string(), z.any()).optional().describe(
     "MongoDB query filters (e.g., {'isPerson': true, 'name': 'Igor'}). Leave empty for all objects."
@@ -1787,6 +1795,28 @@ export class ObjectsResource
         }
 
         if (input.options?.includeRelationships) {
+          if (input.view === "timeline") {
+            const limit = resolveTimelineObjectLimit(input.options?.limit);
+            const rows = await mongo({
+              action: "aggregate",
+              collection: "objects",
+              pipeline: buildTimelineObjectsPipeline(
+                query,
+                input.options?.sort,
+                limit,
+              ),
+              options: {
+                allowDiskUse: true,
+                maxTimeMS: TIMELINE_OBJECT_MAX_TIME_MS,
+              },
+            });
+
+            return {
+              objects: rows.slice(0, limit),
+              truncated: rows.length > limit,
+            };
+          }
+
           const pipeline: any[] = [
             {
               $addFields: {

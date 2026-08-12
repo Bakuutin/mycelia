@@ -32,6 +32,18 @@ Deno.test(
 );
 
 Deno.test(
+  "migrations add the Timeline object start index",
+  withFixtures(["Mongo"], async ({ db }) => {
+    await ensureAllCollectionsExist(db);
+    expect(
+      await db.collection("objects").indexExists(
+        "timeline_objects_time_range_start",
+      ),
+    ).toBe(true);
+  }),
+);
+
+Deno.test(
   "explicit LLM routing migration preserves a null inference provider",
   withFixtures([
     "Mongo",
