@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from sys import path
+from types import SimpleNamespace
 from unittest import TestCase, main
 from unittest.mock import patch
 
@@ -35,6 +36,26 @@ def _sequence(*, partial: bool = False) -> DiarizationSequence:
             {"_id": ObjectId(), "original_id": original_id, "index": 0, "start": now},
             {"_id": ObjectId(), "original_id": original_id, "index": 1, "start": now},
         ],
+    )
+
+
+def _diarize_response(segments: int = 3) -> SimpleNamespace:
+    """Minimal stand-in for the diarizator /diarize response."""
+    return SimpleNamespace(
+        status_code=200,
+        raise_for_status=lambda: None,
+        json=lambda: {
+            "embeddingSpaceId": "space-1",
+            "segments": [
+                {
+                    "start": float(index * 2),
+                    "end": float(index * 2 + 2),
+                    "speaker": f"SPEAKER_{index % 2:02d}",
+                    "embedding": [1.0, 0.0] if index % 2 == 0 else [0.0, 1.0],
+                }
+                for index in range(segments)
+            ],
+        },
     )
 
 
@@ -186,6 +207,41 @@ class DiarizationWorkerTest(TestCase):
 
         self.assertEqual(result["status"], "error")
         record_failure.assert_not_called()
+
+    def test_generation_writes_one_identity_key_per_segment(self):
+        sequence = _sequence()
+        segment_keys = []
+
+        def mongo(_resource, request):
+            if request.get("collection") == "diarizations":
+                if request["action"] == "updateOne":
+                    segment_keys.append(request["query"]["segmentKey"])
+                    return {"upsertedCount": 1}
+                return []
+            if request["action"] in ("find", "aggregate"):
+                return []
+            if request["action"] == "count":
+                return 0
+            return {}
+
+        with (
+            patch("diarization_worker.claim_sequence", return_value=(True, None)),
+            patch("diarization_worker.combine_chunks_to_wav", return_value=(BytesIO(b"wav"), 16000)),
+            patch("diarization_worker.requests.post", return_value=_diarize_response()),
+            patch("diarization_worker.release_sequence"),
+            patch("diarization_worker.call_resource", side_effect=mongo),
+        ):
+            result = diarize_sequence(
+                sequence,
+                "worker-1",
+                run_id="run-1",
+                mark_chunks=False,
+                server_url="https://diar.example",
+            )
+
+        self.assertEqual(result["status"], "diarized")
+        self.assertEqual(len(segment_keys), 3)
+        self.assertEqual(len(set(segment_keys)), 3)
 
 
 if __name__ == "__main__":

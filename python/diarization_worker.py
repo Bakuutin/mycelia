@@ -638,7 +638,7 @@ def diarize_sequence(
             previous_segments,
             reserved_labels=reserved_labels,
         )
-        for segment_index, segment in enumerate(segments):
+        for segment in segments:
             segment['speaker'] = speaker_label_mapping.get(segment['speaker'], segment['speaker'])
 
         if not segments:
@@ -675,7 +675,7 @@ def diarize_sequence(
         saved_segments = 0
         matched_segments = 0
         overlap_end = sequence.chunks[1]['start'] if sequence.is_continuation and len(sequence.chunks) > 1 else None
-        for segment in segments:
+        for segment_index, segment in enumerate(segments):
             # Convert relative times to absolute datetimes
             segment_start_relative = segment['start']  # seconds relative to audio start
             segment_end_relative = segment['end']  # seconds relative to audio start
