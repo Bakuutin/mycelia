@@ -197,3 +197,53 @@ Deno.test(
     expect(profiles?.[1]?.enabled).toBe(true);
   }),
 );
+
+/**
+ * The diarization worker looks up a recording's prior segments once per
+ * sequence (overlap reconciliation and reserved speaker labels). Without an
+ * original_id index both are collection scans over every segment ever written,
+ * so throughput decays as the archive grows.
+ */
+function planStages(plan: Record<string, any> | undefined): string[] {
+  if (!plan) throw new Error("Explain output carried no query plan");
+  // Aggregation explains wrap the plan tree in `queryPlan`.
+  if (plan.queryPlan) return planStages(plan.queryPlan);
+  const stages = [plan.stage].filter(Boolean);
+  if (plan.inputStage) stages.push(...planStages(plan.inputStage));
+  return stages;
+}
+
+Deno.test(
+  "overlap lookups by original_id use an index",
+  withFixtures(["Mongo"], async ({ db }) => {
+    await ensureAllCollectionsExist(db);
+    const originalId = new ObjectId();
+
+    const explained = await db.collection("diarizations").find({
+      original_id: originalId,
+      end: { $gt: new Date(0) },
+      start: { $lt: new Date() },
+    }).sort({ start: 1 }).explain("queryPlanner");
+
+    expect(planStages(explained.queryPlanner.winningPlan)).not.toContain(
+      "COLLSCAN",
+    );
+  }),
+);
+
+Deno.test(
+  "reserved speaker labels are grouped from an index",
+  withFixtures(["Mongo"], async ({ db }) => {
+    await ensureAllCollectionsExist(db);
+    const originalId = new ObjectId();
+
+    const explained = await db.collection("diarizations").aggregate([
+      { $match: { original_id: originalId } },
+      { $group: { _id: "$speaker" } },
+    ]).explain("queryPlanner");
+
+    const plan = explained.queryPlanner?.winningPlan ??
+      explained.stages?.[0]?.$cursor?.queryPlanner?.winningPlan;
+    expect(planStages(plan)).not.toContain("COLLSCAN");
+  }),
+);
