@@ -143,10 +143,9 @@ export async function markHistogramStale(
   return { total, byResolution };
 }
 
-
 /**
  * Mark higher resolution buckets as stale based on processed lower resolution range.
- */ 
+ */
 async function markHigherResolutionStale(
   auth: Auth,
   start: Date,
@@ -306,12 +305,25 @@ async function updateHistogramOptimized(
 
   if (end.getTime() - start.getTime() > BATCH_SIZE) {
     const steps = Math.ceil((end.getTime() - start.getTime()) / BATCH_SIZE);
-    console.log(`   ├─ Splitting into ${steps} batches (max ${MAX_LOWER_BINS} source bins each)...`);
+    console.log(
+      `   ├─ Splitting into ${steps} batches (max ${MAX_LOWER_BINS} source bins each)...`,
+    );
     for (let i = 0; i < steps; i++) {
       const batchStart = new Date(start.getTime() + i * BATCH_SIZE);
-      const batchEnd = new Date(Math.min(start.getTime() + (i + 1) * BATCH_SIZE, end.getTime()));
-      console.log(`   ├─ Batch ${i + 1}/${steps}: ${batchStart.toISOString()} to ${batchEnd.toISOString()}`);
-      await updateHistogramOptimizedBatch(auth, batchStart, batchEnd, resolution);
+      const batchEnd = new Date(
+        Math.min(start.getTime() + (i + 1) * BATCH_SIZE, end.getTime()),
+      );
+      console.log(
+        `   ├─ Batch ${
+          i + 1
+        }/${steps}: ${batchStart.toISOString()} to ${batchEnd.toISOString()}`,
+      );
+      await updateHistogramOptimizedBatch(
+        auth,
+        batchStart,
+        batchEnd,
+        resolution,
+      );
     }
     return;
   }
@@ -594,6 +606,33 @@ export async function updateAllHistogram(
   );
 }
 
+export async function replaceHistogramRange(
+  auth: Auth,
+  start: Date,
+  end: Date,
+): Promise<void> {
+  const mongo = await getMongoResource(auth);
+  for (const resolution of RESOLUTION_ORDER) {
+    const binSize = RESOLUTION_TO_MS[resolution];
+    const alignedStart = new Date(
+      Math.floor(start.getTime() / binSize) * binSize,
+    );
+    const alignedEnd = new Date(
+      Math.ceil(end.getTime() / binSize) * binSize,
+    );
+    await mongo({
+      action: "deleteMany",
+      collection: `histogram_${resolution}`,
+      query: { start: { $gte: alignedStart, $lt: alignedEnd } },
+    });
+  }
+}
+
+export function alignTimelineCampaignStart(start: Date): Date {
+  const largestBin = RESOLUTION_TO_MS["1week"];
+  return new Date(Math.floor(start.getTime() / largestBin) * largestBin);
+}
+
 /**
  * Process stale buckets at a single resolution level.
  * After processing, marks the next higher resolution as stale.
@@ -686,6 +725,13 @@ export const schema = z.object({
   staleOnly: z.boolean().default(true),
   /** Mark range as stale without processing (for manual invalidation) */
   markStale: z.boolean().default(false),
+  /** Shared metadata for a multi-job rebuild launched from Pipeline health. */
+  timelineRebuildCampaignId: z.string().min(1).optional(),
+  timelineRebuildBatchIndex: z.number().int().min(0).optional(),
+  timelineRebuildBatchCount: z.number().int().min(1).optional(),
+  timelineRebuildCreatedAt: zDateOrString().optional(),
+  timelineRebuildEnd: zDateOrString().optional(),
+  timelineRebuildBatchDays: z.number().int().min(1).max(62).optional(),
 });
 
 export type HistRecalculationJobData = z.infer<typeof schema>;
@@ -708,7 +754,10 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
   // Mode 1: Mark range as stale (for manual invalidation)
   if (jobData.markStale) {
     if (!start || !end) {
-      return { success: false, message: "Start and end required for markStale" };
+      return {
+        success: false,
+        message: "Start and end required for markStale",
+      };
     }
     const { total, byResolution } = await markHistogramStale(auth, start, end);
     return { success: true, marked: total, byResolution, hasMore: false };
@@ -719,8 +768,52 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
     console.log(
       `[histRecalculation] Processing full range ${start.toISOString()} to ${end.toISOString()}`,
     );
-    await updateAllHistogram(auth, start, end);
-    return { success: true, hasMore: false };
+    if (jobData.timelineRebuildCampaignId) {
+      // A campaign is a true reconciliation, not just an upsert. Remove old
+      // buckets first so deleted source rows and formerly-populated empty bins
+      // cannot survive a rebuild as ghost counts. Rewind every batch to the
+      // week boundary: otherwise adjacent 31-day jobs would each overwrite a
+      // shared daily/weekly bucket using only their side of the boundary.
+      const rebuildStart = alignTimelineCampaignStart(start);
+      await replaceHistogramRange(auth, rebuildStart, end);
+      await updateAllHistogram(auth, rebuildStart, end);
+    } else {
+      await updateAllHistogram(auth, start, end);
+    }
+    const campaignEnd = jobData.timelineRebuildEnd
+      ? new Date(jobData.timelineRebuildEnd)
+      : end;
+    const hasMore = Boolean(
+      jobData.timelineRebuildCampaignId && end < campaignEnd,
+    );
+    const nextStart = end;
+    const nextEnd = new Date(
+      Math.min(
+        nextStart.getTime() +
+          (jobData.timelineRebuildBatchDays ?? 31) * day,
+        campaignEnd.getTime(),
+      ),
+    );
+    return {
+      success: true,
+      processed: 1,
+      hasMore,
+      ...(jobData.timelineRebuildCampaignId
+        ? {
+          timelineRebuildCampaignId: jobData.timelineRebuildCampaignId,
+          timelineRebuildBatchIndex: (jobData.timelineRebuildBatchIndex ?? 0) +
+            (hasMore ? 1 : 0),
+          timelineRebuildBatchCount: jobData.timelineRebuildBatchCount,
+          ...(hasMore
+            ? {
+              cursor: nextStart.toISOString(),
+              nextStart: nextStart.toISOString(),
+              nextEnd: nextEnd.toISOString(),
+            }
+            : {}),
+        }
+        : {}),
+    };
   }
 
   // Mode 3: Process stale buckets only (default)
@@ -747,6 +840,12 @@ const capability: JobCapability = {
       processed: z.number().optional(),
       marked: z.number().optional(),
       hasMore: z.boolean(),
+      timelineRebuildCampaignId: z.string().optional(),
+      timelineRebuildBatchIndex: z.number().optional(),
+      timelineRebuildBatchCount: z.number().optional(),
+      cursor: z.string().optional(),
+      nextStart: z.string().optional(),
+      nextEnd: z.string().optional(),
     }),
   ),
   policies: [

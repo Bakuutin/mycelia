@@ -56,6 +56,26 @@ Deno.test("cursor-based workers advance their continuation cursor", () => {
   });
 });
 
+Deno.test("timeline rebuild continuation advances the bounded range", () => {
+  const data = {
+    type: "histRecalculation",
+    start: "2026-01-01T00:00:00.000Z",
+    end: "2026-02-01T00:00:00.000Z",
+    staleOnly: false,
+    timelineRebuildBatchIndex: 0,
+  };
+  expect(getContinuationJobData(data, {
+    nextStart: "2026-02-01T00:00:00.000Z",
+    nextEnd: "2026-03-04T00:00:00.000Z",
+    timelineRebuildBatchIndex: 1,
+  })).toEqual({
+    ...data,
+    start: "2026-02-01T00:00:00.000Z",
+    end: "2026-03-04T00:00:00.000Z",
+    timelineRebuildBatchIndex: 1,
+  });
+});
+
 Deno.test("diarization continuation adopts the campaign created by the first batch", () => {
   expect(getContinuationJobData(
     { type: "diarization", mode: "missing", limit: 4 },

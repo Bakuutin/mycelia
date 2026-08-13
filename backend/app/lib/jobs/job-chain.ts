@@ -39,6 +39,17 @@ export function getContinuationJobData(
       ? result.cursor
       : parsedCursor.toISOString();
   }
+  if (
+    data.type === "histRecalculation" &&
+    typeof result?.nextStart === "string" &&
+    typeof result?.nextEnd === "string"
+  ) {
+    continuation.start = result.nextStart;
+    continuation.end = result.nextEnd;
+    if (typeof result.timelineRebuildBatchIndex === "number") {
+      continuation.timelineRebuildBatchIndex = result.timelineRebuildBatchIndex;
+    }
+  }
   return Object.keys(continuation).length === Object.keys(data).length &&
       Object.entries(continuation).every(([key, value]) => data[key] === value)
     ? data

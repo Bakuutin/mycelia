@@ -26,8 +26,24 @@ import {
   assertWorkerConcurrency,
   getAvailableForceStartSlots,
 } from "@/lib/jobs/worker-concurrency.ts";
+import {
+  buildTimelineRebuildBatches,
+  timelineCampaignStatus,
+} from "@/lib/jobs/timeline-recovery.ts";
 
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
+const TIMELINE_SOURCE_COLLECTIONS = [
+  ["audio_chunks", "Audio chunks"],
+  ["transcriptions", "Transcriptions"],
+  ["diarizations", "Diarizations"],
+] as const;
+const TIMELINE_RESOLUTIONS = ["5min", "1hour", "1day", "1week"] as const;
+
+function validDate(value: unknown): Date | null {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value as any);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 const UpdateProgressSchema = z.object({
   action: z.literal("progressUpdate"),
@@ -220,6 +236,22 @@ const PipelineHealthSchema = z.object({
   force: z.boolean().optional(),
 });
 
+const TimelineIntegrityReportSchema = z.object({
+  action: z.literal("timeline_integrity_report"),
+});
+
+const TimelineBookkeepingRepairSchema = z.object({
+  action: z.literal("timeline_bookkeeping_repair"),
+  apply: z.boolean().default(false),
+});
+
+const StartTimelineRebuildSchema = z.object({
+  action: z.literal("start_timeline_rebuild"),
+  start: z.string().datetime({ offset: true }).optional(),
+  end: z.string().datetime({ offset: true }).optional(),
+  batchDays: z.number().int().min(1).max(62).default(31),
+});
+
 const RetryFailedJobsSchema = z.object({
   action: z.literal("retry_failed"),
   workerType: z.string(),
@@ -279,6 +311,9 @@ const RequestSchema = z.union([
   StatsSchema,
   ErrorStatsSchema,
   PipelineHealthSchema,
+  TimelineIntegrityReportSchema,
+  TimelineBookkeepingRepairSchema,
+  StartTimelineRebuildSchema,
   RetryFailedJobsSchema,
   ModelArtifactsSchema,
   ReprocessModelArtifactsSchema,
@@ -523,6 +558,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.errorStats(input, auth);
       case "pipeline_health":
         return this.pipelineHealth(input, auth);
+      case "timeline_integrity_report":
+        return this.timelineIntegrityReport(auth);
+      case "timeline_bookkeeping_repair":
+        return this.timelineBookkeepingRepair(input, auth);
+      case "start_timeline_rebuild":
+        return this.startTimelineRebuild(input, auth);
       case "retry_failed":
         return this.retryFailed(input, auth);
       case "model_artifacts":
@@ -1717,6 +1758,525 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     };
   }
 
+  private async timelineSourceStats(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    return await Promise.all(
+      TIMELINE_SOURCE_COLLECTIONS.map(async ([collection, label]) => {
+        const [collectionStats, first, last] = await Promise.all([
+          mongo({
+            action: "aggregate",
+            collection,
+            pipeline: [{ $collStats: { count: {} } }],
+            options: { maxTimeMS: 5_000 },
+          }),
+          mongo({
+            action: "findOne",
+            collection,
+            query: { start: { $type: "date" } },
+            options: {
+              sort: { start: 1 },
+              projection: { start: 1, end: 1 },
+              maxTimeMS: 30_000,
+            },
+          }),
+          mongo({
+            action: "findOne",
+            collection,
+            query: { start: { $type: "date" } },
+            options: {
+              sort: { start: -1 },
+              projection: { start: 1, end: 1 },
+              maxTimeMS: 30_000,
+            },
+          }),
+        ]);
+        const firstStart = validDate(first?.start);
+        const lastStart = validDate(last?.start);
+        const lastEnd = validDate(last?.end) ??
+          (lastStart ? new Date(lastStart.getTime() + 1) : null);
+        return {
+          collection,
+          label,
+          // countDocuments({}) walks the entire 949k-chunk collection on the
+          // live database. $collStats reads the maintained collection count
+          // instead, keeping this explicit audit sub-second.
+          documents: Number(collectionStats?.[0]?.count ?? 0),
+          firstStart: firstStart?.toISOString() ?? null,
+          lastStart: lastStart?.toISOString() ?? null,
+          lastEnd: lastEnd?.toISOString() ?? null,
+        };
+      }),
+    );
+  }
+
+  private async terminalTranscriptionMarkerStats(
+    auth: Auth,
+    apply: boolean,
+  ) {
+    const mongo = await getMongoResource(auth);
+    if (!apply) {
+      // A batched $in count performs one index seek per terminal sequence and
+      // took 38 seconds on the live database when the result was empty. Let
+      // MongoDB execute the indexed correlated lookup instead; the same exact
+      // reconciliation completes in about 3 seconds and does not inherit the
+      // generic find helper's 1,000-document default limit.
+      const rows = await mongo({
+        action: "aggregate",
+        collection: "transcription_sequences",
+        pipeline: [
+          { $match: { state: { $in: ["completed", "empty"] } } },
+          {
+            $lookup: {
+              from: "audio_chunks",
+              let: { sequenceId: "$_id" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        {
+                          $eq: [
+                            "$transcription_sequence_id",
+                            "$$sequenceId",
+                          ],
+                        },
+                        { $eq: ["$transcribed_at", null] },
+                      ],
+                    },
+                  },
+                },
+                { $count: "count" },
+              ],
+              as: "missingChunks",
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              terminalSequences: { $sum: 1 },
+              eligibleChunks: {
+                $sum: {
+                  $ifNull: [{ $first: "$missingChunks.count" }, 0],
+                },
+              },
+            },
+          },
+        ],
+        options: { allowDiskUse: true, maxTimeMS: 60_000 },
+      }) as Array<{ terminalSequences?: number; eligibleChunks?: number }>;
+      return {
+        terminalSequences: Number(rows[0]?.terminalSequences ?? 0),
+        eligibleChunks: Number(rows[0]?.eligibleChunks ?? 0),
+        modifiedChunks: 0,
+        applied: false,
+      };
+    }
+
+    let terminalSequences = 0;
+    let eligibleChunks = 0;
+    let modifiedChunks = 0;
+    const sequenceBatchSize = 5_000;
+    let afterId: ObjectId | null = null;
+    while (true) {
+      const sequences = await mongo({
+        action: "find",
+        collection: "transcription_sequences",
+        query: {
+          state: { $in: ["completed", "empty"] },
+          ...(afterId ? { _id: { $gt: afterId } } : {}),
+        },
+        options: {
+          sort: { _id: 1 },
+          limit: sequenceBatchSize,
+          projection: { _id: 1 },
+        },
+      }) as Array<{ _id: ObjectId }>;
+      if (sequences.length === 0) break;
+      terminalSequences += sequences.length;
+      afterId = sequences.at(-1)!._id;
+      const sequenceIds = sequences.map((sequence) => sequence._id);
+      if (sequenceIds.length === 0) continue;
+      const query = {
+        transcription_sequence_id: { $in: sequenceIds },
+        transcribed_at: null,
+      };
+      const count = Number(
+        await mongo({
+          action: "count",
+          collection: "audio_chunks",
+          query,
+          options: {
+            maxTimeMS: 30_000,
+            hint: "audio_chunks_terminal_marker_repair",
+          },
+        }),
+      );
+      eligibleChunks += count;
+      if (apply && count > 0) {
+        const result = await mongo({
+          action: "updateMany",
+          collection: "audio_chunks",
+          query,
+          update: {
+            $set: {
+              transcribed_at: new Date(),
+              transcription_marker_repaired_at: new Date(),
+            },
+          },
+        });
+        modifiedChunks += Number(result.modifiedCount ?? 0);
+      }
+    }
+
+    return {
+      terminalSequences,
+      eligibleChunks,
+      modifiedChunks,
+      applied: apply,
+    };
+  }
+
+  private async latestTimelineCampaign(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const latest = await mongo({
+      action: "findOne",
+      collection: "jobs",
+      query: {
+        type: "histRecalculation",
+        "data.timelineRebuildCampaignId": { $exists: true },
+      },
+      options: {
+        sort: { createdAt: -1 },
+        projection: { "data.timelineRebuildCampaignId": 1 },
+      },
+    });
+    const campaignId = latest?.data?.timelineRebuildCampaignId;
+    if (!campaignId) return null;
+
+    const jobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        type: "histRecalculation",
+        "data.timelineRebuildCampaignId": campaignId,
+      },
+      options: {
+        sort: { "data.timelineRebuildBatchIndex": 1 },
+        projection: {
+          state: 1,
+          data: 1,
+          result: 1,
+          createdAt: 1,
+          startedAt: 1,
+          finishedAt: 1,
+          failedReason: 1,
+        },
+      },
+    }) as any[];
+    const stateCounts = {
+      active: 0,
+      waiting: 0,
+      delayed: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+    for (const job of jobs) {
+      if (job.state in stateCounts) {
+        stateCounts[job.state as keyof typeof stateCounts]++;
+      }
+    }
+    const planned = Number(
+      jobs[0]?.data?.timelineRebuildBatchCount ?? jobs.length,
+    );
+    const missingJobs = Math.max(0, planned - jobs.length);
+    const latestJob = jobs.at(-1);
+    const latestFinishedAt = validDate(latestJob?.finishedAt);
+    const continuationPending = missingJobs > 0 &&
+      latestJob?.state === "completed" && latestJob?.result?.hasMore === true &&
+      (!latestFinishedAt ||
+        Date.now() - latestFinishedAt.getTime() < STALE_JOB_AGE_MS);
+    const status = stateCounts.active > 0
+      ? "running"
+      : stateCounts.waiting + stateCounts.delayed > 0
+      ? "queued"
+      : missingJobs > 0
+      ? continuationPending ? "queued" : "completed_with_errors"
+      : timelineCampaignStatus({
+        total: jobs.length,
+        ...stateCounts,
+      });
+    const firstJob = jobs[0];
+    const lastJob = jobs.at(-1);
+    return {
+      campaignId,
+      status,
+      plannedJobs: planned,
+      queuedJobs: jobs.length,
+      missingJobs,
+      ...stateCounts,
+      start: validDate(firstJob?.data?.start)?.toISOString() ?? null,
+      end: validDate(
+        firstJob?.data?.timelineRebuildEnd ?? lastJob?.data?.end,
+      )?.toISOString() ?? null,
+      createdAt: validDate(
+        firstJob?.data?.timelineRebuildCreatedAt ?? firstJob?.createdAt,
+      )
+        ?.toISOString() ?? null,
+      finishedAt:
+        stateCounts.completed + stateCounts.failed + stateCounts.cancelled ===
+            jobs.length
+          ? validDate(
+            jobs.reduce((latestDate: Date | null, job) => {
+              const candidate = validDate(job.finishedAt);
+              return candidate && (!latestDate || candidate > latestDate)
+                ? candidate
+                : latestDate;
+            }, null),
+          )?.toISOString() ?? null
+          : null,
+      failures: jobs.filter((job) =>
+        job.state === "failed" || job.state === "cancelled"
+      ).slice(0, 5).map((job) => ({
+        jobId: job._id?.toString(),
+        batchIndex: job.data?.timelineRebuildBatchIndex,
+        start: validDate(job.data?.start)?.toISOString() ?? null,
+        end: validDate(job.data?.end)?.toISOString() ?? null,
+        reason: job.failedReason ?? job.state,
+      })),
+    };
+  }
+
+  private async timelineIntegrityReport(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const auditStartedAt = performance.now();
+    const stageMs: Record<string, number> = {};
+    const timed = async <T>(name: string, task: () => Promise<T>) => {
+      const startedAt = performance.now();
+      try {
+        return await task();
+      } finally {
+        stageMs[name] = Math.round(performance.now() - startedAt);
+      }
+    };
+    const [sources, histograms, campaign] = await Promise.all([
+      timed("sourceMetadata", () => this.timelineSourceStats(auth)),
+      timed(
+        "histogramTotals",
+        () =>
+          Promise.all(TIMELINE_RESOLUTIONS.map(async (resolution) => {
+            const rows = await mongo({
+              action: "aggregate",
+              collection: `histogram_${resolution}`,
+              pipeline: [{
+                $group: {
+                  _id: null,
+                  buckets: { $sum: 1 },
+                  stale: {
+                    $sum: { $cond: [{ $eq: ["$stale", true] }, 1, 0] },
+                  },
+                  firstStart: { $min: "$start" },
+                  lastStart: { $max: "$start" },
+                  audio_chunks: {
+                    $sum: { $ifNull: ["$totals.audio_chunks.count", 0] },
+                  },
+                  transcriptions: {
+                    $sum: { $ifNull: ["$totals.transcriptions.count", 0] },
+                  },
+                  diarizations: {
+                    $sum: { $ifNull: ["$totals.diarizations.count", 0] },
+                  },
+                },
+              }],
+              options: { maxTimeMS: 60_000 },
+            }) as any[];
+            const row = rows[0] ?? {};
+            return {
+              resolution,
+              buckets: Number(row.buckets ?? 0),
+              stale: Number(row.stale ?? 0),
+              firstStart: validDate(row.firstStart)?.toISOString() ?? null,
+              lastStart: validDate(row.lastStart)?.toISOString() ?? null,
+              totals: {
+                audio_chunks: Number(row.audio_chunks ?? 0),
+                transcriptions: Number(row.transcriptions ?? 0),
+                diarizations: Number(row.diarizations ?? 0),
+              },
+            };
+          })),
+      ),
+      timed("campaignReport", () => this.latestTimelineCampaign(auth)),
+    ]);
+
+    // Exact marker reconciliation is intentionally kept behind its own
+    // Preview button. On a busy million-row audio collection it can take tens
+    // of seconds even with an index; it must not block the main timeline audit.
+    const bookkeeping = {
+      checked: false,
+      terminalSequences: null,
+      eligibleChunks: null,
+      modifiedChunks: 0,
+      applied: false,
+    };
+
+    const daily = histograms.find((item) => item.resolution === "1day")!;
+    const sourcesWithHistogram = sources.map((source) => ({
+      ...source,
+      histogramDocuments:
+        daily.totals[source.collection as keyof typeof daily.totals],
+      difference: daily.totals[source.collection as keyof typeof daily.totals] -
+        source.documents,
+    }));
+    const issues: Array<{
+      severity: "warning" | "error";
+      code: string;
+      message: string;
+    }> = [];
+    for (const source of sourcesWithHistogram) {
+      if (source.difference !== 0) {
+        issues.push({
+          severity: "error",
+          code: `histogram_count_${source.collection}`,
+          message:
+            `${source.label}: daily histogram differs from raw documents by ${source.difference}.`,
+        });
+      }
+    }
+    const staleBuckets = histograms.reduce((sum, item) => sum + item.stale, 0);
+    if (staleBuckets > 0) {
+      issues.push({
+        severity: "warning",
+        code: "stale_histogram_buckets",
+        message: `${staleBuckets} histogram bucket(s) are still marked stale.`,
+      });
+    }
+    if (campaign?.status === "completed_with_errors") {
+      issues.push({
+        severity: "error",
+        code: "timeline_rebuild_campaign_failed",
+        message:
+          "The latest timeline rebuild campaign has failed, cancelled, or missing jobs.",
+      });
+    }
+
+    return {
+      checkedAt: new Date().toISOString(),
+      status: issues.length === 0 ? "healthy" : "needs_attention",
+      sources: sourcesWithHistogram,
+      histograms,
+      bookkeeping,
+      campaign,
+      issues,
+      scope: {
+        verifies: [
+          "raw source ranges and document counts",
+          "stored histogram totals at every resolution",
+          "stale histogram flags",
+          "terminal transcription bookkeeping when Preview repair is run",
+          "latest rebuild campaign completion",
+        ],
+        note:
+          "Matching totals and ranges are a reconciliation check, not a byte-for-byte proof of every bucket. A full rebuild is the deterministic repair when any difference is found.",
+      },
+      performance: {
+        totalMs: Math.round(performance.now() - auditStartedAt),
+        stages: stageMs,
+        note:
+          "The main audit uses collection metadata and indexed ranges. Exact terminal-marker reconciliation runs separately so it cannot stall this report.",
+      },
+    };
+  }
+
+  private async timelineBookkeepingRepair(
+    input: z.infer<typeof TimelineBookkeepingRepairSchema>,
+    auth: Auth,
+  ) {
+    return {
+      checkedAt: new Date().toISOString(),
+      ...(await this.terminalTranscriptionMarkerStats(auth, input.apply)),
+      note: input.apply
+        ? "Only transcribed_at bookkeeping was repaired; no transcript text was generated or changed."
+        : "Preview only. Apply updates transcribed_at only for chunks owned by completed or empty transcription sequences.",
+    };
+  }
+
+  private async startTimelineRebuild(
+    input: z.infer<typeof StartTimelineRebuildSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const existing = await mongo({
+      action: "findOne",
+      collection: "jobs",
+      query: {
+        type: "histRecalculation",
+        state: { $in: ["active", "waiting", "delayed"] },
+      },
+      options: { projection: { _id: 1, state: 1, data: 1 } },
+    });
+    if (existing) {
+      throw new Error(
+        `A histogram job is already ${existing.state} (${existing._id.toString()}). Wait for it or cancel it before starting another rebuild.`,
+      );
+    }
+
+    const sources = await this.timelineSourceStats(auth);
+    const earliest = sources.map((source) => validDate(source.firstStart))
+      .filter((date): date is Date => date != null)
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    const latest = sources.map((source) => validDate(source.lastEnd))
+      .filter((date): date is Date => date != null)
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    const start = input.start ? new Date(input.start) : earliest;
+    const end = input.end ? new Date(input.end) : latest;
+    if (!start || !end) {
+      throw new Error("No timeline source range is available to rebuild");
+    }
+
+    const batches = buildTimelineRebuildBatches(start, end, input.batchDays);
+    if (batches.length > 240) {
+      throw new Error(
+        `Refusing to enqueue ${batches.length} jobs at once; choose a larger batch size or a smaller range.`,
+      );
+    }
+
+    const campaignId = new ObjectId().toString();
+    const createdAt = new Date();
+    const firstBatch = batches[0];
+    const job = await enqueueJob({
+      type: "histRecalculation",
+      start: firstBatch.start,
+      end: firstBatch.end,
+      staleOnly: false,
+      markStale: false,
+      timelineRebuildCampaignId: campaignId,
+      timelineRebuildBatchIndex: 0,
+      timelineRebuildBatchCount: batches.length,
+      timelineRebuildCreatedAt: createdAt,
+      timelineRebuildEnd: end,
+      timelineRebuildBatchDays: input.batchDays,
+    }, {
+      trigger: {
+        type: "manual",
+        reason: `timeline_rebuild:${campaignId}`,
+      },
+    }, await getServerAuth());
+
+    return {
+      success: true,
+      campaignId,
+      status: "queued",
+      start: start.toISOString(),
+      end: end.toISOString(),
+      batchDays: input.batchDays,
+      plannedJobs: batches.length,
+      queuedJobs: 1,
+      firstJobId: job.id,
+      lastJobId: job.id,
+      createdAt: createdAt.toISOString(),
+    };
+  }
+
   private async resetWorker(
     input: z.infer<typeof ResetWorkerSchema>,
     auth: Auth,
@@ -2879,6 +3439,19 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return [{ path: ["jobs"], actions: ["read"] }];
       case "error_stats":
         return [{ path: ["jobs"], actions: ["read"] }];
+      case "pipeline_health":
+      case "timeline_integrity_report":
+        return [{ path: ["jobs"], actions: ["read"] }];
+      case "timeline_bookkeeping_repair":
+        return [{
+          path: ["jobs", "timeline_recovery"],
+          actions: input.apply ? ["read", "write"] : ["read"],
+        }];
+      case "start_timeline_rebuild":
+        return [{
+          path: ["jobs", "histRecalculation"],
+          actions: ["enqueue"],
+        }];
     }
     return [{ path: ["jobs"], actions: ["read", "write"] }];
   }
