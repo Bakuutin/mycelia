@@ -42,6 +42,7 @@ Deno.test(
     expect(jobs.length).toBeGreaterThan(0);
     expect(jobs[0].data.start).toBe("2024-01-01T00:00:00.000Z");
     expect(jobs[0].data.end).toBe("2024-01-01T01:00:00.000Z");
+    expect(jobs[0].data.staleOnly).toBe(false);
   }),
 );
 

@@ -1,5 +1,9 @@
 import { expect } from "@std/expect";
-import { aggregateBatchTranscriptionResult } from "./transcription.ts";
+import {
+  aggregateBatchTranscriptionResult,
+  buildTranscribedChunkQuery,
+  buildTranscriptionSequenceClaimQuery,
+} from "./transcription.ts";
 
 Deno.test("batch result remains transcribed when its final sequence is empty", () => {
   const transcribed = {
@@ -45,4 +49,28 @@ Deno.test("batch result stays empty when no sequence saved a transcription", () 
   };
 
   expect(aggregateBatchTranscriptionResult(empty, [empty, empty])).toEqual(empty);
+});
+
+Deno.test("sequence claiming recovers stale processing work", () => {
+  const now = new Date("2026-08-13T00:00:00.000Z");
+  expect(buildTranscriptionSequenceClaimQuery(now)).toEqual({
+    $or: [
+      { state: "ready" },
+      {
+        state: "error",
+        updatedAt: { $lt: new Date("2026-08-12T23:30:00.000Z") },
+      },
+      {
+        state: "processing",
+        updatedAt: { $lt: new Date("2026-08-12T23:30:00.000Z") },
+      },
+    ],
+  });
+});
+
+Deno.test("terminal transcription marks only chunks owned by its sequence", () => {
+  const id = { toString: () => "sequence-1" };
+  expect(buildTranscribedChunkQuery({ _id: id })).toEqual({
+    transcription_sequence_id: id,
+  });
 });

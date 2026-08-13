@@ -5,25 +5,31 @@ import { teeOutput } from "./subprocess.ts";
 
 export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
   const tempFiles: string[] = [];
-  
+
   try {
     // 1. Write chunks to temporary files
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       let data: Uint8Array;
-      
+
       if (chunk.data instanceof Uint8Array) {
         data = chunk.data;
-      } else if (chunk.data instanceof Binary || chunk.data instanceof MongoBinary) {
+      } else if (
+        chunk.data instanceof Binary || chunk.data instanceof MongoBinary
+      ) {
         data = new Uint8Array(chunk.data.buffer);
-      } else if (chunk.data && typeof chunk.data === "object" && "$binary" in chunk.data) {
+      } else if (
+        chunk.data && typeof chunk.data === "object" && "$binary" in chunk.data
+      ) {
         data = new Uint8Array(Buffer.from(chunk.data.$binary.base64, "base64"));
       } else if (Buffer.isBuffer(chunk.data)) {
         data = new Uint8Array(chunk.data);
       } else {
-        throw new Error(`Unsupported chunk data format at index ${i}: ${typeof chunk.data}`);
+        throw new Error(
+          `Unsupported chunk data format at index ${i}: ${typeof chunk.data}`,
+        );
       }
-      
+
       const tempPath = await Deno.makeTempFile({ suffix: ".opus" });
       await Deno.writeFile(tempPath, data);
       tempFiles.push(tempPath);
@@ -33,23 +39,34 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
       throw new Error("No valid audio chunks to combine");
     }
 
-    // 2. Create concat file for ffmpeg
-    const concatFilePath = await Deno.makeTempFile({ suffix: ".txt" });
-    const concatContent = tempFiles.map(path => `file '${path}'`).join("\n");
-    await Deno.writeTextFile(concatFilePath, concatContent);
-    tempFiles.push(concatFilePath);
-
-    // 3. Combine using ffmpeg
+    // 2. Combine using ffmpeg. Audio chunks can carry absolute Opus packet
+    // timestamps (for example, chunk 72 starts around PTS 720s). The concat
+    // demuxer preserves/accumulates those offsets and can turn a few minutes of
+    // audio into a multi-hour WAV. Decode every input separately and reset its
+    // PTS before concatenating so only the actual packet durations are joined.
     const outputPath = await Deno.makeTempFile({ suffix: ".wav" });
-    
+    const inputArgs = tempFiles.flatMap((path) => ["-i", path]);
+    const normalizedInputs = tempFiles.map((_, index) =>
+      `[${index}:a]asetpts=PTS-STARTPTS[a${index}]`
+    );
+    const concatInputs = tempFiles.map((_, index) => `[a${index}]`).join("");
+    const filterGraph = [
+      ...normalizedInputs,
+      `${concatInputs}concat=n=${tempFiles.length}:v=0:a=1[outa]`,
+    ].join(";");
+
     const ffmpegArgs = [
-      "-f", "concat",
-      "-safe", "0",
-      "-fflags", "+genpts",
-      "-i", concatFilePath,
-      "-acodec", "pcm_s16le",
-      "-ar", "16000",
-      "-ac", "1",
+      ...inputArgs,
+      "-filter_complex",
+      filterGraph,
+      "-map",
+      "[outa]",
+      "-acodec",
+      "pcm_s16le",
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
       "-y",
       outputPath,
     ];
@@ -76,7 +93,7 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
 
     const combinedData = await Deno.readFile(outputPath);
     await Deno.remove(outputPath);
-    
+
     return combinedData;
   } finally {
     // Cleanup temp files
@@ -89,7 +106,3 @@ export async function combineChunks(chunks: any[]): Promise<Uint8Array> {
     }
   }
 }
-
-
-
-

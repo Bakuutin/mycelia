@@ -5,7 +5,6 @@ import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
 import { combineChunks } from "@/lib/audio-combiner.ts";
 import { filterSegments } from "@/lib/transcription-filters.ts";
-import { MAX_SEQUENCE_LENGTH } from "@/lib/transcription-constants.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
 // Logging helper
@@ -80,6 +79,24 @@ export const schema = z.object({
   batchTimeoutBaseSeconds: z.number().int().min(60).max(1800).optional(),
   batchTimeoutPerSequenceSeconds: z.number().int().min(15).max(300).optional(),
 });
+
+export function buildTranscriptionSequenceClaimQuery(now = new Date()) {
+  const staleBefore = new Date(now.getTime() - 30 * 60 * 1000);
+  return {
+    $or: [
+      { state: "ready" },
+      { state: "error", updatedAt: { $lt: staleBefore } },
+      // A worker can die after the atomic claim and before it persists a
+      // terminal state. Reclaim those sequences after the same grace period
+      // used for retryable errors so they cannot remain processing forever.
+      { state: "processing", updatedAt: { $lt: staleBefore } },
+    ],
+  };
+}
+
+export function buildTranscribedChunkQuery(sequence: any) {
+  return { transcription_sequence_id: sequence._id };
+}
 
 const capability: JobCapability = {
   name: "transcription",
@@ -336,6 +353,16 @@ const capability: JobCapability = {
             update: { $set: { state: "empty", updatedAt: new Date() } },
           });
 
+          // Empty is a successful terminal STT outcome. Mark the chunks owned
+          // by this sequence as processed so pipeline health and reconciliation
+          // do not report them as permanently pending.
+          await mongo({
+            action: "updateMany",
+            collection: "audio_chunks",
+            query: buildTranscribedChunkQuery(sequence),
+            update: { $set: { transcribed_at: new Date() } },
+          });
+
           return {
             status: "success",
             result: "empty",
@@ -410,22 +437,16 @@ const capability: JobCapability = {
         });
 
         // 8. Mark chunks as transcribed
-        // If it's a full sequence (MAX_SEQUENCE_LENGTH chunks), we don't mark the last chunk as transcribed
-        // because it will be the first chunk of the next sequence (for context).
-        const isFull = sequence.chunk_count >= MAX_SEQUENCE_LENGTH;
-        const chunksToMarkQuery: any = {
-          original_id: sequence.original_id,
-          index: {
-            $gte: sequence.fromIndex,
-            $lte: isFull ? sequence.toIndex - 1 : sequence.toIndex,
-          },
-        };
+        // Sequence creation leaves the overlap chunk unassigned until the next
+        // sequence owns it. Mark exactly the chunks owned by this sequence;
+        // index arithmetic previously left one assigned chunk pending for every
+        // full sequence.
+        const chunksToMarkQuery = buildTranscribedChunkQuery(sequence);
 
         log("INFO", `Marking chunks as transcribed`, {
           sequenceId: seqId,
-          isFull,
           fromIndex: sequence.fromIndex,
-          toIndex: isFull ? sequence.toIndex - 1 : sequence.toIndex,
+          toIndex: sequence.toIndex,
         });
 
         await mongo({
@@ -536,13 +557,7 @@ const capability: JobCapability = {
           action: "findOneAndUpdate",
           collection: "transcription_sequences",
           query: {
-            $or: [
-              { state: "ready" },
-              {
-                state: "error",
-                updatedAt: { $lt: new Date(Date.now() - 30 * 60 * 1000) },
-              },
-            ],
+            ...buildTranscriptionSequenceClaimQuery(),
           },
           update: { $set: { state: "processing", updatedAt: new Date() } },
           options: { sort: { start: -1 }, returnDocument: "before" },

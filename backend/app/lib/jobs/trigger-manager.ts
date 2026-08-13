@@ -40,6 +40,13 @@ export function isEventTriggerEnabled(
   return workerConfig?.[source.workerConfigFlag] !== false;
 }
 
+export function isHealthBlockedEnqueueError(message: string): boolean {
+  return message.includes("health check") ||
+    message.includes("No healthy STT provider profiles are available") ||
+    message.includes("All enabled STT provider concurrency slots are reserved") ||
+    message.includes("has no free concurrency slots");
+}
+
 export class TriggerManager {
   private isRunning = false;
   private subscribers = new Map<string, any>();
@@ -358,7 +365,7 @@ export class TriggerManager {
       // out the full trigger interval, so work resumes shortly after the
       // provider recovers. One pending retry per job.
       if (
-        errorMsg.includes("health check") && this.isRunning &&
+        isHealthBlockedEnqueueError(errorMsg) && this.isRunning &&
         !this.healthRetryTimers.has(jobName)
       ) {
         const timer = setTimeout(() => {

@@ -56,6 +56,11 @@ export class TimelineResource
           type: "histRecalculation" as const,
           start: validatedInput.start?.toISOString(),
           end: validatedInput.end?.toISOString(),
+          // A manual range request must recompute the requested range even when
+          // no pre-existing bucket has been marked stale. Otherwise the job
+          // succeeds after processing zero buckets and missing buckets remain
+          // invisible forever.
+          staleOnly: false,
         };
 
         const jobResult = await jobsResource({

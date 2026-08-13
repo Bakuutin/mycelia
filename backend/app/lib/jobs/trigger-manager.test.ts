@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import {
   buildTriggeredJobData,
   isEventTriggerEnabled,
+  isHealthBlockedEnqueueError,
 } from "./trigger-manager.ts";
 
 Deno.test("trigger payload can scope an automatic job", async () => {
@@ -46,4 +47,20 @@ Deno.test("live trigger config gates only its event source", () => {
   expect(isEventTriggerEnabled(undefined, { liveTriggerEnabled: false })).toBe(
     true,
   );
+});
+
+Deno.test("STT provider health failures receive the short trigger retry", () => {
+  expect(isHealthBlockedEnqueueError(
+    "No healthy STT provider profiles are available",
+  )).toBe(true);
+  expect(isHealthBlockedEnqueueError("provider health check failed")).toBe(true);
+  expect(isHealthBlockedEnqueueError(
+    "All enabled STT provider concurrency slots are reserved",
+  )).toBe(true);
+  expect(isHealthBlockedEnqueueError(
+    "STT provider local has no free concurrency slots",
+  )).toBe(true);
+  expect(isHealthBlockedEnqueueError(
+    "Transcription job is missing its provider routing snapshot",
+  )).toBe(false);
 });

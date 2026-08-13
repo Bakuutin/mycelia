@@ -305,6 +305,10 @@ export async function enqueueJob(
       }
       mergedData.routingContext = routingContext;
     } catch (error) {
+      // STT jobs require a concrete provider reservation. Preserve the real
+      // health/slot error so TriggerManager can schedule a health retry instead
+      // of replacing it with a misleading missing-snapshot error.
+      if (data.type === "transcription") throw error;
       console.warn(
         `[queue] Could not snapshot routing context for ${data.type}:`,
         error,
