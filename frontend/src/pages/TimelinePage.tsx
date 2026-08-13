@@ -18,6 +18,7 @@ import { useTimelineTimeZoneStore } from "@/stores/timelineTimeZoneStore";
 import { useTimelineTimeZone } from "@/hooks/useTimelineTimeZone";
 import { getTimelinePresetRange, type TimelinePreset } from "@/lib/timeZones";
 import { getAudioFocusRange } from "@/lib/audioTimeline";
+import { TimelineRecoveryStatus } from "@/components/timeline/TimelineRecoveryStatus";
 
 const TimelinePage = () => {
   const location = useLocation();
@@ -204,6 +205,8 @@ const TimelinePage = () => {
             onCreateEvent={handleCreateEvent}
             onClearTimeSelection={clearTimeSelection}
           />
+
+          <TimelineRecoveryStatus />
 
           <div className="border rounded-lg p-2">
             <MultiTrackTimeline timeline={timeline} />

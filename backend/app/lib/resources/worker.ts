@@ -1936,6 +1936,33 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     };
   }
 
+  private async latestTimelineBookkeepingRepair(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const report = await mongo({
+      action: "findOne",
+      collection: "timeline_recovery_runs",
+      query: {
+        kind: "terminal_transcription_bookkeeping",
+        applied: true,
+      },
+      options: {
+        sort: { createdAt: -1 },
+        projection: { _id: 0 },
+        maxTimeMS: 5_000,
+      },
+    });
+    if (!report) return null;
+    return {
+      checkedAt: validDate(report.checkedAt)?.toISOString() ?? null,
+      terminalSequences: Number(report.terminalSequences ?? 0),
+      eligibleChunks: Number(report.eligibleChunks ?? 0),
+      modifiedChunks: Number(report.modifiedChunks ?? 0),
+      applied: true,
+      durationMs: Number(report.durationMs ?? 0),
+      backfilled: report.backfilled === true,
+    };
+  }
+
   private async latestTimelineCampaign(auth: Auth) {
     const mongo = await getMongoResource(auth);
     const latest = await mongo({
@@ -2059,7 +2086,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         stageMs[name] = Math.round(performance.now() - startedAt);
       }
     };
-    const [sources, histograms, campaign] = await Promise.all([
+    const [
+      sources,
+      histograms,
+      campaign,
+      lastBookkeepingRepair,
+    ] = await Promise.all([
       timed("sourceMetadata", () => this.timelineSourceStats(auth)),
       timed(
         "histogramTotals",
@@ -2106,6 +2138,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           })),
       ),
       timed("campaignReport", () => this.latestTimelineCampaign(auth)),
+      timed(
+        "bookkeepingReport",
+        () => this.latestTimelineBookkeepingRepair(auth),
+      ),
     ]);
 
     // Exact marker reconciliation is intentionally kept behind its own
@@ -2165,6 +2201,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       sources: sourcesWithHistogram,
       histograms,
       bookkeeping,
+      lastBookkeepingRepair,
       campaign,
       issues,
       scope: {
@@ -2191,9 +2228,30 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     input: z.infer<typeof TimelineBookkeepingRepairSchema>,
     auth: Auth,
   ) {
+    const startedAt = performance.now();
+    const result = await this.terminalTranscriptionMarkerStats(
+      auth,
+      input.apply,
+    );
+    const durationMs = Math.round(performance.now() - startedAt);
+    if (input.apply) {
+      const mongo = await getMongoResource(auth);
+      await mongo({
+        action: "insertOne",
+        collection: "timeline_recovery_runs",
+        doc: {
+          kind: "terminal_transcription_bookkeeping",
+          checkedAt: new Date(),
+          createdAt: new Date(),
+          ...result,
+          durationMs,
+        },
+      });
+    }
     return {
       checkedAt: new Date().toISOString(),
-      ...(await this.terminalTranscriptionMarkerStats(auth, input.apply)),
+      ...result,
+      durationMs,
       note: input.apply
         ? "Only transcribed_at bookkeeping was repaired; no transcript text was generated or changed."
         : "Preview only. Apply updates transcribed_at only for chunks owned by completed or empty transcription sequences.",

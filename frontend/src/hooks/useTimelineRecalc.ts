@@ -28,19 +28,22 @@ export function useTimelineRecalc() {
 
       const resolution = collection.replace("histogram_", "");
       const start = document.start ? new Date(document.start) : null;
-      
+
       if (!start || !RESOLUTION_TO_MS[resolution]) return;
 
       const end = new Date(start.getTime() + RESOLUTION_TO_MS[resolution]);
 
       setActiveRanges((prev) => {
-        return [...prev, {
-          resolution,
-          start,
-          end,
-          addedAt: Date.now(),
-          key: document._id.toString(),
-        }];
+        return [
+          ...prev,
+          {
+            resolution,
+            start,
+            end,
+            addedAt: Date.now(),
+            key: document._id.toString(),
+          },
+        ];
       });
     },
     true,
@@ -50,7 +53,9 @@ export function useTimelineRecalc() {
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      setActiveRanges((prev) => prev.filter((range) => now - range.addedAt > 10000));
+      setActiveRanges((prev) =>
+        prev.filter((range) => now - range.addedAt < 10000)
+      );
     }, 1000);
     return () => clearInterval(interval);
   }, []);

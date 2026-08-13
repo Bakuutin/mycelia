@@ -77,6 +77,10 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
+import type {
+  TimelineBookkeepingRepair,
+  TimelineIntegrityReport,
+} from "@/types/timelineRecovery";
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
 import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
@@ -207,83 +211,6 @@ type PipelineHealth = {
       }>;
     }>;
   };
-};
-
-type TimelineIntegrityReport = {
-  checkedAt: string;
-  status: "healthy" | "needs_attention";
-  sources: Array<{
-    collection: "audio_chunks" | "transcriptions" | "diarizations";
-    label: string;
-    documents: number;
-    firstStart: string | null;
-    lastStart: string | null;
-    lastEnd: string | null;
-    histogramDocuments: number;
-    difference: number;
-  }>;
-  histograms: Array<{
-    resolution: "5min" | "1hour" | "1day" | "1week";
-    buckets: number;
-    stale: number;
-    firstStart: string | null;
-    lastStart: string | null;
-    totals: Record<"audio_chunks" | "transcriptions" | "diarizations", number>;
-  }>;
-  bookkeeping: {
-    checked: boolean;
-    terminalSequences: number | null;
-    eligibleChunks: number | null;
-    modifiedChunks: number;
-    applied: boolean;
-  };
-  campaign: null | {
-    campaignId: string;
-    status: "queued" | "running" | "completed" | "completed_with_errors";
-    plannedJobs: number;
-    queuedJobs: number;
-    missingJobs: number;
-    active: number;
-    waiting: number;
-    delayed: number;
-    completed: number;
-    failed: number;
-    cancelled: number;
-    start: string | null;
-    end: string | null;
-    createdAt: string | null;
-    finishedAt: string | null;
-    failures: Array<{
-      jobId?: string;
-      batchIndex?: number;
-      start: string | null;
-      end: string | null;
-      reason: string;
-    }>;
-  };
-  issues: Array<{
-    severity: "warning" | "error";
-    code: string;
-    message: string;
-  }>;
-  scope: {
-    verifies: string[];
-    note: string;
-  };
-  performance: {
-    totalMs: number;
-    stages: Record<string, number>;
-    note: string;
-  };
-};
-
-type TimelineBookkeepingRepair = {
-  checkedAt: string;
-  terminalSequences: number;
-  eligibleChunks: number;
-  modifiedChunks: number;
-  applied: boolean;
-  note: string;
 };
 
 type ModelAlias = "small" | "medium" | "large";
@@ -1558,10 +1485,18 @@ export default function JobsPage() {
   const [diarizationPriorityDrafts, setDiarizationPriorityDrafts] = useState<
     Record<string, string>
   >({});
-  const [timelineAuditRequested, setTimelineAuditRequested] = useState(false);
+  const [timelineAuditRequested, setTimelineAuditRequested] = useState(
+    searchParams.get("timelineAudit") === "1",
+  );
   const [timelineRepairPreview, setTimelineRepairPreview] = useState<
     TimelineBookkeepingRepair | null
   >(null);
+
+  useEffect(() => {
+    if (searchParams.get("timelineAudit") === "1") {
+      setTimelineAuditRequested(true);
+    }
+  }, [searchParams]);
 
   const toggleHideEmpty = () => {
     const newParams = new URLSearchParams(searchParams);
@@ -4323,7 +4258,7 @@ export default function JobsPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="timeline-integrity" className="scroll-mt-4">
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -4518,6 +4453,18 @@ export default function JobsPage() {
                         : " no writes applied"}
                     </div>
                   )}
+                  {!timelineRepairPreview &&
+                    timelineIntegrity.lastBookkeepingRepair && (
+                    <div className="rounded bg-muted/50 p-2 text-xs">
+                      Last applied repair: {timelineIntegrity
+                        .lastBookkeepingRepair.modifiedChunks} marker(s) ·{" "}
+                      {formatTimelineAuditDate(
+                        timelineIntegrity.lastBookkeepingRepair.checkedAt,
+                      )} · {timelineIntegrity.lastBookkeepingRepair.durationMs}
+                      {" "}
+                      ms
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     <Button
                       variant="outline"
@@ -4612,6 +4559,23 @@ export default function JobsPage() {
                       {timelineIntegrity.campaign.status.replaceAll("_", " ")}
                     </Badge>
                   </div>
+                  <div className="mt-3 space-y-1">
+                    <Progress
+                      value={timelineIntegrity.campaign.plannedJobs > 0
+                        ? timelineIntegrity.campaign.completed /
+                          timelineIntegrity.campaign.plannedJobs * 100
+                        : 0}
+                      className="h-2"
+                    />
+                    <div className="text-muted-foreground">
+                      {timelineIntegrity.campaign.plannedJobs > 0
+                        ? Math.round(
+                          timelineIntegrity.campaign.completed /
+                            timelineIntegrity.campaign.plannedJobs * 100,
+                        )
+                        : 0}% complete
+                    </div>
+                  </div>
                   <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
                     <div>Completed: {timelineIntegrity.campaign.completed}</div>
                     <div>Active: {timelineIntegrity.campaign.active}</div>
@@ -4629,6 +4593,13 @@ export default function JobsPage() {
                     —{"  "}
                     {formatTimelineAuditDate(timelineIntegrity.campaign.end)}
                   </div>
+                  {timelineIntegrity.campaign.finishedAt && (
+                    <div className="mt-2 text-muted-foreground">
+                      Finished {formatTimelineAuditDate(
+                        timelineIntegrity.campaign.finishedAt,
+                      )}
+                    </div>
+                  )}
                   {timelineIntegrity.campaign.failures.map((failure) => (
                     <div
                       key={failure.jobId ?? failure.batchIndex}
