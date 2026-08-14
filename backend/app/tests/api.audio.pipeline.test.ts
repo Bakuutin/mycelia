@@ -16,7 +16,14 @@ Deno.test(
 
 Deno.test(
   "audio pipeline handler: returns sessions and stats when authenticated",
-  withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    await db.collection("audio_chunks").insertOne({
+      start: new Date("2026-08-13T00:00:00Z"),
+      vad: { has_speech: true },
+    });
     const response = await callExpressHandler(
       apiAudioPipelineHandler,
       "http://localhost:3000/api/audio/pipeline",
@@ -48,7 +55,15 @@ Deno.test(
       "conversation_chunk_creator",
       "conversation_extractor_merged",
       "summarization",
+      "diarization",
+      "speakerMatching",
+      "speakerIdentity",
+      "enrollment",
     ]);
+    expect(
+      data.stats.stages.find((stage: any) => stage.type === "diarization")
+        ?.backlog,
+    ).toBe(1);
     expect(Array.isArray(data.stats.recentJobs)).toBe(true);
   }),
 );

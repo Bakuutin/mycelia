@@ -8,7 +8,6 @@ export const zTriggerSource = z.object({
   channel: z.string(),
   name: z.string(),
   filter: z.record(z.string(), z.any()).optional(),
-  workerConfigFlag: z.string().optional(),
 });
 
 export type TriggerSource = z.infer<typeof zTriggerSource>;

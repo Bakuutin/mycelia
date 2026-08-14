@@ -1876,7 +1876,9 @@ export default function VoiceIdentityReviewPage() {
                 <span className="text-muted-foreground">
                   {identityCampaignView.remainingLabel}
                   {identityCampaignView.rateLabel
-                    ? ` · ${identityCampaignView.rateLabel}`
+                    ? `${
+                      identityCampaignView.remainingLabel ? " · " : ""
+                    }${identityCampaignView.rateLabel}`
                     : ""}
                 </span>
               </div>

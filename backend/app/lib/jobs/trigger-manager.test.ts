@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import {
   buildTriggeredJobData,
-  isEventTriggerEnabled,
   isHealthBlockedEnqueueError,
 } from "./trigger-manager.ts";
 
@@ -33,27 +32,13 @@ Deno.test("workers without trigger data builders keep the legacy payload", async
   });
 });
 
-Deno.test("live trigger config gates only its event source", () => {
-  const source = {
-    channel: "mycelia:mongo:audio_chunks",
-    name: "speech_missing_diarization",
-    workerConfigFlag: "liveTriggerEnabled",
-  };
-
-  expect(isEventTriggerEnabled(source, {})).toBe(true);
-  expect(isEventTriggerEnabled(source, { liveTriggerEnabled: false })).toBe(
-    false,
-  );
-  expect(isEventTriggerEnabled(undefined, { liveTriggerEnabled: false })).toBe(
-    true,
-  );
-});
-
 Deno.test("STT provider health failures receive the short trigger retry", () => {
   expect(isHealthBlockedEnqueueError(
     "No healthy STT provider profiles are available",
   )).toBe(true);
-  expect(isHealthBlockedEnqueueError("provider health check failed")).toBe(true);
+  expect(isHealthBlockedEnqueueError("provider health check failed")).toBe(
+    true,
+  );
   expect(isHealthBlockedEnqueueError(
     "All enabled STT provider concurrency slots are reserved",
   )).toBe(true);

@@ -10,9 +10,9 @@ export type DiarizationProgress = {
 export type DiarizationProgressView = {
   percent: number;
   progressLabel: string;
-  remainingLabel: string;
+  remainingLabel: string | null;
   rateLabel: string | null;
-  etaLabel: string;
+  etaLabel: string | null;
 };
 
 function formatEta(seconds: number): string {
@@ -43,11 +43,11 @@ export function getDiarizationProgressView(
     return {
       percent: 0,
       progressLabel: `${processed} chunks processed`,
-      remainingLabel: "Exact backlog total unavailable",
+      remainingLabel: null,
       rateLabel: rate && rate > 0
         ? `${(rate * 60).toFixed(1)} chunks/min`
         : null,
-      etaLabel: "ETA available when the backlog total is known",
+      etaLabel: null,
     };
   }
 

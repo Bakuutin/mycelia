@@ -479,7 +479,9 @@ export function VoiceIdentityOperations() {
                 <span className="text-muted-foreground">
                   {identityProgress.remainingLabel}
                   {identityProgress.rateLabel
-                    ? ` · ${identityProgress.rateLabel}`
+                    ? `${
+                      identityProgress.remainingLabel ? " · " : ""
+                    }${identityProgress.rateLabel}`
                     : ""}
                 </span>
               </div>

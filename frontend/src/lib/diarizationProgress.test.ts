@@ -28,7 +28,7 @@ describe("getDiarizationProgressView", () => {
     });
   });
 
-  it("shows useful progress when the bounded backlog count times out", () => {
+  it("shows measured work without an unavailable-total warning", () => {
     expect(getDiarizationProgressView({
       total_chunks: null,
       total_estimated: true,
@@ -37,9 +37,9 @@ describe("getDiarizationProgressView", () => {
     })).toEqual({
       percent: 0,
       progressLabel: "6 chunks processed",
-      remainingLabel: "Exact backlog total unavailable",
+      remainingLabel: null,
       rateLabel: "15.0 chunks/min",
-      etaLabel: "ETA available when the backlog total is known",
+      etaLabel: null,
     });
   });
 });

@@ -30,9 +30,7 @@ export function getSpeakerIdentityProgressView(
     progressLabel: hasTotal
       ? `${processed} / ${total} embeddings`
       : `${processed} embeddings classified`,
-    remainingLabel: hasTotal
-      ? `${remaining} remaining`
-      : "Exact backlog total unavailable",
+    remainingLabel: hasTotal ? `${remaining} remaining` : null,
     rateLabel: progress.segmentsPerSecond && progress.segmentsPerSecond > 0
       ? `${(progress.segmentsPerSecond * 60).toFixed(1)}/min`
       : null,

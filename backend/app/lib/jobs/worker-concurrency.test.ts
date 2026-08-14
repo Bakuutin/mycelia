@@ -12,12 +12,6 @@ Deno.test("legacy worker config defaults concurrency to one", () => {
   expect(zWorkerConfig.parse({ paused: false }).concurrency).toBe(1);
 });
 
-Deno.test("legacy diarization worker config keeps live event triggering enabled", () => {
-  expect(zWorkerConfig.parse({}).liveTriggerEnabled).toBe(true);
-  expect(zWorkerConfig.parse({ liveTriggerEnabled: false }).liveTriggerEnabled)
-    .toBe(false);
-});
-
 Deno.test("worker concurrency defaults to one and clamps legacy values", () => {
   expect(normalizeWorkerConcurrency("summarization", undefined)).toBe(1);
   expect(normalizeWorkerConcurrency("summarization", 99)).toBe(8);

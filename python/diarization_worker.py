@@ -371,21 +371,16 @@ def _build_pending_chunk_filters(
     filters: Optional[dict[str, Any]] = None,
     include_diarized: bool = False,
 ) -> dict[str, Any]:
-    required = [
-            {'processing_by': None},
-            {'vad.has_speech': True},
-            {'diarizationFailure.status': {'$ne': 'needs_attention'}},
-            {
-                '$or': [
-                    {'diarizationFailure.retryAt': {'$exists': False}},
-                    {'diarizationFailure.retryAt': None},
-                    {'diarizationFailure.retryAt': {'$lte': datetime.now(tz=UTC)}},
-                ]
-            },
-        ]
+    base_filters: dict[str, Any] = {
+        'processing_by': None,
+        'vad.has_speech': True,
+        'diarizationFailure.status': {'$ne': 'needs_attention'},
+        # $not/$gt matches missing and null retryAt values as well as retries
+        # whose delay has elapsed, while remaining index-friendly.
+        'diarizationFailure.retryAt': {'$not': {'$gt': datetime.now(tz=UTC)}},
+    }
     if not include_diarized:
-        required.insert(0, {'diarized_at': None})
-    base_filters: dict[str, Any] = {'$and': required}
+        base_filters['diarized_at'] = None
 
     if filters:
         base_filters.update(filters)
@@ -403,7 +398,7 @@ def count_pending_chunks(filters: Optional[dict[str, Any]] = None) -> Optional[i
         "collection": "audio_chunks",
         "query": query,
         "options": {
-            "hint": "audio_chunks_diarization_pending_v2",
+            "hint": "audio_chunks_diarization_ready_backlog_v1",
             "maxTimeMS": 5_000,
         },
     })
@@ -558,7 +553,11 @@ def count_pending_chunks_for_original(original_id: ObjectId) -> Optional[int]:
     result = call_resource('mongo', {
         "action": "count",
         "collection": "audio_chunks",
-        "query": query
+        "query": query,
+        "options": {
+            "hint": "audio_chunks_diarization_ready_backlog_v1",
+            "maxTimeMS": 5_000,
+        },
     })
     return int(result) if result is not None else None
 

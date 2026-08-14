@@ -227,7 +227,7 @@ def process_diarization_job(
         "message": (
             f"Processing {pending_count} pending chunks..."
             if pending_count is not None
-            else "Processing while the exact backlog total is unavailable..."
+            else "Processing pending chunks..."
         ),
         "total_chunks": total_chunks,
         "total_estimated": total_chunks is None,

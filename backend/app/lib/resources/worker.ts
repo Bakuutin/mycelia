@@ -3086,9 +3086,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         triggerIntervalSeconds:
           config?.workers?.[workerType]?.triggerIntervalSeconds ??
             defaultTriggerIntervalSeconds,
-        liveTriggerEnabled: workerType === "diarization"
-          ? config?.workers?.[workerType]?.liveTriggerEnabled !== false
-          : undefined,
         running: runtime.running,
         active: workerJobs.filter((job) => job.state === "active").length,
         waiting: workerJobs.filter((job) => job.state === "waiting").length,

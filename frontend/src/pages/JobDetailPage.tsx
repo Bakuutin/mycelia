@@ -751,11 +751,13 @@ export default function JobDetailPage() {
                     )}
                     <div className="flex flex-wrap justify-between gap-2 text-sm">
                       <span>{view.progressLabel}</span>
-                      <span>{view.etaLabel}</span>
+                      {view.etaLabel && <span>{view.etaLabel}</span>}
                     </div>
                     <div className="text-sm text-muted-foreground">
                       {view.remainingLabel}
-                      {view.rateLabel ? ` · ${view.rateLabel}` : ""}
+                      {view.rateLabel
+                        ? `${view.remainingLabel ? " · " : ""}${view.rateLabel}`
+                        : ""}
                       {job.progress?.sequences_processed != null
                         ? ` · ${job.progress.sequences_processed} sequences`
                         : ""}
@@ -823,7 +825,9 @@ export default function JobDetailPage() {
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {view.remainingLabel}
-                      {view.rateLabel ? ` · ${view.rateLabel}` : ""}
+                      {view.rateLabel
+                        ? `${view.remainingLabel ? " · " : ""}${view.rateLabel}`
+                        : ""}
                       {job.progress?.batchNumber
                         ? ` · batch ${job.progress.batchNumber}/${
                           job.progress.estimatedBatches ?? "?"

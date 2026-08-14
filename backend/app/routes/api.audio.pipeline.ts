@@ -65,43 +65,40 @@ function countPipelineStats(
   query: Record<string, unknown>,
 ): Promise<number> {
   return mongo({
-    action: "count",
+    action: "count" as const,
     collection,
     query,
     options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
   }) as Promise<number>;
 }
 
-async function getDiarizationCampaignBacklog(
+async function getDiarizationBacklog(
   mongo: ReturnType<typeof getMongoResource>,
 ): Promise<number> {
-  const rows = await mongo({
-    action: "aggregate",
-    collection: "diarization_campaigns",
-    pipeline: [
-      { $match: { status: { $in: ["counting", "running", "interrupted"] } } },
-      {
-        $group: {
-          _id: null,
-          pending: {
-            $sum: {
-              $ifNull: [
-                "$pendingChunks",
-                {
-                  $max: [
-                    { $subtract: ["$totalChunks", "$processedChunks"] },
-                    0,
-                  ],
-                },
-              ],
-            },
-          },
-        },
-      },
-    ],
-    options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
-  }) as any[];
-  return Number(rows[0]?.pending ?? 0);
+  const request = {
+    action: "count" as const,
+    collection: "audio_chunks",
+    query: {
+      "vad.has_speech": true,
+      diarized_at: null,
+      processing_by: null,
+      "diarizationFailure.status": { $ne: "needs_attention" },
+      "diarizationFailure.retryAt": { $not: { $gt: new Date() } },
+    },
+    options: {
+      hint: "audio_chunks_diarization_ready_backlog_v1",
+      maxTimeMS: PIPELINE_STATS_MAX_TIME_MS,
+    },
+  };
+  try {
+    return await mongo(request) as number;
+  } catch (error) {
+    if (!isMissingIndexHint(error)) throw error;
+    return await mongo({
+      ...request,
+      options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
+    }) as number;
+  }
 }
 
 interface PipelineSession {
@@ -850,8 +847,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         { isConversation: true, "summaries.0.date": { $exists: false } },
       ),
       safeStat(
-        "diarization campaign backlog",
-        getDiarizationCampaignBacklog(mongo),
+        "diarization backlog",
+        getDiarizationBacklog(mongo),
         0,
       ),
       Promise.resolve(0),

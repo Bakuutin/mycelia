@@ -32,18 +32,12 @@ export async function buildTriggeredJobData(
   };
 }
 
-export function isEventTriggerEnabled(
-  source: Pick<JobTriggerSource, "workerConfigFlag"> | undefined,
-  workerConfig: Record<string, unknown> | undefined,
-): boolean {
-  if (!source?.workerConfigFlag) return true;
-  return workerConfig?.[source.workerConfigFlag] !== false;
-}
-
 export function isHealthBlockedEnqueueError(message: string): boolean {
   return message.includes("health check") ||
     message.includes("No healthy STT provider profiles are available") ||
-    message.includes("All enabled STT provider concurrency slots are reserved") ||
+    message.includes(
+      "All enabled STT provider concurrency slots are reserved",
+    ) ||
     message.includes("has no free concurrency slots");
 }
 
@@ -195,33 +189,6 @@ export class TriggerManager {
         // Use sift to evaluate the filter if it exists
         const matches = !source.filter || sift(source.filter)(payload);
         if (matches) {
-          let enabled = true;
-          if (source.workerConfigFlag) {
-            try {
-              const config = await getServerConfig();
-              enabled = isEventTriggerEnabled(
-                source,
-                config?.workers?.[cap.manifest.name] as unknown as
-                  | Record<string, unknown>
-                  | undefined,
-              );
-            } catch (error) {
-              log("WARN", `Could not read event trigger config; using default`, {
-                jobName: cap.manifest.name,
-                triggerName: source.name,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-          }
-          if (!enabled) {
-            log("DEBUG", `Redis event trigger disabled by worker config`, {
-              channel,
-              jobName: cap.manifest.name,
-              triggerName: source.name,
-              workerConfigFlag: source.workerConfigFlag,
-            });
-            return;
-          }
           log("INFO", `Redis event received`, {
             channel,
             jobName: cap.manifest.name,

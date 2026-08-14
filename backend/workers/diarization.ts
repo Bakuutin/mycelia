@@ -66,17 +66,14 @@ export default new NetworkJobCapability({
     }) as unknown[];
     return pending.length > 0 ? 1 : 0;
   },
-  getTriggerJobData: async (payload, reason, { mongo }) => {
-    const originalId = (payload as any)?.data?.document?.original_id;
+  getTriggerJobData: async (_payload, _reason, { mongo }) => {
     const existing = await mongo({
       action: "find",
       collection: "diarization_campaigns",
       query: {
         mode: "missing",
         status: { $in: ["counting", "running", "interrupted"] },
-        ...(originalId ? { originalId: String(originalId) } : {
-          $or: [{ originalId: null }, { originalId: { $exists: false } }],
-        }),
+        $or: [{ originalId: null }, { originalId: { $exists: false } }],
       },
       options: { sort: { updatedAt: -1 }, limit: 1 },
     }) as any[];
@@ -88,48 +85,28 @@ export default new NetworkJobCapability({
         campaignId: campaign.campaignId,
         ...(campaign.range?.start ? { start: campaign.range.start } : {}),
         ...(campaign.range?.end ? { end: campaign.range.end } : {}),
-        ...(campaign.originalId ? { originalId: campaign.originalId } : {}),
       };
     }
     const now = new Date();
-    const oldest = !originalId
-      ? (await mongo({
-        action: "find",
-        collection: "audio_chunks",
-        query: {
-          "vad.has_speech": true,
-          $or: [{ diarized_at: { $exists: false } }, { diarized_at: null }],
-        },
-        options: { sort: { start: 1 }, limit: 1, projection: { start: 1 } },
-      }) as any[])?.[0]
-      : null;
+    const oldest = (await mongo({
+      action: "find",
+      collection: "audio_chunks",
+      query: {
+        "vad.has_speech": true,
+        $or: [{ diarized_at: { $exists: false } }, { diarized_at: null }],
+      },
+      options: { sort: { start: 1 }, limit: 1, projection: { start: 1 } },
+    }) as any[])?.[0];
     return {
       type: "diarization",
       mode: "missing",
-      ...(originalId ? { originalId: String(originalId) } : {}),
-      campaignId: `diarization-${
-        originalId ? "live" : "historical"
-      }-${crypto.randomUUID()}`,
+      campaignId: `diarization-historical-${crypto.randomUUID()}`,
       end: now,
-      ...(reason === "speech_missing_diarization"
-        ? { start: new Date(now.getTime() - 24 * 60 * 60 * 1000) }
-        : oldest?.start
-        ? { start: oldest.start }
-        : {}),
+      ...(oldest?.start ? { start: oldest.start } : {}),
     };
   },
   triggers: {
-    sources: [{
-      channel: "mycelia:mongo:audio_chunks",
-      name: "speech_missing_diarization",
-      workerConfigFlag: "liveTriggerEnabled",
-      filter: {
-        event: "mongo.change",
-        "data.operationType": "update",
-        "data.changedFields": { $in: ["vad.has_speech"] },
-        "data.document.vad.has_speech": true,
-      },
-    }],
+    sources: [],
     ...getTriggerTiming("diarization"),
   },
 });
