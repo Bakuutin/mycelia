@@ -34,7 +34,7 @@ export interface ExternalServiceHealth {
     enabled: boolean;
     model?: string;
     priority: number;
-    // Parallel-slot budget; STT only. LLM routes have no slot reservation.
+    // Parallel-slot budget for routes with enqueue reservations (STT/diarization).
     concurrency?: number;
     latencyMs?: number;
     message: string;

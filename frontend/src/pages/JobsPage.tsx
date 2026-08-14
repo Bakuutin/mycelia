@@ -1,3 +1,5 @@
+/// <reference path="../vite-env.d.ts" />
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
@@ -91,6 +93,7 @@ import { getDiarizationProgressView } from "@/lib/diarizationProgress";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import {
   type DiarizationRouteConfig,
+  getEnabledDiarizationCapacity,
   updateDiarizationRouteConfig,
 } from "@/lib/diarizationSettings";
 import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
@@ -123,6 +126,13 @@ type WorkerStatus = {
     }>;
   }>;
 };
+
+function formatLifecycleTimestamp(value?: string): string {
+  if (!value) return "checking…";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return "unknown";
+  return format(timestamp, "MMM d, HH:mm");
+}
 
 type ExternalServiceHealth = {
   id: "stt" | "llm" | "diarizator";
@@ -357,6 +367,7 @@ type InferenceRoutingConfig = {
     profiles: DiarizationRouteConfig["profiles"];
     includeEnvironment?: boolean;
     environmentPriority?: number;
+    environmentConcurrency?: number;
   } | null;
 };
 
@@ -1491,6 +1502,7 @@ export default function JobsPage() {
   const [diarizationPriorityDrafts, setDiarizationPriorityDrafts] = useState<
     Record<string, string>
   >({});
+  const [showRoutingDetails, setShowRoutingDetails] = useState(false);
   const [timelineAuditRequested, setTimelineAuditRequested] = useState(
     searchParams.get("timelineAudit") === "1",
   );
@@ -1541,6 +1553,7 @@ export default function JobsPage() {
     status: string;
     mode: string;
     reload: string;
+    startedAt: string;
   }>({
     queryKey: ["backend-readiness"],
     queryFn: () => api.get("/readiness"),
@@ -2543,23 +2556,40 @@ export default function JobsPage() {
         action: "get",
       }) as InferenceRoutingConfig;
       const profiles = config.transcriptionProfiles?.profiles ?? [];
-      if (!profiles.some((profile) => profile.id === profileId)) {
+      const isEnvironment = profileId === "environment";
+      if (
+        !isEnvironment && !profiles.some((profile) => profile.id === profileId)
+      ) {
         throw new Error("STT route no longer exists");
       }
+      const nextProfiles = profiles.map((profile) =>
+        profile.id === profileId ? { ...profile, enabled } : profile
+      );
+      const nextIncludeEnvironment = isEnvironment
+        ? enabled
+        : config.transcriptionProfiles?.includeEnvironment ?? false;
       await api.callResource("config", {
         action: "patch",
         updates: {
           transcriptionProfiles: {
-            profiles: profiles.map((profile) =>
-              profile.id === profileId ? { ...profile, enabled } : profile
-            ),
-            includeEnvironment:
-              config.transcriptionProfiles?.includeEnvironment ?? false,
+            profiles: nextProfiles,
+            includeEnvironment: nextIncludeEnvironment,
             environmentPriority:
               config.transcriptionProfiles?.environmentPriority ?? 50,
           },
         },
       });
+      const totalConcurrency = nextProfiles
+        .filter((profile) => profile.enabled)
+        .reduce((sum, profile) => sum + profile.concurrency, 0) +
+        (nextIncludeEnvironment ? 1 : 0);
+      if (totalConcurrency > 0) {
+        await api.callResource("jobs", {
+          action: "set_worker_concurrency",
+          workerType: "transcription",
+          concurrency: totalConcurrency,
+        });
+      }
       // An explicit enable is the one time we immediately wake this server to
       // confirm it came back. Disabling does not probe the server.
       return enabled
@@ -2620,12 +2650,26 @@ export default function JobsPage() {
           true,
         environmentPriority: config.diarizationProfiles?.environmentPriority ??
           50,
+        environmentConcurrency:
+          config.diarizationProfiles?.environmentConcurrency ?? 1,
       };
       const next = updateDiarizationRouteConfig(current, profileId, changes);
       await api.callResource("config", {
         action: "patch",
         updates: { diarizationProfiles: next },
       });
+      const totalConcurrency = getEnabledDiarizationCapacity(
+        next.profiles,
+        next.includeEnvironment,
+        next.environmentConcurrency,
+      );
+      if (totalConcurrency > 0) {
+        await api.callResource("jobs", {
+          action: "set_worker_concurrency",
+          workerType: "diarization",
+          concurrency: totalConcurrency,
+        });
+      }
       return await api.callResource("jobs", {
         action: "pipeline_health",
         force: true,
@@ -2653,6 +2697,115 @@ export default function JobsPage() {
           ? error.message
           : "Failed to update diarizator routing",
       }));
+    },
+  });
+
+  const setAllServiceRoutesMutation = useMutation({
+    mutationFn: async ({ serviceId, routeIds, enabled }: {
+      serviceId: ExternalServiceHealth["id"];
+      routeIds: string[];
+      enabled: boolean;
+    }) => {
+      const config = await api.callResource("config", {
+        action: "get",
+      }) as InferenceRoutingConfig;
+      const visibleRouteIds = new Set(routeIds);
+
+      if (serviceId === "llm") {
+        const current = config.llmProfiles;
+        if (!current) throw new Error("No LLM routes are configured");
+        await api.callResource("config", {
+          action: "patch",
+          updates: {
+            llmProfiles: {
+              ...current,
+              includeEnvironment: visibleRouteIds.has("environment")
+                ? enabled
+                : current.includeEnvironment,
+              profiles: current.profiles.map((profile) =>
+                visibleRouteIds.has(profile.id)
+                  ? { ...profile, enabled }
+                  : profile
+              ),
+            },
+          },
+        });
+      } else if (serviceId === "stt") {
+        const current = config.transcriptionProfiles;
+        if (!current) throw new Error("No STT routes are configured");
+        const next = {
+          ...current,
+          includeEnvironment: visibleRouteIds.has("environment")
+            ? enabled
+            : current.includeEnvironment,
+          profiles: current.profiles.map((profile) =>
+            visibleRouteIds.has(profile.id) ? { ...profile, enabled } : profile
+          ),
+        };
+        await api.callResource("config", {
+          action: "patch",
+          updates: { transcriptionProfiles: next },
+        });
+        const totalConcurrency = next.profiles
+          .filter((profile) => profile.enabled)
+          .reduce((sum, profile) => sum + profile.concurrency, 0) +
+          (next.includeEnvironment ? 1 : 0);
+        if (totalConcurrency > 0) {
+          await api.callResource("jobs", {
+            action: "set_worker_concurrency",
+            workerType: "transcription",
+            concurrency: totalConcurrency,
+          });
+        }
+      } else {
+        const current = config.diarizationProfiles;
+        if (!current) throw new Error("No diarization routes are configured");
+        const next: DiarizationRouteConfig = {
+          profiles: current.profiles.map((profile) =>
+            visibleRouteIds.has(profile.id) ? { ...profile, enabled } : profile
+          ),
+          includeEnvironment: visibleRouteIds.has("environment")
+            ? enabled
+            : current.includeEnvironment ?? true,
+          environmentPriority: current.environmentPriority ?? 50,
+          environmentConcurrency: current.environmentConcurrency ?? 1,
+        };
+        await api.callResource("config", {
+          action: "patch",
+          updates: { diarizationProfiles: next },
+        });
+        const totalConcurrency = getEnabledDiarizationCapacity(
+          next.profiles,
+          next.includeEnvironment,
+          next.environmentConcurrency,
+        );
+        if (totalConcurrency > 0) {
+          await api.callResource("jobs", {
+            action: "set_worker_concurrency",
+            workerType: "diarization",
+            concurrency: totalConcurrency,
+          });
+        }
+      }
+
+      return await api.callResource("jobs", {
+        action: "pipeline_health",
+        force: true,
+      }) as PipelineHealth;
+    },
+    onSuccess: (health, { serviceId, enabled }) => {
+      queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
+      queryClient.setQueryData(["pipeline-health"], health);
+      toast.success(
+        `${
+          serviceId === "diarizator" ? "Diarization" : serviceId.toUpperCase()
+        } routes ${enabled ? "enabled" : "disabled"}`,
+      );
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update routes",
+      );
     },
   });
 
@@ -3424,10 +3577,10 @@ export default function JobsPage() {
   };
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight">System Jobs</h1>
+    <div className="container mx-auto space-y-3 p-3 md:p-4">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-xl font-bold tracking-tight">System Jobs</h1>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75">
@@ -3437,72 +3590,110 @@ export default function JobsPage() {
             </span>
             Live
           </div>
-          <Badge variant="outline" title="Frontend code reload mode">
+          <Badge
+            variant="outline"
+            className="px-2 py-0.5 text-[10px] font-normal"
+            title={`Frontend ${
+              import.meta.env.DEV
+                ? "development server started"
+                : "build created"
+            } at ${import.meta.env.VITE_FRONTEND_LIFECYCLE_AT}`}
+          >
             Frontend: {import.meta.env.DEV ? "dev · HMR" : "prod · rebuild"}
+            {" · "}
+            {import.meta.env.DEV ? "started" : "built"}{" "}
+            {formatLifecycleTimestamp(
+              import.meta.env.VITE_FRONTEND_LIFECYCLE_AT,
+            )}
           </Badge>
-          <Badge variant="outline" title="Backend code reload mode">
-            Backend: {backendReadiness?.mode ?? "checking"} ·{" "}
-            {backendReadiness?.reload ?? "…"}
+          <Badge
+            variant="outline"
+            className="px-2 py-0.5 text-[10px] font-normal"
+            title={backendReadiness?.startedAt
+              ? `Backend process restarted at ${backendReadiness.startedAt}`
+              : "Checking backend process start time"}
+          >
+            Backend: {backendReadiness
+              ? backendReadiness.mode === "dev" ? "dev" : "prod"
+              : "checking"} · {backendReadiness?.reload ?? "…"}
+            {" · restarted "}
+            {formatLifecycleTimestamp(backendReadiness?.startedAt)}
           </Badge>
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="text-blue-500">{displayCounts.active} active</span>
+            <span>{displayCounts.waiting + displayCounts.delayed} queued</span>
+            <span
+              className={displayCounts.failed > 0 ? "text-red-500" : ""}
+              title="Retained failed job history in the current filter"
+            >
+              {displayCounts.failed} failed history
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             variant="default"
             size="sm"
+            className="h-8 px-2.5 text-xs"
             asChild
           >
             <Link to="/jobs/new">
-              <Play className="h-4 w-4 mr-2" />
-              Launch Job
+              <Play className="mr-1.5 h-3.5 w-3.5" />
+              Launch
             </Link>
           </Button>
           <Button
             variant="default"
             size="sm"
+            className="h-8 px-2.5 text-xs"
             onClick={() => resumeAllMutation.mutate()}
             disabled={resumeAllMutation.isPending ||
               pauseAllMutation.isPending ||
               !somePaused}
           >
-            <PlayCircle className="h-4 w-4 mr-2" />
-            {resumeAllMutation.isPending ? "Resuming…" : "Resume All"}
+            <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
+            {resumeAllMutation.isPending ? "Resuming…" : "Resume"}
           </Button>
           <Button
             variant="secondary"
             size="sm"
+            className="h-8 px-2.5 text-xs"
             onClick={() => pauseAllMutation.mutate()}
             disabled={pauseAllMutation.isPending ||
               resumeAllMutation.isPending ||
               allPaused === true}
           >
-            <PauseCircle className="h-4 w-4 mr-2" />
-            {pauseAllMutation.isPending ? "Pausing…" : "Pause All"}
+            <PauseCircle className="mr-1.5 h-3.5 w-3.5" />
+            {pauseAllMutation.isPending ? "Pausing…" : "Pause"}
           </Button>
           <Button
             variant="destructive"
             size="sm"
+            className="h-8 px-2.5 text-xs"
             onClick={handleCancelAll}
           >
-            <Trash2 className="h-4 w-4 mr-2" />
-            Clear Queued
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+            Clear queue
           </Button>
           {import.meta.env.DEV && (
             <Button
               variant="outline"
               size="sm"
+              className="h-8 px-2.5 text-xs"
               onClick={handleClearCompleted}
               title="Dev only: Permanently delete completed jobs from database"
             >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Clear Completed (Dev)
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Clear done
             </Button>
           )}
           <Button
             variant="outline"
             size="sm"
+            className="h-8 px-2.5 text-xs"
             onClick={() => refetch()}
           >
-            <RefreshCw className="h-4 w-4 mr-2" />
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             Refresh
           </Button>
         </div>
@@ -3510,7 +3701,7 @@ export default function JobsPage() {
 
       {pausedPipelineWorkers.length > 0 && (
         <Card className="border-amber-500/50 bg-amber-500/5">
-          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex gap-3">
               <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
               <div>
@@ -3540,8 +3731,8 @@ export default function JobsPage() {
       )}
 
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <CardHeader className="px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Server className="h-4 w-4" />
@@ -3552,10 +3743,11 @@ export default function JobsPage() {
                 unavailable or loading.
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-1.5">
               <Button
                 variant="outline"
                 size="sm"
+                className="h-8 px-2.5 text-xs"
                 onClick={() => testServicesMutation.mutate()}
                 disabled={testServicesMutation.isPending ||
                   isFetchingPipelineHealth}
@@ -3567,13 +3759,33 @@ export default function JobsPage() {
                 />
                 Refresh status
               </Button>
-              <Button variant="outline" size="sm" asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2.5 text-xs"
+                asChild
+              >
                 <Link to="/settings/inference">Configure routing</Link>
+              </Button>
+              <Button
+                variant={showRoutingDetails ? "secondary" : "outline"}
+                size="sm"
+                className="h-8 px-2.5 text-xs"
+                onClick={() => setShowRoutingDetails((current) => !current)}
+                aria-expanded={showRoutingDetails}
+                aria-controls="routing-details"
+              >
+                Details
+                <ChevronDown
+                  className={`ml-1.5 h-3.5 w-3.5 transition-transform ${
+                    showRoutingDetails ? "rotate-180" : ""
+                  }`}
+                />
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-3 pb-3 pt-0">
           {!pipelineHealth
             ? (
               <div className="text-sm text-muted-foreground">
@@ -3581,311 +3793,639 @@ export default function JobsPage() {
               </div>
             )
             : (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {pipelineHealth.services.map((service) => {
-                  const allPausedForService = service.usedBy.every(
-                    (workerType) => workerStatus?.workers[workerType]?.paused,
-                  );
-                  const intentionallyPaused = allPausedForService &&
-                    service.status !== "healthy";
-                  const statusClass = intentionallyPaused
-                    ? "bg-amber-500/10 text-amber-600"
-                    : service.status === "healthy"
-                    ? "bg-green-500/10 text-green-600"
-                    : service.status === "loading"
-                    ? "bg-amber-500/10 text-amber-600"
-                    : "bg-red-500/10 text-red-600";
-                  return (
-                    <div
-                      key={service.id}
-                      className="space-y-3 rounded-lg border p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3">
-                          {intentionallyPaused
-                            ? (
-                              <PauseCircle className="mt-0.5 h-5 w-5 text-amber-500" />
-                            )
-                            : service.status === "healthy"
-                            ? <Wifi className="mt-0.5 h-5 w-5 text-green-500" />
-                            : (
-                              <WifiOff className="mt-0.5 h-5 w-5 text-red-500" />
-                            )}
-                          <div>
-                            <div className="font-medium">{service.label}</div>
-                            <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
-                              {service.baseUrl || "Not configured"}
-                            </div>
+              <>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {pipelineHealth.services.map((service) => {
+                    const allPausedForService = service.usedBy.every(
+                      (workerType) => workerStatus?.workers[workerType]?.paused,
+                    );
+                    const intentionallyPaused = allPausedForService &&
+                      service.status !== "healthy";
+                    const statusClass = intentionallyPaused
+                      ? "bg-amber-500/10 text-amber-600"
+                      : service.status === "healthy"
+                      ? "bg-green-500/10 text-green-600"
+                      : service.status === "loading"
+                      ? "bg-amber-500/10 text-amber-600"
+                      : "bg-red-500/10 text-red-600";
+                    const routeMutationPending =
+                      setAllServiceRoutesMutation.isPending ||
+                      (service.id === "llm" &&
+                        setLlmRouteEnabledMutation.isPending) ||
+                      (service.id === "stt" &&
+                        setSttRouteEnabledMutation.isPending) ||
+                      (service.id === "diarizator" &&
+                        updateDiarizationRouteMutation.isPending);
+                    const routes = service.routes ?? [];
+                    const allRoutesEnabled = routes.length > 0 &&
+                      routes.every((route) => route.enabled);
+                    const allRoutesDisabled = routes.length > 0 &&
+                      routes.every((route) => !route.enabled);
+                    return (
+                      <div
+                        key={`summary-${service.id}`}
+                        className="min-w-0 rounded-md border bg-muted/10 p-2.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
+                            {intentionallyPaused
+                              ? (
+                                <PauseCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                              )
+                              : service.status === "healthy"
+                              ? (
+                                <Wifi className="h-3.5 w-3.5 shrink-0 text-green-500" />
+                              )
+                              : (
+                                <WifiOff className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                              )}
+                            <span className="truncate">{service.label}</span>
                           </div>
+                          <Badge
+                            variant="secondary"
+                            className={`${statusClass} shrink-0 px-1.5 py-0 text-[10px]`}
+                          >
+                            {intentionallyPaused ? "paused" : service.status}
+                          </Badge>
                         </div>
-                        <Badge variant="secondary" className={statusClass}>
-                          {intentionallyPaused
-                            ? "paused intentionally"
-                            : service.status}
-                          {service.httpStatus
-                            ? ` · HTTP ${service.httpStatus}`
-                            : ""}
-                        </Badge>
-                      </div>
-
-                      <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                        <div>
-                          Source:{" "}
-                          <span className="font-mono text-foreground">
-                            {service.source || "none"}
+                        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                            {service.model || service.models?.[0] ||
+                              "unknown model"}
                           </span>
-                        </div>
-                        {service.providerProfileName && (
-                          <div>
-                            Preset:{" "}
-                            <span className="font-mono text-foreground">
-                              {service.providerProfileName}
-                            </span>
-                          </div>
-                        )}
-                        <div>
-                          Model:{" "}
-                          <span className="font-mono text-foreground">
-                            {service.model || service.models?.[0] || "unknown"}
-                          </span>
-                        </div>
-                        <div>
-                          Latency:{" "}
-                          <span className="text-foreground">
+                          <span className="shrink-0">
                             {service.latencyMs != null
                               ? `${service.latencyMs} ms`
                               : "—"}
                           </span>
                         </div>
-                        <div>
-                          Checked:{" "}
-                          <span className="text-foreground">
-                            {format(new Date(service.checkedAt), "HH:mm:ss")}
-                          </span>
+                        <div
+                          className={`mt-1 line-clamp-2 text-[10px] leading-tight ${
+                            service.status === "healthy" || intentionallyPaused
+                              ? "text-muted-foreground"
+                              : "text-red-500"
+                          }`}
+                          title={service.message}
+                        >
+                          {intentionallyPaused
+                            ? "All routed workers are paused"
+                            : service.message}
                         </div>
-                      </div>
-
-                      <div
-                        className={`rounded p-2 text-xs ${
-                          service.status === "healthy"
-                            ? "bg-green-500/5"
-                            : intentionallyPaused
-                            ? "bg-amber-500/5 text-amber-700"
-                            : "bg-red-500/5 text-red-500"
-                        }`}
-                      >
-                        {intentionallyPaused
-                          ? `Expected while all routed workers are paused. Last probe: ${service.message}`
-                          : service.message}
-                      </div>
-
-                      {service.id === "diarizator" && (
-                        <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div>
-                              <p className="text-xs font-medium">
-                                Diarizator routes
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                New jobs use the first healthy enabled route by
-                                priority.
-                              </p>
+                        {routes.length > 0 && (
+                          <div className="mt-2 border-t pt-2">
+                            <div className="mb-1.5 flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-medium text-muted-foreground">
+                                Routes · {routes.filter((route) =>
+                                  route.enabled
+                                ).length}/
+                                {routes.length} on
+                              </span>
+                              <div className="flex gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-1.5 text-[10px]"
+                                  disabled={routeMutationPending ||
+                                    allRoutesEnabled}
+                                  onClick={() =>
+                                    setAllServiceRoutesMutation.mutate({
+                                      serviceId: service.id,
+                                      routeIds: routes.map((route) =>
+                                        route.providerProfileId
+                                      ),
+                                      enabled: true,
+                                    })}
+                                >
+                                  All on
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-1.5 text-[10px]"
+                                  disabled={routeMutationPending ||
+                                    allRoutesDisabled}
+                                  onClick={() =>
+                                    setAllServiceRoutesMutation.mutate({
+                                      serviceId: service.id,
+                                      routeIds: routes.map((route) =>
+                                        route.providerProfileId
+                                      ),
+                                      enabled: false,
+                                    })}
+                                >
+                                  All off
+                                </Button>
+                              </div>
                             </div>
-                            <Button size="sm" variant="outline" asChild>
-                              <Link to="/settings/diarization">Configure</Link>
-                            </Button>
-                          </div>
-                          {service.routes?.map((route) => {
-                            const priorityDraft = diarizationPriorityDrafts[
-                              route.providerProfileId
-                            ] ?? String(route.priority);
-                            const parsedPriority = Number(priorityDraft);
-                            const validPriority = Number.isInteger(
-                              parsedPriority,
-                            ) && parsedPriority >= 1 && parsedPriority <= 100;
-                            return (
-                              <div
-                                key={route.providerProfileId}
-                                className="space-y-2 rounded border bg-background p-2 text-xs"
-                              >
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="font-medium">
-                                      {route.providerProfileName}
-                                    </div>
-                                    <div className="break-all font-mono text-muted-foreground">
-                                      {route.baseUrl}
-                                    </div>
-                                  </div>
-                                  <Badge
-                                    variant={route.status === "healthy"
-                                      ? "secondary"
-                                      : route.status === "disabled"
-                                      ? "outline"
-                                      : "destructive"}
-                                  >
-                                    {route.status === "healthy"
-                                      ? "running"
-                                      : route.status}
-                                  </Badge>
-                                </div>
-                                <div className="flex flex-wrap items-end gap-2">
-                                  <div className="flex h-9 items-center gap-2 rounded border px-2">
-                                    <Switch
-                                      checked={route.enabled}
-                                      disabled={updateDiarizationRouteMutation
-                                        .isPending}
-                                      onCheckedChange={(enabled) =>
+                            <div className="space-y-1">
+                              {routes.map((route) => (
+                                <div
+                                  key={`summary-route-${service.id}-${route.providerProfileId}`}
+                                  className="flex min-w-0 items-center gap-1.5 rounded bg-background/70 px-1.5 py-1"
+                                  title={route.message}
+                                >
+                                  <Switch
+                                    checked={route.enabled}
+                                    disabled={routeMutationPending}
+                                    onCheckedChange={(enabled) => {
+                                      if (service.id === "llm") {
+                                        setLlmRouteEnabledMutation.mutate({
+                                          profileId: route.providerProfileId,
+                                          enabled,
+                                        });
+                                      } else if (service.id === "stt") {
+                                        setSttRouteEnabledMutation.mutate({
+                                          profileId: route.providerProfileId,
+                                          enabled,
+                                        });
+                                      } else {
                                         updateDiarizationRouteMutation.mutate({
                                           profileId: route.providerProfileId,
                                           changes: { enabled },
-                                        })}
-                                      aria-label={`Enable ${route.providerProfileName}`}
-                                    />
-                                    <span>{route.enabled ? "On" : "Off"}</span>
-                                  </div>
-                                  <div className="w-28 space-y-1">
-                                    <Label
-                                      htmlFor={`diar-priority-${route.providerProfileId}`}
-                                      className="text-[11px]"
-                                    >
-                                      Priority 1–100
-                                    </Label>
-                                    <Input
-                                      id={`diar-priority-${route.providerProfileId}`}
-                                      type="number"
-                                      min={1}
-                                      max={100}
-                                      step={1}
-                                      value={priorityDraft}
-                                      onChange={(event) =>
-                                        setDiarizationPriorityDrafts((
-                                          current,
-                                        ) => ({
-                                          ...current,
-                                          [route.providerProfileId]:
-                                            event.target.value,
-                                        }))}
-                                      className="h-8"
-                                    />
-                                  </div>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={!validPriority ||
-                                      updateDiarizationRouteMutation
-                                        .isPending ||
-                                      parsedPriority === route.priority}
-                                    onClick={() =>
-                                      updateDiarizationRouteMutation.mutate({
-                                        profileId: route.providerProfileId,
-                                        changes: { priority: parsedPriority },
-                                      })}
-                                  >
-                                    <Save className="mr-1.5 h-3.5 w-3.5" />
-                                    Save priority
-                                  </Button>
+                                        });
+                                      }
+                                    }}
+                                    aria-label={`${
+                                      route.enabled ? "Disable" : "Enable"
+                                    } ${route.providerProfileName} ${service.label} route`}
+                                    className="scale-75"
+                                  />
+                                  <span className="min-w-0 flex-1 truncate text-[10px] font-medium">
+                                    {route.providerProfileName}
+                                  </span>
+                                  <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
+                                    P{route.priority}
+                                    {route.concurrency
+                                      ? ` · ${route.concurrency} slot${
+                                        route.concurrency === 1 ? "" : "s"
+                                      }`
+                                      : ""}
+                                    {route.model ? ` · ${route.model}` : ""}
+                                  </span>
+                                  <span
+                                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                      route.status === "healthy"
+                                        ? "bg-green-500"
+                                        : route.status === "disabled"
+                                        ? "bg-muted-foreground/40"
+                                        : "bg-red-500"
+                                    }`}
+                                    aria-label={route.status}
+                                  />
                                 </div>
-                                <div className="text-[11px] text-muted-foreground">
-                                  {route.message}
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {showRoutingDetails && (
+                  <div
+                    id="routing-details"
+                    className="mt-3 grid gap-3 xl:grid-cols-2"
+                  >
+                    {pipelineHealth.services.map((service) => {
+                      const allPausedForService = service.usedBy.every(
+                        (workerType) =>
+                          workerStatus?.workers[workerType]?.paused,
+                      );
+                      const intentionallyPaused = allPausedForService &&
+                        service.status !== "healthy";
+                      const statusClass = intentionallyPaused
+                        ? "bg-amber-500/10 text-amber-600"
+                        : service.status === "healthy"
+                        ? "bg-green-500/10 text-green-600"
+                        : service.status === "loading"
+                        ? "bg-amber-500/10 text-amber-600"
+                        : "bg-red-500/10 text-red-600";
+                      return (
+                        <div
+                          key={service.id}
+                          className="space-y-2 rounded-lg border p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              {intentionallyPaused
+                                ? (
+                                  <PauseCircle className="mt-0.5 h-5 w-5 text-amber-500" />
+                                )
+                                : service.status === "healthy"
+                                ? (
+                                  <Wifi className="mt-0.5 h-5 w-5 text-green-500" />
+                                )
+                                : (
+                                  <WifiOff className="mt-0.5 h-5 w-5 text-red-500" />
+                                )}
+                              <div>
+                                <div className="font-medium">
+                                  {service.label}
+                                </div>
+                                <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                                  {service.baseUrl || "Not configured"}
                                 </div>
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                            </div>
+                            <Badge variant="secondary" className={statusClass}>
+                              {intentionallyPaused
+                                ? "paused intentionally"
+                                : service.status}
+                              {service.httpStatus
+                                ? ` · HTTP ${service.httpStatus}`
+                                : ""}
+                            </Badge>
+                          </div>
 
-                      {service.id === "llm" && (
-                        <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                          {service.routes?.length
-                            ? (
-                              <>
-                                <Label className="text-xs">
-                                  Provider-aware LLM routes
-                                </Label>
-                                <p className="text-xs text-muted-foreground">
-                                  Requests use the highest-priority enabled
-                                  route and fail over down the list on errors.
-                                </p>
-                                <div className="space-y-1">
-                                  {service.routes.map((route) => {
-                                    const pinnedWorkers = Object.entries(
-                                      pinnedTaskRoutes ?? {},
-                                    )
-                                      .filter(([, providerId]) =>
-                                        providerId === route.providerProfileId
-                                      )
-                                      .map(([workerType]) => workerType);
-                                    return (
-                                      <div
-                                        key={route.providerProfileId}
-                                        className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                                      >
-                                        <div className="flex min-w-0 items-center gap-2">
-                                          <Switch
-                                            checked={route.enabled}
-                                            disabled={setLlmRouteEnabledMutation
-                                              .isPending}
-                                            onCheckedChange={(enabled) =>
-                                              setLlmRouteEnabledMutation.mutate(
-                                                {
-                                                  profileId:
-                                                    route.providerProfileId,
-                                                  enabled,
-                                                },
-                                              )}
-                                            aria-label={`Enable ${route.providerProfileName} LLM route`}
-                                          />
-                                          <div className="min-w-0">
-                                            <div className="truncate font-medium">
-                                              {route.providerProfileName}
-                                            </div>
-                                            <div className="text-muted-foreground">
-                                              {route.enabled
-                                                ? "Enabled for new requests"
-                                                : "Disabled for new requests"}
-                                            </div>
-                                            {!route.enabled &&
-                                              pinnedWorkers.length > 0 && (
-                                              <div className="text-red-500">
-                                                {pinnedWorkers.length}{" "}
-                                                task route(s) pinned to this
-                                                provider will fail:{" "}
-                                                {pinnedWorkers.join(", ")} —
-                                                {" "}
-                                                <Link
-                                                  to="/settings/inference"
-                                                  className="underline"
-                                                >
-                                                  Configure routing
-                                                </Link>
-                                              </div>
-                                            )}
-                                          </div>
+                          <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                            <div>
+                              Source:{" "}
+                              <span className="font-mono text-foreground">
+                                {service.source || "none"}
+                              </span>
+                            </div>
+                            {service.providerProfileName && (
+                              <div>
+                                Preset:{" "}
+                                <span className="font-mono text-foreground">
+                                  {service.providerProfileName}
+                                </span>
+                              </div>
+                            )}
+                            <div>
+                              Model:{" "}
+                              <span className="font-mono text-foreground">
+                                {service.model || service.models?.[0] ||
+                                  "unknown"}
+                              </span>
+                            </div>
+                            <div>
+                              Latency:{" "}
+                              <span className="text-foreground">
+                                {service.latencyMs != null
+                                  ? `${service.latencyMs} ms`
+                                  : "—"}
+                              </span>
+                            </div>
+                            <div>
+                              Checked:{" "}
+                              <span className="text-foreground">
+                                {format(
+                                  new Date(service.checkedAt),
+                                  "HH:mm:ss",
+                                )}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div
+                            className={`rounded p-2 text-xs ${
+                              service.status === "healthy"
+                                ? "bg-green-500/5"
+                                : intentionallyPaused
+                                ? "bg-amber-500/5 text-amber-700"
+                                : "bg-red-500/5 text-red-500"
+                            }`}
+                          >
+                            {intentionallyPaused
+                              ? `Expected while all routed workers are paused. Last probe: ${service.message}`
+                              : service.message}
+                          </div>
+
+                          {service.id === "diarizator" && (
+                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-medium">
+                                    Diarizator routes
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    New jobs use the first healthy enabled route
+                                    by priority.
+                                  </p>
+                                </div>
+                                <Button size="sm" variant="outline" asChild>
+                                  <Link to="/settings/diarization">
+                                    Configure
+                                  </Link>
+                                </Button>
+                              </div>
+                              {service.routes?.map((route) => {
+                                const priorityDraft = diarizationPriorityDrafts[
+                                  route.providerProfileId
+                                ] ?? String(route.priority);
+                                const parsedPriority = Number(priorityDraft);
+                                const validPriority = Number.isInteger(
+                                  parsedPriority,
+                                ) && parsedPriority >= 1 &&
+                                  parsedPriority <= 100;
+                                return (
+                                  <div
+                                    key={route.providerProfileId}
+                                    className="space-y-2 rounded border bg-background p-2 text-xs"
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-medium">
+                                          {route.providerProfileName}
                                         </div>
-                                        <span className="font-mono text-muted-foreground">
-                                          P{route.priority} ·{" "}
-                                          {route.model || "unknown"}
-                                          {typeof route.concurrency === "number"
-                                            ? ` · ${route.concurrency} req${
-                                              route.concurrency === 1 ? "" : "s"
-                                            }`
-                                            : ""}
+                                        <div className="text-muted-foreground">
+                                          {route.concurrency ?? 1} parallel slot
+                                          {(route.concurrency ?? 1) === 1
+                                            ? ""
+                                            : "s"}
+                                        </div>
+                                        <div className="break-all font-mono text-muted-foreground">
+                                          {route.baseUrl}
+                                        </div>
+                                      </div>
+                                      <Badge
+                                        variant={route.status === "healthy"
+                                          ? "secondary"
+                                          : route.status === "disabled"
+                                          ? "outline"
+                                          : "destructive"}
+                                      >
+                                        {route.status === "healthy"
+                                          ? "running"
+                                          : route.status}
+                                      </Badge>
+                                    </div>
+                                    <div className="flex flex-wrap items-end gap-2">
+                                      <div className="flex h-9 items-center gap-2 rounded border px-2">
+                                        <Switch
+                                          checked={route.enabled}
+                                          disabled={updateDiarizationRouteMutation
+                                            .isPending}
+                                          onCheckedChange={(enabled) =>
+                                            updateDiarizationRouteMutation
+                                              .mutate({
+                                                profileId:
+                                                  route.providerProfileId,
+                                                changes: { enabled },
+                                              })}
+                                          aria-label={`Enable ${route.providerProfileName}`}
+                                        />
+                                        <span>
+                                          {route.enabled ? "On" : "Off"}
                                         </span>
-                                        <div className="flex items-center gap-2">
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            onClick={() =>
-                                              makeLlmPrimaryMutation.mutate(
+                                      </div>
+                                      <div className="w-28 space-y-1">
+                                        <Label
+                                          htmlFor={`diar-priority-${route.providerProfileId}`}
+                                          className="text-[11px]"
+                                        >
+                                          Priority 1–100
+                                        </Label>
+                                        <Input
+                                          id={`diar-priority-${route.providerProfileId}`}
+                                          type="number"
+                                          min={1}
+                                          max={100}
+                                          step={1}
+                                          value={priorityDraft}
+                                          onChange={(event) =>
+                                            setDiarizationPriorityDrafts((
+                                              current,
+                                            ) => ({
+                                              ...current,
+                                              [route.providerProfileId]:
+                                                event.target.value,
+                                            }))}
+                                          className="h-8"
+                                        />
+                                      </div>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={!validPriority ||
+                                          updateDiarizationRouteMutation
+                                            .isPending ||
+                                          parsedPriority === route.priority}
+                                        onClick={() =>
+                                          updateDiarizationRouteMutation.mutate(
+                                            {
+                                              profileId:
                                                 route.providerProfileId,
-                                              )}
-                                            disabled={makeLlmPrimaryMutation
-                                              .isPending}
-                                            title="Give this route the highest priority"
+                                              changes: {
+                                                priority: parsedPriority,
+                                              },
+                                            },
+                                          )}
+                                      >
+                                        <Save className="mr-1.5 h-3.5 w-3.5" />
+                                        Save priority
+                                      </Button>
+                                    </div>
+                                    <div className="text-[11px] text-muted-foreground">
+                                      {route.message}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {service.id === "llm" && (
+                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                              {service.routes?.length
+                                ? (
+                                  <>
+                                    <Label className="text-xs">
+                                      Provider-aware LLM routes
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                      Requests use the highest-priority enabled
+                                      route and fail over down the list on
+                                      errors.
+                                    </p>
+                                    <div className="space-y-1">
+                                      {service.routes.map((route) => {
+                                        const pinnedWorkers = Object.entries(
+                                          pinnedTaskRoutes ?? {},
+                                        )
+                                          .filter(([, providerId]) =>
+                                            providerId ===
+                                              route.providerProfileId
+                                          )
+                                          .map(([workerType]) => workerType);
+                                        return (
+                                          <div
+                                            key={route.providerProfileId}
+                                            className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
                                           >
-                                            Make primary
-                                          </Button>
+                                            <div className="flex min-w-0 items-center gap-2">
+                                              <Switch
+                                                checked={route.enabled}
+                                                disabled={setLlmRouteEnabledMutation
+                                                  .isPending}
+                                                onCheckedChange={(enabled) =>
+                                                  setLlmRouteEnabledMutation
+                                                    .mutate(
+                                                      {
+                                                        profileId: route
+                                                          .providerProfileId,
+                                                        enabled,
+                                                      },
+                                                    )}
+                                                aria-label={`Enable ${route.providerProfileName} LLM route`}
+                                              />
+                                              <div className="min-w-0">
+                                                <div className="truncate font-medium">
+                                                  {route.providerProfileName}
+                                                </div>
+                                                <div className="text-muted-foreground">
+                                                  {route.enabled
+                                                    ? "Enabled for new requests"
+                                                    : "Disabled for new requests"}
+                                                </div>
+                                                {!route.enabled &&
+                                                  pinnedWorkers.length > 0 && (
+                                                  <div className="text-red-500">
+                                                    {pinnedWorkers.length}{" "}
+                                                    task route(s) pinned to this
+                                                    provider will fail:{" "}
+                                                    {pinnedWorkers.join(", ")} —
+                                                    {" "}
+                                                    <Link
+                                                      to="/settings/inference"
+                                                      className="underline"
+                                                    >
+                                                      Configure routing
+                                                    </Link>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </div>
+                                            <span className="font-mono text-muted-foreground">
+                                              P{route.priority} ·{" "}
+                                              {route.model || "unknown"}
+                                              {typeof route.concurrency ===
+                                                  "number"
+                                                ? ` · ${route.concurrency} req${
+                                                  route.concurrency === 1
+                                                    ? ""
+                                                    : "s"
+                                                }`
+                                                : ""}
+                                            </span>
+                                            <div className="flex items-center gap-2">
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() =>
+                                                  makeLlmPrimaryMutation.mutate(
+                                                    route.providerProfileId,
+                                                  )}
+                                                disabled={makeLlmPrimaryMutation
+                                                  .isPending}
+                                                title="Give this route the highest priority"
+                                              >
+                                                Make primary
+                                              </Button>
+                                              <Badge
+                                                variant="secondary"
+                                                className={route.status ===
+                                                    "disabled"
+                                                  ? "bg-muted text-muted-foreground"
+                                                  : undefined}
+                                              >
+                                                {route.status}
+                                              </Badge>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </>
+                                )
+                                : (
+                                  <p className="text-xs text-muted-foreground">
+                                    No LLM provider routes are configured yet.
+                                  </p>
+                                )}
+                              <div className="flex flex-wrap gap-2">
+                                <Button asChild size="sm" variant="outline">
+                                  <Link to="/settings/inference">
+                                    Configure LLM providers
+                                  </Link>
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    testServiceMutation.mutate("llm")}
+                                  disabled={testServiceMutation.isPending}
+                                >
+                                  <RefreshCw
+                                    className={`mr-2 h-3.5 w-3.5 ${
+                                      testServiceMutation.isPending &&
+                                        testServiceMutation.variables === "llm"
+                                        ? "animate-spin"
+                                        : ""
+                                    }`}
+                                  />
+                                  Test LLM
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          {service.id === "stt" && (
+                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                              {service.routes?.length
+                                ? (
+                                  <>
+                                    <Label className="text-xs">
+                                      Provider-aware transcription routes
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                      The toggle controls Mycelia routing for
+                                      new jobs; it does not stop the server
+                                      process.
+                                    </p>
+                                    <div className="space-y-1">
+                                      {service.routes.map((route) => (
+                                        <div
+                                          key={route.providerProfileId}
+                                          className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
+                                        >
+                                          <div className="flex min-w-0 items-center gap-2">
+                                            <Switch
+                                              checked={route.enabled}
+                                              disabled={setSttRouteEnabledMutation
+                                                .isPending}
+                                              onCheckedChange={(enabled) =>
+                                                setSttRouteEnabledMutation
+                                                  .mutate({
+                                                    profileId:
+                                                      route.providerProfileId,
+                                                    enabled,
+                                                  })}
+                                              aria-label={`Enable ${route.providerProfileName} STT route`}
+                                            />
+                                            <div className="min-w-0">
+                                              <div className="truncate font-medium">
+                                                {route.providerProfileName}
+                                              </div>
+                                              <div className="text-muted-foreground">
+                                                {route.enabled
+                                                  ? "Enabled for new jobs"
+                                                  : "Disabled for new jobs"}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <span className="font-mono text-muted-foreground">
+                                            P{route.priority} ·{" "}
+                                            {route.model || "unknown"} ·{" "}
+                                            {route.concurrency}{" "}
+                                            slot{route.concurrency ===
+                                                1
+                                              ? ""
+                                              : "s"}
+                                          </span>
                                           <Badge
                                             variant="secondary"
                                             className={route.status ===
@@ -3896,214 +4436,123 @@ export default function JobsPage() {
                                             {route.status}
                                           </Badge>
                                         </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </>
-                            )
-                            : (
-                              <p className="text-xs text-muted-foreground">
-                                No LLM provider routes are configured yet.
-                              </p>
-                            )}
-                          <div className="flex flex-wrap gap-2">
-                            <Button asChild size="sm" variant="outline">
-                              <Link to="/settings/inference">
-                                Configure LLM providers
-                              </Link>
-                            </Button>
+                                      ))}
+                                    </div>
+                                    <Button asChild size="sm" variant="outline">
+                                      <Link to="/settings/speech-to-text">
+                                        Configure STT providers
+                                      </Link>
+                                    </Button>
+                                  </>
+                                )
+                                : (
+                                  <>
+                                    <Label className="text-xs">
+                                      Model for transcription jobs
+                                    </Label>
+                                    <div className="flex flex-wrap gap-2">
+                                      <Select
+                                        value={selectedSttModel}
+                                        onValueChange={setSelectedSttModel}
+                                        disabled={!service.models?.length}
+                                      >
+                                        <SelectTrigger className="min-w-52 flex-1">
+                                          <SelectValue placeholder="Load STT models first" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {[
+                                            ...new Set([
+                                              ...(service.models || []),
+                                              ...(selectedSttModel
+                                                ? [selectedSttModel]
+                                                : []),
+                                            ]),
+                                          ].map((model) => (
+                                            <SelectItem
+                                              key={model}
+                                              value={model}
+                                            >
+                                              {model}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      <Button
+                                        size="sm"
+                                        onClick={() =>
+                                          saveSttModelMutation.mutate(
+                                            selectedSttModel,
+                                          )}
+                                        disabled={!selectedSttModel ||
+                                          saveSttModelMutation.isPending}
+                                      >
+                                        <Save className="mr-2 h-3.5 w-3.5" />
+                                        Save model
+                                      </Button>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() =>
+                                          testServiceMutation.mutate("stt")}
+                                        disabled={testServiceMutation.isPending}
+                                      >
+                                        <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                                        Test & load models
+                                      </Button>
+                                    </div>
+                                  </>
+                                )}
+                            </div>
+                          )}
+
+                          {serviceTestResults[service.id] && (
+                            <div className="text-xs text-muted-foreground">
+                              {serviceTestResults[service.id]}
+                            </div>
+                          )}
+
+                          <div className="space-y-2">
+                            <div className="text-xs text-muted-foreground">
+                              Routed workers: {service.usedBy.join(", ")}
+                            </div>
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => testServiceMutation.mutate("llm")}
-                              disabled={testServiceMutation.isPending}
+                              onClick={() =>
+                                setServiceWorkersPausedMutation.mutate({
+                                  workerTypes: service.usedBy,
+                                  paused: !allPausedForService,
+                                })}
+                              disabled={setServiceWorkersPausedMutation
+                                .isPending}
                             >
-                              <RefreshCw
-                                className={`mr-2 h-3.5 w-3.5 ${
-                                  testServiceMutation.isPending &&
-                                    testServiceMutation.variables === "llm"
-                                    ? "animate-spin"
-                                    : ""
-                                }`}
-                              />
-                              Test LLM
+                              {allPausedForService
+                                ? <PlayCircle className="mr-2 h-4 w-4" />
+                                : <PauseCircle className="mr-2 h-4 w-4" />}
+                              {allPausedForService
+                                ? "Resume affected workers"
+                                : "Pause affected workers"}
                             </Button>
                           </div>
                         </div>
-                      )}
-
-                      {service.id === "stt" && (
-                        <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                          {service.routes?.length
-                            ? (
-                              <>
-                                <Label className="text-xs">
-                                  Provider-aware transcription routes
-                                </Label>
-                                <p className="text-xs text-muted-foreground">
-                                  The toggle controls Mycelia routing for new
-                                  jobs; it does not stop the server process.
-                                </p>
-                                <div className="space-y-1">
-                                  {service.routes.map((route) => (
-                                    <div
-                                      key={route.providerProfileId}
-                                      className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                                    >
-                                      <div className="flex min-w-0 items-center gap-2">
-                                        <Switch
-                                          checked={route.enabled}
-                                          disabled={setSttRouteEnabledMutation
-                                            .isPending}
-                                          onCheckedChange={(enabled) =>
-                                            setSttRouteEnabledMutation.mutate({
-                                              profileId:
-                                                route.providerProfileId,
-                                              enabled,
-                                            })}
-                                          aria-label={`Enable ${route.providerProfileName} STT route`}
-                                        />
-                                        <div className="min-w-0">
-                                          <div className="truncate font-medium">
-                                            {route.providerProfileName}
-                                          </div>
-                                          <div className="text-muted-foreground">
-                                            {route.enabled
-                                              ? "Enabled for new jobs"
-                                              : "Disabled for new jobs"}
-                                          </div>
-                                        </div>
-                                      </div>
-                                      <span className="font-mono text-muted-foreground">
-                                        P{route.priority} ·{" "}
-                                        {route.model || "unknown"} ·{" "}
-                                        {route.concurrency}{" "}
-                                        slot{route.concurrency ===
-                                            1
-                                          ? ""
-                                          : "s"}
-                                      </span>
-                                      <Badge
-                                        variant="secondary"
-                                        className={route.status === "disabled"
-                                          ? "bg-muted text-muted-foreground"
-                                          : undefined}
-                                      >
-                                        {route.status}
-                                      </Badge>
-                                    </div>
-                                  ))}
-                                </div>
-                                <Button asChild size="sm" variant="outline">
-                                  <Link to="/settings/speech-to-text">
-                                    Configure STT providers
-                                  </Link>
-                                </Button>
-                              </>
-                            )
-                            : (
-                              <>
-                                <Label className="text-xs">
-                                  Model for transcription jobs
-                                </Label>
-                                <div className="flex flex-wrap gap-2">
-                                  <Select
-                                    value={selectedSttModel}
-                                    onValueChange={setSelectedSttModel}
-                                    disabled={!service.models?.length}
-                                  >
-                                    <SelectTrigger className="min-w-52 flex-1">
-                                      <SelectValue placeholder="Load STT models first" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {[
-                                        ...new Set([
-                                          ...(service.models || []),
-                                          ...(selectedSttModel
-                                            ? [selectedSttModel]
-                                            : []),
-                                        ]),
-                                      ].map((model) => (
-                                        <SelectItem key={model} value={model}>
-                                          {model}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                  <Button
-                                    size="sm"
-                                    onClick={() =>
-                                      saveSttModelMutation.mutate(
-                                        selectedSttModel,
-                                      )}
-                                    disabled={!selectedSttModel ||
-                                      saveSttModelMutation.isPending}
-                                  >
-                                    <Save className="mr-2 h-3.5 w-3.5" />
-                                    Save model
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() =>
-                                      testServiceMutation.mutate("stt")}
-                                    disabled={testServiceMutation.isPending}
-                                  >
-                                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                                    Test & load models
-                                  </Button>
-                                </div>
-                              </>
-                            )}
-                        </div>
-                      )}
-
-                      {serviceTestResults[service.id] && (
-                        <div className="text-xs text-muted-foreground">
-                          {serviceTestResults[service.id]}
-                        </div>
-                      )}
-
-                      <div className="space-y-2">
-                        <div className="text-xs text-muted-foreground">
-                          Routed workers: {service.usedBy.join(", ")}
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setServiceWorkersPausedMutation.mutate({
-                              workerTypes: service.usedBy,
-                              paused: !allPausedForService,
-                            })}
-                          disabled={setServiceWorkersPausedMutation.isPending}
-                        >
-                          {allPausedForService
-                            ? <PlayCircle className="mr-2 h-4 w-4" />
-                            : <PauseCircle className="mr-2 h-4 w-4" />}
-                          {allPausedForService
-                            ? "Resume affected workers"
-                            : "Pause affected workers"}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="px-3 py-2.5">
           <CardTitle className="text-base">Work ready now</CardTitle>
           <p className="text-xs text-muted-foreground">
             Domain backlog is counted independently of whether upstream workers
             are enabled. Failed job history is retained.
           </p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-3 pb-3 pt-0">
           {!pipelineHealth
             ? (
               <div className="text-sm text-muted-foreground">
@@ -4111,7 +4560,7 @@ export default function JobsPage() {
               </div>
             )
             : (
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                 {([
                   ["transcription", "Ready for transcription", "stt"],
                   [
@@ -4138,18 +4587,31 @@ export default function JobsPage() {
                     !workerPaused && !busy;
                   const availableWork = backlog.ready +
                     (backlog.retryableErrors ?? 0);
+                  const blockedReason = workerPaused
+                    ? "Worker is paused"
+                    : service?.status !== "healthy"
+                    ? `${service?.label ?? serviceId} is ${
+                      service?.status ?? "unavailable"
+                    }; enable a healthy route`
+                    : busy
+                    ? "A job is already active or waiting"
+                    : availableWork === 0
+                    ? "No new or retryable source work"
+                    : null;
                   return (
                     <div
                       key={workerType}
-                      className="space-y-3 rounded-lg border p-4"
+                      className="space-y-2 rounded-md border p-2.5"
                     >
-                      <div>
-                        <div className="text-sm font-medium">{label}</div>
-                        <div className="mt-1 text-3xl font-semibold">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-xs font-medium leading-tight">
+                          {label}
+                        </div>
+                        <div className="text-xl font-semibold leading-none">
                           {backlog.ready}
                         </div>
                       </div>
-                      <div className="space-y-1 text-xs text-muted-foreground">
+                      <div className="space-y-0.5 text-[10px] leading-tight text-muted-foreground">
                         {backlog.processing != null && (
                           <div>Processing: {backlog.processing}</div>
                         )}
@@ -4174,26 +4636,22 @@ export default function JobsPage() {
                           Unretried failed jobs: {backlog.failedJobsUnretried}
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1.5">
                         <Button
                           size="sm"
+                          className="h-7 px-2 text-[11px]"
                           onClick={() => runBacklogMutation.mutate(workerType)}
                           disabled={!runnable || availableWork === 0 ||
                             runBacklogMutation.isPending}
-                          title={workerPaused
-                            ? "Resume this worker first"
-                            : service?.status !== "healthy"
-                            ? "Provider must be healthy"
-                            : busy
-                            ? "A job is already active or waiting"
-                            : undefined}
+                          title={blockedReason ?? undefined}
                         >
-                          <Play className="mr-2 h-3.5 w-3.5" />
+                          <Play className="mr-1 h-3 w-3" />
                           Run now
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
+                          className="h-7 px-2 text-[11px]"
                           onClick={async () => {
                             if (
                               await confirmAction({
@@ -4212,19 +4670,30 @@ export default function JobsPage() {
                           disabled={service?.status !== "healthy" ||
                             backlog.failedJobsUnretried === 0 ||
                             retryFailedMutation.isPending}
+                          title={service?.status !== "healthy"
+                            ? `${
+                              service?.label ?? serviceId
+                            } must have a healthy route`
+                            : undefined}
                         >
-                          <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                          Retry all failed ({backlog.failedJobsUnretried})
+                          <RefreshCw className="mr-1 h-3 w-3" />
+                          Retry ({backlog.failedJobsUnretried})
                         </Button>
                       </div>
-                      {workerPaused && (
-                        <div className="text-xs text-amber-500">
-                          Worker is paused
-                        </div>
-                      )}
-                      {busy && (
-                        <div className="text-xs text-blue-500">
-                          A job is already active or waiting
+                      {blockedReason && (
+                        <div
+                          className={`text-[10px] leading-tight ${
+                            service?.status !== "healthy"
+                              ? "text-red-500"
+                              : workerPaused
+                              ? "text-amber-500"
+                              : "text-blue-500"
+                          }`}
+                          title={service?.status !== "healthy"
+                            ? service?.message
+                            : blockedReason}
+                        >
+                          {blockedReason}
                         </div>
                       )}
                     </div>
@@ -4384,8 +4853,8 @@ export default function JobsPage() {
                           {histogram.stale}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
-                          {formatTimelineAuditDate(histogram.firstStart)} —
-                          {"  "}{formatTimelineAuditDate(histogram.lastStart)}
+                          {formatTimelineAuditDate(histogram.firstStart)} —{" "}
+                          {formatTimelineAuditDate(histogram.lastStart)}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -4603,22 +5072,25 @@ export default function JobsPage() {
 
       {/* Workers & Statistics */}
       <Card>
-        <CardHeader className="py-3 px-4">
+        <CardHeader className="px-3 py-2.5">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Workers</CardTitle>
-            {somePaused && (
-              <Badge
-                variant="secondary"
-                className="bg-amber-500/10 text-amber-500 text-xs"
-              >
-                {sortedWorkers.filter((w) =>
-                  workerStatus?.workers[w.type]?.paused
-                ).length} paused
-              </Badge>
-            )}
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span>{sortedWorkers.length} configured</span>
+              {somePaused && (
+                <Badge
+                  variant="secondary"
+                  className="bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-500"
+                >
+                  {sortedWorkers.filter((w) =>
+                    workerStatus?.workers[w.type]?.paused
+                  ).length} paused
+                </Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="overflow-x-auto p-0">
           {isLoadingSchemas
             ? (
               <div className="p-4 text-muted-foreground text-sm">
@@ -4626,7 +5098,7 @@ export default function JobsPage() {
               </div>
             )
             : (
-              <Table>
+              <Table className="min-w-[900px] text-xs">
                 <TableHeader>
                   <TableRow className="h-8">
                     <TableHead className="w-[40px] pl-4">On</TableHead>
@@ -4635,22 +5107,37 @@ export default function JobsPage() {
                     <TableHead className="text-center w-[145px]">
                       Concurrency · Batch
                     </TableHead>
-                    <TableHead className="text-center w-[50px]">
-                      Active
+                    <TableHead className="w-[170px] text-center">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="cursor-help leading-tight">
+                            <div>Current queue</div>
+                            <div className="text-[9px] font-normal text-muted-foreground">
+                              active · queued · stale
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-72">
+                          Jobs running now, jobs waiting to start, and jobs or
+                          claims that may be stuck.
+                        </TooltipContent>
+                      </Tooltip>
                     </TableHead>
-                    <TableHead className="text-center w-[50px]">
-                      Queue
-                    </TableHead>
-                    <TableHead className="text-center w-[50px]">
-                      Stale
-                    </TableHead>
-                    <TableHead className="text-center w-[50px]">Err</TableHead>
-                    <TableHead className="text-center w-[60px]">Runs</TableHead>
-                    <TableHead className="text-center w-[70px]">
-                      Success
-                    </TableHead>
-                    <TableHead className="text-center w-[50px]">
-                      Empty
+                    <TableHead className="w-[225px] text-center">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="cursor-help leading-tight">
+                            <div>Run history</div>
+                            <div className="text-[9px] font-normal text-muted-foreground">
+                              failed · total · success · empty
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-72">
+                          Completed-run totals. Empty means a successful run
+                          that found no work to process.
+                        </TooltipContent>
+                      </Tooltip>
                     </TableHead>
                     <TableHead className="w-[120px]">Schedule</TableHead>
                   </TableRow>
@@ -4998,94 +5485,86 @@ export default function JobsPage() {
                             </>
                           )}
                         </TableCell>
-                        <TableCell className="text-center py-1">
-                          {(stats?.active ?? 0) > 0
-                            ? (
-                              <span className="text-blue-500 text-sm font-medium">
-                                {stats?.active}
-                              </span>
-                            )
-                            : (
-                              <span className="text-muted-foreground/50">
-                                -
-                              </span>
-                            )}
+                        <TableCell className="py-1 text-center">
+                          <div className="flex items-center justify-center gap-2 text-[10px]">
+                            <span
+                              className={(stats?.active ?? 0) > 0
+                                ? "text-blue-500"
+                                : "text-muted-foreground"}
+                              title="Jobs running now"
+                            >
+                              Active {stats?.active ?? 0}
+                            </span>
+                            <span
+                              className={(stats?.waiting ?? 0) +
+                                    (stats?.delayed ?? 0) > 0
+                                ? "text-yellow-500"
+                                : "text-muted-foreground"}
+                              title="Waiting and delayed jobs"
+                            >
+                              Queued {(stats?.waiting ?? 0) +
+                                (stats?.delayed ?? 0)}
+                            </span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span
+                                  className={((stats?.staleActive ?? 0) +
+                                      (stats?.staleClaims ?? 0)) > 0
+                                    ? "cursor-help text-amber-500"
+                                    : "text-muted-foreground"}
+                                >
+                                  Stale {(stats?.staleActive ?? 0) +
+                                    (stats?.staleClaims ?? 0)}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {stats?.staleActive ?? 0} stale active job(s),
+                                {" "}
+                                {stats?.staleClaims ?? 0} stale claim(s)
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
                         </TableCell>
-                        <TableCell className="text-center py-1">
-                          {(stats?.waiting ?? 0) > 0
-                            ? (
-                              <span className="text-yellow-500 text-sm font-medium">
-                                {stats?.waiting}
-                              </span>
-                            )
-                            : (
-                              <span className="text-muted-foreground/50">
-                                -
-                              </span>
-                            )}
-                        </TableCell>
-                        <TableCell className="text-center py-1">
-                          {((stats?.staleActive ?? 0) +
-                              (stats?.staleClaims ?? 0)) > 0
-                            ? (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-amber-500 text-sm font-medium cursor-help">
-                                    {(stats?.staleActive ?? 0) +
-                                      (stats?.staleClaims ?? 0)}
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {stats?.staleActive ?? 0} stale active job(s),
-                                  {" "}
-                                  {stats?.staleClaims ?? 0} stale claim(s)
-                                </TooltipContent>
-                              </Tooltip>
-                            )
-                            : (
-                              <span className="text-muted-foreground/50">
-                                -
-                              </span>
-                            )}
-                        </TableCell>
-                        <TableCell className="text-center py-1">
-                          {(stats?.failed ?? 0) > 0
-                            ? (
-                              <span className="text-red-500 text-sm font-medium">
-                                {stats?.failed}
-                              </span>
-                            )
-                            : (
-                              <span className="text-muted-foreground/50">
-                                -
-                              </span>
-                            )}
-                        </TableCell>
-                        <TableCell className="text-center py-1 text-sm">
-                          {stats?.totalRuns ?? "-"}
-                        </TableCell>
-                        <TableCell className="text-center py-1">
-                          {stats
-                            ? (
-                              <Badge
-                                variant="secondary"
-                                className={stats.successRate >= 95
+                        <TableCell className="py-1 text-center">
+                          <div className="flex items-center justify-center gap-2 text-[10px]">
+                            <span
+                              className={(stats?.failed ?? 0) > 0
+                                ? "text-red-500"
+                                : "text-muted-foreground"}
+                              title="Failed runs"
+                            >
+                              Failed {stats?.failed ?? 0}
+                            </span>
+                            <span
+                              className="text-muted-foreground"
+                              title="Total runs"
+                            >
+                              Runs {stats?.totalRuns ?? 0}
+                            </span>
+                            <Badge
+                              variant="secondary"
+                              className={`${
+                                !stats
+                                  ? "text-muted-foreground"
+                                  : stats.successRate >= 95
                                   ? "bg-green-500/10 text-green-600"
                                   : stats.successRate >= 80
                                   ? "bg-yellow-500/10 text-yellow-600"
-                                  : "bg-red-500/10 text-red-600"}
-                              >
-                                {stats.successRate.toFixed(0)}%
-                              </Badge>
-                            )
-                            : (
-                              <span className="text-muted-foreground/50">
-                                -
-                              </span>
-                            )}
-                        </TableCell>
-                        <TableCell className="text-center py-1 text-sm text-muted-foreground">
-                          {stats && stats.emptyRuns > 0 ? stats.emptyRuns : "-"}
+                                  : "bg-red-500/10 text-red-600"
+                              } px-1.5 py-0 font-mono text-[10px]`}
+                              title="Success rate"
+                            >
+                              {stats
+                                ? `${stats.successRate.toFixed(0)}% ok`
+                                : "—"}
+                            </Badge>
+                            <span
+                              className="text-muted-foreground"
+                              title="Empty runs"
+                            >
+                              Empty {stats?.emptyRuns ?? 0}
+                            </span>
+                          </div>
                         </TableCell>
                         <TableCell className="py-1">
                           {typeof runtime?.defaultTriggerIntervalSeconds ===
@@ -5164,10 +5643,11 @@ export default function JobsPage() {
         </CardContent>
       </Card>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1">
         <Button
           variant={!isEmptyView ? "default" : "outline"}
           size="sm"
+          className="h-7 px-2 text-xs"
           onClick={() => setJobsView("operational")}
         >
           Jobs ({operationalViewCount})
@@ -5175,6 +5655,7 @@ export default function JobsPage() {
         <Button
           variant={isEmptyView ? "default" : "outline"}
           size="sm"
+          className="h-7 px-2 text-xs"
           onClick={() => setJobsView("idle_auto")}
           title="Completed automatic checks that found no work"
         >
@@ -5189,10 +5670,11 @@ export default function JobsPage() {
       </div>
 
       {!isEmptyView && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1">
           <Button
             variant={quickFilter === "all" ? "default" : "outline"}
             size="sm"
+            className="h-7 px-2 text-xs"
             onClick={() => setQuickFilter("all")}
           >
             All ({displayCounts.total})
@@ -5202,8 +5684,8 @@ export default function JobsPage() {
             size="sm"
             onClick={() => setQuickFilter("active")}
             className={quickFilter !== "active"
-              ? "text-blue-500 hover:text-blue-600"
-              : ""}
+              ? "h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
+              : "h-7 px-2 text-xs"}
           >
             <Activity className="h-3.5 w-3.5 mr-1" />
             Active ({displayCounts.active})
@@ -5213,8 +5695,8 @@ export default function JobsPage() {
             size="sm"
             onClick={() => setQuickFilter("waiting")}
             className={quickFilter !== "waiting"
-              ? "text-yellow-500 hover:text-yellow-600"
-              : ""}
+              ? "h-7 px-2 text-xs text-yellow-500 hover:text-yellow-600"
+              : "h-7 px-2 text-xs"}
           >
             <Clock className="h-3.5 w-3.5 mr-1" />
             Waiting ({displayCounts.waiting})
@@ -5224,8 +5706,8 @@ export default function JobsPage() {
             size="sm"
             onClick={() => setQuickFilter("failed")}
             className={quickFilter !== "failed"
-              ? "text-red-500 hover:text-red-600 border-red-500/30"
-              : ""}
+              ? "h-7 border-red-500/30 px-2 text-xs text-red-500 hover:text-red-600"
+              : "h-7 px-2 text-xs"}
           >
             <AlertCircle className="h-3.5 w-3.5 mr-1" />
             Errors ({displayCounts.failed})
@@ -5235,8 +5717,8 @@ export default function JobsPage() {
             size="sm"
             onClick={() => setQuickFilter("completed")}
             className={quickFilter !== "completed"
-              ? "text-green-500 hover:text-green-600"
-              : ""}
+              ? "h-7 px-2 text-xs text-green-500 hover:text-green-600"
+              : "h-7 px-2 text-xs"}
           >
             <CheckCircle className="h-3.5 w-3.5 mr-1" />
             Completed ({displayCounts.completed})
@@ -5247,14 +5729,14 @@ export default function JobsPage() {
       {!isEmptyView && <JobErrorStats />}
 
       <Card>
-        <CardContent className="space-y-3 mt-6">
-          <div className="flex flex-wrap items-center gap-3">
+        <CardContent className="space-y-2 p-2.5 [&_button]:h-8 [&_input]:h-8">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="relative w-[220px]">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
                 placeholder="Search by ID or worker..."
-                className="pl-8"
+                className="h-8 pl-8 text-xs"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -5512,10 +5994,10 @@ export default function JobsPage() {
       </Card>
 
       <Card>
-        <CardContent className="p-0">
-          <Table>
+        <CardContent className="overflow-x-auto p-0">
+          <Table className="min-w-[760px] text-xs">
             <TableHeader>
-              <TableRow>
+              <TableRow className="h-8 [&>th]:h-8 [&>th]:px-2">
                 <TableHead
                   className="cursor-pointer hover:bg-muted/50 select-none"
                   onClick={() => handleSort("state")}
@@ -5577,9 +6059,11 @@ export default function JobsPage() {
                   filteredJobs.map((job) => (
                     <TableRow
                       key={job.id}
-                      className={job.state === "failed"
-                        ? "bg-red-500/5 border-l-2 border-l-red-500"
-                        : ""}
+                      className={`text-xs [&>td]:px-2 [&>td]:py-1.5 ${
+                        job.state === "failed"
+                          ? "border-l-2 border-l-red-500 bg-red-500/5"
+                          : ""
+                      }`}
                     >
                       <TableCell>
                         <Link
@@ -5865,17 +6349,17 @@ export default function JobsPage() {
                           </Link>
                         )}
                       </TableCell>
-                      <TableCell className="text-sm">
+                      <TableCell className="whitespace-nowrap text-xs">
                         {job.timestamp
-                          ? format(new Date(job.timestamp), "MMM d, HH:mm:ss")
+                          ? format(new Date(job.timestamp), "MMM d, HH:mm")
                           : "-"}
                       </TableCell>
                       <TableCell
                         className={job.restarted ||
                             (job.finishedOn && job.processedOn &&
                               job.finishedOn < job.processedOn)
-                          ? "text-sm text-amber-500"
-                          : "text-sm"}
+                          ? "text-xs text-amber-500"
+                          : "text-xs"}
                         title={job.finishedOn && job.processedOn &&
                             job.finishedOn < job.processedOn
                           ? "This job was restarted and still has stale timestamps from an earlier attempt"

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { callResource } from "@/lib/api";
 import {
   type DiarizationProfile,
+  getEnabledDiarizationCapacity,
   validateDiarizationRoutes,
 } from "@/lib/diarizationSettings";
 import { Badge } from "@/components/ui/badge";
@@ -37,26 +38,38 @@ const emptyProfile = (): DiarizationProfile => ({
   baseUrl: "https://",
   enabled: true,
   priority: 50,
+  concurrency: 1,
 });
 
 export default function DiarizationSettingsPage() {
   const [profiles, setProfiles] = useState<DiarizationProfile[]>([]);
   const [includeEnvironment, setIncludeEnvironment] = useState(true);
   const [environmentPriority, setEnvironmentPriority] = useState(50);
+  const [environmentConcurrency, setEnvironmentConcurrency] = useState(1);
   const [health, setHealth] = useState<RouteHealth[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
 
   const refreshHealth = async () => {
     setRefreshing(true);
     try {
-      const pipeline = await callResource("jobs", { action: "pipeline_health", force: true });
-      const service = pipeline?.services?.find((item: { id: string }) => item.id === "diarizator");
+      const pipeline = await callResource("jobs", {
+        action: "pipeline_health",
+        force: true,
+      });
+      const service = pipeline?.services?.find((item: { id: string }) =>
+        item.id === "diarizator"
+      );
       setHealth(service?.routes ?? []);
     } catch (error) {
-      setMessage({ ok: false, text: error instanceof Error ? error.message : "Health check failed" });
+      setMessage({
+        ok: false,
+        text: error instanceof Error ? error.message : "Health check failed",
+      });
     } finally {
       setRefreshing(false);
     }
@@ -66,9 +79,23 @@ export default function DiarizationSettingsPage() {
     void (async () => {
       try {
         const config = await callResource("config", { action: "get" });
-        setProfiles(config?.diarizationProfiles?.profiles ?? []);
-        setIncludeEnvironment(config?.diarizationProfiles?.includeEnvironment ?? true);
-        setEnvironmentPriority(config?.diarizationProfiles?.environmentPriority ?? 50);
+        setProfiles(
+          (config?.diarizationProfiles?.profiles ?? []).map(
+            (profile: DiarizationProfile) => ({
+              ...profile,
+              concurrency: profile.concurrency ?? 1,
+            }),
+          ),
+        );
+        setIncludeEnvironment(
+          config?.diarizationProfiles?.includeEnvironment ?? true,
+        );
+        setEnvironmentPriority(
+          config?.diarizationProfiles?.environmentPriority ?? 50,
+        );
+        setEnvironmentConcurrency(
+          config?.diarizationProfiles?.environmentConcurrency ?? 1,
+        );
         await refreshHealth();
       } finally {
         setLoading(false);
@@ -87,8 +114,26 @@ export default function DiarizationSettingsPage() {
       name: profile.name.trim(),
       baseUrl: profile.baseUrl.trim().replace(/\/+$/, ""),
     }));
-    const error = validateDiarizationRoutes(normalized, includeEnvironment);
+    const error = validateDiarizationRoutes(
+      normalized,
+      includeEnvironment,
+      environmentConcurrency,
+    );
     if (error) return setMessage({ ok: false, text: error });
+    if (
+      !Number.isInteger(environmentPriority) || environmentPriority < 1 ||
+      environmentPriority > 100
+    ) {
+      return setMessage({
+        ok: false,
+        text: "Environment priority must be 1-100.",
+      });
+    }
+    const totalConcurrency = getEnabledDiarizationCapacity(
+      normalized,
+      includeEnvironment,
+      environmentConcurrency,
+    );
     setSaving(true);
     setMessage(null);
     try {
@@ -99,74 +144,267 @@ export default function DiarizationSettingsPage() {
             profiles: normalized,
             includeEnvironment,
             environmentPriority,
+            environmentConcurrency,
           },
         },
       });
+      if (totalConcurrency > 0) {
+        await callResource("jobs", {
+          action: "set_worker_concurrency",
+          workerType: "diarization",
+          concurrency: totalConcurrency,
+        });
+      }
       setProfiles(normalized);
-      setMessage({ ok: true, text: "Diarizator routing saved. New jobs will snapshot the first healthy route by priority." });
+      const enabledCount = normalized.filter((profile) =>
+        profile.enabled
+      ).length +
+        (includeEnvironment ? 1 : 0);
+      setMessage({
+        ok: true,
+        text: enabledCount > 0
+          ? `Diarizator routing saved. Provider capacity and diarization worker concurrency are ${totalConcurrency}.`
+          : "Diarizator routing saved. All routes are disabled; their cards remain available for re-enabling.",
+      });
       await refreshHealth();
     } catch (error) {
-      setMessage({ ok: false, text: error instanceof Error ? error.message : "Failed to save" });
+      setMessage({
+        ok: false,
+        text: error instanceof Error ? error.message : "Failed to save",
+      });
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+  if (loading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
 
   const environmentHealth = healthById.get("environment");
+  const enabledSlots = getEnabledDiarizationCapacity(
+    profiles,
+    includeEnvironment,
+    environmentConcurrency,
+  );
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="flex items-center gap-2 text-2xl font-bold"><Server className="h-6 w-6" />Diarization servers</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Choose local or remote speaker diarization services. Health here is the same gate used when a job starts.</p>
+          <h2 className="flex items-center gap-2 text-2xl font-bold">
+            <Server className="h-6 w-6" />Diarization servers
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Choose local or remote speaker diarization services. Health here is
+            the same gate used when a job starts.
+          </p>
         </div>
-        <Button variant="outline" onClick={() => void refreshHealth()} disabled={refreshing}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />Refresh health
+        <Button
+          variant="outline"
+          onClick={() => void refreshHealth()}
+          disabled={refreshing}
+        >
+          <RefreshCw
+            className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+          />Refresh health
         </Button>
       </div>
 
       <Card className="space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Switch checked={includeEnvironment} onCheckedChange={setIncludeEnvironment} aria-label="Use environment diarizator" />
+          <Switch
+            checked={includeEnvironment}
+            onCheckedChange={setIncludeEnvironment}
+            aria-label="Use environment diarizator"
+          />
           <div className="min-w-56 flex-1">
             <p className="font-medium">Local / environment route</p>
-            <p className="text-xs text-muted-foreground">{environmentHealth?.baseUrl ?? "http://host.docker.internal:8085"} · DIARIZATION_SERVER_URL · deployment managed</p>
+            <p className="text-xs text-muted-foreground">
+              {environmentHealth?.baseUrl ?? "http://host.docker.internal:8085"}
+              {" "}
+              · DIARIZATION_SERVER_URL · deployment managed
+            </p>
           </div>
-          <div className="w-32 space-y-1"><Label htmlFor="diar-env-priority">Priority</Label><Input id="diar-env-priority" type="number" min={1} max={100} value={environmentPriority} onChange={(event) => setEnvironmentPriority(Number(event.target.value))} /></div>
-          <Badge variant={environmentHealth?.status === "healthy" ? "secondary" : "destructive"}>{environmentHealth ? statusLabel[environmentHealth.status] : includeEnvironment ? "Not checked" : "Disabled"}</Badge>
+          <div className="w-32 space-y-1">
+            <Label htmlFor="diar-env-priority">Priority</Label>
+            <Input
+              id="diar-env-priority"
+              type="number"
+              min={1}
+              max={100}
+              value={environmentPriority}
+              onChange={(event) =>
+                setEnvironmentPriority(Number(event.target.value))}
+            />
+          </div>
+          <div className="w-28 space-y-1">
+            <Label htmlFor="diar-env-slots">Slots</Label>
+            <Input
+              id="diar-env-slots"
+              type="number"
+              min={1}
+              max={8}
+              value={environmentConcurrency}
+              disabled={!includeEnvironment}
+              onChange={(event) =>
+                setEnvironmentConcurrency(Number(event.target.value))}
+            />
+          </div>
+          <Badge
+            variant={environmentHealth?.status === "healthy"
+              ? "secondary"
+              : "destructive"}
+          >
+            {environmentHealth
+              ? statusLabel[environmentHealth.status]
+              : includeEnvironment
+              ? "Not checked"
+              : "Disabled"}
+          </Badge>
         </div>
-        <p className="text-xs text-muted-foreground">{environmentHealth?.message ?? "Start the CPU diarizator container on this Mac, then refresh health."}</p>
+        <p className="text-xs text-muted-foreground">
+          {environmentHealth?.message ??
+            "Start the CPU diarizator container on this Mac, then refresh health."}
+        </p>
       </Card>
 
       <div className="flex items-center justify-between gap-3">
-        <div><h3 className="font-semibold">Configured remote servers ({profiles.length})</h3><p className="text-xs text-muted-foreground">Lower priority numbers are preferred; an unhealthy route is skipped.</p></div>
-        <Button variant="outline" onClick={() => profiles.length < 8 && setProfiles([...profiles, emptyProfile()])} disabled={profiles.length >= 8}><Plus className="mr-2 h-4 w-4" />Add server</Button>
+        <div>
+          <h3 className="font-semibold">
+            Configured remote servers ({profiles.length})
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            Lower priority numbers are preferred; an unhealthy route is skipped.
+            {` ${enabledSlots}/8 total parallel slots are selected.`}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          onClick={() =>
+            profiles.length < 8 && setProfiles([...profiles, emptyProfile()])}
+          disabled={profiles.length >= 8}
+        >
+          <Plus className="mr-2 h-4 w-4" />Add server
+        </Button>
       </div>
 
-      {profiles.length === 0 && <Card className="p-5 text-sm text-muted-foreground">No remote diarizators configured. The local environment route is currently {includeEnvironment ? "enabled" : "disabled"}.</Card>}
+      {profiles.length === 0 && (
+        <Card className="p-5 text-sm text-muted-foreground">
+          No remote diarizators configured. The local environment route is
+          currently {includeEnvironment ? "enabled" : "disabled"}.
+        </Card>
+      )}
       {profiles.map((profile, index) => {
         const routeHealth = healthById.get(profile.id);
-        const update = (next: Partial<DiarizationProfile>) => setProfiles(profiles.map((item, itemIndex) => itemIndex === index ? { ...item, ...next } : item));
+        const update = (next: Partial<DiarizationProfile>) =>
+          setProfiles(profiles.map((item, itemIndex) =>
+            itemIndex === index ? { ...item, ...next } : item
+          ));
         return (
           <Card key={profile.id} className="space-y-4 p-5">
             <div className="flex items-center justify-between gap-3">
-              <label className="flex items-center gap-2 text-sm"><Switch checked={profile.enabled} onCheckedChange={(enabled) => update({ enabled })} />Enabled</label>
-              <div className="flex items-center gap-2"><Badge variant={routeHealth?.status === "healthy" ? "secondary" : routeHealth ? "destructive" : "outline"}>{routeHealth ? statusLabel[routeHealth.status] : "Save to test"}</Badge><Button size="icon" variant="ghost" aria-label={`Delete ${profile.name}`} onClick={() => setProfiles(profiles.filter((_, itemIndex) => itemIndex !== index))}><Trash2 className="h-4 w-4" /></Button></div>
+              <label className="flex items-center gap-2 text-sm">
+                <Switch
+                  checked={profile.enabled}
+                  aria-label={`Enable ${profile.name}`}
+                  onCheckedChange={(enabled) => update({ enabled })}
+                />Enabled
+              </label>
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant={routeHealth?.status === "healthy"
+                    ? "secondary"
+                    : routeHealth
+                    ? "destructive"
+                    : "outline"}
+                >
+                  {routeHealth
+                    ? statusLabel[routeHealth.status]
+                    : "Save to test"}
+                </Badge>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`Delete ${profile.name}`}
+                  onClick={() =>
+                    setProfiles(
+                      profiles.filter((_, itemIndex) => itemIndex !== index),
+                    )}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-6">
-              <div className="space-y-2 md:col-span-2"><Label>Name</Label><Input value={profile.name} onChange={(event) => update({ name: event.target.value })} /></div>
-              <div className="space-y-2 md:col-span-3"><Label>Base URL</Label><Input value={profile.baseUrl} placeholder="https://diarizator.example.com" onChange={(event) => update({ baseUrl: event.target.value })} /></div>
-              <div className="space-y-2"><Label>Priority</Label><Input type="number" min={1} max={100} value={profile.priority} onChange={(event) => update({ priority: Number(event.target.value) })} /></div>
+            <div className="grid gap-4 md:grid-cols-7">
+              <div className="space-y-2 md:col-span-2">
+                <Label>Name</Label>
+                <Input
+                  value={profile.name}
+                  onChange={(event) => update({ name: event.target.value })}
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label>Base URL</Label>
+                <Input
+                  value={profile.baseUrl}
+                  placeholder="https://diarizator.example.com"
+                  onChange={(event) => update({ baseUrl: event.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Priority</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={profile.priority}
+                  onChange={(event) =>
+                    update({ priority: Number(event.target.value) })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Slots</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={profile.concurrency}
+                  onChange={(event) =>
+                    update({ concurrency: Number(event.target.value) })}
+                />
+              </div>
             </div>
-            {routeHealth && <p className="text-xs text-muted-foreground">{routeHealth.message}{routeHealth.latencyMs != null ? ` · ${routeHealth.latencyMs} ms` : ""}</p>}
+            {routeHealth && (
+              <p className="text-xs text-muted-foreground">
+                {routeHealth.message}
+                {routeHealth.latencyMs != null
+                  ? ` · ${routeHealth.latencyMs} ms`
+                  : ""}
+              </p>
+            )}
           </Card>
         );
       })}
 
-      {message && <div className={`rounded-md border p-3 text-sm ${message.ok ? "border-green-500/40 bg-green-500/10" : "border-destructive/40 bg-destructive/10"}`}>{message.text}</div>}
-      <Button onClick={() => void save()} disabled={saving}><Save className="mr-2 h-4 w-4" />{saving ? "Saving…" : "Save routing"}</Button>
+      {message && (
+        <div
+          className={`rounded-md border p-3 text-sm ${
+            message.ok
+              ? "border-green-500/40 bg-green-500/10"
+              : "border-destructive/40 bg-destructive/10"
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
+      <Button onClick={() => void save()} disabled={saving}>
+        <Save className="mr-2 h-4 w-4" />
+        {saving ? "Saving…" : "Save routing and slots"}
+      </Button>
     </div>
   );
 }

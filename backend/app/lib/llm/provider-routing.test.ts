@@ -3,8 +3,9 @@ import { zLlmProfilesConfig } from "@myceliasdk/config.ts";
 import {
   LlmProviderLimiter,
   providerAdvertisesModel,
-  resolveProviderModel,
   type ResolvedLlmProvider,
+  resolveProviderModel,
+  selectLlmJobProvider,
   selectLlmProviders,
 } from "./provider-routing.ts";
 
@@ -78,12 +79,18 @@ Deno.test("LLM provider selection skips disabled and alias-less providers", () =
       "small",
     ),
   ).toEqual([]);
-  // Explicit models keep every enabled provider in the chain; failover
-  // decides at request time whether the provider actually has the model.
-  expect(selectLlmProviders(providers, "gpt-4o").map((p) => p.id)).toEqual([
-    "openrouter",
-    "local",
-  ]);
+  // An unqualified exact model is not sent to arbitrary providers.
+  expect(selectLlmProviders(providers, "gpt-4o")).toEqual([]);
+  // Once the caller explicitly pins a provider, its live model catalogue is
+  // authoritative even when the model is not duplicated into an alias map.
+  expect(
+    selectLlmProviders(
+      [providers[0]],
+      "gpt-4o",
+      {},
+      { allowUnadvertisedExplicitModels: true },
+    ).map((p) => p.id),
+  ).toEqual(["openrouter"]);
 });
 
 Deno.test("LLM providers with equal priority tie-break on name then id", () => {
@@ -94,7 +101,7 @@ Deno.test("LLM providers with equal priority tie-break on name then id", () => {
   ]);
 });
 
-Deno.test("LLM profile config requires an enabled route unless env is included", () => {
+Deno.test("LLM profile config permits an intentionally disabled routing set", () => {
   const profile = {
     id: "p1",
     name: "Provider",
@@ -103,9 +110,8 @@ Deno.test("LLM profile config requires an enabled route unless env is included",
     aliases: { medium: "model-m" },
     enabled: false,
   };
-  expect(() => zLlmProfilesConfig.parse({ profiles: [profile] })).toThrow(
-    /At least one LLM provider profile/,
-  );
+  expect(zLlmProfilesConfig.parse({ profiles: [profile] }).profiles[0].enabled)
+    .toBe(false);
   expect(
     zLlmProfilesConfig.parse({
       profiles: [profile],
@@ -143,20 +149,41 @@ Deno.test("LLM profile defaults apply for legacy configurations", () => {
   expect(parsed.environmentPriority).toBe(50);
 });
 
-Deno.test("Providers advertising an explicit model outrank blind failover candidates", () => {
-  // "qwen3-8b" is only advertised by the lower-priority local provider, so it
-  // must be tried first; the higher-priority provider stays as failover.
+Deno.test("Exact models route only to providers that advertise them", () => {
+  // "qwen3-8b" is only advertised by the local provider. OpenRouter must not
+  // receive that provider-specific name as a blind failover attempt.
   expect(providerAdvertisesModel("qwen3-8b", providers[1])).toBe(true);
   expect(providerAdvertisesModel("qwen3-8b", providers[0])).toBe(false);
   expect(selectLlmProviders(providers, "qwen3-8b").map((p) => p.id)).toEqual([
     "local",
-    "openrouter",
   ]);
   // Aliases keep pure priority order.
   expect(selectLlmProviders(providers, "small").map((p) => p.id)).toEqual([
     "openrouter",
     "local",
   ]);
+});
+
+Deno.test("LLM job snapshots include an environment-only route", () => {
+  const environment: ResolvedLlmProvider = {
+    ...providers[0],
+    id: "environment",
+    name: "Environment LLM",
+    source: "llm_env",
+    aliases: { small: "env-model", medium: "env-model" },
+    chatModel: "env-model",
+  };
+
+  expect(
+    selectLlmJobProvider(
+      [{ ...providers[0], enabled: false }, environment],
+      "small",
+    )?.id,
+  ).toBe("environment");
+  expect(
+    selectLlmJobProvider([environment], "catalog-only-model", "environment")
+      ?.id,
+  ).toBe("environment");
 });
 
 Deno.test("Equal priorities balance by in-flight load ratio", () => {

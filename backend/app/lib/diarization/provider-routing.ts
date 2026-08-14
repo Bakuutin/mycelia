@@ -4,8 +4,11 @@ export interface ResolvedDiarizatorRoute {
   baseUrl: string;
   enabled: boolean;
   priority: number;
+  concurrency: number;
   source?: string;
 }
+
+export type DiarizatorProviderLoad = Record<string, number>;
 
 export interface DiarizatorJobRoute {
   providerProfileId: string;
@@ -32,16 +35,26 @@ export function buildDiarizatorJobSnapshot(
 export function selectDiarizatorRoute(
   routes: ResolvedDiarizatorRoute[],
   healthyIds?: Set<string>,
+  load: DiarizatorProviderLoad = {},
+  requestedProviderId?: string,
 ): ResolvedDiarizatorRoute | undefined {
   return routes
-    .filter((route) => route.enabled && (!healthyIds || healthyIds.has(route.id)))
-    .sort((a, b) =>
-      a.priority - b.priority || a.name.localeCompare(b.name) ||
-      a.id.localeCompare(b.id)
-    )[0];
+    .filter((route) =>
+      route.enabled && (!healthyIds || healthyIds.has(route.id)) &&
+      (!requestedProviderId || route.id === requestedProviderId) &&
+      (load[route.id] ?? 0) < route.concurrency
+    )
+    .sort((a, b) => {
+      const aRatio = (load[a.id] ?? 0) / a.concurrency;
+      const bRatio = (load[b.id] ?? 0) / b.concurrency;
+      return a.priority - b.priority || aRatio - bRatio ||
+        a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+    })[0];
 }
 
-export function resolveDiarizatorRoutes(config: any): ResolvedDiarizatorRoute[] {
+export function resolveDiarizatorRoutes(
+  config: any,
+): ResolvedDiarizatorRoute[] {
   const environmentUrl = Deno.env.get("DIARIZATION_SERVER_URL") ??
     "http://host.docker.internal:8085";
   const configured = config?.diarizationProfiles;
@@ -51,6 +64,7 @@ export function resolveDiarizatorRoutes(config: any): ResolvedDiarizatorRoute[] 
     baseUrl: String(profile.baseUrl).replace(/\/+$/, ""),
     enabled: profile.enabled ?? true,
     priority: Number(profile.priority ?? 50),
+    concurrency: Number(profile.concurrency ?? 1),
     source: "diarization_profile",
   }));
   if (configured?.includeEnvironment ?? true) {
@@ -60,6 +74,7 @@ export function resolveDiarizatorRoutes(config: any): ResolvedDiarizatorRoute[] 
       baseUrl: environmentUrl.replace(/\/+$/, ""),
       enabled: true,
       priority: Number(configured?.environmentPriority ?? 50),
+      concurrency: Number(configured?.environmentConcurrency ?? 1),
       source: "environment",
     });
   }

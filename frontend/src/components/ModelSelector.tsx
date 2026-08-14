@@ -164,11 +164,7 @@ export function ModelSelector({
       setModels(extractModelIds(response.models));
       setProviderListings(
         Array.isArray(response.providers)
-          ? sortProviders(
-            response.providers.filter((provider) =>
-              provider.enabled !== false
-            ),
-          )
+          ? sortProviders(response.providers)
           : [],
       );
       setLoadedOnce(true);
@@ -203,8 +199,7 @@ export function ModelSelector({
   };
 
   const providersById = useMemo(
-    () =>
-      new Map(providerListings.map((provider) => [provider.id, provider])),
+    () => new Map(providerListings.map((provider) => [provider.id, provider])),
     [providerListings],
   );
 
@@ -219,20 +214,22 @@ export function ModelSelector({
     return pinnedProvider ? `${value} @ ${pinnedProvider.name}` : value;
   }, [value, placeholder, providerValue, providersById]);
 
-
   // Recents survive only while their provider (or model) is still offered, so
   // a removed route does not resurrect through history.
   const visibleRecents = useMemo(() => {
     if (isStatic) return [];
     return recentModels.filter((entry) =>
       entry.providerProfileId
-        ? providersById.has(entry.providerProfileId)
+        ? providersById.get(entry.providerProfileId)?.enabled !== false
         : models.includes(entry.model)
     );
   }, [isStatic, recentModels, providersById, models]);
 
   const failedProviders = useMemo(
-    () => providerListings.filter((provider) => provider.error),
+    () =>
+      providerListings.filter((provider) =>
+        provider.enabled !== false && provider.error
+      ),
     [providerListings],
   );
 
@@ -269,7 +266,7 @@ export function ModelSelector({
 
   const searching = search.trim().length > 0;
   const customCandidate = allowCustomValue && searching &&
-    !staticModels?.includes(search.trim())
+      !staticModels?.includes(search.trim())
     ? search.trim()
     : null;
 
@@ -376,7 +373,9 @@ export function ModelSelector({
                     providerValue === entry.providerProfileId;
                   return (
                     <CommandItem
-                      key={`recent:${entry.providerProfileId ?? ""}:${entry.model}`}
+                      key={`recent:${
+                        entry.providerProfileId ?? ""
+                      }:${entry.model}`}
                       value={`recent ${provider?.name ?? ""} ${entry.model}`}
                       onSelect={() =>
                         entry.providerProfileId
@@ -406,62 +405,65 @@ export function ModelSelector({
               </CommandGroup>
             )}
 
-            {/* Provider groups in failover-priority order. Picking a model
-                pins the request to that provider. */}
+            {
+              /* Provider groups in failover-priority order. Picking a model
+                pins the request to that provider. */
+            }
             {!isStatic &&
-              providerListings.map((provider) => {
-                const ordered = orderProviderModels(provider);
-                if (ordered.length === 0) return null;
-                const expanded = searching ||
-                  expandedProviders.has(provider.id);
-                const shown = expanded
-                  ? ordered
-                  : ordered.slice(0, COLLAPSED_MODELS_PER_PROVIDER);
-                const hiddenCount = ordered.length - shown.length;
-                return (
-                  <CommandGroup
-                    key={provider.id}
-                    heading={`${provider.name} · priority ${
-                      provider.priority ?? 50
-                    }`}
-                  >
-                    {shown.map((model) => (
-                      <CommandItem
-                        key={`${provider.id}:${model}`}
-                        value={`${provider.name} ${model}`}
-                        onSelect={() =>
-                          handleSelectFromProvider(model, provider.id)}
-                      >
-                        <Check
-                          className={cn(
-                            "mr-2 h-4 w-4",
-                            value === model && providerValue === provider.id
-                              ? "opacity-100"
-                              : "opacity-0",
-                          )}
-                        />
-                        <span className="truncate font-mono text-sm">
-                          {model}
-                        </span>
-                      </CommandItem>
-                    ))}
-                    {hiddenCount > 0 && (
-                      <CommandItem
-                        key={`${provider.id}:__more`}
-                        value={`${provider.name} show more`}
-                        onSelect={() =>
-                          setExpandedProviders((current) =>
-                            new Set(current).add(provider.id)
-                          )}
-                      >
-                        <span className="pl-6 text-xs text-muted-foreground">
-                          Show all {ordered.length} models…
-                        </span>
-                      </CommandItem>
-                    )}
-                  </CommandGroup>
-                );
-              })}
+              providerListings.filter((provider) => provider.enabled !== false)
+                .map((provider) => {
+                  const ordered = orderProviderModels(provider);
+                  if (ordered.length === 0) return null;
+                  const expanded = searching ||
+                    expandedProviders.has(provider.id);
+                  const shown = expanded
+                    ? ordered
+                    : ordered.slice(0, COLLAPSED_MODELS_PER_PROVIDER);
+                  const hiddenCount = ordered.length - shown.length;
+                  return (
+                    <CommandGroup
+                      key={provider.id}
+                      heading={`${provider.name} · priority ${
+                        provider.priority ?? 50
+                      }`}
+                    >
+                      {shown.map((model) => (
+                        <CommandItem
+                          key={`${provider.id}:${model}`}
+                          value={`${provider.name} ${model}`}
+                          onSelect={() =>
+                            handleSelectFromProvider(model, provider.id)}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              value === model && providerValue === provider.id
+                                ? "opacity-100"
+                                : "opacity-0",
+                            )}
+                          />
+                          <span className="truncate font-mono text-sm">
+                            {model}
+                          </span>
+                        </CommandItem>
+                      ))}
+                      {hiddenCount > 0 && (
+                        <CommandItem
+                          key={`${provider.id}:__more`}
+                          value={`${provider.name} show more`}
+                          onSelect={() =>
+                            setExpandedProviders((current) =>
+                              new Set(current).add(provider.id)
+                            )}
+                        >
+                          <span className="pl-6 text-xs text-muted-foreground">
+                            Show all {ordered.length} models…
+                          </span>
+                        </CommandItem>
+                      )}
+                    </CommandGroup>
+                  );
+                })}
 
             {loading && models.length === 0 && !isStatic && (
               <div className="flex items-center justify-center py-4">
@@ -473,8 +475,10 @@ export function ModelSelector({
             )}
           </CommandList>
 
-          {/* Unreachable providers stay visible instead of silently dropping
-              their models from the list. */}
+          {
+            /* Unreachable providers stay visible instead of silently dropping
+              their models from the list. */
+          }
           {failedProviders.map((provider) => (
             <div
               key={provider.id}

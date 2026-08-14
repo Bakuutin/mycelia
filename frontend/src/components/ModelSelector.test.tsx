@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { ModelSelector } from "./ModelSelector";
 import * as api from "@/lib/api";
 
@@ -30,5 +30,30 @@ describe("ModelSelector", () => {
     await waitFor(() => {
       expect(mockCallResource).toHaveBeenCalledWith("llm", { action: "list" });
     });
+  });
+
+  it("keeps a disabled provider name visible for an existing exact-model pin", async () => {
+    mockCallResource.mockResolvedValue({
+      models: [],
+      providers: [{
+        id: "local",
+        name: "Local GPU",
+        enabled: false,
+        aliases: { medium: "qwen.gguf" },
+        models: ["qwen.gguf"],
+      }],
+    });
+
+    render(
+      <ModelSelector
+        value="qwen.gguf"
+        providerValue="local"
+        onChange={() => {}}
+        prefetch
+      />,
+    );
+
+    expect(await screen.findByRole("combobox"))
+      .toHaveTextContent("qwen.gguf @ Local GPU");
   });
 });

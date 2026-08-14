@@ -23,11 +23,42 @@ import {
 } from "./summarization-defaults.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { selectTranscriptionProvider } from "@/lib/transcription/provider-routing.ts";
-import { buildDiarizatorJobSnapshot } from "@/lib/diarization/provider-routing.ts";
+import {
+  buildDiarizatorJobSnapshot,
+  resolveDiarizatorRoutes,
+  selectDiarizatorRoute,
+} from "@/lib/diarization/provider-routing.ts";
 import { assertDiarizationGenerationReady } from "@/lib/diarization/generation-preflight.ts";
+import { LLMResource } from "@/lib/llm/resource.server.ts";
+import {
+  isLlmModelAlias,
+  selectLlmJobProvider,
+} from "@/lib/llm/provider-routing.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
+
+const LLM_ROUTED_JOB_TYPES = new Set([
+  "summarization",
+  "conversation_chunk_creator",
+  "conversation_extractor_merged",
+  "tagger",
+  "entity_typing",
+]);
+
+const DIARIZATION_ROUTED_JOB_TYPES = new Set([
+  "diarization",
+  "enrollment",
+  "profileReenrollment",
+]);
+
+const RESERVED_PROVIDER_JOB_STATES = [
+  "active",
+  "wait",
+  "delayed",
+  "paused",
+  "prioritized",
+] as const;
 
 // Some workers run long, externally-backed operations (for example Whisper
 // batches). BullMQ's default 30s lock is too short for a busy Deno process or
@@ -71,6 +102,25 @@ export function getQueueEvents(type: string): QueueEvents {
     queueEvents.set(type, events);
   }
   return events;
+}
+
+async function getDiarizatorProviderLoad(): Promise<Record<string, number>> {
+  const reservedByQueue = await Promise.all(
+    [...DIARIZATION_ROUTED_JOB_TYPES].map((type) =>
+      getQueue(type).getJobs(
+        [...RESERVED_PROVIDER_JOB_STATES],
+        0,
+        -1,
+        true,
+      )
+    ),
+  );
+  const load: Record<string, number> = {};
+  for (const job of reservedByQueue.flat()) {
+    const profileId = job.data.routingContext?.providerProfileId;
+    if (profileId) load[profileId] = (load[profileId] ?? 0) + 1;
+  }
+  return load;
 }
 
 export async function enqueueJob(
@@ -216,24 +266,54 @@ export async function enqueueJob(
       const jobModel = typeof mergedData.model === "string"
         ? mergedData.model.trim()
         : "";
-      const isAlias = ["small", "medium", "large"].includes(jobModel);
-      const enabledProfiles = ((config?.llmProfiles?.profiles ?? []) as any[])
-        .filter((profile) => profile.enabled ?? true)
-        .sort((a, b) =>
-          (a.priority ?? 50) - (b.priority ?? 50) ||
-          String(a.name ?? "").localeCompare(String(b.name ?? "")) ||
-          String(a.id ?? "").localeCompare(String(b.id ?? ""))
-        );
-      const canServe = (profile: any) =>
-        !jobModel || !isAlias || Boolean(profile.aliases?.[jobModel]);
-      const advertises = (profile: any) =>
-        Boolean(
-          jobModel && !isAlias &&
-            (Object.values(profile.aliases ?? {}).includes(jobModel) ||
-              profile.chatModel === jobModel),
-        );
-      const primaryProfile = enabledProfiles.find(advertises) ??
-        enabledProfiles.find(canServe) ?? enabledProfiles[0];
+      const isAlias = isLlmModelAlias(jobModel);
+      // Use the same fully resolved provider list as the LLM resource itself.
+      // This includes the optional environment route and legacy fallback, so
+      // enqueue validation cannot reject a route that completions can serve.
+      const enabledProfiles = (await new LLMResource().getInferenceProviders())
+        .filter((profile) => profile.enabled);
+      const requestedProviderId = typeof mergedData.providerProfileId ===
+            "string" && mergedData.providerProfileId.trim()
+        ? mergedData.providerProfileId.trim()
+        : typeof workerConfig.routingContext?.providerProfileId === "string"
+        ? workerConfig.routingContext.providerProfileId.trim()
+        : undefined;
+      const requestedProvider = requestedProviderId
+        ? enabledProfiles.find((profile) => profile.id === requestedProviderId)
+        : undefined;
+      const primaryProfile = selectLlmJobProvider(
+        enabledProfiles,
+        jobModel,
+        requestedProviderId,
+      );
+      if (LLM_ROUTED_JOB_TYPES.has(data.type)) {
+        if (requestedProviderId && !requestedProvider) {
+          throw new Error(
+            `Selected LLM provider "${requestedProviderId}" is disabled or no longer configured`,
+          );
+        }
+        if (
+          requestedProvider && isAlias &&
+          !requestedProvider.aliases?.[jobModel]
+        ) {
+          throw new Error(
+            `Selected LLM provider "${requestedProvider.name}" does not map alias "${jobModel}"`,
+          );
+        }
+        if (!primaryProfile) {
+          throw new Error(
+            jobModel && !isAlias
+              ? `Exact LLM model "${jobModel}" is not mapped by any enabled provider. Choose it from a provider or use a small/medium/large alias.`
+              : "All LLM provider routes are disabled",
+          );
+        }
+        // Exact model names are provider-specific. Persist the resolved
+        // provider in the worker input so the LLM call cannot leak that name
+        // to an unrelated failover route.
+        if (jobModel && !isAlias && !requestedProviderId) {
+          mergedData.providerProfileId = primaryProfile.id;
+        }
+      }
       let routingContext: JobRoutingContext;
       if (data.type === "transcription") {
         const configuredProviders = (await new TranscriptionResource()
@@ -258,13 +338,7 @@ export async function enqueueJob(
         }
         const transcriptionQueue = getQueue("transcription");
         const reservedJobs = await transcriptionQueue.getJobs(
-          [
-            "active",
-            "wait",
-            "delayed",
-            "paused",
-            "prioritized",
-          ],
+          [...RESERVED_PROVIDER_JOB_STATES],
           0,
           -1,
           true,
@@ -294,8 +368,7 @@ export async function enqueueJob(
           ...(workerConfig.routingContext?.sourceId
             ? { sourceId: workerConfig.routingContext.sourceId }
             : {}),
-          providerProfileId: workerConfig.routingContext?.providerProfileId ??
-            primaryProfile?.id,
+          providerProfileId: requestedProviderId ?? primaryProfile?.id,
           providerProfileName: primaryProfile?.name,
           model: typeof mergedData.model === "string"
             ? mergedData.model
@@ -308,7 +381,11 @@ export async function enqueueJob(
       // STT jobs require a concrete provider reservation. Preserve the real
       // health/slot error so TriggerManager can schedule a health retry instead
       // of replacing it with a misleading missing-snapshot error.
-      if (data.type === "transcription") throw error;
+      if (
+        data.type === "transcription" || LLM_ROUTED_JOB_TYPES.has(data.type)
+      ) {
+        throw error;
+      }
       console.warn(
         `[queue] Could not snapshot routing context for ${data.type}:`,
         error,
@@ -331,7 +408,7 @@ export async function enqueueJob(
       throw new Error(`STT provider profile not found: ${providerProfileId}`);
     }
     const reservedJobs = await getQueue("transcription").getJobs(
-      ["active", "wait", "delayed", "paused", "prioritized"],
+      [...RESERVED_PROVIDER_JOB_STATES],
       0,
       -1,
       true,
@@ -350,26 +427,55 @@ export async function enqueueJob(
     data.type === "diarization" &&
     typeof mergedData.diarizationServerUrl === "string" &&
     Boolean(mergedData.routingContext?.providerProfileId);
-  if (
-    ["diarization", "enrollment", "profileReenrollment"].includes(data.type) &&
-    !reuseDiarizatorRoute
-  ) {
+  if (DIARIZATION_ROUTED_JOB_TYPES.has(data.type)) {
     const diarizator = (await getExternalServicesHealth()).find((service) =>
       service.id === "diarizator"
     );
-    if (diarizator?.status !== "healthy" || !diarizator.baseUrl) {
+    const healthyIds = new Set(
+      diarizator?.routes?.filter((route) => route.status === "healthy")
+        .map((route) => route.providerProfileId)
+        .filter((id): id is string => Boolean(id)) ?? [],
+    );
+    if (healthyIds.size === 0) {
       throw new Error(
-        `No healthy diarizator route is available. ${diarizator?.message ?? "Configure one in Settings → Diarization."}`,
+        `No healthy diarizator route is available. ${
+          diarizator?.message ?? "Configure one in Settings → Diarization."
+        }`,
       );
     }
-    if (!diarizator.providerProfileId || !diarizator.providerProfileName) {
-      throw new Error("Selected diarizator route is missing profile provenance");
+    const configResource = await getConfigResource(auth);
+    const config = await configResource({ action: "get" });
+    const routes = resolveDiarizatorRoutes(config);
+    const load = await getDiarizatorProviderLoad();
+    const requestedProviderId = reuseDiarizatorRoute
+      ? mergedData.routingContext?.providerProfileId
+      : undefined;
+    const selected = selectDiarizatorRoute(
+      routes,
+      healthyIds,
+      load,
+      requestedProviderId,
+    );
+    if (!selected) {
+      if (requestedProviderId) {
+        const requested = routes.find((route) =>
+          route.id === requestedProviderId
+        );
+        throw new Error(
+          `Diarizator provider ${
+            requested?.name ?? requestedProviderId
+          } has no free concurrency slots`,
+        );
+      }
+      throw new Error(
+        "All healthy diarizator provider concurrency slots are reserved",
+      );
     }
     const snapshot = buildDiarizatorJobSnapshot(
       {
-        providerProfileId: diarizator.providerProfileId,
-        providerProfileName: diarizator.providerProfileName,
-        baseUrl: diarizator.baseUrl,
+        providerProfileId: selected.id,
+        providerProfileName: selected.name,
+        baseUrl: selected.baseUrl,
       },
       mergedData.routingContext,
       new Date().toISOString(),

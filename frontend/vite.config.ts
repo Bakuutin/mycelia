@@ -15,8 +15,14 @@ const interfacesPath = existsSync("../myceliasdk")
 // Two zods in one bundle break the v4-only `_zod` internals the SDK writes to,
 // so pin every zod import to this package's copy.
 const zodPath = fileURLToPath(new URL("./node_modules/zod", import.meta.url));
+const frontendLifecycleAt = new Date().toISOString();
 
 export default defineConfig({
+  define: {
+    "import.meta.env.VITE_FRONTEND_LIFECYCLE_AT": JSON.stringify(
+      frontendLifecycleAt,
+    ),
+  },
   plugins: [
     deno(),
     react(),

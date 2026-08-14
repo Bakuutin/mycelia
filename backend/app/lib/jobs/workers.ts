@@ -23,6 +23,7 @@ import {
   invalidateExternalServicesHealthCache,
 } from "./service-health.ts";
 import { isCancelledJobRecord } from "./job-state.ts";
+import { releaseTranscriptionSequenceClaimsForJob } from "./transcription-claim-reaper.ts";
 
 const workers = new Map<string, Worker>();
 
@@ -170,6 +171,17 @@ export async function startWorkers() {
           `[${jobType}] Job ${jobId} was cancelled; preserving cancelled state after worker exit`,
         );
         return;
+      }
+      if (jobType === "transcription") {
+        const released = await releaseTranscriptionSequenceClaimsForJob(
+          mongo,
+          jobId,
+        );
+        if (released > 0) {
+          console.warn(
+            `[SELF-HEAL] Released ${released} transcription sequence claim(s) from failed job ${jobId}.`,
+          );
+        }
       }
       const finishedAt = new Date();
       let partialResult: Record<string, unknown> | undefined;

@@ -262,12 +262,6 @@ const TranscriptionSettingsPage = () => {
       }
     }
     const enabled = nextProfiles.filter((profile) => profile.enabled);
-    if (
-      enabled.length === 0 &&
-      !(includeEnvironment && environmentRoute?.configured)
-    ) {
-      return "Enable at least one provider or the environment route.";
-    }
     const total = enabled.reduce(
       (sum, profile) => sum + profile.concurrency,
       includeEnvironment && environmentRoute?.configured ? 1 : 0,
@@ -342,17 +336,20 @@ const TranscriptionSettingsPage = () => {
           },
         },
       });
-      await callResource("jobs", {
-        action: "set_worker_concurrency",
-        workerType: "transcription",
-        concurrency: totalConcurrency,
-      });
+      if (totalConcurrency > 0) {
+        await callResource("jobs", {
+          action: "set_worker_concurrency",
+          workerType: "transcription",
+          concurrency: totalConcurrency,
+        });
+      }
       setProfiles(nextProfiles);
       setDraft(nextProfiles.find((profile) => profile.id === activeId)!);
       setMessage({
         success: true,
-        text:
-          `Saved ${nextProfiles.length} provider(s); transcription worker concurrency is ${totalConcurrency}.`,
+        text: totalConcurrency > 0
+          ? `Saved ${nextProfiles.length} provider(s); transcription worker concurrency is ${totalConcurrency}.`
+          : `Saved ${nextProfiles.length} provider(s); all STT routes are disabled.`,
       });
       await refreshHealth();
     } catch (error) {
@@ -603,6 +600,7 @@ const TranscriptionSettingsPage = () => {
           <label className="flex items-center gap-2 text-sm">
             <Switch
               checked={draft.enabled}
+              aria-label={`Enable ${draft.name}`}
               onCheckedChange={(enabled) =>
                 setDraft((current) => ({ ...current, enabled }))}
             />

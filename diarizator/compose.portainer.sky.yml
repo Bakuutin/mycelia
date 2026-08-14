@@ -1,0 +1,46 @@
+services:
+  diarization:
+    image: sky-mycelia-diarization:waveform-fix-20260812
+    pull_policy: never
+    command:
+      - uv
+      - run
+      - --no-sync
+      - --extra
+      - cu126
+      - --no-dev
+      - simple-speaker-service
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "8085:8085"
+    environment:
+      HF_HOME: /models
+      HF_TOKEN: ${HF_TOKEN}
+      DIARIZATION_MODEL: pyannote/speaker-diarization-community-1
+      COMPUTE_MODE: gpu
+      SPEAKER_SERVICE_HOST: 0.0.0.0
+      SPEAKER_SERVICE_PORT: "8085"
+      LOG_LEVEL: INFO
+    volumes:
+      - diarization-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10m
+    restart: unless-stopped
+
+volumes:
+  diarization-models:
+    name: sky_diarization-models

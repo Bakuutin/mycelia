@@ -55,14 +55,6 @@ export const zLlmProfilesConfig = z.object({
   environmentPriority: z.number().int().min(1).max(100).optional().default(50),
   environmentConcurrency: z.number().int().min(1).max(32).optional().default(4),
 }).superRefine((value, context) => {
-  const enabled = value.profiles.filter((profile) => profile.enabled);
-  if (enabled.length === 0 && !value.includeEnvironment) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["profiles"],
-      message: "At least one LLM provider profile must be enabled",
-    });
-  }
   const ids = new Set<string>();
   for (const [index, profile] of value.profiles.entries()) {
     if (ids.has(profile.id)) {
@@ -121,13 +113,6 @@ export const zTranscriptionProfilesConfig = z.object({
   environmentPriority: z.number().int().min(1).max(100).optional().default(50),
 }).superRefine((value, context) => {
   const enabled = value.profiles.filter((profile) => profile.enabled);
-  if (enabled.length === 0 && !value.includeEnvironment) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["profiles"],
-      message: "At least one STT provider profile must be enabled",
-    });
-  }
   const totalConcurrency = enabled.reduce(
     (sum, profile) => sum + profile.concurrency,
     value.includeEnvironment ? 1 : 0,
@@ -158,18 +143,28 @@ export const zDiarizationProviderProfile = z.object({
   baseUrl: z.string().url(),
   enabled: z.boolean().default(true),
   priority: z.number().int().min(1).max(100).default(50),
+  // Maximum simultaneous diarization/embed requests routed to this server.
+  concurrency: z.number().int().min(1).max(8).default(1),
 });
 
 export const zDiarizationProfilesConfig = z.object({
   profiles: z.array(zDiarizationProviderProfile).max(8).default([]),
   includeEnvironment: z.boolean().optional().default(true),
   environmentPriority: z.number().int().min(1).max(100).optional().default(50),
+  environmentConcurrency: z.number().int().min(1).max(8).optional().default(1),
 }).superRefine((value, context) => {
-  if (!value.includeEnvironment && !value.profiles.some((profile) => profile.enabled)) {
+  const totalConcurrency = value.profiles
+    .filter((profile) => profile.enabled)
+    .reduce(
+      (sum, profile) => sum + profile.concurrency,
+      value.includeEnvironment ? value.environmentConcurrency : 0,
+    );
+  if (totalConcurrency > 8) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["profiles"],
-      message: "At least one diarization route must be enabled",
+      message:
+        "Enabled diarization provider concurrency cannot exceed 8 in total",
     });
   }
   const ids = new Set<string>();

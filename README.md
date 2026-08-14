@@ -250,6 +250,52 @@ non-empty profile key. See
 [Local STT with Argmax and Whisper](docs/LOCAL_STT.md) for startup, Docker
 networking, and model-specific examples.
 
+### Local speaker diarization (Docker)
+
+Argmax and the Mycelia diarizator are separate providers. `argmax-cli serve`
+exposes WhisperKit transcription only. `argmax-cli diarize --audio-path ...`
+is a one-shot Apple Silicon CLI that writes diarization output for one file; it
+does not expose Mycelia's required `/health`, `/diarize`, and `/embed` HTTP
+endpoints or the compatible Pyannote/WeSpeaker embedding space.
+
+Run the supported local diarization service in the main Mycelia Compose project:
+
+```bash
+cd /path/to/mycelia
+
+# First start, or after changing the Dockerfile/dependencies:
+docker compose --profile diarization up -d --build diarizator
+
+# Normal subsequent start:
+docker compose --profile diarization up -d diarizator
+
+docker compose --profile diarization ps diarizator
+docker compose --profile diarization logs -f diarizator
+```
+
+Set `HF_TOKEN` in the repository `.env` and accept access to both gated models
+listed in [`diarizator/README.md`](diarizator/README.md). Inside the Mycelia
+network the service URL is:
+
+```dotenv
+DIARIZATION_SERVER_URL=http://diarizator:8085
+```
+
+Verify model readiness and a real audio request, not only container state:
+
+```bash
+curl -fsS http://127.0.0.1:8085/health | jq .
+curl -fsS \
+  -F 'file=@test.wav;type=audio/wav' \
+  'http://127.0.0.1:8085/diarize?min_speakers=1&max_speakers=2' \
+  | jq '{segments: (.segments | length), speakers: [.segments[].speaker] | unique}'
+```
+
+In **Settings → Diarization**, enable the environment route, set it to the
+highest preference (for example priority `1`), and confirm that it reports
+**Running**. See [`diarizator/README.md`](diarizator/README.md) for memory,
+remote GPU, and troubleshooting details.
+
 #### Debugging conversation re-extraction
 
 The scripts in `scripts/debug/` find and optionally enqueue historical

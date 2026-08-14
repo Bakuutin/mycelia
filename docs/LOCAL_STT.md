@@ -65,19 +65,6 @@ models on CPU/GPU instead:
   Jobs `× realtime` value from a newly completed job, or time the same test
   file with curl, before changing the production route.
 
-For the 632 MB experimental variant, use the same explicit GPU options rather
-than allowing the default ANE path:
-
-```bash
-BUILD_ALL=1 swift run argmax-cli serve \
-  --host 0.0.0.0 \
-  --port 10301 \
-  --model large-v3-v20240930_turbo_632MB \
-  --download-model-path /private/tmp/argmax-whisper-models \
-  --audio-encoder-compute-units cpuAndGPU \
-  --text-decoder-compute-units cpuAndGPU \
-  --verbose
-```
 
 The first launch downloads model files, and the first load may still take time
 to create Core ML caches. Wait for both `Server started` and

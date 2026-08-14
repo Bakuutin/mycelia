@@ -91,11 +91,16 @@ export function selectLlmProviders(
   providers: readonly ResolvedLlmProvider[],
   requestedModel: string,
   load: LlmProviderLoad = {},
+  options: { allowUnadvertisedExplicitModels?: boolean } = {},
 ): ResolvedLlmProvider[] {
+  const requested = requestedModel.trim();
+  const requireAdvertisement = !isLlmModelAlias(requested) &&
+    !options.allowUnadvertisedExplicitModels;
   return providers
     .filter((provider) =>
       provider.enabled &&
-      resolveProviderModel(requestedModel, provider) !== null
+      resolveProviderModel(requested, provider) !== null &&
+      (!requireAdvertisement || providerAdvertisesModel(requested, provider))
     )
     .sort((a, b) => {
       const advertises = Number(providerAdvertisesModel(requestedModel, b)) -
@@ -106,6 +111,27 @@ export function selectLlmProviders(
         a.name.localeCompare(b.name) ||
         a.id.localeCompare(b.id);
     });
+}
+
+/**
+ * Resolve the provider whose identity should be snapshotted when an LLM-backed
+ * job is enqueued. The caller must pass the fully resolved provider list so the
+ * deployment-managed environment route participates alongside saved profiles.
+ */
+export function selectLlmJobProvider(
+  providers: readonly ResolvedLlmProvider[],
+  requestedModel: string,
+  requestedProviderId?: string,
+): ResolvedLlmProvider | undefined {
+  const enabledProviders = getEnabledLlmProviders(providers);
+  if (requestedProviderId) {
+    return enabledProviders.find((provider) =>
+      provider.id === requestedProviderId
+    );
+  }
+  const requested = requestedModel.trim();
+  if (!requested) return enabledProviders[0];
+  return selectLlmProviders(enabledProviders, requested)[0];
 }
 
 /**

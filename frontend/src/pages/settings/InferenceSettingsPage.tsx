@@ -132,6 +132,12 @@ const sortByPriority = (a: LlmProfile, b: LlmProfile) =>
   a.priority - b.priority || a.name.localeCompare(b.name) ||
   a.id.localeCompare(b.id);
 
+const isModelAlias = (model: string) =>
+  MODEL_ALIASES.includes(model as ModelAlias);
+
+const profileAdvertisesModel = (profile: LlmProfile, model: string) =>
+  Object.values(profile.aliases).includes(model) || profile.chatModel === model;
+
 const InferenceSettingsPage = () => {
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -223,7 +229,6 @@ const InferenceSettingsPage = () => {
         });
         setWorkerDefaults(defaultsByWorker);
         setTaskModels(modelsByWorker);
-        setTaskProviders(providersByWorker);
         setTaskFallbackModels(fallbackModelsByWorker);
 
         const legacy = config?.llm || config?.inference || {};
@@ -261,10 +266,29 @@ const InferenceSettingsPage = () => {
             concurrency: 4,
             promptCaching: { enabled: true, sessionPrefix: "mycelia" },
           }];
-        const active =
-          [...nextProfiles].sort(sortByPriority).find((profile) =>
-            profile.enabled
-          ) ?? nextProfiles[0];
+        // Older task defaults stored an exact model without its provider id.
+        // Recover the pin only when the configured model identifies exactly
+        // one provider; otherwise force the user to choose an alias or a
+        // provider-qualified model instead of silently sending it elsewhere.
+        const resolvedProvidersByWorker = { ...providersByWorker };
+        MODEL_ROUTES.forEach((route) => {
+          const model = modelsByWorker[route.workerType]?.trim();
+          if (!model || isModelAlias(model)) {
+            delete resolvedProvidersByWorker[route.workerType];
+            return;
+          }
+          if (resolvedProvidersByWorker[route.workerType]) return;
+          const matches = nextProfiles.filter((profile) =>
+            profileAdvertisesModel(profile, model)
+          );
+          if (matches.length === 1) {
+            resolvedProvidersByWorker[route.workerType] = matches[0].id;
+          }
+        });
+        setTaskProviders(resolvedProvidersByWorker);
+        const active = [...nextProfiles].sort(sortByPriority).find((profile) =>
+          profile.enabled
+        ) ?? nextProfiles[0];
         setProfiles(nextProfiles);
         setActiveId(active.id);
         setDraft(active);
@@ -384,11 +408,27 @@ const InferenceSettingsPage = () => {
       }
     }
     const enabled = nextProfiles.filter((profile) => profile.enabled);
-    if (
-      enabled.length === 0 &&
-      !(includeEnvironment && environmentRoute?.configured)
-    ) {
-      return "Enable at least one provider or the environment route.";
+    const routingEnabled = enabled.length > 0 ||
+      Boolean(includeEnvironment && environmentRoute?.configured);
+    if (routingEnabled) {
+      for (const route of MODEL_ROUTES) {
+        const model = taskModels[route.workerType]?.trim();
+        if (!model || isModelAlias(model)) continue;
+        const providerId = taskProviders[route.workerType]?.trim();
+        if (!providerId) {
+          return `${route.label}: choose the exact model from a provider ` +
+            "or use a small/medium/large alias.";
+        }
+        const providerEnabled = providerId === "environment"
+          ? Boolean(includeEnvironment && environmentRoute?.configured)
+          : nextProfiles.some((profile) =>
+            profile.id === providerId && profile.enabled
+          );
+        if (!providerEnabled) {
+          return `${route.label}: the selected model belongs to a disabled ` +
+            "provider. Enable it or choose another provider/alias.";
+        }
+      }
     }
     if (
       !Number.isInteger(environmentPriority) || environmentPriority < 1 ||
@@ -775,6 +815,7 @@ const InferenceSettingsPage = () => {
           <label className="flex items-center gap-2 text-sm">
             <Switch
               checked={draft.enabled}
+              aria-label={`Enable ${draft.name}`}
               onCheckedChange={(enabled) =>
                 setDraft((current) => ({ ...current, enabled }))}
             />
@@ -982,14 +1023,14 @@ const InferenceSettingsPage = () => {
       <Card className="space-y-5 p-5">
         <div>
           <h3 className="text-lg font-semibold">Model routing for tasks</h3>
-          <p className="text-sm text-muted-foreground">
+          <div className="text-sm text-muted-foreground">
             Each task uses an alias (resolved per provider) or an exact model.
             Empty override means the primary provider default:{" "}
             <Badge variant="secondary">{globalAlias}</Badge>{" "}
             <span className="font-mono text-xs">
               {globalModel ? `→ ${globalModel}` : "(not mapped yet)"}
             </span>
-          </p>
+          </div>
         </div>
 
         <div className="space-y-3">

@@ -238,7 +238,14 @@ const capability: JobCapability = {
           action: "updateOne",
           collection: "transcription_sequences",
           query: { _id: sequence._id },
-          update: { $set: { state: "processing", updatedAt: new Date() } },
+          update: {
+            $set: {
+              state: "processing",
+              processedByJobId: job.id,
+              updatedAt: new Date(),
+            },
+            $unset: { error: "" },
+          },
         });
       }
 
@@ -350,7 +357,10 @@ const capability: JobCapability = {
             action: "updateOne",
             collection: "transcription_sequences",
             query: { _id: sequence._id },
-            update: { $set: { state: "empty", updatedAt: new Date() } },
+            update: {
+              $set: { state: "empty", updatedAt: new Date() },
+              $unset: { processedByJobId: "", error: "" },
+            },
           });
 
           // Empty is a successful terminal STT outcome. Mark the chunks owned
@@ -461,7 +471,10 @@ const capability: JobCapability = {
           action: "updateOne",
           collection: "transcription_sequences",
           query: { _id: sequence._id },
-          update: { $set: { state: "completed", updatedAt: new Date() } },
+          update: {
+            $set: { state: "completed", updatedAt: new Date() },
+            $unset: { processedByJobId: "", error: "" },
+          },
         });
 
         log("INFO", `Sequence completed successfully`, {
@@ -506,6 +519,7 @@ const capability: JobCapability = {
           query: { _id: sequence._id },
           update: {
             $set: { state: "error", error: errorMsg, updatedAt: new Date() },
+            $unset: { processedByJobId: "" },
           },
         });
 
@@ -559,7 +573,14 @@ const capability: JobCapability = {
           query: {
             ...buildTranscriptionSequenceClaimQuery(),
           },
-          update: { $set: { state: "processing", updatedAt: new Date() } },
+          update: {
+            $set: {
+              state: "processing",
+              processedByJobId: job.id,
+              updatedAt: new Date(),
+            },
+            $unset: { error: "" },
+          },
           options: { sort: { start: -1 }, returnDocument: "before" },
         }) as any;
 
@@ -681,7 +702,10 @@ const capability: JobCapability = {
               action: "updateOne",
               collection: "transcription_sequences",
               query: { _id: prefetchedSequence._id, state: "processing" },
-              update: { $set: { state: "ready", updatedAt: new Date() } },
+              update: {
+                $set: { state: "ready", updatedAt: new Date() },
+                $unset: { processedByJobId: "" },
+              },
             });
           }
           throw error;

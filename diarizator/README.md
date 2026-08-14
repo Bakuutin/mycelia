@@ -68,6 +68,13 @@ diarizator on the same Docker network as backend and python-worker, where it is
 available as `http://diarizator:8085`. The compatibility wrapper
 `scripts/start-diarizator.sh` runs the same command.
 
+The build flag is needed on the first start and after Dockerfile or dependency
+changes. Once the image exists, the shorter normal-start command reuses it:
+
+```bash
+docker compose --profile diarization up -d diarizator
+```
+
 Recommended Docker Desktop resources for Mycelia plus diarization:
 
 - memory: at least 10 GB, preferably 12 GB;

@@ -180,4 +180,43 @@ describe("TranscriptionSettingsPage", () => {
         .toHaveTextContent("large-v3-turbo");
     });
   });
+
+  it("saves an intentional all-routes-disabled state", async () => {
+    renderPage();
+    await screen.findByText("Local Argmax");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByLabelText("Use environment STT route"));
+    await user.click(screen.getByLabelText("Enable Local Argmax"));
+    await user.click(screen.getByRole("button", { name: /Remote Whisper/ }));
+    await user.click(screen.getByLabelText("Enable Remote Whisper"));
+    await user.click(
+      screen.getByRole("button", { name: "Save all STT servers" }),
+    );
+
+    await waitFor(() => {
+      expect(mockCallResource).toHaveBeenCalledWith(
+        "config",
+        expect.objectContaining({
+          action: "patch",
+          updates: expect.objectContaining({
+            transcriptionProfiles: expect.objectContaining({
+              includeEnvironment: false,
+              profiles: expect.arrayContaining([
+                expect.objectContaining({ id: "local", enabled: false }),
+                expect.objectContaining({ id: "remote", enabled: false }),
+              ]),
+            }),
+          }),
+        }),
+      );
+    });
+    expect(mockCallResource).not.toHaveBeenCalledWith("jobs", {
+      action: "set_worker_concurrency",
+      workerType: "transcription",
+      concurrency: 0,
+    });
+    expect(screen.getByText(/all STT routes are disabled/i))
+      .toBeInTheDocument();
+  });
 });

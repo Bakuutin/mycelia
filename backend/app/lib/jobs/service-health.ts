@@ -8,9 +8,9 @@ import {
 } from "@/lib/llm/provider-routing.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import {
+  type ResolvedDiarizatorRoute,
   resolveDiarizatorRoutes,
   selectDiarizatorRoute,
-  type ResolvedDiarizatorRoute,
 } from "@/lib/diarization/provider-routing.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import {
@@ -530,6 +530,24 @@ export async function getExternalServicesHealth(
     )!
     : diarizatorRouteHealth.find((route) => route.status === "loading") ??
       diarizatorRouteHealth[0];
+  const diarizatorRouteSnapshots = diarizatorRoutes.map((route) => {
+    const health = diarizatorRouteHealth.find((candidate) =>
+      candidate.providerProfileId === route.id
+    );
+    return {
+      providerProfileId: route.id,
+      providerProfileName: route.name,
+      baseUrl: route.baseUrl,
+      status: route.enabled ? health?.status ?? "unavailable" : "disabled",
+      enabled: route.enabled,
+      priority: route.priority,
+      concurrency: route.concurrency,
+      latencyMs: health?.latencyMs,
+      message: route.enabled
+        ? health?.message ?? "Route health is unavailable"
+        : "Disabled for new diarization jobs; no health probe was sent.",
+    };
+  });
   const diarizatorService: ExternalServiceHealth = representativeDiarizator
     ? {
       ...representativeDiarizator,
@@ -541,35 +559,21 @@ export async function getExternalServicesHealth(
       message: selectedDiarizator
         ? `Using ${selectedDiarizator.name}; ${healthyDiarizatorIds.size}/${enabledDiarizatorRoutes.length} enabled routes healthy`
         : representativeDiarizator.message,
-      routes: diarizatorRoutes.map((route) => {
-        const health = diarizatorRouteHealth.find((candidate) =>
-          candidate.providerProfileId === route.id
-        );
-        return {
-          providerProfileId: route.id,
-          providerProfileName: route.name,
-          baseUrl: route.baseUrl,
-          status: route.enabled ? health?.status ?? "unavailable" : "disabled",
-          enabled: route.enabled,
-          priority: route.priority,
-          latencyMs: health?.latencyMs,
-          message: route.enabled
-            ? health?.message ?? "Route health is unavailable"
-            : "Disabled for new diarization jobs; no health probe was sent.",
-        };
-      }),
+      routes: diarizatorRouteSnapshots,
     }
     : {
       id: "diarizator",
       label: "Diarizator (speaker service)",
-      status: "misconfigured",
+      status: "disabled",
       configured: false,
-      message: "No diarization route is configured",
+      message: diarizatorRoutes.length > 0
+        ? "All diarization routes are disabled; no health probe was sent."
+        : "Diarization routing is disabled; no health probe was sent.",
       checkedAt: new Date().toISOString(),
       usedBy: Object.entries(JOB_SERVICE_DEPENDENCIES)
         .filter(([, dependencies]) => dependencies.includes("diarizator"))
         .map(([workerType]) => workerType),
-      routes: [],
+      routes: diarizatorRouteSnapshots,
     };
 
   const services = [sttService, llmService, diarizatorService];

@@ -4,18 +4,20 @@ export type DiarizationProfile = {
   baseUrl: string;
   enabled: boolean;
   priority: number;
+  concurrency: number;
 };
 
 export type DiarizationRouteConfig = {
   profiles: DiarizationProfile[];
   includeEnvironment: boolean;
   environmentPriority: number;
+  environmentConcurrency: number;
 };
 
 export function updateDiarizationRouteConfig(
   config: DiarizationRouteConfig,
   profileId: string,
-  changes: { enabled?: boolean; priority?: number },
+  changes: { enabled?: boolean; priority?: number; concurrency?: number },
 ): DiarizationRouteConfig {
   if (
     changes.priority != null &&
@@ -24,12 +26,21 @@ export function updateDiarizationRouteConfig(
   ) {
     throw new Error("Diarizator priority must be an integer from 1 to 100.");
   }
+  if (
+    changes.concurrency != null &&
+    (!Number.isInteger(changes.concurrency) || changes.concurrency < 1 ||
+      changes.concurrency > 8)
+  ) {
+    throw new Error("Diarizator slots must be an integer from 1 to 8.");
+  }
 
   const next = profileId === "environment"
     ? {
       ...config,
       includeEnvironment: changes.enabled ?? config.includeEnvironment,
       environmentPriority: changes.priority ?? config.environmentPriority,
+      environmentConcurrency: changes.concurrency ??
+        config.environmentConcurrency,
     }
     : {
       ...config,
@@ -44,21 +55,19 @@ export function updateDiarizationRouteConfig(
   ) {
     throw new Error("Diarizator route no longer exists.");
   }
-  if (
-    !next.includeEnvironment &&
-    !next.profiles.some((profile) => profile.enabled)
-  ) {
-    throw new Error("Keep at least one diarizator route enabled.");
-  }
   return next;
 }
 
 export function validateDiarizationRoutes(
   profiles: DiarizationProfile[],
   includeEnvironment: boolean,
+  environmentConcurrency = 1,
 ): string | null {
-  if (!includeEnvironment && !profiles.some((profile) => profile.enabled)) {
-    return "Enable at least one diarizator server or the environment route.";
+  if (
+    !Number.isInteger(environmentConcurrency) || environmentConcurrency < 1 ||
+    environmentConcurrency > 8
+  ) {
+    return "Environment diarizator slots must be 1-8.";
   }
   for (const profile of profiles) {
     if (!profile.name.trim()) return "Every server needs a name.";
@@ -67,9 +76,40 @@ export function validateDiarizationRoutes(
     } catch {
       return `${profile.name}: enter a valid http(s) URL.`;
     }
-    if (!Number.isInteger(profile.priority) || profile.priority < 1 || profile.priority > 100) {
+    if (
+      !Number.isInteger(profile.priority) || profile.priority < 1 ||
+      profile.priority > 100
+    ) {
       return `${profile.name}: priority must be 1-100.`;
     }
+    if (
+      !Number.isInteger(profile.concurrency) || profile.concurrency < 1 ||
+      profile.concurrency > 8
+    ) {
+      return `${profile.name}: slots must be 1-8.`;
+    }
+  }
+  if (
+    getEnabledDiarizationCapacity(
+      profiles,
+      includeEnvironment,
+      environmentConcurrency,
+    ) > 8
+  ) {
+    return "Enabled diarization slots cannot exceed 8 in total.";
   }
   return null;
+}
+
+export function getEnabledDiarizationCapacity(
+  profiles: DiarizationProfile[],
+  includeEnvironment: boolean,
+  environmentConcurrency = 1,
+): number {
+  return profiles
+    .filter((profile) => profile.enabled)
+    .reduce(
+      (sum, profile) => sum + (profile.concurrency ?? 1),
+      includeEnvironment ? environmentConcurrency : 0,
+    );
 }

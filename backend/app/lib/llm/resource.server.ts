@@ -472,7 +472,21 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           }
           // The failover chain: enabled providers that can serve the
           // requested alias or explicit model, in priority order.
-          const chain = selectLlmProviders(allProviders, input.model);
+          const providerSelectionOptions = {
+            // A provider-qualified exact model may come from that provider's
+            // live /models catalogue without being copied into an alias map.
+            // Unpinned exact names, however, must never leak to another
+            // provider just because it has a higher routing priority.
+            allowUnadvertisedExplicitModels: Boolean(
+              pinnedProviderProfileId,
+            ),
+          };
+          const chain = selectLlmProviders(
+            allProviders,
+            input.model,
+            {},
+            providerSelectionOptions,
+          );
           if (chain.length === 0) {
             llmErrorsCounter.add(1, {
               error_type: "provider_not_configured",
@@ -524,6 +538,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
               ),
               input.model,
               llmProviderLimiter.load(),
+              providerSelectionOptions,
             );
             if (remaining.length === 0) break;
             const candidate = remaining.find((provider) =>

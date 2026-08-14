@@ -60,12 +60,12 @@ Deno.test("STT providers with equal priority balance by reserved-slot load", () 
   );
 });
 
-Deno.test("STT profile config requires an enabled route and at most eight slots", () => {
-  expect(() =>
+Deno.test("STT profile config permits all routes off and caps enabled slots", () => {
+  expect(
     zTranscriptionProfilesConfig.parse({
       profiles: profiles.map((profile) => ({ ...profile, enabled: false })),
-    })
-  ).toThrow(/At least one STT provider profile/);
+    }).profiles.every((profile) => !profile.enabled),
+  ).toBe(true);
   expect(() =>
     zTranscriptionProfilesConfig.parse({
       profiles: profiles.map((profile) => ({ ...profile, concurrency: 8 })),
