@@ -10,7 +10,7 @@ Deno.test("job chaining continues only after measurable progress", () => {
   expect(shouldContinueJobChain({ hasMore: true, processed: 25 })).toBe(true);
 });
 
-Deno.test("diarization priority keeps live recordings ahead of historical work", () => {
+Deno.test("diarization priority keeps targeted recordings ahead of historical work", () => {
   expect(getContinuationPriority({
     type: "diarization",
     originalId: "recording-1",

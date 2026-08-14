@@ -116,12 +116,19 @@ def process_diarization_job(
         if not run:
             raise ValueError("A building diarization run must exist before processing")
 
-    # Count once when a campaign starts. Continuations use the fixed campaign
-    # total instead of scanning the entire historical backlog between batches.
+    cumulative_chunks = int(campaign.get("processedChunks", 0))
+    cumulative_sequences = int(campaign.get("processedSequences", 0))
+    cumulative_segments = int(campaign.get("segmentsCreated", 0))
+    cumulative_errors = int(campaign.get("errorCount", 0))
+
+    # Missing-work campaigns recount the indexed ready backlog before every
+    # bounded job. A persisted campaign total becomes stale when another job
+    # processes chunks, and the indexed count is cheap enough to keep the Jobs
+    # progress display exact. Generation builds retain their frozen total.
     count_warning: Optional[str] = None
     campaign_total = campaign.get("totalChunks") if campaign else None
     try:
-        if campaign and campaign_total is not None:
+        if building_generation and campaign and campaign_total is not None:
             pending_count: Optional[int] = max(
                 int(campaign_total) - int(campaign.get("processedChunks", 0)),
                 0,
@@ -149,14 +156,11 @@ def process_diarization_job(
 
     total_chunks: Optional[int] = (
         int(campaign_total)
-        if campaign_total is not None
-        else int(pending_count) if pending_count is not None
+        if building_generation and campaign_total is not None
+        else cumulative_chunks + int(pending_count)
+        if pending_count is not None
         else None
     )
-    cumulative_chunks = int(campaign.get("processedChunks", 0))
-    cumulative_sequences = int(campaign.get("processedSequences", 0))
-    cumulative_segments = int(campaign.get("segmentsCreated", 0))
-    cumulative_errors = int(campaign.get("errorCount", 0))
     previous_errors = list(campaign.get("errors", []))[-100:]
     previous_rate_samples = [
         float(value) for value in campaign.get("rateSamples", [])[-9:]

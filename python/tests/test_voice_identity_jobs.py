@@ -187,6 +187,45 @@ class DiarizationJobTest(TestCase):
         self.assertTrue(any(update.get("batchNumber") == 1 for update in campaign_updates))
         self.assertTrue(any(update.get("estimatedBatches") == 2 for update in campaign_updates))
 
+    def test_continuation_recounts_ready_backlog_and_replaces_stale_total(self):
+        updates = []
+        campaign = {
+            "campaignId": "diarization-historical-existing",
+            "totalChunks": 100,
+            "processedChunks": 12,
+            "processedSequences": 4,
+            "segmentsCreated": 20,
+            "errorCount": 0,
+            "jobIds": ["job-before"],
+        }
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=campaign),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks", return_value=8) as count,
+            patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={"status": "diarized", "chunks_diarized": 2, "segments": 3},
+            ),
+        ):
+            result = process_diarization_job(
+                "job-continuation",
+                DiarizationJobData(
+                    campaignId="diarization-historical-existing",
+                    limit=1,
+                ),
+                updates.append,
+            )
+
+        count.assert_called_once_with(None)
+        processing = [update for update in updates if update.get("stage") == "processing"]
+        self.assertEqual(processing[0]["total_chunks"], 20)
+        self.assertEqual(processing[0]["chunks_remaining"], 8)
+        self.assertEqual(processing[-1]["chunks_processed"], 14)
+        self.assertEqual(processing[-1]["chunks_remaining"], 6)
+        self.assertTrue(result["hasMore"])
+
     def test_one_failed_sequence_does_not_end_a_campaign_of_unknown_size(self):
         with (
             patch("jobs.diarization._campaign_call", return_value=None),
