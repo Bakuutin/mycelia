@@ -4,7 +4,10 @@ import type { JobCapability } from "@/lib/jobs/job-registry.ts";
 import { env } from "#/env.ts";
 import { callResource } from "@myceliasdk/resources.ts";
 
-import { MAX_SEQUENCE_LENGTH, MAX_GAP_MS } from "@/lib/transcription-constants.ts";
+import {
+  MAX_GAP_MS,
+  MAX_SEQUENCE_LENGTH,
+} from "@/lib/transcription-constants.ts";
 import { mongoCursor } from "@/lib/mongo/cursor.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 
@@ -12,13 +15,20 @@ export const schema = z.object({
   type: z.literal("transcription_sequence_creator"),
 });
 
-
 interface SpeechSequence {
   originalId: ObjectId;
   chunks: any[]; // Chunks in reverse chronological order (as added)
   isPartial: boolean; // True if sequence was split due to reaching MAX_LENGTH
   isContinuation: boolean; // True if this is a continuation of a previous sequence
 }
+
+export const transcriptionSequencePendingQuery = {
+  "vad.has_speech": true,
+  transcribed_at: { $eq: null },
+  processing_by: { $eq: null },
+  transcription_sequence_id: { $exists: false },
+  original_id: { $exists: true, $ne: null },
+} as const;
 
 function getLastChunk(seq: SpeechSequence) {
   return seq.chunks[seq.chunks.length - 1];
@@ -32,10 +42,9 @@ function getMinIndex(seq: SpeechSequence): number {
   return getLastChunk(seq).index;
 }
 
-
 async function* getSpeechSequences(
   mongo: any,
-  limit: number | null = null
+  limit: number | null = null,
 ): AsyncIterableIterator<SpeechSequence> {
   const sequencesById = new Map<string, SpeechSequence>();
   let yielded = 0;
@@ -43,17 +52,20 @@ async function* getSpeechSequences(
   const cursor = mongoCursor(
     mongo,
     "audio_chunks",
-    {
-      "vad.has_speech": true,
-      transcribed_at: { $eq: null },
-      transcription_sequence_id: { $exists: false },
-    },
+    transcriptionSequencePendingQuery,
     {
       sort: { start: -1 }, // DESCENDING - newest first
       hint: "audio_chunks_pending_work",
-      projection: { _id: 1, original_id: 1, start: 1, index: 1, vad: 1, transcription_sequence_id: 1 },
+      projection: {
+        _id: 1,
+        original_id: 1,
+        start: 1,
+        index: 1,
+        vad: 1,
+        transcription_sequence_id: 1,
+      },
     },
-    200 // batch size
+    200, // batch size
   );
 
   for await (const chunk of cursor) {
@@ -154,7 +166,7 @@ async function* getSpeechSequences(
  */
 async function persistSequence(
   mongo: any,
-  seq: SpeechSequence
+  seq: SpeechSequence,
 ): Promise<number> {
   // Chunks are in reverse chronological order, reverse to get chronological
   const chunksInOrder = [...seq.chunks].reverse();
@@ -201,21 +213,21 @@ async function persistSequence(
     : seq.chunks;
 
   if (chunksToUpdate.length > 0) {
-    const idsToUpdate = chunksToUpdate.map(c => c._id);
+    const idsToUpdate = chunksToUpdate.map((c) => c._id);
     const query: any = isSingleChunkWithNeighbor
       ? {
-          $or: [
-            { _id: { $in: idsToUpdate } },
-            {
-              original_id: seq.originalId,
-              index: fromIndex,
-              transcription_sequence_id: { $exists: false },
-            },
-          ],
-        }
+        $or: [
+          { _id: { $in: idsToUpdate } },
+          {
+            original_id: seq.originalId,
+            index: fromIndex,
+            transcription_sequence_id: { $exists: false },
+          },
+        ],
+      }
       : {
-          _id: { $in: idsToUpdate },
-        };
+        _id: { $in: idsToUpdate },
+      };
 
     await mongo({
       action: "updateMany",
@@ -225,7 +237,9 @@ async function persistSequence(
         $set: { transcription_sequence_id: sequenceId },
       },
     });
-    return isSingleChunkWithNeighbor ? chunksToUpdate.length + 1 : chunksToUpdate.length;
+    return isSingleChunkWithNeighbor
+      ? chunksToUpdate.length + 1
+      : chunksToUpdate.length;
   }
 
   return 0;
@@ -242,13 +256,31 @@ const capability: JobCapability = {
   policies: [
     { resource: "db/audio_chunks", action: "read", effect: "allow" },
     { resource: "db/audio_chunks", action: "update", effect: "allow" },
-    { resource: "db/transcription_sequences", action: "write", effect: "allow" },
+    {
+      resource: "db/transcription_sequences",
+      action: "write",
+      effect: "allow",
+    },
   ],
   maxConcurrency: 1,
+  hasPendingWork: async ({ mongo }) => {
+    const pending = await mongo({
+      action: "find",
+      collection: "audio_chunks",
+      query: transcriptionSequencePendingQuery,
+      options: {
+        projection: { _id: 1 },
+        hint: "audio_chunks_pending_work",
+        limit: 1,
+      },
+    }) as unknown[];
+    return pending.length > 0 ? 1 : 0;
+  },
   use: async (job) => {
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
-    const mongo = (input: any) => callResource("mongo", input, { jwt, myceliaUrl });
+    const mongo = (input: any) =>
+      callResource("mongo", input, { jwt, myceliaUrl });
 
     console.log(`[transcription_sequence_creator] Job ${job.id}: starting`);
 
@@ -262,12 +294,14 @@ const capability: JobCapability = {
         hasMore = true;
         break;
       }
-      
+
       const seqStart = getSequenceStart(seq);
       const firstChunk = seq.chunks[0];
       const lastChunk = getLastChunk(seq);
-      console.log(`[transcription_sequence_creator] Job ${job.id}: creating sequence for original ${seq.originalId} - ${seq.chunks.length} chunks (idx ${lastChunk.index}-${firstChunk.index}), start: ${seqStart.toISOString()}`);
-      
+      console.log(
+        `[transcription_sequence_creator] Job ${job.id}: creating sequence for original ${seq.originalId} - ${seq.chunks.length} chunks (idx ${lastChunk.index}-${firstChunk.index}), start: ${seqStart.toISOString()}`,
+      );
+
       processedCount += await persistSequence(mongo, seq);
       sequencesCreated++;
 

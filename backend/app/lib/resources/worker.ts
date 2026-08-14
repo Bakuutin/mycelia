@@ -32,6 +32,103 @@ import {
 } from "@/lib/jobs/timeline-recovery.ts";
 
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
+const WORKER_SPECIFIC_IDLE_TYPES = [
+  "vad",
+  "conversation_chunk_creator",
+  "conversation_extractor",
+  "transcription_sequence_creator",
+  "transcription",
+] as const;
+
+/**
+ * A conservative aggregation expression for a run that touched no source
+ * work. Keep this separate from semantic-empty results: a worker that
+ * processed an input but produced no artifact is still useful history.
+ */
+export const IDLE_JOB_RESULT_EXPRESSION = {
+  $or: [
+    {
+      $and: [
+        { $eq: ["$type", "vad"] },
+        {
+          $eq: [{
+            $ifNull: ["$result.hasSpeech", {
+              $ifNull: ["$progress.hasSpeech", -1],
+            }],
+          }, 0],
+        },
+        {
+          $eq: [{
+            $ifNull: ["$result.processed", {
+              $ifNull: ["$progress.processed", -1],
+            }],
+          }, 0],
+        },
+      ],
+    },
+    {
+      $and: [
+        { $eq: ["$type", "conversation_chunk_creator"] },
+        { $eq: [{ $ifNull: ["$result.finalized", 0] }, 0] },
+        { $eq: [{ $ifNull: ["$result.streamed", 0] }, 0] },
+        { $eq: [{ $ifNull: ["$result.chunksCreated", 0] }, 0] },
+      ],
+    },
+    {
+      $and: [
+        { $eq: ["$type", "conversation_extractor"] },
+        { $eq: [{ $ifNull: ["$result.conversationsCreated", 0] }, 0] },
+        { $eq: [{ $ifNull: ["$result.chunksProcessed", 0] }, 0] },
+      ],
+    },
+    {
+      $and: [
+        { $eq: ["$type", "transcription_sequence_creator"] },
+        { $eq: [{ $ifNull: ["$result.processed", 0] }, 0] },
+      ],
+    },
+    {
+      $and: [
+        { $eq: ["$type", "transcription"] },
+        {
+          $eq: [{
+            $ifNull: ["$result.processed", {
+              $ifNull: ["$progress.processed", -1],
+            }],
+          }, 0],
+        },
+      ],
+    },
+    {
+      $and: [
+        { $not: [{ $in: ["$type", WORKER_SPECIFIC_IDLE_TYPES] }] },
+        {
+          $eq: [{
+            $ifNull: ["$result.processed", {
+              $ifNull: ["$progress.processed", -1],
+            }],
+          }, 0],
+        },
+        {
+          $in: [{
+            $ifNull: ["$result.total", {
+              $ifNull: ["$progress.total", null],
+            }],
+          }, [null, 0]],
+        },
+      ],
+    },
+  ],
+} as const;
+
+export function getIdleAutoJobQuery() {
+  return {
+    state: "completed",
+    "trigger.type": "auto",
+    $expr: IDLE_JOB_RESULT_EXPRESSION,
+  };
+}
+
 const TIMELINE_SOURCE_COLLECTIONS = [
   ["audio_chunks", "Audio chunks"],
   ["transcriptions", "Transcriptions"],
@@ -53,6 +150,7 @@ const UpdateProgressSchema = z.object({
 
 const ListJobsSchema = z.object({
   action: z.literal("list"),
+  view: z.enum(["all", "operational", "idle_auto"]).default("all"),
   types: z.array(z.string()).nullable().optional(),
   statuses: z
     .array(
@@ -2696,6 +2794,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       ["active", "waiting", "delayed", "failed", "cancelled", "completed"];
 
     const totalLimit = input.limit || 100;
+    const idleAutoQuery = getIdleAutoJobQuery();
+    const viewQuery = input.view === "idle_auto"
+      ? idleAutoQuery
+      : input.view === "operational"
+      ? { $nor: [idleAutoQuery] }
+      : {};
 
     const jobs = await mongo({
       action: "find",
@@ -2704,6 +2808,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         type: { $in: types },
         state: { $in: queryStatuses },
         dismissedAt: { $exists: false },
+        ...viewQuery,
       },
       options: {
         sort: { createdAt: -1 },
@@ -3128,117 +3233,22 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                 {
                   $and: [
                     { $eq: ["$state", "completed"] },
-                    {
-                      $or: [
-                        // VAD: hasSpeech=0 and processed=0
-                        {
-                          $and: [
-                            { $eq: ["$type", "vad"] },
-                            {
-                              $eq: [{
-                                $ifNull: ["$result.hasSpeech", {
-                                  $ifNull: ["$progress.hasSpeech", -1],
-                                }],
-                              }, 0],
-                            },
-                            {
-                              $eq: [{
-                                $ifNull: ["$result.processed", {
-                                  $ifNull: ["$progress.processed", -1],
-                                }],
-                              }, 0],
-                            },
-                          ],
-                        },
-                        // conversation_chunk_creator: finalized=0 and streamed=0 and chunksCreated=0
-                        {
-                          $and: [
-                            { $eq: ["$type", "conversation_chunk_creator"] },
-                            { $eq: [{ $ifNull: ["$result.finalized", 0] }, 0] },
-                            { $eq: [{ $ifNull: ["$result.streamed", 0] }, 0] },
-                            {
-                              $eq: [
-                                { $ifNull: ["$result.chunksCreated", 0] },
-                                0,
-                              ],
-                            },
-                          ],
-                        },
-                        // conversation_extractor: conversationsCreated=0 and chunksProcessed=0
-                        {
-                          $and: [
-                            { $eq: ["$type", "conversation_extractor"] },
-                            {
-                              $eq: [{
-                                $ifNull: ["$result.conversationsCreated", 0],
-                              }, 0],
-                            },
-                            {
-                              $eq: [
-                                { $ifNull: ["$result.chunksProcessed", 0] },
-                                0,
-                              ],
-                            },
-                          ],
-                        },
-                        // transcription_sequence_creator: processed=0
-                        {
-                          $and: [
-                            {
-                              $eq: ["$type", "transcription_sequence_creator"],
-                            },
-                            { $eq: [{ $ifNull: ["$result.processed", 0] }, 0] },
-                          ],
-                        },
-                        // transcription: processed=0
-                        {
-                          $and: [
-                            { $eq: ["$type", "transcription"] },
-                            {
-                              $eq: [{
-                                $ifNull: ["$result.processed", {
-                                  $ifNull: ["$progress.processed", -1],
-                                }],
-                              }, 0],
-                            },
-                          ],
-                        },
-                        // Generic: processed=0 for other types. Most workers
-                        // report no `total`; when one does, a run with work
-                        // queued but none processed is stalled, not empty.
-                        // Keep in sync with isEmptyJobResult in
-                        // frontend/src/lib/jobEmptyResult.ts.
-                        {
-                          $and: [
-                            {
-                              $not: {
-                                $in: ["$type", [
-                                  "vad",
-                                  "conversation_chunk_creator",
-                                  "conversation_extractor",
-                                  "transcription_sequence_creator",
-                                  "transcription",
-                                ]],
-                              },
-                            },
-                            {
-                              $eq: [{
-                                $ifNull: ["$result.processed", {
-                                  $ifNull: ["$progress.processed", -1],
-                                }],
-                              }, 0],
-                            },
-                            {
-                              $in: [{
-                                $ifNull: ["$result.total", {
-                                  $ifNull: ["$progress.total", null],
-                                }],
-                              }, [null, 0]],
-                            },
-                          ],
-                        },
-                      ],
-                    },
+                    IDLE_JOB_RESULT_EXPRESSION,
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          idleAutoRuns: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$state", "completed"] },
+                    { $eq: ["$trigger.type", "auto"] },
+                    IDLE_JOB_RESULT_EXPRESSION,
                   ],
                 },
                 1,
@@ -3269,6 +3279,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           completed: 1,
           failed: 1,
           emptyRuns: 1,
+          idleAutoRuns: 1,
           successRate: {
             $cond: [
               { $eq: ["$totalRuns", 0] },
@@ -3339,6 +3350,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         completed: stat.completed ?? 0,
         failed: stat.failed ?? 0,
         emptyRuns: stat.emptyRuns ?? 0,
+        idleAutoRuns: stat.idleAutoRuns ?? 0,
         successRate: stat.successRate ?? 0,
         avgFrequency,
       };

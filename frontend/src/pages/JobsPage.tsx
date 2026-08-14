@@ -84,6 +84,7 @@ import type {
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
 import { getToggledWorkerFilter } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
+import { getJobsListView, withJobsListView } from "@/lib/jobListView";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
 import { getDiarizationProgressView } from "@/lib/diarizationProgress";
@@ -1448,7 +1449,8 @@ export default function JobsPage() {
   ];
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const hideEmpty = searchParams.get("hideEmpty") === "true";
+  const jobsView = getJobsListView(searchParams);
+  const isEmptyView = jobsView === "idle_auto";
   const typeParam = searchParams.get("type");
   const [quickFilter, setQuickFilter] = useState<string>("all");
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(
@@ -1498,14 +1500,10 @@ export default function JobsPage() {
     }
   }, [searchParams]);
 
-  const toggleHideEmpty = () => {
-    const newParams = new URLSearchParams(searchParams);
-    if (hideEmpty) {
-      newParams.delete("hideEmpty");
-    } else {
-      newParams.set("hideEmpty", "true");
-    }
-    setSearchParams(newParams);
+  const setJobsView = (view: "operational" | "idle_auto") => {
+    setSearchParams(withJobsListView(searchParams, view));
+    setQuickFilter("all");
+    setFilterStatuses(new Set(ALL_STATUSES));
   };
 
   const syncTypeToUrl = (types: Set<string>, allSelected: boolean) => {
@@ -1519,6 +1517,7 @@ export default function JobsPage() {
   };
 
   const { jobs, isLoading } = useJobsListener({
+    view: jobsView,
     types: !allTypesSelected && filterTypes.size > 0
       ? Array.from(filterTypes)
       : undefined,
@@ -1696,6 +1695,7 @@ export default function JobsPage() {
           completed: number;
           failed: number;
           emptyRuns: number;
+          idleAutoRuns: number;
           successRate: number;
           avgFrequency: string;
         }>;
@@ -2825,7 +2825,7 @@ export default function JobsPage() {
       failed: 0,
       delayed: 0,
       total: 0,
-      emptyRuns: 0,
+      idleAutoRuns: 0,
     };
     for (const stat of jobStatsResponse.stats) {
       if (filterTypes.has(stat.type)) {
@@ -2835,49 +2835,67 @@ export default function JobsPage() {
         totals.completed += stat.completed || 0;
         totals.failed += stat.failed || 0;
         totals.total += stat.totalRuns || 0;
-        totals.emptyRuns += stat.emptyRuns || 0;
+        totals.idleAutoRuns += stat.idleAutoRuns || 0;
       }
     }
     return totals;
   }, [jobStatsResponse, allTypesSelected, filterTypes]);
 
-  // Calculate total empty runs from backend stats (for adjusting counts when hideEmpty is on)
-  const totalEmptyRuns = useMemo(() => {
+  const totalIdleAutoRuns = useMemo(() => {
     if (!jobStatsResponse?.stats) return 0;
     return jobStatsResponse.stats.reduce(
-      (sum, stat) => sum + (stat.emptyRuns || 0),
+      (sum, stat) => sum + (stat.idleAutoRuns || 0),
       0,
     );
   }, [jobStatsResponse]);
 
-  // Get display counts adjusted for hideEmpty filter
+  // Status totals follow the server-side view, so no-op checks do not inflate
+  // the operational list while the Empty view reports only those checks.
   const displayCounts = useMemo(() => {
     if (allTypesSelected) {
       const totals = jobStatsResponse?.totals;
       if (!totals) return jobCounts;
 
-      const emptyAdjust = hideEmpty ? totalEmptyRuns : 0;
+      if (isEmptyView) {
+        return {
+          active: 0,
+          waiting: 0,
+          failed: 0,
+          completed: totalIdleAutoRuns,
+          delayed: 0,
+          total: totalIdleAutoRuns,
+        };
+      }
       return {
         active: totals.active ?? jobCounts.active,
         waiting: totals.waiting ?? jobCounts.waiting,
         failed: totals.failed ?? jobCounts.failed,
-        // Empty jobs are completed, so subtract from completed and total
-        completed: (totals.completed ?? jobCounts.completed) - emptyAdjust,
+        completed: (totals.completed ?? jobCounts.completed) -
+          totalIdleAutoRuns,
         delayed: totals.delayed ?? jobCounts.delayed,
-        total: (totals.total ?? jobCounts.total) - emptyAdjust,
+        total: (totals.total ?? jobCounts.total) - totalIdleAutoRuns,
       };
     } else {
       const totals = filteredTypeTotals;
       if (!totals) return jobCounts;
 
-      const emptyAdjust = hideEmpty ? totals.emptyRuns : 0;
+      if (isEmptyView) {
+        return {
+          active: 0,
+          waiting: 0,
+          failed: 0,
+          completed: totals.idleAutoRuns,
+          delayed: 0,
+          total: totals.idleAutoRuns,
+        };
+      }
       return {
         active: totals.active,
         waiting: totals.waiting,
         failed: totals.failed,
-        completed: totals.completed - emptyAdjust,
+        completed: totals.completed - totals.idleAutoRuns,
         delayed: totals.delayed,
-        total: totals.total - emptyAdjust,
+        total: totals.total - totals.idleAutoRuns,
       };
     }
   }, [
@@ -2885,9 +2903,24 @@ export default function JobsPage() {
     jobStatsResponse,
     filteredTypeTotals,
     jobCounts,
-    hideEmpty,
-    totalEmptyRuns,
+    isEmptyView,
+    totalIdleAutoRuns,
   ]);
+
+  const idleViewCount = allTypesSelected
+    ? totalIdleAutoRuns
+    : filteredTypeTotals?.idleAutoRuns ?? 0;
+  const operationalViewCount = allTypesSelected
+    ? Math.max(
+      0,
+      (jobStatsResponse?.totals.total ?? jobCounts.total) -
+        totalIdleAutoRuns,
+    )
+    : Math.max(
+      0,
+      (filteredTypeTotals?.total ?? jobCounts.total) -
+        (filteredTypeTotals?.idleAutoRuns ?? 0),
+    );
 
   // Get workers sorted by pipeline order, with unknown workers at the end
   const sortedWorkers = useMemo(() => {
@@ -3084,15 +3117,6 @@ export default function JobsPage() {
       );
     }
 
-    // Apply hide empty filter
-    if (hideEmpty) {
-      result = result.filter((job) => {
-        // Only filter completed jobs - keep active/waiting/failed visible
-        if (job.state !== "completed") return true;
-        return !isEmptyJobResult(job);
-      });
-    }
-
     // Sort the results
     const sortedResult = [...result].sort((a, b) => {
       let aVal: any;
@@ -3157,7 +3181,6 @@ export default function JobsPage() {
     limit,
     sortColumn,
     sortDirection,
-    hideEmpty,
   ]);
 
   const refetch = () => {
@@ -3266,8 +3289,7 @@ export default function JobsPage() {
       filterStatuses.size !== ALL_STATUSES.length ||
       searchQuery !== "" ||
       inferenceFilter !== null ||
-      errorFilter !== null ||
-      hideEmpty
+      errorFilter !== null
     );
   }, [
     quickFilter,
@@ -3276,7 +3298,6 @@ export default function JobsPage() {
     searchQuery,
     inferenceFilter,
     errorFilter,
-    hideEmpty,
     ALL_STATUSES.length,
   ]);
 
@@ -5204,62 +5225,87 @@ export default function JobsPage() {
         </CardContent>
       </Card>
 
-      {/* Quick Filter Tabs */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
-          variant={quickFilter === "all" ? "default" : "outline"}
+          variant={!isEmptyView ? "default" : "outline"}
           size="sm"
-          onClick={() => setQuickFilter("all")}
+          onClick={() => setJobsView("operational")}
         >
-          All ({displayCounts.total})
+          Jobs ({operationalViewCount})
         </Button>
         <Button
-          variant={quickFilter === "active" ? "default" : "outline"}
+          variant={isEmptyView ? "default" : "outline"}
           size="sm"
-          onClick={() => setQuickFilter("active")}
-          className={quickFilter !== "active"
-            ? "text-blue-500 hover:text-blue-600"
-            : ""}
+          onClick={() => setJobsView("idle_auto")}
+          title="Completed automatic checks that found no work"
         >
-          <Activity className="h-3.5 w-3.5 mr-1" />
-          Active ({displayCounts.active})
+          Empty ({idleViewCount})
         </Button>
-        <Button
-          variant={quickFilter === "waiting" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setQuickFilter("waiting")}
-          className={quickFilter !== "waiting"
-            ? "text-yellow-500 hover:text-yellow-600"
-            : ""}
-        >
-          <Clock className="h-3.5 w-3.5 mr-1" />
-          Waiting ({displayCounts.waiting})
-        </Button>
-        <Button
-          variant={quickFilter === "failed" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setQuickFilter("failed")}
-          className={quickFilter !== "failed"
-            ? "text-red-500 hover:text-red-600 border-red-500/30"
-            : ""}
-        >
-          <AlertCircle className="h-3.5 w-3.5 mr-1" />
-          Errors ({displayCounts.failed})
-        </Button>
-        <Button
-          variant={quickFilter === "completed" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setQuickFilter("completed")}
-          className={quickFilter !== "completed"
-            ? "text-green-500 hover:text-green-600"
-            : ""}
-        >
-          <CheckCircle className="h-3.5 w-3.5 mr-1" />
-          Completed ({displayCounts.completed})
-        </Button>
+        {isEmptyView && (
+          <span className="text-xs text-muted-foreground">
+            Automatic checks that found no work. History is retained for
+            diagnostics.
+          </span>
+        )}
       </div>
 
-      <JobErrorStats />
+      {!isEmptyView && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant={quickFilter === "all" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setQuickFilter("all")}
+          >
+            All ({displayCounts.total})
+          </Button>
+          <Button
+            variant={quickFilter === "active" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setQuickFilter("active")}
+            className={quickFilter !== "active"
+              ? "text-blue-500 hover:text-blue-600"
+              : ""}
+          >
+            <Activity className="h-3.5 w-3.5 mr-1" />
+            Active ({displayCounts.active})
+          </Button>
+          <Button
+            variant={quickFilter === "waiting" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setQuickFilter("waiting")}
+            className={quickFilter !== "waiting"
+              ? "text-yellow-500 hover:text-yellow-600"
+              : ""}
+          >
+            <Clock className="h-3.5 w-3.5 mr-1" />
+            Waiting ({displayCounts.waiting})
+          </Button>
+          <Button
+            variant={quickFilter === "failed" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setQuickFilter("failed")}
+            className={quickFilter !== "failed"
+              ? "text-red-500 hover:text-red-600 border-red-500/30"
+              : ""}
+          >
+            <AlertCircle className="h-3.5 w-3.5 mr-1" />
+            Errors ({displayCounts.failed})
+          </Button>
+          <Button
+            variant={quickFilter === "completed" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setQuickFilter("completed")}
+            className={quickFilter !== "completed"
+              ? "text-green-500 hover:text-green-600"
+              : ""}
+          >
+            <CheckCircle className="h-3.5 w-3.5 mr-1" />
+            Completed ({displayCounts.completed})
+          </Button>
+        </div>
+      )}
+
+      {!isEmptyView && <JobErrorStats />}
 
       <Card>
         <CardContent className="space-y-3 mt-6">
@@ -5511,16 +5557,6 @@ export default function JobsPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Switch
-                id="hide-empty"
-                checked={hideEmpty}
-                onCheckedChange={toggleHideEmpty}
-              />
-              <Label htmlFor="hide-empty" className="text-sm cursor-pointer">
-                Hide empty
-              </Label>
-            </div>
             {hasActiveFilters && (
               <Button
                 variant="ghost"

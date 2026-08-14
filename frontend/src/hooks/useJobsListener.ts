@@ -6,6 +6,11 @@ import { useNavigate } from "react-router-dom";
 import type { JobInfo } from "@/types/jobs";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { buildSummarizationCompletionNotifications } from "@/lib/jobNotifications";
+import {
+  buildJobsListRequest,
+  type JobsListView,
+  shouldRefreshJobsViews,
+} from "@/lib/jobListView";
 
 /** Format job type for display */
 function formatJobType(type: string): string {
@@ -68,6 +73,7 @@ function getResultDescription(result: any): string | null {
 
 interface UseJobsListenerOptions {
   types?: string[];
+  view?: JobsListView;
   onJobFinished?: (job: {
     id: string;
     type: string;
@@ -82,25 +88,24 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
 
   // Create a stable query key that includes the types filter
   const queryKey = options.types?.length
-    ? ["jobs", "filtered", options.types.sort().join(",")]
-    : ["jobs", "all"];
+    ? [
+      "jobs",
+      options.view ?? "operational",
+      "filtered",
+      [...options.types].sort().join(","),
+    ]
+    : ["jobs", options.view ?? "operational", "all"];
 
   const { data: jobs = [], isLoading } = useQuery({
     queryKey,
     queryFn: async () => {
-      const response = await api.callResource("jobs", {
-        action: "list",
-        limit: 1000,
-        statuses: [
-          "active",
-          "waiting",
-          "delayed",
-          "completed",
-          "failed",
-          "cancelled",
-        ],
-        ...(options.types?.length && { types: options.types }),
-      });
+      const response = await api.callResource(
+        "jobs",
+        buildJobsListRequest(
+          options.view ?? "operational",
+          options.types,
+        ),
+      );
       return response as JobInfo[];
     },
     staleTime: 30000,
@@ -193,7 +198,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
         }
       });
 
-      if (event.event === "job.completed" && event.data) {
+      if (shouldRefreshJobsViews(event.event) && event.data) {
+        // A completed automatic run can move from the operational view to the
+        // idle-auto view. Refresh every cached jobs view so the server-side
+        // classifier, not a partial WebSocket payload, decides membership.
+        void queryClient.invalidateQueries({ queryKey: ["jobs"] });
         if (jobData.jobType === "speakerIdentity") {
           void queryClient.invalidateQueries({ queryKey: ["speaker-track"] });
           void queryClient.invalidateQueries({
