@@ -6,7 +6,7 @@ describe("getDiarizationJobRoute", () => {
     expect(getDiarizationJobRoute({
       id: "job-1",
       type: "diarization",
-      data: { diarizationServerUrl: "http://100.119.163.116:8085" },
+      data: { diarizationServerUrl: "http://diarizer.example.test:8085" },
       state: "active",
       progress: {},
       timestamp: 1,
@@ -17,7 +17,7 @@ describe("getDiarizationJobRoute", () => {
       },
     })).toEqual({
       name: "RTX 4090",
-      url: "http://100.119.163.116:8085",
+      url: "http://diarizer.example.test:8085",
     });
   });
 

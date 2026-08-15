@@ -8,7 +8,7 @@ Make diarization operable from the Jobs page in the same place as STT and LLM ro
 
 ## Confirmed current failures
 
-1. The saved remote profile is named `faeon-diar` and points to `http://100.119.163.116:8085`, but new diarization jobs are labelled `selfhost`. The generic enqueue snapshot first copies the primary LLM profile name. Diarization routing later replaces the profile ID and URL but does not replace `providerProfileName`.
+1. The saved remote profile is named `remote-diarizer` and points to `http://diarizer.example.test:8085`, but new diarization jobs are labelled `selfhost`. The generic enqueue snapshot first copies the primary LLM profile name. Diarization routing later replaces the profile ID and URL but does not replace `providerProfileName`.
 2. The first generation job `6a79437d2233ed05182939ec` failed because the diarization capability may write and update `db/diarizations` but may not read it. Speaker-label reconciliation reads existing diarizations, producing HTTP 403.
 3. That failure moved the generation run out of `building`. Generic `Run again` copied the same `runId`, so subsequent jobs failed with `A building diarization run must exist before processing`.
 4. The default job limit is four sequences, while detailed progress is emitted only every fifth sequence. Later progress payloads also omit `total_chunks`, so the Jobs page cannot retain a percentage or calculate an ETA.
@@ -56,7 +56,7 @@ When enqueue selects a healthy diarizator route, it must snapshot the selected r
 
 No diarization field may be inherited from LLM routing. Jobs list and Job Details continue to read the immutable snapshot through `getDiarizationJobRoute`.
 
-Historical jobs are not rewritten. A pre-fix job that says `selfhost` remains an audit record of the previously stored snapshot. New jobs using the configured remote route must display `faeon-diar · http://100.119.163.116:8085`.
+Historical jobs are not rewritten. A pre-fix job that says `selfhost` remains an audit record of the previously stored snapshot. New jobs using the configured remote route must display `remote-diarizer · http://diarizer.example.test:8085`.
 
 ## Capability repair
 
@@ -151,7 +151,7 @@ Generation launch
 
 ### Backend and queue
 
-- Selecting `faeon-diar` snapshots its ID, exact name, URL, source, and resolved timestamp.
+- Selecting `remote-diarizer` snapshots its ID, exact name, URL, source, and resolved timestamp.
 - A primary LLM profile named `selfhost` cannot leak into diarization provenance.
 - Route enable/disable and numeric priority patches preserve all unrelated profiles and fields.
 - Disabling the final available route is rejected.
@@ -180,9 +180,9 @@ Generation launch
 - Verify backend/frontend bind mounts and effective runtime modes per `DEVELOPMENT.md`.
 - Rebuild/recreate only the affected production-mode application services and restart nginx.
 - Wait for backend `[READY]`, healthy containers, `/health=200`, and `/readiness=200`.
-- In Jobs, confirm local/environment remains disabled and `faeon-diar` is enabled with numeric priority.
+- In Jobs, confirm local/environment remains disabled and `remote-diarizer` is enabled with numeric priority.
 - Launch a bounded seven-day generation against the remote route.
-- Confirm the new job shows `faeon-diar`, emits progress before five sequences, and shows remaining work/ETA after its first successful sequence.
+- Confirm the new job shows `remote-diarizer`, emits progress before five sequences, and shows remaining work/ETA after its first successful sequence.
 - Confirm the new run stays isolated and is not activated automatically.
 
 ## Acceptance criteria

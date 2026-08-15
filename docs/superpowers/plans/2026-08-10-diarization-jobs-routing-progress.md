@@ -99,21 +99,21 @@ Because the effective backend mode is `start`, recreate only backend, restart ng
 
 - [ ] **Step 1: Write a failing pure snapshot test**
 
-Add a test where the existing context contains the primary LLM name `selfhost` and the selected route is `faeon-diar`:
+Add a test where the existing context contains the primary LLM name `selfhost` and the selected route is `remote-diarizer`:
 
 ```ts
 expect(buildDiarizatorJobSnapshot({
-  providerProfileId: "faeon",
-  providerProfileName: "faeon-diar",
-  baseUrl: "http://100.119.163.116:8085",
+  providerProfileId: "remote-1",
+  providerProfileName: "remote-diarizer",
+  baseUrl: "http://diarizer.example.test:8085",
 }, {
   providerProfileName: "selfhost",
 }, "2026-08-10T00:00:00.000Z")).toEqual({
-  diarizationServerUrl: "http://100.119.163.116:8085",
+  diarizationServerUrl: "http://diarizer.example.test:8085",
   routingContext: {
-    providerProfileId: "faeon",
-    providerProfileName: "faeon-diar",
-    sourceId: "diarization:faeon",
+    providerProfileId: "remote-1",
+    providerProfileName: "remote-diarizer",
+    sourceId: "diarization:remote-1",
     resolvedAt: "2026-08-10T00:00:00.000Z",
   },
 });
@@ -299,7 +299,7 @@ git commit -m "feat: report diarization remaining work and eta"
 
 - [ ] **Step 1: Write failing immutable-update tests**
 
-Cover a remote profile and the environment route. Assert that updating `faeon` priority to 40 preserves the second profile, names, URLs, enable flags, and environment priority. Assert that disabling the last available route returns the existing validation error.
+Cover a remote profile and the environment route. Assert that updating `remote-1` priority to 40 preserves the second profile, names, URLs, enable flags, and environment priority. Assert that disabling the last available route returns the existing validation error.
 
 - [ ] **Step 2: Verify RED**
 
@@ -361,7 +361,7 @@ git commit -m "feat: manage diarizator priorities from jobs"
 
 - [ ] **Step 1: Write failing frontend generation tests**
 
-Given a failed job with `runId=old`, active run `legacy-v0`, maximum generation 3, and healthy `faeon-diar`, assert a new ID, generation 4, the original range, and `replacesRunId=legacy-v0`. Assert the returned enqueue payload never contains `runId=old`.
+Given a failed job with `runId=old`, active run `legacy-v0`, maximum generation 3, and healthy `remote-diarizer`, assert a new ID, generation 4, the original range, and `replacesRunId=legacy-v0`. Assert the returned enqueue payload never contains `runId=old`.
 
 - [ ] **Step 2: Verify frontend RED and implement the pure builder**
 
@@ -428,11 +428,11 @@ Read `DEVELOPMENT.md`, verify mounts and effective `FRONTEND_MODE`/`BACKEND_TASK
 
 - [ ] **Step 3: Verify Jobs route controls in the browser**
 
-Confirm environment/local is disabled, `faeon-diar` is enabled, URL is `http://100.119.163.116:8085`, exact numeric priority saves, and health is visible. Do not enable local as part of testing.
+Confirm environment/local is disabled, `remote-diarizer` is enabled, URL is `http://diarizer.example.test:8085`, exact numeric priority saves, and health is visible. Do not enable local as part of testing.
 
 - [ ] **Step 4: Launch a new bounded seven-day generation**
 
-Use the generation operation, not generic rerun. Verify the new run is `building`, the job label is `faeon-diar`, `db.diarizations:read` is allowed, and no 403 occurs.
+Use the generation operation, not generic rerun. Verify the new run is `building`, the job label is `remote-diarizer`, `db.diarizations:read` is allowed, and no 403 occurs.
 
 - [ ] **Step 5: Observe real progress**
 

@@ -142,19 +142,19 @@ Deno.test("diarizator snapshot replaces an inherited LLM provider name", () => {
   assertEquals(
     buildDiarizatorJobSnapshot(
       {
-        providerProfileId: "faeon",
-        providerProfileName: "faeon-diar",
-        baseUrl: "http://100.119.163.116:8085",
+        providerProfileId: "remote-1",
+        providerProfileName: "remote-diarizer",
+        baseUrl: "http://diarizer.example.test:8085",
       },
       { providerProfileName: "selfhost" },
       "2026-08-10T00:00:00.000Z",
     ),
     {
-      diarizationServerUrl: "http://100.119.163.116:8085",
+      diarizationServerUrl: "http://diarizer.example.test:8085",
       routingContext: {
-        providerProfileId: "faeon",
-        providerProfileName: "faeon-diar",
-        sourceId: "diarization:faeon",
+        providerProfileId: "remote-1",
+        providerProfileName: "remote-diarizer",
+        sourceId: "diarization:remote-1",
         resolvedAt: "2026-08-10T00:00:00.000Z",
       },
     },

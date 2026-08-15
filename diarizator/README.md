@@ -206,12 +206,12 @@ The expected image architecture is `amd64`. Set the Portainer stack variable
 #### Create or update the Portainer stack
 
 1. Open the target Docker environment in Portainer.
-2. Open **Stacks → Add stack** and use the name `sky-diarization`, or open the
+2. Open **Stacks → Add stack** and use the name `gpu-diarization`, or open the
    existing stack with that name.
 3. Select **Web editor** and paste the complete contents of
    `diarizator/compose.portainer.yml`.
 4. Under **Environment variables**, add `HF_TOKEN`, the immutable
-   `DIARIZATION_IMAGE` tag, and `DIARIZATION_BIND_ADDRESS=100.119.163.116`.
+   `DIARIZATION_IMAGE` tag, and `DIARIZATION_BIND_ADDRESS=<TAILSCALE_IP>`.
    Do not place the token in the Compose file or Git.
 5. Set `COMPOSE_PROFILES` to `pool-3` or `pool-6`; delete it for one process.
 6. Deploy the stack. For an update, replace the editor contents, preserve all
@@ -274,14 +274,14 @@ checklist.
 
 #### Private Portainer access through Tailscale
 
-Use `https://bastion.cheetah-cod.ts.net/`. This trusted Tailscale Serve URL
+Use `https://gpu-host.example-tailnet.ts.net/`. This trusted Tailscale Serve URL
 proxies to Portainer's self-signed loopback endpoint, so browsers do not need a
-certificate-warning bypass. Do not use the raw `100.119.163.116:9443` URL and
+certificate-warning bypass. Do not use the raw `<TAILSCALE_IP>:9443` URL and
 do not expose Portainer with Tailscale Funnel.
 
 #### Duplicate diarization containers in Portainer
 
-Canonical containers belong to the `sky-diarization` stack and have service
+Canonical containers belong to the `gpu-diarization` stack and have service
 names `diarization-1` through `diarization-6`. A container such as
 `mycelia-stt-diarization-1` belongs to another stack and is not a pool slot. If
 it is obsolete, remove the `diarization` service from that stack's Compose and

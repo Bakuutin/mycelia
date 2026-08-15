@@ -66,5 +66,5 @@ repository coverage is intentionally out of scope.
 
 Backend and frontend changes require recreating those application services and
 restarting nginx. The diarizator logging change requires a new self-contained
-`linux/amd64` CUDA image on faeon, followed by `/health`, `/embed`, `/diarize`,
+`linux/amd64` CUDA image on remote-1, followed by `/health`, `/embed`, `/diarize`,
 and GPU verification. No historical data reset or re-diarization is required.

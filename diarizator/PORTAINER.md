@@ -1,6 +1,6 @@
 # Operate the remote diarization pool with Portainer
 
-This runbook manages the `sky-diarization` Docker Compose stack on the remote
+This runbook manages the `gpu-diarization` Docker Compose stack on the remote
 NVIDIA host. The canonical stack file is `compose.portainer.yml`.
 
 The stack exposes independent private endpoints because Mycelia reserves one
@@ -13,7 +13,7 @@ Use the Tailscale HTTPS address, not the raw IP and Portainer's self-signed
 certificate:
 
 ```text
-https://bastion.cheetah-cod.ts.net/
+https://gpu-host.example-tailnet.ts.net/
 ```
 
 On the GPU host, the expected Tailscale Serve configuration is:
@@ -25,8 +25,8 @@ sudo tailscale serve status
 
 `https+insecure` applies only between the local Tailscale daemon and Portainer's
 self-signed loopback endpoint. Clients still receive a publicly trusted
-certificate for `bastion.cheetah-cod.ts.net`, and the service remains private
-to the tailnet. Do not enable Tailscale Funnel for Portainer.
+certificate for `gpu-host.example-tailnet.ts.net`, and the service remains
+private to the tailnet. Do not enable Tailscale Funnel for Portainer.
 
 Tailscale Serve requires MagicDNS and HTTPS certificates to be enabled in the
 tailnet. If the command asks for approval, open the URL it prints while signed
@@ -34,7 +34,7 @@ in as a tailnet administrator, approve HTTPS, and run the command again.
 
 ## Stack variables
 
-Create or update **Stacks → sky-diarization → Editor** using the complete
+Create or update **Stacks → gpu-diarization → Editor** using the complete
 contents of `diarizator/compose.portainer.yml`. Keep secrets in Portainer's
 **Environment variables** section, never in Git.
 
@@ -44,7 +44,7 @@ Set these variables:
 | --- | --- | --- |
 | `HF_TOKEN` | secret value | Access to the gated Pyannote model |
 | `DIARIZATION_IMAGE` | immutable imported tag | Exact image to run |
-| `DIARIZATION_BIND_ADDRESS` | `100.119.163.116` | Bind only to the Tailscale interface |
+| `DIARIZATION_BIND_ADDRESS` | `<TAILSCALE_IP>` | Bind only to the Tailscale interface |
 | `DIARIZATION_MODELS_VOLUME` | `mycelia_diarization_models` | Persistent shared model cache |
 | `COMPOSE_PROFILES` | unset, `pool-3`, or `pool-6` | Select pool capacity |
 | `DIARIZATION_SEGMENTATION_BATCH_SIZE` | `8` | Pyannote segmentation inference batch |
@@ -80,7 +80,7 @@ To change capacity without sending new work to containers that are stopping:
 1. In Mycelia open **Settings → Diarization** and disable the routes that will
    disappear. Existing jobs keep their route snapshot, so let them finish or
    cancel them before continuing.
-2. In Portainer open **Stacks → sky-diarization**, select **Stop this stack**,
+2. In Portainer open **Stacks → gpu-diarization**, select **Stop this stack**,
    and wait until all current processes have exited.
 3. Open **Editor** and change only `COMPOSE_PROFILES` in **Environment
    variables**.
@@ -101,12 +101,12 @@ Configure the Mycelia routes with equal priority and one slot each:
 
 | Route | Base URL | Priority | Slots |
 | --- | --- | ---: | ---: |
-| `gpu-1` | `http://100.119.163.116:8085` | 1 | 1 |
-| `gpu-2` | `http://100.119.163.116:8086` | 1 | 1 |
-| `gpu-3` | `http://100.119.163.116:8087` | 1 | 1 |
-| `gpu-4` | `http://100.119.163.116:8088` | 1 | 1 |
-| `gpu-5` | `http://100.119.163.116:8089` | 1 | 1 |
-| `gpu-6` | `http://100.119.163.116:8090` | 1 | 1 |
+| `gpu-1` | `http://<TAILSCALE_IP>:8085` | 1 | 1 |
+| `gpu-2` | `http://<TAILSCALE_IP>:8086` | 1 | 1 |
+| `gpu-3` | `http://<TAILSCALE_IP>:8087` | 1 | 1 |
+| `gpu-4` | `http://<TAILSCALE_IP>:8088` | 1 | 1 |
+| `gpu-5` | `http://<TAILSCALE_IP>:8089` | 1 | 1 |
+| `gpu-6` | `http://<TAILSCALE_IP>:8090` | 1 | 1 |
 
 Do not advertise slots for stopped processes. Health filtering prevents an
 unhealthy route from being selected, but configured slots still affect the
@@ -122,7 +122,7 @@ utilization, throttling, and OOM events.
 ## Stop and start
 
 For a planned full stop, first disable all remote routes in Mycelia and drain
-or cancel active jobs. Then use **Stacks → sky-diarization → Stop this stack**.
+or cancel active jobs. Then use **Stacks → gpu-diarization → Stop this stack**.
 Start the same stack from its Portainer page, wait for health and a real
 inference check, then enable only the routes for the selected profile.
 

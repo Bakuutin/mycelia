@@ -9,7 +9,7 @@ SERVER_ADDRESS="$1"
 if [ -z "$SERVER_ADDRESS" ]; then
     echo "Usage: $0 <ip-or-domain>"
     echo "Example: $0 100.83.66.30"
-    echo "Example: $0 kraken.tail168755.ts.net"
+    echo "Example: $0 gpu-host.example-tailnet.ts.net"
     exit 1
 fi
 
