@@ -156,7 +156,7 @@ class DiarizationJobTest(TestCase):
             ),
             patch(
                 "jobs.diarization.is_diarization_route_enabled",
-                side_effect=[True, False],
+                side_effect=[True, True, False],
             ),
             patch(
                 "jobs.diarization.diarize_sequence",
@@ -178,7 +178,37 @@ class DiarizationJobTest(TestCase):
 
         self.assertEqual(diarize.call_count, 1)
         self.assertEqual(result["processed"], 2)
-        self.assertTrue(result["hasMore"])
+        self.assertFalse(result["hasMore"])
+        self.assertTrue(result["routeDisabled"])
+        self.assertEqual(updates[-1]["stage"], "stopping")
+
+    def test_disabled_route_stops_before_sequence_scan(self):
+        updates = []
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks", return_value=4),
+            patch(
+                "jobs.diarization.is_diarization_route_enabled",
+                return_value=False,
+            ),
+            patch("jobs.diarization.get_diarization_sequences") as sequences,
+            patch("jobs.diarization.diarize_sequence") as diarize,
+        ):
+            result = process_diarization_job(
+                "job-route-already-off",
+                DiarizationJobData(
+                    limit=2,
+                    routingContext={"providerProfileId": "gpu-4"},
+                ),
+                updates.append,
+            )
+
+        sequences.assert_not_called()
+        diarize.assert_not_called()
+        self.assertEqual(result["processed"], 0)
+        self.assertFalse(result["hasMore"])
         self.assertTrue(result["routeDisabled"])
         self.assertEqual(updates[-1]["stage"], "stopping")
 

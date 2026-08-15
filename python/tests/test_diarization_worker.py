@@ -21,6 +21,7 @@ from diarization_worker import (  # noqa: E402
     _segment_identity_key,
     _failure_retry_state,
     _get_overlap_segments,
+    count_pending_chunks_for_original,
     diarize_sequence,
     get_diarization_sequences,
     mark_as_diarized,
@@ -61,6 +62,15 @@ def _diarize_response(segments: int = 3) -> SimpleNamespace:
 
 
 class DiarizationWorkerTest(TestCase):
+    def test_original_pending_count_is_best_effort(self):
+        original_id = ObjectId()
+
+        with patch(
+            "diarization_worker.call_resource",
+            side_effect=RuntimeError("count timed out"),
+        ):
+            self.assertIsNone(count_pending_chunks_for_original(original_id))
+
     def test_similarity_threshold_is_sent_as_query_parameter(self):
         data, params = _build_diarization_request_fields("[]")
 

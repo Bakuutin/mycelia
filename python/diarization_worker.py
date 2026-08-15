@@ -550,16 +550,25 @@ def _get_claim_owner(chunk_id: ObjectId) -> Optional[str]:
 def count_pending_chunks_for_original(original_id: ObjectId) -> Optional[int]:
     filters = {'original_id': original_id}
     query = _build_pending_chunk_filters(filters)
-    result = call_resource('mongo', {
-        "action": "count",
-        "collection": "audio_chunks",
-        "query": query,
-        "options": {
-            "hint": "audio_chunks_diarization_ready_backlog_v1",
-            "maxTimeMS": 5_000,
-        },
-    })
-    return int(result) if result is not None else None
+    try:
+        result = call_resource('mongo', {
+            "action": "count",
+            "collection": "audio_chunks",
+            "query": query,
+            "options": {
+                "hint": "audio_chunks_diarization_ready_backlog_v1",
+                "maxTimeMS": 5_000,
+            },
+        })
+        return int(result) if result is not None else None
+    except Exception as exc:
+        # This count is diagnostic only. Inference, persistence, and chunk
+        # completion have already succeeded, so a slow historical count must
+        # not turn the sequence into a retry and duplicate GPU work.
+        log_info(
+            f'Pending chunk count unavailable for original {original_id}: {exc}'
+        )
+        return None
 
 
 def claim_sequence(seq: DiarizationSequence, worker_id: str) -> tuple[bool, Optional[str]]:

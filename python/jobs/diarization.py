@@ -298,17 +298,41 @@ def process_diarization_job(
     provider_unavailable = False
     route_disabled = False
     provider_profile_id = (data.routingContext or {}).get("providerProfileId")
+
+    # Check the operational stop before constructing the Mongo-backed sequence
+    # iterator. Advancing that iterator can scan a large historical range, so
+    # a job snapshotted to a route that was disabled during pool downsizing
+    # should release its worker slot immediately.
+    if not is_diarization_route_enabled(provider_profile_id):
+        route_disabled = True
+        logger.info(
+            "Stopping diarization job %s before scanning because route %s is disabled",
+            job_id,
+            provider_profile_id,
+        )
+        progress_callback({
+            "stage": "stopping",
+            "message": "Route disabled; stopping before scanning for work",
+            "campaignId": campaign_id,
+            "providerProfileId": provider_profile_id,
+            "sequences_processed": cumulative_sequences,
+            "chunks_processed": cumulative_chunks,
+            "segments_created": cumulative_segments,
+        })
+        sequences = ()
+    else:
+        sequences = get_diarization_sequences(
+            # Concurrent jobs can initially observe the same Mongo cursor window.
+            # Keep scanning after a lost claim instead of burning this job's batch
+            # budget on work that another diarizator already owns.
+            limit=None,
+            filters=filters if filters else None,
+            worker_id=worker_id,
+            include_diarized=building_generation,
+        )
     
     # Get and process sequences
-    for sequence in get_diarization_sequences(
-        # Concurrent jobs can initially observe the same Mongo cursor window.
-        # Keep scanning after a lost claim instead of burning this job's batch
-        # budget on work that another diarizator already owns.
-        limit=None,
-        filters=filters if filters else None,
-        worker_id=worker_id,
-        include_diarized=building_generation,
-    ):
+    for sequence in sequences:
         # Route toggles are an operational stop control, not only an enqueue
         # filter. A synchronous request already in flight may finish, but the
         # batch must not start another external call after its route is off.
@@ -459,6 +483,10 @@ def process_diarization_job(
         # Avoid a hot continuation loop while the selected service is down.
         # The historical watchdog resumes interrupted campaigns once their
         # persisted sequence retryAt becomes eligible again.
+        has_more = False
+    if route_disabled:
+        # A route toggle is an explicit operator stop. Never chain another job
+        # carrying the same immutable, now-disabled route snapshot.
         has_more = False
     if building_generation and not has_more and not provider_unavailable:
         now = datetime.now().astimezone()
