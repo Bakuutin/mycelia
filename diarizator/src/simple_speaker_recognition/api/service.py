@@ -124,6 +124,15 @@ async def health():
         "device": str(device),
         "service": "pyannote-diarization",
         "ready": audio_backend is not None,
+        "batching": (
+            {
+                "segmentation": audio_backend.segmentation_batch_size,
+                "pipeline_embeddings": audio_backend.embedding_batch_size,
+                "segment_embeddings": audio_backend.segment_embedding_batch_size,
+            }
+            if audio_backend is not None
+            else None
+        ),
         **(fingerprint or {}),
     }
 
@@ -365,12 +374,14 @@ async def diarize(
             f"Diarization params: min_speakers={min_speakers}, max_speakers={max_speakers}, collar={collar}, min_duration_off={min_duration_off}"
         )
         diarize_start = time.time()
+        full_waveform = await audio_backend.async_load_wave(tmp_path)
         segments = await audio_backend.async_diarize(
             tmp_path,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             collar=collar,
             min_duration_off=min_duration_off,
+            waveform=full_waveform,
         )
         diarize_time = time.time() - diarize_start
         log.info(
@@ -402,6 +413,7 @@ async def diarize(
         segment_info = []
         valid_segments = []  # Keep track of which segments were successfully processed
         embed_start = time.time()
+        embedding_candidates = []
 
         for i, segment in enumerate(segments):
             log.debug(
@@ -411,39 +423,17 @@ async def diarize(
             try:
                 # Preserve the detected timestamps, but add surrounding context when
                 # the embedding model cannot process a very short turn directly.
-                wav = audio_backend.load_wave(
-                    tmp_path,
+                wav = audio_backend.crop_waveform(
+                    full_waveform,
                     start=segment["start"],
                     end=segment["end"],
                     min_duration=0.5,
                 )
-                log.debug(f"  Loaded audio shape: {wav.shape}")
-
-                # Extract embedding
-                emb = await audio_backend.async_embed(wav)
-                emb_flat = emb.flatten()
-
-                # Validate embedding
-                if np.any(np.isnan(emb_flat)):
-                    log.error(f"  Segment {i+1} produced NaN embedding, skipping")
-                    continue
-
-                log.debug(
-                    f"  Embedding shape: {emb_flat.shape}, norm: {np.linalg.norm(emb_flat):.4f}"
-                )
-
-                segment_embeddings.append(emb_flat)
-                segment_info.append(
-                    {
-                        "start": segment["start"],
-                        "end": segment["end"],
-                        "duration": segment["duration"],
-                        "speaker": segment[
-                            "speaker"
-                        ],  # Original pyannote speaker label
-                    }
-                )
-                valid_segments.append(segment)  # Keep track of valid segment
+                if wav.shape[-1] < audio_backend.min_embedding_samples:
+                    raise ValueError(
+                        f"cropped segment has only {wav.shape[-1]} samples"
+                    )
+                embedding_candidates.append((i, segment, wav))
             except ValueError as e:
                 log.error(f"  Failed to process segment {i+1}: {e}")
                 continue
@@ -452,6 +442,52 @@ async def diarize(
                     f"  Unexpected error processing segment {i+1}: {e}", exc_info=True
                 )
                 continue
+
+        def append_embedding(segment, embedding):
+            emb_flat = np.asarray(embedding).flatten()
+            if np.any(np.isnan(emb_flat)):
+                raise ValueError("segment produced a NaN embedding")
+            segment_embeddings.append(emb_flat)
+            segment_info.append(
+                {
+                    "start": segment["start"],
+                    "end": segment["end"],
+                    "duration": segment["duration"],
+                    "speaker": segment["speaker"],
+                }
+            )
+            valid_segments.append(segment)
+
+        embedding_batch_size = audio_backend.segment_embedding_batch_size
+        for offset in range(0, len(embedding_candidates), embedding_batch_size):
+            batch_candidates = embedding_candidates[
+                offset : offset + embedding_batch_size
+            ]
+            try:
+                batch_embeddings = await audio_backend.async_embed_batch(
+                    [candidate[2] for candidate in batch_candidates]
+                )
+                for (_, segment, _), embedding in zip(
+                    batch_candidates, batch_embeddings
+                ):
+                    append_embedding(segment, embedding)
+            except Exception as batch_error:
+                log.warning(
+                    "Batch embedding failed for %d segments; retrying individually: %s",
+                    len(batch_candidates),
+                    batch_error,
+                )
+                for index, segment, wav in batch_candidates:
+                    try:
+                        embedding = await audio_backend.async_embed(wav)
+                        append_embedding(segment, embedding)
+                    except Exception as segment_error:
+                        log.error(
+                            "Failed to embed segment %d/%d: %s",
+                            index + 1,
+                            len(segments),
+                            segment_error,
+                        )
 
         embed_time = time.time() - embed_start
         num_processed = len(segment_embeddings)

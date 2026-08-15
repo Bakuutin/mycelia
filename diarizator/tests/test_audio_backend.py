@@ -66,6 +66,44 @@ class AudioBackendTest(unittest.TestCase):
 
             self.assertEqual(wave.shape, (1, 1, 8000))
 
+    def test_preloaded_waveform_can_be_cropped_without_decoding_again(self):
+        waveform = torch.arange(16000, dtype=torch.float32).reshape(1, 1, -1)
+
+        cropped = self.backend.crop_waveform(
+            waveform,
+            start=0.4,
+            end=0.6,
+            min_duration=0.5,
+        )
+
+        self.assertEqual(cropped.shape, (1, 1, 8000))
+
+    def test_embedding_batch_uses_padding_masks_and_normalizes_rows(self):
+        calls = []
+
+        def embedder(batch, masks=None):
+            calls.append((batch.cpu(), masks.cpu()))
+            return np.array([[3.0, 4.0], [0.0, 2.0]], dtype=np.float32)
+
+        self.backend.device = torch.device("cpu")
+        self.backend.min_embedding_samples = 8000
+        self.backend.embedder = embedder
+
+        embeddings = self.backend.embed_batch(
+            [
+                torch.ones((1, 1, 8000)),
+                torch.ones((1, 1, 10000)),
+            ]
+        )
+
+        self.assertEqual(calls[0][0].shape, (2, 1, 10000))
+        self.assertEqual(calls[0][1].shape, (2, 10000))
+        self.assertEqual(int(calls[0][1][0].sum()), 8000)
+        np.testing.assert_allclose(
+            embeddings,
+            np.array([[0.6, 0.8], [0.0, 1.0]], dtype=np.float32),
+        )
+
     def test_diarization_passes_preloaded_waveform_to_pyannote(self):
         """CPU diarization must not depend on Pyannote's TorchCodec loader."""
         annotation = Mock()
@@ -83,6 +121,51 @@ class AudioBackendTest(unittest.TestCase):
         self.assertIsInstance(audio_input, dict)
         self.assertEqual(audio_input["sample_rate"], 16000)
         self.assertEqual(audio_input["waveform"].shape, (1, 16000))
+
+    def test_diarization_reuses_supplied_waveform(self):
+        annotation = Mock()
+        annotation.itertracks.return_value = []
+        self.backend.diar = Mock(return_value=Mock(speaker_diarization=annotation))
+        self.backend.load_wave = Mock(side_effect=AssertionError("must not decode"))
+
+        self.backend.diarize(
+            Path("unused.wav"),
+            waveform=torch.zeros((1, 1, 16000)),
+        )
+
+        self.backend.load_wave.assert_not_called()
+        audio_input = self.backend.diar.call_args.args[0]
+        self.assertEqual(audio_input["waveform"].shape, (1, 16000))
+
+    def test_gpu_batch_sizes_are_configurable(self):
+        pipeline = Mock()
+        pipeline.to.return_value = pipeline
+        embedder = Mock(dimension=256)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "DIARIZATION_SEGMENTATION_BATCH_SIZE": "12",
+                    "DIARIZATION_EMBEDDING_BATCH_SIZE": "10",
+                    "DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE": "14",
+                },
+                clear=True,
+            ),
+            patch(
+                "simple_speaker_recognition.core.audio_backend.Pipeline.from_pretrained",
+                return_value=pipeline,
+            ),
+            patch(
+                "simple_speaker_recognition.core.audio_backend.PretrainedSpeakerEmbedding",
+                return_value=embedder,
+            ),
+        ):
+            backend = AudioBackend("hf-token", torch.device("cuda"))
+
+        self.assertEqual(pipeline.segmentation_batch_size, 12)
+        self.assertEqual(pipeline.embedding_batch_size, 10)
+        self.assertEqual(backend.segment_embedding_batch_size, 14)
 
     def test_diarization_does_not_format_full_model_output_for_info_logging(self):
         class DiarizationOutput:

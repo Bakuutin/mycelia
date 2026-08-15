@@ -96,7 +96,7 @@ Deno.test("historical watchdog closes an exhausted range before routing", async 
     },
   });
 
-  expect(pending).toBe(1);
+  expect(pending).toBe(true);
   expect(updates).toHaveLength(1);
   expect(updates[0].update.$set).toMatchObject({
     status: "completed",
@@ -131,7 +131,7 @@ Deno.test("historical watchdog waits for delayed work without empty jobs", async
     },
   });
 
-  expect(pending).toBe(0);
+  expect(pending).toBe(false);
   expect(audioFind).toBe(2);
 });
 

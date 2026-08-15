@@ -86,10 +86,11 @@ diarization request (`DIARIZATION_MAX_SEQUENCE_CHUNKS=2`). This preserves the
 one-chunk overlap used for speaker continuity while avoiding a confirmed Docker
 Desktop OOM when six chunks are combined under an 8 GB VM.
 After assigning 10–12 GB to Docker, or when the worker targets a sufficiently
-large remote/GPU service, increase throughput explicitly:
+large remote/GPU service, increase throughput explicitly. The tested starting
+point for a 24 GiB RTX 4090 pool is:
 
 ```bash
-DIARIZATION_MAX_SEQUENCE_CHUNKS=6
+DIARIZATION_MAX_SEQUENCE_CHUNKS=8
 ```
 
 ### 2B. Linux server with an NVIDIA GPU (CUDA 12.6)
@@ -115,6 +116,13 @@ docker compose --profile gpu exec diarization-service-gpu \
 The GPU image is intentionally `linux/amd64` and uses the CUDA 12.6 PyTorch
 wheels. Confirm that the installed NVIDIA driver supports this CUDA runtime.
 Do not build or run this image as the local Mac default.
+
+GPU deployments default to Pyannote segmentation and internal embedding batch
+sizes of `8`, plus a per-segment identity embedding batch of `16`. Override
+`DIARIZATION_SEGMENTATION_BATCH_SIZE`, `DIARIZATION_EMBEDDING_BATCH_SIZE`, and
+`DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` only after a representative
+throughput/VRAM benchmark. `/health` reports the effective values under
+`batching`.
 
 To stop either deployment:
 

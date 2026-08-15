@@ -47,6 +47,9 @@ Set these variables:
 | `DIARIZATION_BIND_ADDRESS` | `100.119.163.116` | Bind only to the Tailscale interface |
 | `DIARIZATION_MODELS_VOLUME` | `mycelia_diarization_models` | Persistent shared model cache |
 | `COMPOSE_PROFILES` | unset, `pool-3`, or `pool-6` | Select pool capacity |
+| `DIARIZATION_SEGMENTATION_BATCH_SIZE` | `8` | Pyannote segmentation inference batch |
+| `DIARIZATION_EMBEDDING_BATCH_SIZE` | `8` | Pyannote internal embedding batch |
+| `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `16` | Mycelia per-segment identity embedding batch |
 
 Ports default to `8085` through `8090`. Override `DIARIZATION_PORT_1` through
 `DIARIZATION_PORT_6` only if those ports conflict. All processes default to GPU
@@ -101,10 +104,12 @@ Do not advertise slots for stopped processes. Health filtering prevents an
 unhealthy route from being selected, but configured slots still affect the
 worker's desired concurrency and operator UI.
 
-`pool-6` is an experimental capacity mode on a 24 GiB RTX 4090. Three observed
-processes held about 9.4 GiB in total, but peak inference memory and other GPU
-services also count. Before leaving six enabled, run concurrent real jobs and
-monitor `nvidia-smi` for peak memory, utilization, throttling, and OOM events.
+`pool-6` is an experimental capacity mode on a 24 GiB RTX 4090. With the current
+Community-1 image, an idle process was observed at about 0.53 GiB and an active
+or warmed process at about 2.2–2.5 GiB. Six warmed processes should fit, but
+peak inference memory and other GPU services also count. Before leaving six
+enabled, run concurrent real jobs and monitor `nvidia-smi` for peak memory,
+utilization, throttling, and OOM events.
 
 ## Stop and start
 
@@ -115,6 +120,12 @@ inference check, then enable only the routes for the selected profile.
 
 The named model volume survives a normal stop, start, or stack update. Do not
 delete the stack or volume merely to release GPU memory.
+
+The current service intentionally keeps models resident for the life of each
+container; it has no idle offload timer. Stopping an unused pool process is the
+reliable way to release its CUDA context and model memory. PyTorch allocator
+cache may remain visible in `nvidia-smi` after a request even though that memory
+can be reused by the same process.
 
 Restart an individual container only to recover that process from a transient
 failure. A restart does not load a new image and does not change pool capacity.

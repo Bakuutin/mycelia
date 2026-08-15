@@ -3,20 +3,36 @@
 import asyncio
 import logging
 import os
+from functools import partial
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import soundfile as sf
 import torch
 from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
-
 from pyannote.audio.telemetry import set_telemetry_metrics
 
 set_telemetry_metrics(False, save_choice_as_default=True)
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %d", name, raw, default)
+        return default
+    if value < 1:
+        logger.warning("%s must be positive; using %d", name, default)
+        return default
+    return value
+
 
 # Audio loading backend selection:
 # - "soundfile": Pure Python, works on Mac without FFmpeg (recommended for local dev)
@@ -35,6 +51,19 @@ class AudioBackend:
 
     def __init__(self, hf_token: str, device: torch.device):
         self.device = device
+        default_pipeline_batch_size = 8 if device.type == "cuda" else 1
+        default_segment_embedding_batch_size = 16 if device.type == "cuda" else 1
+        self.segmentation_batch_size = _positive_int_env(
+            "DIARIZATION_SEGMENTATION_BATCH_SIZE", default_pipeline_batch_size
+        )
+        self.embedding_batch_size = _positive_int_env(
+            "DIARIZATION_EMBEDDING_BATCH_SIZE", default_pipeline_batch_size
+        )
+        self.segment_embedding_batch_size = _positive_int_env(
+            "DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE",
+            default_segment_embedding_batch_size,
+        )
+        self.min_embedding_samples = 8000
         self.diarization_model = os.environ.get(
             "DIARIZATION_MODEL",
             "pyannote/speaker-diarization-community-1",
@@ -47,79 +76,105 @@ class AudioBackend:
         self.diar = Pipeline.from_pretrained(self.diarization_model, token=hf_token).to(
             device
         )
+        if hasattr(self.diar, "segmentation_batch_size"):
+            self.diar.segmentation_batch_size = self.segmentation_batch_size
+        if hasattr(self.diar, "embedding_batch_size"):
+            self.diar.embedding_batch_size = self.embedding_batch_size
+        logger.info(
+            "Diarization batching: segmentation=%d, pipeline_embeddings=%d, segment_embeddings=%d",
+            self.segmentation_batch_size,
+            self.embedding_batch_size,
+            self.segment_embedding_batch_size,
+        )
         logger.debug("Pipeline loaded and moved to device")
 
         # Use the EXACT same embedding model that the diarization pipeline uses internally
         logger.debug("Loading wespeaker-voxceleb-resnet34-LM embedding model")
-        self.embedder = PretrainedSpeakerEmbedding(
-            self.embedding_model, device=device
-        )
+        self.embedder = PretrainedSpeakerEmbedding(self.embedding_model, device=device)
         logger.debug(f"Embedding model loaded, dimension: {self.embedder.dimension}")
         logger.debug(f"AudioBackend ready (audio backend: {AUDIO_BACKEND})")
 
-    def embed(self, wave: torch.Tensor) -> np.ndarray:  # (1, T)
-        logger.debug(f"Embedding audio: shape={wave.shape}, device={wave.device}")
+    def embed(self, wave: torch.Tensor) -> np.ndarray:
+        return self.embed_batch([wave])
 
-        # Check minimum duration requirement (embedding model needs at least ~0.5 seconds)
-        # At 16kHz, that's about 8000 samples
-        audio_length = wave.shape[-1]
-        min_samples = 8000  # ~0.5 seconds at 16kHz
+    def embed_batch(self, waves: Sequence[torch.Tensor]) -> np.ndarray:
+        """Embed variable-length mono waveforms in one padded model call."""
+        if not waves:
+            return np.empty((0, int(self.embedder.dimension)), dtype=np.float32)
 
-        if audio_length < min_samples:
-            logger.warning(
-                f"Audio segment too short ({audio_length} samples, ~{audio_length/16000:.3f}s). Minimum required: {min_samples} samples (~{min_samples/16000:.3f}s)"
-            )
-            raise ValueError(
-                f"Audio segment too short for embedding model: {audio_length} samples < {min_samples} samples minimum"
-            )
+        prepared: List[torch.Tensor] = []
+        lengths: List[int] = []
+        for index, wave in enumerate(waves):
+            if wave.ndim == 3 and wave.shape[0] == 1:
+                wave = wave.squeeze(0)
+            if wave.ndim != 2 or wave.shape[0] != 1:
+                raise ValueError(
+                    f"Embedding waveform {index} must have shape (1, 1, T) or (1, T); got {tuple(wave.shape)}"
+                )
+            audio_length = int(wave.shape[-1])
+            if audio_length < self.min_embedding_samples:
+                raise ValueError(
+                    "Audio segment too short for embedding model: "
+                    f"{audio_length} samples < {self.min_embedding_samples} samples minimum"
+                )
+            prepared.append(wave)
+            lengths.append(audio_length)
+
+        max_samples = max(lengths)
+        batch = torch.zeros(
+            (len(prepared), 1, max_samples),
+            dtype=prepared[0].dtype,
+        )
+        masks = torch.zeros((len(prepared), max_samples), dtype=torch.float32)
+        for index, (wave, length) in enumerate(zip(prepared, lengths)):
+            batch[index, :, :length] = wave.cpu()
+            masks[index, :length] = 1.0
 
         with torch.inference_mode():
             try:
-                emb = self.embedder(wave.to(self.device))
-            except AssertionError as e:
-                logger.error(f"Embedding failed for audio shape {wave.shape}: {e}")
+                emb = self.embedder(
+                    batch.to(self.device),
+                    masks=masks.to(self.device),
+                )
+            except AssertionError as exc:
+                logger.error(
+                    "Batch embedding failed for shape %s: %s", batch.shape, exc
+                )
                 raise ValueError(
-                    f"Audio segment too short for embedding model: {e}"
-                ) from e
-            except Exception as e:
-                logger.error(f"Unexpected error during embedding: {e}")
+                    f"Audio segment too short for embedding model: {exc}"
+                ) from exc
+            except Exception:
+                logger.exception("Unexpected error during batch embedding")
                 raise
 
         if isinstance(emb, torch.Tensor):
             emb = emb.cpu().numpy()
-
-        # Check for NaN values
-        if np.any(np.isnan(emb)):
-            logger.error(
-                f"Embedding contains NaN values! Input shape: {wave.shape}, embedding shape: {emb.shape}"
-            )
+        emb = np.asarray(emb)
+        if emb.ndim != 2 or emb.shape[0] != len(prepared):
             raise ValueError(
-                "Embedding computation produced NaN values - audio segment may be too short or invalid"
+                f"Embedding model returned unexpected shape {emb.shape} for batch {len(prepared)}"
             )
+        if np.any(np.isnan(emb)):
+            raise ValueError("Embedding computation produced NaN values")
 
         norm = np.linalg.norm(emb, axis=-1, keepdims=True)
-        logger.debug(f"Raw embedding shape: {emb.shape}, norm: {norm.flatten()}")
-
-        # Check for zero norm
         if np.any(norm == 0):
             logger.warning(
-                f"Zero norm detected in embedding, using identity normalization"
+                "Zero norm detected in embedding, using identity normalization"
             )
-            norm = np.ones_like(norm)
-
+            norm = np.where(norm == 0, 1.0, norm)
         normalized = emb / norm
-
-        # Final NaN check after normalization
         if np.any(np.isnan(normalized)):
-            logger.error(f"Normalized embedding contains NaN values!")
             raise ValueError("Normalized embedding contains NaN values")
-
-        logger.debug(f"Normalized embedding shape: {normalized.shape}")
         return normalized
 
     async def async_embed(self, wave: torch.Tensor) -> np.ndarray:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.embed, wave)
+
+    async def async_embed_batch(self, waves: Sequence[torch.Tensor]) -> np.ndarray:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.embed_batch, waves)
 
     def diarize(
         self,
@@ -128,6 +183,7 @@ class AudioBackend:
         max_speakers: Optional[int] = None,
         collar: Optional[float] = None,
         min_duration_off: Optional[float] = None,
+        waveform: Optional[torch.Tensor] = None,
     ) -> List[Dict]:
         """Perform speaker diarization on an audio file.
 
@@ -148,8 +204,9 @@ class AudioBackend:
         # TorchCodec, which may be unavailable even when soundfile can decode
         # the same WAV (notably in native CPU containers on Apple Silicon).
         # load_wave normalizes to mono 16 kHz and returns (batch, channel, time).
-        waveform = self.load_wave(path).squeeze(0)
-        audio_input = {"waveform": waveform, "sample_rate": 16000}
+        if waveform is None:
+            waveform = self.load_wave(path)
+        audio_input = {"waveform": waveform.squeeze(0), "sample_rate": 16000}
 
         # Community-1 is already tuned. Keep this only as an explicit legacy-model
         # escape hatch; mutating the pipeline per request is not thread-safe.
@@ -215,6 +272,7 @@ class AudioBackend:
         max_speakers: Optional[int] = None,
         collar: Optional[float] = None,
         min_duration_off: Optional[float] = None,
+        waveform: Optional[torch.Tensor] = None,
     ) -> List[Dict]:
         """Async wrapper for diarization.
 
@@ -228,13 +286,68 @@ class AudioBackend:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
-            self.diarize,
-            path,
-            min_speakers,
-            max_speakers,
-            collar,
-            min_duration_off,
+            partial(
+                self.diarize,
+                path,
+                min_speakers,
+                max_speakers,
+                collar,
+                min_duration_off,
+                waveform,
+            ),
         )
+
+    async def async_load_wave(self, path: Path) -> torch.Tensor:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.load_wave, path)
+
+    def crop_waveform(
+        self,
+        waveform: torch.Tensor,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+        min_duration: Optional[float] = None,
+    ) -> torch.Tensor:
+        """Crop an already decoded mono 16 kHz waveform."""
+        if waveform.ndim == 2:
+            waveform = waveform.unsqueeze(0)
+        if waveform.ndim != 3 or waveform.shape[0] != 1 or waveform.shape[1] != 1:
+            raise ValueError(
+                f"Expected waveform shape (1, 1, T) or (1, T), got {tuple(waveform.shape)}"
+            )
+        if start is None and end is None:
+            return waveform
+
+        file_duration = waveform.shape[-1] / 16000.0
+        requested_start = 0.0 if start is None else start
+        requested_end = file_duration if end is None else end
+        start_clamped = max(0.0, min(requested_start, file_duration))
+        end_clamped = max(start_clamped, min(requested_end, file_duration))
+
+        if min_duration is not None and end_clamped - start_clamped < min_duration:
+            missing = min_duration - (end_clamped - start_clamped)
+            start_clamped = max(0.0, start_clamped - missing / 2)
+            end_clamped = min(file_duration, end_clamped + missing / 2)
+            remaining = min_duration - (end_clamped - start_clamped)
+            if remaining > 0:
+                if start_clamped == 0.0:
+                    end_clamped = min(file_duration, end_clamped + remaining)
+                elif end_clamped == file_duration:
+                    start_clamped = max(0.0, start_clamped - remaining)
+
+        if requested_start != start_clamped or requested_end != end_clamped:
+            logger.warning(
+                "Segment [%.6fs, %.6fs] clamped to [%.6fs, %.6fs] for file duration %.6fs",
+                requested_start,
+                requested_end,
+                start_clamped,
+                end_clamped,
+                file_duration,
+            )
+
+        start_sample = int(start_clamped * 16000)
+        end_sample = int(end_clamped * 16000)
+        return waveform[..., start_sample:end_sample]
 
     def load_wave(
         self,
@@ -276,48 +389,12 @@ class AudioBackend:
             waveform = self._resample(waveform, sample_rate, 16000)
             logger.debug(f"Resampled to 16kHz: shape={waveform.shape}")
 
-        # Get duration for clamping
-        file_duration = waveform.shape[1] / 16000.0
-
-        # Crop if start and/or end specified
-        if start is not None or end is not None:
-            # Default start to 0 if only end is provided
-            if start is None:
-                start = 0.0
-            # Default end to file duration if only start is provided
-            if end is None:
-                end = file_duration
-            # Clamp segment bounds to file duration
-            start_clamped = max(0.0, min(start, file_duration))
-            end_clamped = max(start_clamped, min(end, file_duration))
-
-            if min_duration is not None and end_clamped - start_clamped < min_duration:
-                missing = min_duration - (end_clamped - start_clamped)
-                start_clamped = max(0.0, start_clamped - missing / 2)
-                end_clamped = min(file_duration, end_clamped + missing / 2)
-
-                # If one edge was clamped, take the remaining context from the other edge.
-                remaining = min_duration - (end_clamped - start_clamped)
-                if remaining > 0:
-                    if start_clamped == 0.0:
-                        end_clamped = min(file_duration, end_clamped + remaining)
-                    elif end_clamped == file_duration:
-                        start_clamped = max(0.0, start_clamped - remaining)
-
-            # Log if we had to clamp the segment
-            if start != start_clamped or end != end_clamped:
-                logger.warning(
-                    f"Segment [{start:.6f}s, {end:.6f}s] clamped to [{start_clamped:.6f}s, {end_clamped:.6f}s] for file duration {file_duration:.6f}s"
-                )
-
-            start_sample = int(start_clamped * 16000)
-            end_sample = int(end_clamped * 16000)
-            waveform = waveform[:, start_sample:end_sample]
-            logger.debug(
-                f"Cropped to [{start_clamped:.3f}s, {end_clamped:.3f}s]: shape={waveform.shape}"
-            )
-
-        return waveform.unsqueeze(0)  # (1, 1, T)
+        return self.crop_waveform(
+            waveform.unsqueeze(0),
+            start=start,
+            end=end,
+            min_duration=min_duration,
+        )
 
     def _load_with_soundfile(self, path: Path) -> tuple:
         """Load audio using soundfile (pure Python, Mac compatible)."""

@@ -165,7 +165,9 @@ export default new NetworkJobCapability({
         unresolved: false,
       };
       if (state.ready) {
-        return 1;
+        // This is an existence check, not a backlog estimate. Returning true
+        // lets the trigger manager fill every free provider slot immediately.
+        return true;
       }
 
       // A claimed chunk or a retry whose delay has not elapsed is unresolved,
@@ -176,7 +178,7 @@ export default new NetworkJobCapability({
         campaignChunkQuery(campaign, { readyOnly: false }),
       );
       if (unresolved) {
-        return 0;
+        return false;
       }
 
       await completeExhaustedCampaign(mongo, campaign);
@@ -185,13 +187,11 @@ export default new NetworkJobCapability({
     // Trigger checks only need existence. Counting the entire historical
     // backlog every 300 seconds delayed both startup and batch continuation.
     return await findPendingChunk(
-        mongo,
-        campaignChunkQuery({}, {
-          readyOnly: true,
-        }),
-      )
-      ? 1
-      : 0;
+      mongo,
+      campaignChunkQuery({}, {
+        readyOnly: true,
+      }),
+    );
   },
   getTriggerJobData: async (_payload, _reason, { mongo }) => {
     const campaign = (await findOpenHistoricalCampaigns(mongo))[0];
