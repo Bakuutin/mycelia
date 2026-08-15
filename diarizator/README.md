@@ -117,8 +117,11 @@ The GPU image is intentionally `linux/amd64` and uses the CUDA 12.6 PyTorch
 wheels. Confirm that the installed NVIDIA driver supports this CUDA runtime.
 Do not build or run this image as the local Mac default.
 
-GPU deployments default to Pyannote segmentation and internal embedding batch
-sizes of `8`, plus a per-segment identity embedding batch of `16`. Override
+The standalone single-process GPU deployment defaults to Pyannote segmentation
+and internal embedding batch sizes of `8`, plus a per-segment identity
+embedding batch of `16`. The six-process Portainer pool uses `8/8/4` and
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`: a third batch of `16`
+triggered recoverable CUDA OOM fallback on a shared 24 GiB RTX 4090. Override
 `DIARIZATION_SEGMENTATION_BATCH_SIZE`, `DIARIZATION_EMBEDDING_BATCH_SIZE`, and
 `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` only after a representative
 throughput/VRAM benchmark. `/health` reports the effective values under

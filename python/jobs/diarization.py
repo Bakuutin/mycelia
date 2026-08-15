@@ -20,6 +20,11 @@ from lib.resources import call_resource
 logger = logging.getLogger(__name__)
 
 
+def diarization_claim_owner(job_id: str) -> str:
+    """Return a claim owner that is unique to one concurrent BullMQ job."""
+    return f"{get_worker_id()}:job:{job_id}"
+
+
 def campaign_rate_estimate(samples: list[float]) -> Optional[float]:
     recent = [float(value) for value in samples[-10:] if value > 0]
     if len(recent) < 2:
@@ -42,6 +47,37 @@ class DiarizationJobData(BaseModel):
     diarizationServerUrl: Optional[str] = None
     campaignId: Optional[str] = None
     originalId: Optional[str] = None
+    routingContext: Optional[Dict[str, Any]] = None
+
+
+def is_diarization_route_enabled(provider_profile_id: Optional[str]) -> bool:
+    """Return whether the snapshotted route still accepts external calls."""
+    if not provider_profile_id:
+        # Legacy jobs without a provider snapshot keep their historical
+        # behavior. New provider-routed jobs always carry this field.
+        return True
+
+    try:
+        config = call_resource("config", {"action": "get"}) or {}
+    except Exception as exc:
+        # A transient config read must not interrupt a healthy inference call.
+        # The next sequence checks again, so an explicit disable still takes
+        # effect as soon as config storage recovers.
+        logger.warning(
+            "Could not verify diarization route %s; allowing this sequence: %s",
+            provider_profile_id,
+            exc,
+        )
+        return True
+
+    routes = config.get("diarizationProfiles") or {}
+    if provider_profile_id == "environment":
+        return bool(routes.get("includeEnvironment", True))
+
+    for profile in routes.get("profiles", []):
+        if str(profile.get("id")) == provider_profile_id:
+            return bool(profile.get("enabled", True))
+    return False
 
 
 def _campaign_call(request: Dict[str, Any]) -> Any:
@@ -74,7 +110,7 @@ def process_diarization_job(
     This job runs speaker diarization on audio chunks, combining them into
     sequences and calling the diarization server to identify speakers.
     """
-    worker_id = get_worker_id()
+    worker_id = diarization_claim_owner(job_id)
     started_at = time.monotonic()
     logger.info(f"Starting diarization job {job_id}, worker={worker_id}")
     
@@ -121,14 +157,14 @@ def process_diarization_job(
     cumulative_segments = int(campaign.get("segmentsCreated", 0))
     cumulative_errors = int(campaign.get("errorCount", 0))
 
-    # Missing-work campaigns recount the indexed ready backlog before every
-    # bounded job. A persisted campaign total becomes stale when another job
-    # processes chunks, and the indexed count is cheap enough to keep the Jobs
-    # progress display exact. Generation builds retain their frozen total.
+    # Continuations reuse the persisted campaign total. Recounting a large
+    # historical backlog in every concurrent job delays the external GPU
+    # requests and turns a six-slot pool into a staggered ramp. The total is a
+    # progress estimate; actual continuation is still decided by claimed work.
     count_warning: Optional[str] = None
     campaign_total = campaign.get("totalChunks") if campaign else None
     try:
-        if building_generation and campaign and campaign_total is not None:
+        if campaign and campaign_total is not None:
             pending_count: Optional[int] = max(
                 int(campaign_total) - int(campaign.get("processedChunks", 0)),
                 0,
@@ -249,6 +285,7 @@ def process_diarization_job(
     
     # Process sequences
     sequences_processed = 0
+    skipped_sequences = 0
     chunks_processed = 0
     segments_created = 0
     errors = 0
@@ -259,14 +296,40 @@ def process_diarization_job(
     cursor: Optional[datetime] = data.cursor
     elapsed_seconds = 0.0
     provider_unavailable = False
+    route_disabled = False
+    provider_profile_id = (data.routingContext or {}).get("providerProfileId")
     
     # Get and process sequences
     for sequence in get_diarization_sequences(
-        limit=effective_batch_size,
+        # Concurrent jobs can initially observe the same Mongo cursor window.
+        # Keep scanning after a lost claim instead of burning this job's batch
+        # budget on work that another diarizator already owns.
+        limit=None,
         filters=filters if filters else None,
         worker_id=worker_id,
         include_diarized=building_generation,
     ):
+        # Route toggles are an operational stop control, not only an enqueue
+        # filter. A synchronous request already in flight may finish, but the
+        # batch must not start another external call after its route is off.
+        if not is_diarization_route_enabled(provider_profile_id):
+            route_disabled = True
+            logger.info(
+                "Stopping diarization job %s before the next sequence because route %s is disabled",
+                job_id,
+                provider_profile_id,
+            )
+            progress_callback({
+                "stage": "stopping",
+                "message": "Route disabled; stopping before the next external request",
+                "campaignId": campaign_id,
+                "providerProfileId": provider_profile_id,
+                "sequences_processed": cumulative_sequences + sequences_processed,
+                "chunks_processed": cumulative_chunks + chunks_processed,
+                "segments_created": cumulative_segments + segments_created,
+            })
+            break
+
         result = diarize_sequence(
             sequence,
             worker_id,
@@ -277,6 +340,10 @@ def process_diarization_job(
             expected_embedding_space_id=(run or {}).get("embeddingSpaceId") if building_generation else None,
             server_url=data.diarizationServerUrl,
         )
+        if result.get("status") == "skipped":
+            skipped_sequences += 1
+            continue
+
         sequences_processed += 1
         chunks_processed += result.get("chunks_diarized", 0)
         segments_created += result.get("segments", 0)
@@ -354,6 +421,8 @@ def process_diarization_job(
             "currentChunksPerSecond": batch_rate,
             "lastCursor": cursor,
         })
+        if sequences_processed >= effective_batch_size:
+            break
     
     retryable_failure = any(
         bool(detail.get("retryable")) for detail in error_details
@@ -438,9 +507,11 @@ def process_diarization_job(
         "errors": error_details,
         "successfulSequences": successful_sequences,
         "failedSequences": failed_sequences,
+        "skippedSequences": skipped_sequences,
         "processed": chunks_processed,
         "hasMore": has_more,
         "retryScheduled": provider_unavailable,
+        "routeDisabled": route_disabled,
         "cursor": cursor.isoformat() if cursor else None,
         "campaignId": campaign_id,
         "batchNumber": batch_number,

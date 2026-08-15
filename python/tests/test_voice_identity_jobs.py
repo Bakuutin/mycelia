@@ -11,6 +11,8 @@ path.insert(0, str(Path(__file__).resolve().parents[1]))
 from jobs.diarization import (  # noqa: E402
     DiarizationJobData,
     campaign_rate_estimate,
+    diarization_claim_owner,
+    is_diarization_route_enabled,
     process_diarization_job,
 )
 from jobs.enrollment import EnrollmentJobData, process_enrollment_job  # noqa: E402
@@ -113,6 +115,73 @@ class EnrollmentJobTest(TestCase):
 
 
 class DiarizationJobTest(TestCase):
+    def test_claim_owner_is_unique_per_job(self):
+        with patch("jobs.diarization.get_worker_id", return_value="host_1"):
+            self.assertEqual(
+                diarization_claim_owner("job-a"),
+                "host_1:job:job-a",
+            )
+            self.assertNotEqual(
+                diarization_claim_owner("job-a"),
+                diarization_claim_owner("job-b"),
+            )
+
+    def test_route_enabled_state_follows_saved_routing_config(self):
+        config = {
+            "diarizationProfiles": {
+                "includeEnvironment": False,
+                "profiles": [
+                    {"id": "gpu-1", "enabled": True},
+                    {"id": "gpu-2", "enabled": False},
+                ],
+            },
+        }
+        with patch("jobs.diarization.call_resource", return_value=config):
+            self.assertFalse(is_diarization_route_enabled("environment"))
+            self.assertTrue(is_diarization_route_enabled("gpu-1"))
+            self.assertFalse(is_diarization_route_enabled("gpu-2"))
+            self.assertFalse(is_diarization_route_enabled("removed-route"))
+
+    def test_disabling_route_stops_batch_before_next_external_request(self):
+        sequences = [object(), object()]
+        updates = []
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks", return_value=4),
+            patch(
+                "jobs.diarization.get_diarization_sequences",
+                return_value=sequences,
+            ),
+            patch(
+                "jobs.diarization.is_diarization_route_enabled",
+                side_effect=[True, False],
+            ),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={
+                    "status": "diarized",
+                    "chunks_diarized": 2,
+                    "segments": 3,
+                },
+            ) as diarize,
+        ):
+            result = process_diarization_job(
+                "job-route-off",
+                DiarizationJobData(
+                    limit=2,
+                    routingContext={"providerProfileId": "environment"},
+                ),
+                updates.append,
+            )
+
+        self.assertEqual(diarize.call_count, 1)
+        self.assertEqual(result["processed"], 2)
+        self.assertTrue(result["hasMore"])
+        self.assertTrue(result["routeDisabled"])
+        self.assertEqual(updates[-1]["stage"], "stopping")
+
     def test_empty_campaign_is_finalized_instead_of_left_running(self):
         with (
             patch("jobs.diarization.count_pending_chunks", return_value=0),
@@ -179,7 +248,7 @@ class DiarizationJobTest(TestCase):
                 lambda _progress: None,
             )
 
-        self.assertEqual(get_sequences.call_args.kwargs["limit"], 1)
+        self.assertIsNone(get_sequences.call_args.kwargs["limit"])
         self.assertTrue(result["hasMore"])
         self.assertEqual(result["processed"], 2)
         self.assertTrue(result["campaignId"].startswith("diarization-"))
@@ -187,7 +256,34 @@ class DiarizationJobTest(TestCase):
         self.assertTrue(any(update.get("batchNumber") == 1 for update in campaign_updates))
         self.assertTrue(any(update.get("estimatedBatches") == 2 for update in campaign_updates))
 
-    def test_continuation_recounts_ready_backlog_and_replaces_stale_total(self):
+    def test_lost_claim_scans_forward_without_consuming_batch_capacity(self):
+        sequences = [object(), object()]
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks", return_value=4),
+            patch("jobs.diarization.get_diarization_sequences", return_value=sequences),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                side_effect=[
+                    {"status": "skipped", "chunks_diarized": 0, "segments": 0},
+                    {"status": "diarized", "chunks_diarized": 2, "segments": 3},
+                ],
+            ) as diarize,
+        ):
+            result = process_diarization_job(
+                "job-parallel",
+                DiarizationJobData(limit=1),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(diarize.call_count, 2)
+        self.assertEqual(result["sequences_processed"], 1)
+        self.assertEqual(result["skippedSequences"], 1)
+        self.assertEqual(result["processed"], 2)
+
+    def test_continuation_reuses_campaign_total_without_wide_recount(self):
         updates = []
         campaign = {
             "campaignId": "diarization-historical-existing",
@@ -202,7 +298,7 @@ class DiarizationJobTest(TestCase):
         with (
             patch("jobs.diarization._campaign_call", return_value=campaign),
             patch("jobs.diarization._update_campaign"),
-            patch("jobs.diarization.count_pending_chunks", return_value=8) as count,
+            patch("jobs.diarization.count_pending_chunks") as count,
             patch("jobs.diarization.get_diarization_sequences", return_value=[object()]),
             patch(
                 "jobs.diarization.diarize_sequence",
@@ -218,12 +314,12 @@ class DiarizationJobTest(TestCase):
                 updates.append,
             )
 
-        count.assert_called_once_with(None)
+        count.assert_not_called()
         processing = [update for update in updates if update.get("stage") == "processing"]
-        self.assertEqual(processing[0]["total_chunks"], 20)
-        self.assertEqual(processing[0]["chunks_remaining"], 8)
+        self.assertEqual(processing[0]["total_chunks"], 100)
+        self.assertEqual(processing[0]["chunks_remaining"], 88)
         self.assertEqual(processing[-1]["chunks_processed"], 14)
-        self.assertEqual(processing[-1]["chunks_remaining"], 6)
+        self.assertEqual(processing[-1]["chunks_remaining"], 86)
         self.assertTrue(result["hasMore"])
 
     def test_one_failed_sequence_does_not_end_a_campaign_of_unknown_size(self):

@@ -49,12 +49,20 @@ Set these variables:
 | `COMPOSE_PROFILES` | unset, `pool-3`, or `pool-6` | Select pool capacity |
 | `DIARIZATION_SEGMENTATION_BATCH_SIZE` | `8` | Pyannote segmentation inference batch |
 | `DIARIZATION_EMBEDDING_BATCH_SIZE` | `8` | Pyannote internal embedding batch |
-| `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `16` | Mycelia per-segment identity embedding batch |
+| `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `4` | Mycelia per-segment identity embedding batch |
+| `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | Reduce CUDA allocator fragmentation |
 
 Ports default to `8085` through `8090`. Override `DIARIZATION_PORT_1` through
 `DIARIZATION_PORT_6` only if those ports conflict. All processes default to GPU
 device `0`; a multi-GPU host can override `DIARIZATION_GPU_1` through
 `DIARIZATION_GPU_6`.
+
+The `8/8/4` defaults are the safe starting point for six simultaneous
+processes on a 24 GiB RTX 4090 that also hosts other GPU services. A segment
+embedding batch of `16` completed through the service's per-segment fallback,
+but produced recoverable CUDA OOM warnings with less than 0.5 GiB free and was
+slower in practice. Pool sizes one and three can benchmark a larger third
+value separately.
 
 ## Select one, three, or six processes
 
