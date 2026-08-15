@@ -2,7 +2,7 @@
 
 A minimal inference provider for speaker diarization with embeddings using Pyannote Community-1. Supports matching Pyannote speaker clusters against known profiles.
 
-For the complete Mycelia operator workflow — local Mac and remote RTX 4090
+For the complete Mycelia operator workflow — local Mac and remote NVIDIA GPU
 deployment, routing, campaigns, voice enrollment, calibration, identity
 backfill, and Timeline verification — see
 [`docs/SPEAKER_IDENTIFICATION.md`](../docs/SPEAKER_IDENTIFICATION.md).
@@ -92,7 +92,7 @@ large remote/GPU service, increase throughput explicitly:
 DIARIZATION_MAX_SEQUENCE_CHUNKS=6
 ```
 
-### 2B. Linux server with RTX 4090 (CUDA 12.6)
+### 2B. Linux server with an NVIDIA GPU (CUDA 12.6)
 
 Prerequisites on the server:
 
@@ -112,9 +112,9 @@ docker compose --profile gpu exec diarization-service-gpu \
   uv run python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
 ```
 
-The GPU image is intentionally `linux/amd64`; RTX 4090 is an NVIDIA Ada GPU
-and is served by the CUDA 12.6 PyTorch wheels. Do not build or run this image as
-the local Mac default.
+The GPU image is intentionally `linux/amd64` and uses the CUDA 12.6 PyTorch
+wheels. Confirm that the installed NVIDIA driver supports this CUDA runtime.
+Do not build or run this image as the local Mac default.
 
 To stop either deployment:
 
@@ -123,6 +123,160 @@ docker compose --profile cpu down
 # or
 docker compose --profile gpu down
 ```
+
+### 2C. Portainer-managed NVIDIA GPU deployment
+
+This is the canonical remote deployment when the Docker endpoint is managed by
+Portainer. Keep these three artifacts together and do not build an ad-hoc
+overlay Dockerfile on the server:
+
+- image build context: `diarizator/`;
+- image definition: `diarizator/Dockerfile`;
+- Portainer stack: `diarizator/compose.portainer.yml`.
+
+The detailed operator runbook is [`diarizator/PORTAINER.md`](PORTAINER.md).
+
+The checked-in stack defaults to `mycelia-diarization:cu126`. It uses
+`pull_policy: never`, so the exact `linux/amd64` image must exist on the
+Portainer Docker endpoint before the stack is deployed. Set
+`DIARIZATION_IMAGE` in Portainer to use an immutable versioned tag. The stack
+creates the persistent `mycelia_diarization_models` volume automatically. One
+stack publishes one, three, or six private endpoints selected through the
+Compose-native `COMPOSE_PROFILES` variable.
+
+#### Build on a Mac and transfer over SSH
+
+Run from the Mycelia repository root. Use an immutable tag for every new build;
+do not overwrite an existing tag because Portainer could keep running the old
+image ID.
+
+```bash
+IMAGE_TAG=20260814-abcdef0
+IMAGE="mycelia-diarization:${IMAGE_TAG}"
+GPU_SERVER=user@gpu-server
+
+docker buildx build \
+  --platform linux/amd64 \
+  --build-arg PYTORCH_CUDA_VERSION=cu126 \
+  --file diarizator/Dockerfile \
+  --tag "${IMAGE}" \
+  --load \
+  diarizator
+
+docker image inspect "${IMAGE}" \
+  --format 'id={{.Id}} arch={{.Architecture}}'
+
+docker save --output "/tmp/mycelia-diarization-${IMAGE_TAG}.tar" "${IMAGE}"
+gzip -f "/tmp/mycelia-diarization-${IMAGE_TAG}.tar"
+scp "/tmp/mycelia-diarization-${IMAGE_TAG}.tar.gz" "${GPU_SERVER}:/tmp/"
+```
+
+If Portainer has access to the NVIDIA Docker endpoint, the preferred path is
+to upload a minimal build context and build there; this avoids transferring a
+multi-gigabyte finished image. See [PORTAINER.md](PORTAINER.md#build-and-update-the-image).
+
+Import it on the NVIDIA server. `ssh -t` allocates a terminal so `sudo` can ask
+for the server password without putting it in shell history:
+
+```bash
+ssh -t user@gpu-server
+sudo docker load --input /tmp/mycelia-diarization-20260814-abcdef0.tar.gz
+sudo docker image inspect \
+  mycelia-diarization:20260814-abcdef0 \
+  --format 'id={{.Id}} arch={{.Architecture}}'
+sudo docker run --rm --gpus all \
+  nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+exit
+```
+
+The expected image architecture is `amd64`. Set the Portainer stack variable
+`DIARIZATION_IMAGE` to the imported immutable tag before deploying.
+
+#### Create or update the Portainer stack
+
+1. Open the target Docker environment in Portainer.
+2. Open **Stacks → Add stack** and use the name `sky-diarization`, or open the
+   existing stack with that name.
+3. Select **Web editor** and paste the complete contents of
+   `diarizator/compose.portainer.yml`.
+4. Under **Environment variables**, add `HF_TOKEN`, the immutable
+   `DIARIZATION_IMAGE` tag, and `DIARIZATION_BIND_ADDRESS=100.119.163.116`.
+   Do not place the token in the Compose file or Git.
+5. Set `COMPOSE_PROFILES` to `pool-3` or `pool-6`; delete it for one process.
+6. Deploy the stack. For an update, replace the editor contents, preserve all
+   environment variables, enable **Prune services**, and select
+   **Update the stack**.
+
+The Hugging Face account owning the token must have accepted both gated model
+agreements listed in the prerequisites. The first start can take several
+minutes while the persistent model volume is populated.
+
+Verify all runtime layers instead of relying on the green container icon alone:
+
+```bash
+curl -fsS http://SERVER_PRIVATE_IP:8085/health
+```
+
+The response must contain `"ready":true` and `"device":"cuda"`. Portainer
+logs must also contain records equivalent to:
+
+```text
+CUDA device name: <NVIDIA GPU model>
+Models ready - device=cuda
+```
+
+Finally send a permitted test audio file and require HTTP 200 from `/diarize`:
+
+```bash
+curl -fsS --max-time 180 \
+  -X POST http://SERVER_PRIVATE_IP:8085/diarize \
+  -F file=@/path/to/permitted-test.wav
+```
+
+Do not upload personal audio to a remote server unless the owner has explicitly
+approved that transfer.
+
+#### Select pool capacity
+
+The canonical stack supports one, three, or six independent processes without
+editing its YAML. Set Portainer's `COMPOSE_PROFILES` stack variable to:
+
+| Processes | `COMPOSE_PROFILES` | Ports |
+| ---: | --- | --- |
+| 1 | unset or empty | `8085` |
+| 3 | `pool-3` | `8085`–`8087` |
+| 6 | `pool-6` | `8085`–`8090` |
+
+Before changing the value, disable disappearing Mycelia routes, drain work, and
+stop the stack. Then select **Prune services** and **Update the stack**. When
+reducing capacity, Portainer can retain exited containers for services disabled
+by the new profile; remove only those extra stopped containers and do not remove
+volumes. Each enabled endpoint must have a matching Mycelia profile with
+Priority `1` and Slots `1`.
+
+The six-process mode is experimental on a 24 GiB GPU. Validate concurrent peak
+memory and throughput with real work before leaving it enabled.
+
+See [`PORTAINER.md`](PORTAINER.md) for the exact Tailscale URL, stack variables,
+profile-switch procedure, Mycelia route table, image update, and verification
+checklist.
+
+#### Private Portainer access through Tailscale
+
+Use `https://bastion.cheetah-cod.ts.net/`. This trusted Tailscale Serve URL
+proxies to Portainer's self-signed loopback endpoint, so browsers do not need a
+certificate-warning bypass. Do not use the raw `100.119.163.116:9443` URL and
+do not expose Portainer with Tailscale Funnel.
+
+#### Duplicate diarization containers in Portainer
+
+Canonical containers belong to the `sky-diarization` stack and have service
+names `diarization-1` through `diarization-6`. A container such as
+`mycelia-stt-diarization-1` belongs to another stack and is not a pool slot. If
+it is obsolete, remove the `diarization` service from that stack's Compose and
+update the stack; deleting only the container allows Portainer/Compose to
+create it again. A restart loop ending in `HF_TOKEN environment variable is
+required` confirms that the duplicate is not a working provider.
 
 ### 3. Connect Mycelia
 
@@ -138,7 +292,7 @@ useful for isolated service development. If used alongside containerized
 Mycelia, configure an explicit reachable URL; Docker Desktop host-port
 hairpinning is not used as the supported default.
 
-For a remote RTX 4090 server, set the backend to the reachable protected URL,
+For a remote GPU server, set the backend to the reachable protected URL,
 or add that URL in **Settings → Diarization** and give it a lower priority:
 
 ```bash
@@ -181,7 +335,7 @@ docker compose --profile diarization up -d --force-recreate diarizator
   memory pressure. Increase Docker memory/swap and make sure the CUDA image is
   not running on the Mac.
 
-`CUDA available: False` on the RTX 4090 server
+`CUDA available: False` on the GPU server
 
 - Confirm the GPU profile was used, the image is `mycelia-diarizator:cu126`,
   and the NVIDIA Container Toolkit smoke test above succeeds.

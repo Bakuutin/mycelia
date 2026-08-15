@@ -1,0 +1,127 @@
+# Canonical Portainer stack for one NVIDIA GPU diarization pool.
+#
+# Capacity is selected with the Compose-native COMPOSE_PROFILES variable:
+#   unset / empty -> 1 process   (port 8085)
+#   pool-3        -> 3 processes (ports 8085-8087)
+#   pool-6        -> 6 processes (ports 8085-8090)
+#
+# Portainer must redeploy the stack with "Prune services" enabled when the
+# profile is reduced. Each process loads a separate model copy into GPU memory.
+x-diarization-common: &diarization-common
+  image: ${DIARIZATION_IMAGE:-mycelia-diarization:cu126}
+  pull_policy: never
+  command:
+    - uv
+    - run
+    - --no-sync
+    - --extra
+    - cu126
+    - --no-dev
+    - simple-speaker-service
+  init: true
+  stop_grace_period: 5m
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+  environment:
+    HF_HOME: /models
+    HF_TOKEN: ${HF_TOKEN:?Set HF_TOKEN in Portainer}
+    DIARIZATION_MODEL: pyannote/speaker-diarization-community-1
+    COMPUTE_MODE: gpu
+    SPEAKER_SERVICE_HOST: 0.0.0.0
+    SPEAKER_SERVICE_PORT: "8085"
+    LOG_LEVEL: INFO
+  volumes:
+    - diarization-models:/models
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 10m
+  restart: unless-stopped
+
+services:
+  # The baseline service has no profile and therefore always runs.
+  diarization-1:
+    <<: *diarization-common
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-127.0.0.1}:${DIARIZATION_PORT_1:-8085}:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DIARIZATION_GPU_1:-0}"]
+              capabilities: [gpu]
+
+  # pool-3 and pool-6 both include processes 2 and 3.
+  diarization-2:
+    <<: *diarization-common
+    profiles: ["pool-3", "pool-6"]
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-127.0.0.1}:${DIARIZATION_PORT_2:-8086}:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DIARIZATION_GPU_2:-0}"]
+              capabilities: [gpu]
+
+  diarization-3:
+    <<: *diarization-common
+    profiles: ["pool-3", "pool-6"]
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-127.0.0.1}:${DIARIZATION_PORT_3:-8087}:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DIARIZATION_GPU_3:-0}"]
+              capabilities: [gpu]
+
+  # The remaining processes are enabled only by the experimental pool-6 mode.
+  diarization-4:
+    <<: *diarization-common
+    profiles: ["pool-6"]
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-127.0.0.1}:${DIARIZATION_PORT_4:-8088}:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DIARIZATION_GPU_4:-0}"]
+              capabilities: [gpu]
+
+  diarization-5:
+    <<: *diarization-common
+    profiles: ["pool-6"]
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-127.0.0.1}:${DIARIZATION_PORT_5:-8089}:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DIARIZATION_GPU_5:-0}"]
+              capabilities: [gpu]
+
+  diarization-6:
+    <<: *diarization-common
+    profiles: ["pool-6"]
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-127.0.0.1}:${DIARIZATION_PORT_6:-8090}:8085"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DIARIZATION_GPU_6:-0}"]
+              capabilities: [gpu]
+
+volumes:
+  diarization-models:
+    name: ${DIARIZATION_MODELS_VOLUME:-mycelia_diarization_models}

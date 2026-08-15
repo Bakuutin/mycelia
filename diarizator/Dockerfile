@@ -1,6 +1,6 @@
 FROM python:3.12-bookworm
 
-ARG PYTORCH_CUDA_VERSION
+ARG PYTORCH_CUDA_VERSION=cu126
 
 # Capture build arg as environment variable for runtime
 ENV PYTORCH_CUDA_VERSION=${PYTORCH_CUDA_VERSION}
@@ -20,15 +20,15 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files first (for better caching)
-COPY pyproject.toml ./
+# Copy dependency files first so every remote image uses the reviewed lockfile.
+COPY pyproject.toml uv.lock ./
 
 # Create minimal package structure for dependency installation
 RUN mkdir -p src/simple_speaker_recognition
 COPY src/simple_speaker_recognition/__init__.py src/simple_speaker_recognition/
 
-# Install dependencies and package
-RUN uv sync --no-dev --extra ${PYTORCH_CUDA_VERSION}
+# Install the exact dependency graph recorded in uv.lock.
+RUN uv sync --frozen --no-dev --extra ${PYTORCH_CUDA_VERSION}
 
 # Include the application package in the image. Local Compose bind-mounts this
 # directory for development, but registry/Portainer deployments must be
@@ -45,6 +45,6 @@ ENV PYTHONPATH=/app
 # Expose port
 EXPOSE 8085
 
-# Run the service
-# Use shell form to allow environment variable expansion
-CMD uv run --no-sync --extra ${PYTORCH_CUDA_VERSION} --no-dev simple-speaker-service
+# Keep environment expansion while replacing the shell with the service process
+# so Docker stop signals reach uv/the application directly.
+CMD ["sh", "-c", "exec uv run --no-sync --extra \"$PYTORCH_CUDA_VERSION\" --no-dev simple-speaker-service"]
