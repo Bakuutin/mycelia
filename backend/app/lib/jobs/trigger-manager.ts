@@ -41,12 +41,33 @@ export function isHealthBlockedEnqueueError(message: string): boolean {
     message.includes("has no free concurrency slots");
 }
 
+export function getTriggerFreeSlots(
+  maxConcurrency: number,
+  activeJobs: number,
+  pendingWork?: boolean | number,
+): number {
+  const available = Math.max(0, maxConcurrency - activeJobs);
+  return typeof pendingWork === "number"
+    ? Math.min(available, Math.max(0, Math.floor(pendingWork)))
+    : available;
+}
+
+export function acquireTriggerRun(
+  triggersInFlight: Set<string>,
+  jobName: string,
+): boolean {
+  if (triggersInFlight.has(jobName)) return false;
+  triggersInFlight.add(jobName);
+  return true;
+}
+
 export class TriggerManager {
   private isRunning = false;
   private subscribers = new Map<string, any>();
   private debouncers = new Map<string, any>();
   private intervals = new Map<string, ReturnType<typeof setInterval>>();
   private healthRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private triggersInFlight = new Set<string>();
 
   constructor(private registry: typeof jobRegistry) {}
 
@@ -90,7 +111,7 @@ export class TriggerManager {
     const handleTrigger = debounce(
       async (reason: string, payload?: unknown) => {
         log("DEBUG", `Debounced trigger fired`, { jobName: name, reason });
-        await this.checkAndTrigger(cap, reason, undefined, payload);
+        await this.checkAndTrigger(cap, reason, payload);
       },
       debounceMs,
     );
@@ -136,11 +157,7 @@ export class TriggerManager {
               jobName: name,
               intervalSeconds: seconds,
             });
-            this.checkAndTrigger(
-              cap,
-              `interval:${seconds}s`,
-              { requireIdle: true },
-            );
+            this.checkAndTrigger(cap, `interval:${seconds}s`);
             void scheduleNext();
           }, seconds * 1000);
           this.intervals.set(name, timerId);
@@ -219,33 +236,16 @@ export class TriggerManager {
   private async checkAndTrigger(
     cap: JobRegistryEntry,
     reason: string,
-    triggerOptions: { requireIdle?: boolean } | undefined = undefined,
     payload?: unknown,
   ) {
     const jobName = cap.manifest.name;
+    if (!acquireTriggerRun(this.triggersInFlight, jobName)) {
+      log("DEBUG", `Skipping overlapping trigger`, { jobName, reason });
+      return;
+    }
     try {
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
-
-      if (triggerOptions && triggerOptions.requireIdle) {
-        const activeJobs = await mongo({
-          action: "count",
-          collection: "jobs",
-          query: {
-            type: jobName,
-            state: { $in: ["waiting", "active"] },
-          },
-        }) as number;
-
-        if (activeJobs > 0) {
-          log("DEBUG", `Skipping trigger - job already running`, {
-            jobName,
-            reason,
-            activeJobs,
-          });
-          return;
-        }
-      }
 
       // Runtime concurrency is operator-configurable. The manifest value is a
       // legacy discovery hint and must not silently pin every trigger to one
@@ -291,9 +291,11 @@ export class TriggerManager {
       // claims, while STT additionally reserves a provider-profile slot for
       // each queued job. A worker reporting a numeric backlog caps the
       // fan-out so no slot is burned on a job that would find nothing.
-      const freeSlots = typeof pendingWork === "number"
-        ? Math.min(maxConcurrency - activeJobs, pendingWork)
-        : maxConcurrency - activeJobs;
+      const freeSlots = getTriggerFreeSlots(
+        maxConcurrency,
+        activeJobs,
+        pendingWork,
+      );
       log("INFO", `Enqueuing jobs`, { jobName, reason, freeSlots });
       const triggeredJobData = await buildTriggeredJobData(
         implementation,
@@ -342,6 +344,8 @@ export class TriggerManager {
         }, 60_000);
         this.healthRetryTimers.set(jobName, timer);
       }
+    } finally {
+      this.triggersInFlight.delete(jobName);
     }
   }
 

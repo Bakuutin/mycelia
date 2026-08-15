@@ -1,8 +1,24 @@
 import { expect } from "@std/expect";
 import {
+  acquireTriggerRun,
   buildTriggeredJobData,
+  getTriggerFreeSlots,
   isHealthBlockedEnqueueError,
 } from "./trigger-manager.ts";
+
+Deno.test("overlapping triggers cannot reserve the same worker slots", () => {
+  const inFlight = new Set<string>();
+  expect(acquireTriggerRun(inFlight, "diarization")).toBe(true);
+  expect(acquireTriggerRun(inFlight, "diarization")).toBe(false);
+  expect(acquireTriggerRun(inFlight, "transcription")).toBe(true);
+});
+
+Deno.test("scheduled triggers fill remaining concurrency while work is active", () => {
+  expect(getTriggerFreeSlots(3, 1)).toBe(2);
+  expect(getTriggerFreeSlots(6, 0, true)).toBe(6);
+  expect(getTriggerFreeSlots(3, 1, 1)).toBe(1);
+  expect(getTriggerFreeSlots(3, 3)).toBe(0);
+});
 
 Deno.test("trigger payload can scope an automatic job", async () => {
   const capability = {
