@@ -152,7 +152,7 @@ The checked-in stack defaults to `mycelia-diarization:cu126`. It uses
 Portainer Docker endpoint before the stack is deployed. Set
 `DIARIZATION_IMAGE` in Portainer to use an immutable versioned tag. The stack
 creates the persistent `mycelia_diarization_models` volume automatically. One
-stack publishes one, three, or six private endpoints selected through the
+stack publishes one through six private endpoints selected through the
 Compose-native `COMPOSE_PROFILES` variable.
 
 #### Build on a Mac and transfer over SSH
@@ -213,7 +213,8 @@ The expected image architecture is `amd64`. Set the Portainer stack variable
 4. Under **Environment variables**, add `HF_TOKEN`, the immutable
    `DIARIZATION_IMAGE` tag, and `DIARIZATION_BIND_ADDRESS=<TAILSCALE_IP>`.
    Do not place the token in the Compose file or Git.
-5. Set `COMPOSE_PROFILES` to `pool-3` or `pool-6`; delete it for one process.
+5. Set `COMPOSE_PROFILES` to `pool-N`, where `N` is `2` through `6`; delete it
+   for one process.
 6. Deploy the stack. For an update, replace the editor contents, preserve all
    environment variables, enable **Prune services**, and select
    **Update the stack**.
@@ -249,13 +250,16 @@ approved that transfer.
 
 #### Select pool capacity
 
-The canonical stack supports one, three, or six independent processes without
+The canonical stack supports one through six independent processes without
 editing its YAML. Set Portainer's `COMPOSE_PROFILES` stack variable to:
 
 | Processes | `COMPOSE_PROFILES` | Ports |
 | ---: | --- | --- |
 | 1 | unset or empty | `8085` |
+| 2 | `pool-2` | `8085`–`8086` |
 | 3 | `pool-3` | `8085`–`8087` |
+| 4 | `pool-4` | `8085`–`8088` |
+| 5 | `pool-5` | `8085`–`8089` |
 | 6 | `pool-6` | `8085`–`8090` |
 
 Before changing the value, disable disappearing Mycelia routes, drain work, and

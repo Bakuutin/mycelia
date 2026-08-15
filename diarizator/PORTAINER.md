@@ -46,7 +46,7 @@ Set these variables:
 | `DIARIZATION_IMAGE` | immutable imported tag | Exact image to run |
 | `DIARIZATION_BIND_ADDRESS` | `<TAILSCALE_IP>` | Bind only to the Tailscale interface |
 | `DIARIZATION_MODELS_VOLUME` | `mycelia_diarization_models` | Persistent shared model cache |
-| `COMPOSE_PROFILES` | unset, `pool-3`, or `pool-6` | Select pool capacity |
+| `COMPOSE_PROFILES` | unset or `pool-2`…`pool-6` | Select pool capacity |
 | `DIARIZATION_SEGMENTATION_BATCH_SIZE` | `8` | Pyannote segmentation inference batch |
 | `DIARIZATION_EMBEDDING_BATCH_SIZE` | `8` | Pyannote internal embedding batch |
 | `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `4` | Mycelia per-segment identity embedding batch |
@@ -64,7 +64,7 @@ but produced recoverable CUDA OOM warnings with less than 0.5 GiB free and was
 slower in practice. Pool sizes one and three can benchmark a larger third
 value separately.
 
-## Select one, three, or six processes
+## Select any pool size from one through six
 
 The baseline process has no Compose profile and always runs. The other
 processes use Compose profiles:
@@ -72,8 +72,15 @@ processes use Compose profiles:
 | Desired pool | `COMPOSE_PROFILES` | Active endpoints |
 | ---: | --- | --- |
 | 1 | delete the variable or leave it empty | `:8085` |
+| 2 | `pool-2` | `:8085`–`:8086` |
 | 3 | `pool-3` | `:8085`–`:8087` |
+| 4 | `pool-4` | `:8085`–`:8088` |
+| 5 | `pool-5` | `:8085`–`:8089` |
 | 6 | `pool-6` | `:8085`–`:8090` |
+
+`pool-N` always enables the first `N` services. Compose does not evaluate a
+numeric replica expression here because every process needs its own stable
+published port and matching Mycelia route.
 
 To change capacity without sending new work to containers that are stopping:
 
