@@ -12,8 +12,14 @@ import {
   hasActiveDiarizationCoverage,
 } from "@/lib/diarizationCoverage";
 import { useTimelineQueryRange } from "@/hooks/useTimelineQueryRange";
+import { timelineSpeakerLimit } from "@/lib/timelineDetail";
+import {
+  coverageOpacity,
+  DIARIZATION_BUILDING_COLOR,
+  speakerIdentityAppearance,
+} from "@/lib/timelineDiarization";
 
-const SPEAKER_TRACK_QUERY_ALIGNMENT_MS = 5 * 60_000;
+const SPEAKER_QUERY_DELAY_MS = 650;
 
 // Config for each histogram track type
 export const TRANSCRIPTIONS_CONFIG: TrackConfig = {
@@ -152,16 +158,24 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
     props.scale,
   ]);
   const [start, end] = rescaledScale.domain() as [Date, Date];
+  const rangeMs = Math.max(0, end.getTime() - start.getTime());
+  const queryAlignmentMs = coverageBucketMs(rangeMs, props.width);
+  const segmentLimit = timelineSpeakerLimit(rangeMs, props.width);
   const queryRange = useTimelineQueryRange(
     start,
     end,
-    SPEAKER_TRACK_QUERY_ALIGNMENT_MS,
+    queryAlignmentMs,
+    SPEAKER_QUERY_DELAY_MS,
   );
+  const queryRangeReady = queryRange.alignmentMs === queryAlignmentMs &&
+    queryRange.start.getTime() <= start.getTime() &&
+    queryRange.end.getTime() >= end.getTime();
   const { data } = useQuery({
     queryKey: [
       "speaker-track",
       queryRange.start.getTime(),
       queryRange.end.getTime(),
+      segmentLimit,
     ],
     queryFn: () =>
       callResource("speaker-segments", {
@@ -169,22 +183,15 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
         start: queryRange.start,
         end: queryRange.end,
         view: "timeline",
-        limit: 5000,
+        limit: segmentLimit,
       }) as Promise<{ segments: any[] }>,
     staleTime: 60_000,
     placeholderData: (previousData) => previousData,
+    retry: 1,
+    enabled: queryRangeReady,
   });
   const segments = data?.segments ?? [];
-  const farZoom =
-    (end.getTime() - start.getTime()) / Math.max(props.width, 1) > 60_000;
-  const color = (state?: string) =>
-    state === "matched"
-      ? "#22c55e"
-      : state === "rejected"
-      ? "#64748b"
-      : state === "uncertain"
-      ? "#f59e0b"
-      : "#cbd5e1";
+  const farZoom = rangeMs / Math.max(props.width, 1) > 60_000;
   const marks = useMemo(() => {
     if (!farZoom) {
       return segments.map((segment) => ({
@@ -221,30 +228,25 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
   return (
     <BaseTrack {...props} config={DIARIZATIONS_CONFIG}>
       <g>
-        {marks.map((mark) => (
-          <rect
-            key={mark.id}
-            x={mark.x}
-            y={4}
-            width={mark.width}
-            height={Math.max(4, props.height - 8)}
-            fill={color(mark.state)}
-            opacity={0.82}
-            className="cursor-pointer"
-            onClick={() =>
-              navigate(`/diarizations/${String(mark.segment._id)}`)}
-          >
-            <title>
-              {mark.state === "matched"
-                ? "Sky"
-                : mark.state === "rejected"
-                ? "not Sky"
-                : mark.state === "uncertain"
-                ? "uncertain"
-                : "unclassified"}
-            </title>
-          </rect>
-        ))}
+        {marks.map((mark) => {
+          const appearance = speakerIdentityAppearance(mark.state);
+          return (
+            <rect
+              key={mark.id}
+              x={mark.x}
+              y={4}
+              width={mark.width}
+              height={Math.max(4, props.height - 8)}
+              fill={appearance.color}
+              opacity={appearance.opacity}
+              className="cursor-pointer"
+              onClick={() =>
+                navigate(`/diarizations/${String(mark.segment._id)}`)}
+            >
+              <title>{appearance.label}</title>
+            </rect>
+          );
+        })}
       </g>
     </BaseTrack>
   );
@@ -354,7 +356,7 @@ export const DiarizationCoverageTrack = memo(
                 width={width}
                 height={Math.max(4, props.height - 10)}
                 fill={coverageColor(state)}
-                opacity={state === "pending" ? 0.45 : 0.86}
+                opacity={coverageOpacity(state)}
                 className="cursor-pointer"
                 onClick={() => navigate("/jobs?type=diarization")}
               >
@@ -377,7 +379,7 @@ export const DiarizationCoverageTrack = memo(
                 y={1}
                 width={Math.max(2, rescaledScale(new Date(run.range.end)) - x)}
                 height={3}
-                fill="#a855f7"
+                fill={DIARIZATION_BUILDING_COLOR}
                 opacity={0.9}
               >
                 <title>Building {run.runId}</title>

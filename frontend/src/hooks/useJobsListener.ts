@@ -8,6 +8,7 @@ import { useNotificationStore } from "@/stores/notificationStore";
 import { buildSummarizationCompletionNotifications } from "@/lib/jobNotifications";
 import {
   buildJobsListRequest,
+  type JobListStatus,
   type JobsListView,
   shouldRefreshJobsViews,
 } from "@/lib/jobListView";
@@ -74,6 +75,8 @@ function getResultDescription(result: any): string | null {
 interface UseJobsListenerOptions {
   types?: string[];
   view?: JobsListView;
+  statuses?: JobListStatus[];
+  limit?: number;
   onJobFinished?: (job: {
     id: string;
     type: string;
@@ -87,14 +90,17 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
   const { addNotification, showPopups } = useNotificationStore();
 
   // Create a stable query key that includes the types filter
-  const queryKey = options.types?.length
-    ? [
-      "jobs",
-      options.view ?? "operational",
-      "filtered",
-      [...options.types].sort().join(","),
-    ]
-    : ["jobs", options.view ?? "operational", "all"];
+  const queryKey = [
+    "jobs",
+    options.view ?? "operational",
+    options.types?.length
+      ? `types:${[...options.types].sort().join(",")}`
+      : "all-types",
+    options.statuses?.length
+      ? `statuses:${[...options.statuses].sort().join(",")}`
+      : "all-statuses",
+    `limit:${options.limit ?? 1000}`,
+  ];
 
   const { data: jobs = [], isLoading } = useQuery({
     queryKey,
@@ -104,6 +110,7 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
         buildJobsListRequest(
           options.view ?? "operational",
           options.types,
+          { statuses: options.statuses, limit: options.limit },
         ),
       );
       return response as JobInfo[];

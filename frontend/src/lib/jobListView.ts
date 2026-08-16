@@ -1,21 +1,31 @@
 export type JobsListView = "operational" | "idle_auto";
+export type JobListStatus =
+  | "active"
+  | "waiting"
+  | "delayed"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+const DEFAULT_JOB_STATUSES: JobListStatus[] = [
+  "active",
+  "waiting",
+  "delayed",
+  "completed",
+  "failed",
+  "cancelled",
+];
 
 export function buildJobsListRequest(
   view: JobsListView,
   types?: string[],
+  options: { statuses?: JobListStatus[]; limit?: number } = {},
 ) {
   return {
     action: "list" as const,
     view,
-    limit: 1000,
-    statuses: [
-      "active",
-      "waiting",
-      "delayed",
-      "completed",
-      "failed",
-      "cancelled",
-    ],
+    limit: options.limit ?? 1000,
+    statuses: options.statuses ?? DEFAULT_JOB_STATUSES,
     ...(types?.length ? { types } : {}),
   };
 }

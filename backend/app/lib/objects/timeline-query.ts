@@ -1,7 +1,8 @@
 export const TIMELINE_OBJECT_LIMIT = 5_000;
 export const TIMELINE_OBJECT_MAX_TIME_MS = 5_000;
+export const TIMELINE_OBJECT_RANGE_INDEX = "timeline_objects_time_range_start";
 
-const TIMELINE_OBJECT_PROJECTION = {
+export const TIMELINE_OBJECT_PROJECTION = {
   _id: 1,
   name: 1,
   icon: 1,
@@ -54,6 +55,10 @@ export function buildTimelineObjectsPipeline(
 
   return [
     { $match: query },
+    // Bound the candidate set before computed fields and blocking sorts. At a
+    // wide zoom the UI intentionally asks for a pixel-sized bounded detail
+    // subset, so sorting every matching historical object is wasted work.
+    { $limit: limit + 1 },
     {
       $addFields: {
         earliestStart: {
@@ -82,7 +87,6 @@ export function buildTimelineObjectsPipeline(
       },
     },
     { $sort: sort },
-    { $limit: limit + 1 },
     { $project: TIMELINE_OBJECT_PROJECTION },
     compactRelationshipLookup("relationship.subject", "subjectObject"),
     compactRelationshipLookup("relationship.object", "objectObject"),

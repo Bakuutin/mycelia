@@ -29,6 +29,7 @@ function resetObjectsStore() {
     error: null,
     currentRange: null,
     requestedRange: null,
+    requestedLimit: null,
     truncated: false,
   } as any);
 }
@@ -96,14 +97,30 @@ describe("Timeline object requests", () => {
 
     expect((useObjectsStore.getState() as any).truncated).toBe(true);
     expect(useObjectsStore.getState().objects).toEqual([{ name: "bounded" }]);
-    expect(callResourceMock).toHaveBeenCalledWith("objects", expect.objectContaining({
-      action: "list",
-      view: "timeline",
-      options: expect.objectContaining({ limit: 5_000 }),
-    }));
+    expect(callResourceMock).toHaveBeenCalledWith(
+      "objects",
+      expect.objectContaining({
+        action: "list",
+        view: "timeline",
+        options: expect.objectContaining({ limit: 2_048 }),
+      }),
+    );
   });
 
-  it("waits 300ms before requesting a replacement viewport", async () => {
+  it("does not request individual objects for a wide viewport", () => {
+    useTimelineRange.setState({
+      start: new Date("2026-08-01T00:00:00.000Z"),
+      end: new Date("2026-08-17T00:00:00.000Z"),
+    });
+
+    const { result } = renderHook(() => useObjects({ width: 1_000 }));
+
+    expect(result.current.detailDeferred).toBe(true);
+    expect(callResourceMock).not.toHaveBeenCalled();
+    expect(useObjectsStore.getState().objects).toEqual([]);
+  });
+
+  it("coalesces rapid viewport changes before requesting a replacement", async () => {
     vi.useFakeTimers();
     callResourceMock.mockReturnValue(new Promise(() => {}));
     useTimelineRange.setState({
@@ -127,7 +144,7 @@ describe("Timeline object requests", () => {
     });
 
     act(() => {
-      vi.advanceTimersByTime(299);
+      vi.advanceTimersByTime(649);
     });
     expect(callResourceMock).not.toHaveBeenCalled();
 

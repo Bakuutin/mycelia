@@ -8,6 +8,7 @@ import {
   buildTimelineObjectsPipeline,
   resolveTimelineObjectLimit,
   TIMELINE_OBJECT_MAX_TIME_MS,
+  TIMELINE_OBJECT_RANGE_INDEX,
 } from "./timeline-query.ts";
 
 const zIcon = z.union([
@@ -1807,6 +1808,7 @@ export class ObjectsResource
               ),
               options: {
                 allowDiskUse: true,
+                hint: TIMELINE_OBJECT_RANGE_INDEX,
                 maxTimeMS: TIMELINE_OBJECT_MAX_TIME_MS,
               },
             });

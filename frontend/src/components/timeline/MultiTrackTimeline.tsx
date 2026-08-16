@@ -25,6 +25,7 @@ import { LOCATIONS_CONFIG, LocationTrack } from "./tracks/LocationTrack";
 import type { TrackId } from "@/types/tracks";
 import type { useTimeline } from "@/hooks/useTimeline";
 import { TimeZoneContextTrack } from "./TimeZoneContextTrack";
+import { DiarizationLegend } from "./DiarizationLegend";
 
 // Pre-create layer instances (these are stable references)
 const TIME_LAYER = TimeLayer();
@@ -92,6 +93,10 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
   );
 
   const showObjects = visibleTracks.includes("objects");
+  const showDiarizationCoverage = visibleTracks.includes(
+    "diarization-coverage",
+  );
+  const showSpeakerIdentity = visibleTracks.includes("diarizations");
   // Opt-in and fully lazy: when hidden, LocationTrack is not mounted and
   // performs no location API requests at all.
   const showLocations = visibleTracks.includes("locations");
@@ -117,6 +122,11 @@ export const MultiTrackTimeline = memo(function MultiTrackTimeline({
           scale={timeScale}
           transform={transform}
           width={width}
+        />
+
+        <DiarizationLegend
+          showCoverage={showDiarizationCoverage}
+          showIdentity={showSpeakerIdentity}
         />
 
         {/* Locations track (opt-in, self-fetching) */}

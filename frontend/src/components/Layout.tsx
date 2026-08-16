@@ -28,7 +28,10 @@ const Layout = () => {
   useTheme();
   const location = useLocation();
   const { clientId, clientSecret } = useSettingsStore();
-  const { runningCount } = useJobsListener();
+  const { runningCount } = useJobsListener({
+    statuses: ["active", "waiting", "delayed"],
+    limit: 200,
+  });
 
   // Redirect to setup if no credentials
   if (!clientId || !clientSecret) {

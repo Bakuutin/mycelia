@@ -41,4 +41,14 @@ describe("jobs list views", () => {
     expect(shouldRefreshJobsViews("job.progress")).toBe(false);
     expect(shouldRefreshJobsViews("job.failed")).toBe(false);
   });
+
+  it("supports a compact active-only request for the global status badge", () => {
+    expect(buildJobsListRequest("operational", undefined, {
+      statuses: ["active", "waiting", "delayed"],
+      limit: 200,
+    })).toMatchObject({
+      statuses: ["active", "waiting", "delayed"],
+      limit: 200,
+    });
+  });
 });

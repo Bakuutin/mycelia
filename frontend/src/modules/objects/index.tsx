@@ -587,7 +587,9 @@ const RangeBoxWithOffset = React.memo(function RangeBoxWithOffset({
 export const ObjectsLayer: () => Layer = () => {
   return {
     component: ({ scale, transform, width }: LayerComponentProps) => {
-      const { objects, loading } = useFilteredObjects();
+      const { objects, loading, error, detailDeferred } = useFilteredObjects({
+        width,
+      });
       const setSpanningObjects = useSpanningObjectsStore(
         (state) => state.setSpanningObjects,
       );
@@ -707,6 +709,27 @@ export const ObjectsLayer: () => Layer = () => {
                 rx={1}
               />
             </g>
+          )}
+          {error && !loading && (
+            <text
+              x={8}
+              y={18}
+              fontSize={11}
+              fill="#dc2626"
+            >
+              Object detail unavailable — zoom or refresh to retry
+            </text>
+          )}
+          {detailDeferred && (
+            <text
+              x={8}
+              y={18}
+              fontSize={11}
+              fill="currentColor"
+              opacity={0.6}
+            >
+              Zoom in to load individual objects
+            </text>
           )}
         </svg>
       );

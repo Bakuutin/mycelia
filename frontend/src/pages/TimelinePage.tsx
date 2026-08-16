@@ -5,7 +5,7 @@ import { TimelineHeader } from "@/components/timeline/TimelineHeader";
 import { SelectedObjectsPanel } from "@/components/timeline/SelectedObjectsPanel";
 import { TrackVisibilityPanel } from "@/components/timeline/controls/TrackVisibilityPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useObjects } from "@/modules/objects/useObjects";
+import { useObjectsStore } from "@/modules/objects/useObjects";
 import { useObjectSelectionStore } from "@/stores/objectSelectionStore";
 import { LocationSelectionPanel } from "@/components/location/LocationSelectionPanel";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
@@ -23,7 +23,7 @@ import { TimelineRecoveryStatus } from "@/components/timeline/TimelineRecoverySt
 const TimelinePage = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { error, objects } = useObjects();
+  const objects = useObjectsStore((state) => state.objects);
   const { clearSelection: clearObjectSelection, selectedIds } =
     useObjectSelectionStore();
   const { selection: timeSelection, clearSelection: clearTimeSelection } =
@@ -174,19 +174,6 @@ const TimelinePage = () => {
     );
     zoomTo(start, end);
   };
-
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500 mb-2">Error loading objects: {error}</p>
-          <p className="text-sm text-muted-foreground">
-            Check browser console for details
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <TooltipProvider>

@@ -6,9 +6,14 @@ import { useTimelineRange } from "@/stores/timelineRange";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
 import { OBJECT_CATEGORIES, type ObjectCategory } from "@/types/tracks";
 import { useTimelineQueryRange } from "@/hooks/useTimelineQueryRange";
+import { coverageBucketMs } from "@/lib/diarizationCoverage";
+import {
+  shouldLoadTimelineObjectDetail,
+  timelineObjectLimit,
+} from "@/lib/timelineDetail";
 
-const OBJECT_QUERY_ALIGNMENT_MS = 5 * 60 * 1_000;
-const TIMELINE_OBJECT_LIMIT = 5_000;
+const DEFAULT_TIMELINE_WIDTH = 1_024;
+const OBJECT_QUERY_DELAY_MS = 650;
 
 type TimelineObjectsResponse = {
   objects: Object[];
@@ -22,7 +27,9 @@ type ObjectsState = {
   truncated: boolean;
   currentRange: { start: Date; end: Date } | null;
   requestedRange: { start: Date; end: Date } | null;
-  fetchForRange: (start: Date, end: Date) => Promise<void>;
+  requestedLimit: number | null;
+  fetchForRange: (start: Date, end: Date, limit?: number) => Promise<void>;
+  deferForRange: (start: Date, end: Date) => void;
 };
 
 let latestRequestGeneration = 0;
@@ -34,20 +41,44 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
   truncated: false,
   currentRange: null,
   requestedRange: null,
-  fetchForRange: async (start: Date, end: Date) => {
+  requestedLimit: null,
+  deferForRange: (start, end) => {
+    latestRequestGeneration++;
+    set({
+      objects: [],
+      loading: false,
+      error: null,
+      truncated: false,
+      currentRange: { start, end },
+      requestedRange: null,
+      requestedLimit: null,
+    });
+  },
+  fetchForRange: async (start: Date, end: Date, requestedLimit) => {
     const state = get();
+    const limit = requestedLimit ?? timelineObjectLimit(
+      Math.max(0, end.getTime() - start.getTime()),
+      DEFAULT_TIMELINE_WIDTH,
+    );
     if (
+      state.loading &&
       state.requestedRange &&
       state.requestedRange.start.getTime() === start.getTime() &&
-      state.requestedRange.end.getTime() === end.getTime()
+      state.requestedRange.end.getTime() === end.getTime() &&
+      state.requestedLimit === limit
     ) {
       return;
     }
 
     const requestGeneration = ++latestRequestGeneration;
     try {
-      set({ loading: true, error: null, requestedRange: { start, end } });
-      const result = await fetchObjects(start, end);
+      set({
+        loading: true,
+        error: null,
+        requestedRange: { start, end },
+        requestedLimit: limit,
+      });
+      const result = await fetchObjects(start, end, limit);
       if (requestGeneration !== latestRequestGeneration) return;
       set({
         objects: result.objects,
@@ -69,6 +100,7 @@ export const useObjectsStore = create<ObjectsState>((set, get) => ({
 async function fetchObjects(
   start: Date,
   end: Date,
+  limit: number,
 ): Promise<TimelineObjectsResponse> {
   return callResource("objects", {
     action: "list",
@@ -76,7 +108,7 @@ async function fetchObjects(
     options: {
       hasTimeRanges: true,
       includeRelationships: true,
-      limit: TIMELINE_OBJECT_LIMIT,
+      limit,
       sort: { earliestStart: -1, duration: -1 },
       timeRangeFilter: {
         start: start.toISOString(),
@@ -86,7 +118,12 @@ async function fetchObjects(
   });
 }
 
-export function useObjects() {
+export function useObjects(
+  { width = DEFAULT_TIMELINE_WIDTH, enabled = true }: {
+    width?: number;
+    enabled?: boolean;
+  } = {},
+) {
   const {
     objects,
     loading,
@@ -96,17 +133,42 @@ export function useObjects() {
     requestedRange,
   } = useObjectsStore();
   const fetchForRange = useObjectsStore((state) => state.fetchForRange);
+  const deferForRange = useObjectsStore((state) => state.deferForRange);
   const { start, end } = useTimelineRange();
+  const rangeMs = Math.max(0, end.getTime() - start.getTime());
+  const detailDeferred = !shouldLoadTimelineObjectDetail(rangeMs, width);
+  const alignmentMs = coverageBucketMs(rangeMs, width);
+  const limit = timelineObjectLimit(rangeMs, width);
   const queryRange = useTimelineQueryRange(
     start,
     end,
-    OBJECT_QUERY_ALIGNMENT_MS,
-    300,
+    alignmentMs,
+    OBJECT_QUERY_DELAY_MS,
   );
+  const queryRangeReady = queryRange.alignmentMs === alignmentMs &&
+    queryRange.start.getTime() <= start.getTime() &&
+    queryRange.end.getTime() >= end.getTime();
 
   useEffect(() => {
-    void fetchForRange(queryRange.start, queryRange.end);
-  }, [fetchForRange, queryRange.end, queryRange.start]);
+    if (!enabled) return;
+    if (detailDeferred) {
+      deferForRange(start, end);
+      return;
+    }
+    if (!queryRangeReady) return;
+    void fetchForRange(queryRange.start, queryRange.end, limit);
+  }, [
+    deferForRange,
+    detailDeferred,
+    enabled,
+    end,
+    fetchForRange,
+    limit,
+    queryRange.end,
+    queryRangeReady,
+    queryRange.start,
+    start,
+  ]);
 
   return {
     objects,
@@ -115,6 +177,7 @@ export function useObjects() {
     truncated,
     currentRange,
     requestedRange,
+    detailDeferred,
   };
 }
 
@@ -169,7 +232,7 @@ export function useTotalObjectCount(): number {
 }
 
 // Hook returning only visible objects (skips hidden categories)
-export function useFilteredObjects() {
+export function useFilteredObjects({ width }: { width?: number } = {}) {
   const {
     objects,
     loading,
@@ -177,13 +240,18 @@ export function useFilteredObjects() {
     truncated,
     currentRange,
     requestedRange,
-  } = useObjects();
-  const visibleCategories = useTrackVisibilityStore((s) => s.visibleObjectCategories);
+    detailDeferred,
+  } = useObjects({ width });
+  const visibleCategories = useTrackVisibilityStore((s) =>
+    s.visibleObjectCategories
+  );
 
   const filtered = useMemo(() => {
     // Fast path: all categories visible
     if (visibleCategories.length === OBJECT_CATEGORIES.length) return objects;
-    return objects.filter((obj) => visibleCategories.includes(getObjectCategory(obj)));
+    return objects.filter((obj) =>
+      visibleCategories.includes(getObjectCategory(obj))
+    );
   }, [objects, visibleCategories]);
 
   return {
@@ -193,5 +261,6 @@ export function useFilteredObjects() {
     truncated,
     currentRange,
     requestedRange,
+    detailDeferred,
   };
 }
