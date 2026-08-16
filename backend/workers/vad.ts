@@ -2,6 +2,7 @@ import { z } from "zod";
 import { NetworkJobCapability } from "./python.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
+import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
 
 /** Schema for VAD job data */
 export const schema = z.object({
@@ -13,7 +14,8 @@ export const schema = z.object({
   batchSize: z.number().default(100),
 });
 
-const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
+const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") ||
+  "http://localhost:8000";
 
 export default new NetworkJobCapability({
   name: "vad",
@@ -23,6 +25,14 @@ export default new NetworkJobCapability({
     { resource: "db/audio_chunks", action: "*", effect: "allow" },
   ],
   maxConcurrency: 1,
+  hasPendingWork: async ({ mongo }) =>
+    await hasIndexedPendingWork(mongo, {
+        collection: "audio_chunks",
+        query: { vad: null },
+        hint: "audio_chunks_vad_pending_work",
+      })
+      ? 1
+      : 0,
   triggers: {
     sources: [
       {

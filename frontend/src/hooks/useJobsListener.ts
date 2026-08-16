@@ -10,6 +10,7 @@ import {
   buildJobsListRequest,
   type JobListStatus,
   type JobsListView,
+  resolveJobEventState,
   shouldRefreshJobsViews,
 } from "@/lib/jobListView";
 
@@ -77,6 +78,7 @@ interface UseJobsListenerOptions {
   view?: JobsListView;
   statuses?: JobListStatus[];
   limit?: number;
+  refetchInterval?: number | false;
   onJobFinished?: (job: {
     id: string;
     type: string;
@@ -115,7 +117,10 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       );
       return response as JobInfo[];
     },
-    staleTime: 30000,
+    staleTime: options.refetchInterval
+      ? Math.min(options.refetchInterval, 30000)
+      : 30000,
+    refetchInterval: options.refetchInterval,
   });
 
   const runningCount = jobs.filter(
@@ -149,7 +154,6 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
       }
 
       queryClient.setQueryData<JobInfo[]>(queryKey, (oldJobs = []) => {
-        const newState = jobData.state || event.event.replace("job.", "");
         const existingIndex = oldJobs.findIndex((job) =>
           job.id === jobData.jobId
         );
@@ -157,6 +161,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
         if (existingIndex >= 0) {
           const updated = [...oldJobs];
           const existing = updated[existingIndex];
+          const newState = resolveJobEventState(
+            event.event,
+            jobData.state,
+            existing.state,
+          );
 
           // Determine processedOn and finishedOn with fallbacks
           let processedOn = jobData.processedOn ?? existing.processedOn;

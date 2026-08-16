@@ -35,6 +35,7 @@ function formatEta(seconds?: number | null) {
 export function DiarizationLaunchDialog() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [allHistory, setAllHistory] = useState(true);
   const [presetDays, setPresetDays] = useState(7);
   const [custom, setCustom] = useState(false);
   const [customStart, setCustomStart] = useState(() =>
@@ -44,11 +45,15 @@ export function DiarizationLaunchDialog() {
   const [batchSequences, setBatchSequences] = useState(4);
   const range = useMemo(
     () =>
-      custom ? { start: customStart, end: customEnd } : {
-        start: new Date(Date.now() - presetDays * 86_400_000),
-        end: new Date(),
-      },
-    [custom, customStart, customEnd, presetDays, open],
+      allHistory
+        ? { start: undefined, end: undefined }
+        : custom
+        ? { start: customStart, end: customEnd }
+        : {
+          start: new Date(Date.now() - presetDays * 86_400_000),
+          end: new Date(),
+        },
+    [allHistory, custom, customStart, customEnd, presetDays, open],
   );
 
   const { data: campaigns = [], isLoading: campaignsLoading } = useQuery<
@@ -74,7 +79,9 @@ export function DiarizationLaunchDialog() {
   });
   const route = health?.services?.find((item: any) => item.id === "diarizator");
   const overlap = findOverlappingCampaign(campaigns, range.start, range.end);
-  const invalidRange = range.end <= range.start;
+  const invalidRange = Boolean(
+    range.start && range.end && range.end <= range.start,
+  );
 
   const launch = useMutation({
     mutationFn: () =>
@@ -107,7 +114,16 @@ export function DiarizationLaunchDialog() {
     : 0;
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) {
+          setAllHistory(true);
+          setCustom(false);
+        }
+        setOpen(nextOpen);
+      }}
+    >
       <DialogTrigger asChild>
         <Button
           variant="ghost"
@@ -125,20 +141,35 @@ export function DiarizationLaunchDialog() {
             Diarize missing speech
           </DialogTitle>
           <DialogDescription>
-            Finds speech chunks without diarization and processes them in small,
-            resumable batches. Existing diarization is not recalculated.
+            By default, scans every source across the complete history and
+            processes missing diarization in small, resumable batches. Existing
+            diarization is not recalculated.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={allHistory ? "default" : "outline"}
+              onClick={() => {
+                setAllHistory(true);
+                setCustom(false);
+              }}
+            >
+              All history
+            </Button>
             {[1, 7, 14, 30].map((days) => (
               <Button
                 key={days}
                 type="button"
                 size="sm"
-                variant={!custom && presetDays === days ? "default" : "outline"}
+                variant={!allHistory && !custom && presetDays === days
+                  ? "default"
+                  : "outline"}
                 onClick={() => {
+                  setAllHistory(false);
                   setCustom(false);
                   setPresetDays(days);
                 }}
@@ -149,12 +180,25 @@ export function DiarizationLaunchDialog() {
             <Button
               type="button"
               size="sm"
-              variant={custom ? "default" : "outline"}
-              onClick={() => setCustom(true)}
+              variant={!allHistory && custom ? "default" : "outline"}
+              onClick={() => {
+                setAllHistory(false);
+                setCustom(true);
+              }}
             >
               Custom
             </Button>
           </div>
+
+          {allHistory && (
+            <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-sm">
+              <div className="font-medium">Global missing-work scan</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Includes every source from the oldest recording through now. No
+                source ID or date bounds will be sent with the job.
+              </div>
+            </div>
+          )}
 
           {custom && (
             <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
@@ -257,7 +301,11 @@ export function DiarizationLaunchDialog() {
             disabled={launch.isPending || Boolean(overlap) || invalidRange ||
               route?.status !== "healthy"}
           >
-            {launch.isPending ? "Queueing…" : "Start diarization"}
+            {launch.isPending
+              ? "Queueing…"
+              : allHistory
+              ? "Start full-history diarization"
+              : "Start diarization"}
           </Button>
         </DialogFooter>
       </DialogContent>

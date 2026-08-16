@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "jsr:@std/assert@^1.0.15";
 import { zDiarizationProfilesConfig } from "@myceliasdk/config.ts";
 import {
   buildDiarizatorJobSnapshot,
+  resolveDiarizatorRoutes,
   selectDiarizatorRoute,
 } from "./provider-routing.ts";
 
@@ -136,6 +137,23 @@ Deno.test("diarization config defaults every server to one slot", () => {
 
   assertEquals(parsed.environmentConcurrency, 1);
   assertEquals(parsed.profiles[0].concurrency, 1);
+});
+
+Deno.test("disabled environment diarizator remains visible but unselectable", () => {
+  const routes = resolveDiarizatorRoutes({
+    diarizationProfiles: {
+      profiles: [],
+      includeEnvironment: false,
+      environmentPriority: 7,
+      environmentConcurrency: 1,
+    },
+  });
+
+  assertEquals(routes.length, 1);
+  assertEquals(routes[0]?.id, "environment");
+  assertEquals(routes[0]?.enabled, false);
+  assertEquals(routes[0]?.priority, 7);
+  assertEquals(selectDiarizatorRoute(routes), undefined);
 });
 
 Deno.test("diarizator snapshot replaces an inherited LLM provider name", () => {

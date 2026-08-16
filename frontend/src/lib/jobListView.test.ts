@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildJobsListRequest,
   getJobsListView,
+  resolveJobEventState,
   shouldRefreshJobsViews,
   withJobsListView,
 } from "./jobListView";
@@ -50,5 +51,20 @@ describe("jobs list views", () => {
       statuses: ["active", "waiting", "delayed"],
       limit: 200,
     });
+  });
+
+  it("does not turn progress events into a fake lifecycle state", () => {
+    expect(resolveJobEventState("job.progress", undefined, "active")).toBe(
+      "active",
+    );
+    expect(resolveJobEventState("job.started", undefined, "waiting")).toBe(
+      "active",
+    );
+    expect(resolveJobEventState("job.completed", undefined, "active")).toBe(
+      "completed",
+    );
+    expect(resolveJobEventState("job.progress", "active", "waiting")).toBe(
+      "active",
+    );
   });
 });

@@ -41,8 +41,7 @@ audio
 8. Запустить `Classify existing` сначала на 24 часа.
 9. Проверить результаты, затем расширить pilot до 7 дней.
 10. Запускать исторический identity backfill диапазонами.
-11. Re-diarization делать только для несовместимого или отсутствующего
-    покрытия.
+11. Re-diarization делать только для несовместимого или отсутствующего покрытия.
 12. Новую generation сначала сравнить, затем активировать; старую сохранить для
     rollback.
 
@@ -127,14 +126,14 @@ curl -fsS http://localhost:8085/health | jq
 Ответ должен содержать `status=ok`, `ready=true`, `device=cpu`, fingerprint и
 `embeddingSpaceId`.
 
-На Apple Silicon Docker не даёт этому CUDA/PyTorch сервису Apple GPU. Используйте
-CPU image и выделите Docker Desktop минимум 10 GB, лучше 12 GB RAM.
+На Apple Silicon Docker не даёт этому CUDA/PyTorch сервису Apple GPU.
+Используйте CPU image и выделите Docker Desktop минимум 10 GB, лучше 12 GB RAM.
 
 Standalone-вариант для разработки:
 
 ```bash
 cd diarizator
-docker compose -p sky-diarization-local --profile cpu up -d --build
+docker compose -p mycelia-diarization-local --profile cpu up -d --build
 ```
 
 Этот Compose читает `diarizator/.env`. Основной Compose читает корневой `.env`.
@@ -167,19 +166,19 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
 
 ```bash
 cd /path/to/mycelia/diarizator
-docker compose -p sky-diarization --profile gpu up -d --build diarization-service-gpu
-docker compose -p sky-diarization --profile gpu logs -f diarization-service-gpu
+docker compose -p mycelia-diarization --profile gpu up -d --build diarization-service-gpu
+docker compose -p mycelia-diarization --profile gpu logs -f diarization-service-gpu
 ```
 
 Проверка GPU внутри контейнера:
 
 ```bash
-docker compose -p sky-diarization --profile gpu exec diarization-service-gpu \
+docker compose -p mycelia-diarization --profile gpu exec diarization-service-gpu \
   uv run --no-sync --extra cu126 --no-dev python -c \
   'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
 ```
 
-Ожидаются `True` и RTX 4090.
+Ожидаются `True` и название доступного NVIDIA GPU.
 
 ### Сборка amd64 image на ARM Mac
 
@@ -190,14 +189,14 @@ image или обращаться к registry:
 docker buildx build \
   --platform linux/amd64 \
   --build-arg PYTORCH_CUDA_VERSION=cu126 \
-  -t sky-mycelia-diarization:latest \
+  -t mycelia-diarization:cu126 \
   --load ./diarizator
 
-docker image inspect sky-mycelia-diarization:latest \
+docker image inspect mycelia-diarization:cu126 \
   --format 'os={{.Os}} arch={{.Architecture}}'
 
 docker run --rm --platform linux/amd64 \
-  sky-mycelia-diarization:latest \
+  mycelia-diarization:cu126 \
   uv run --no-sync --extra cu126 --no-dev python -c \
   'import simple_speaker_recognition.core; print("import ok")'
 ```
@@ -208,20 +207,28 @@ docker run --rm --platform linux/amd64 \
 Перенос image:
 
 ```bash
-docker save sky-mycelia-diarization:latest | gzip > /tmp/sky-mycelia-diarization.tar.gz
+docker save mycelia-diarization:cu126 | gzip > /tmp/mycelia-diarization.tar.gz
 rsync -ah --partial --info=progress2 \
-  /tmp/sky-mycelia-diarization.tar.gz SERVER:/tmp/
-ssh SERVER 'gzip -dc /tmp/sky-mycelia-diarization.tar.gz | sudo docker load'
+  /tmp/mycelia-diarization.tar.gz SERVER:/tmp/
+ssh SERVER 'gzip -dc /tmp/mycelia-diarization.tar.gz | sudo docker load'
 ```
 
-Для Portainer используйте image `sky-mycelia-diarization:latest`, persistent
-volume `/models`, NVIDIA reservation и команду без runtime dependency sync:
+Для Portainer используйте image `mycelia-diarization:cu126`, persistent volume
+`/models`, NVIDIA reservation и команду без runtime dependency sync:
 
 ```yaml
 services:
   diarization:
-    image: sky-mycelia-diarization:latest
-    command: [uv, run, --no-sync, --extra, cu126, --no-dev, simple-speaker-service]
+    image: mycelia-diarization:cu126
+    command: [
+      uv,
+      run,
+      --no-sync,
+      --extra,
+      cu126,
+      --no-dev,
+      simple-speaker-service,
+    ]
     environment:
       HF_TOKEN: ${HF_TOKEN}
       HF_HOME: /models
@@ -280,7 +287,7 @@ curl -fsS -X POST http://SERVER_PRIVATE_IP:8085/diarize \
 Для remote route:
 
 1. Нажмите **Add server**.
-2. Укажите понятное имя, например `faeon-diar`.
+2. Укажите понятное имя, например `gpu-diarization`.
 3. Укажите private base URL, например `http://100.x.x.x:8085`.
 4. Включите route.
 5. Поставьте preferred route наименьший числовой priority.
@@ -307,6 +314,11 @@ curl -fkSs https://localhost:4433/readiness
 Дополнительные routes можно хранить в UI config. Environment route при этом
 можно отключить, не меняя `.env`.
 
+Выключение route сразу запрещает назначать на него новые jobs. Если на route уже
+идёт batch, текущий HTTP request может закончиться, но перед следующей sequence
+worker перечитает config и остановит batch без нового внешнего запроса. Сам
+контейнер или remote server route-toggle не останавливает.
+
 ## 6. Diarization campaigns
 
 ### Automatic mode
@@ -324,12 +336,14 @@ Worker реагирует на speech chunk, когда:
 В **Jobs → Diarization** есть два независимых переключателя:
 
 - worker enabled/paused управляет всей очередью diarization;
-- live trigger управляет только созданием jobs при переходе
-  `vad.has_speech` в `true`.
+- live trigger управляет только созданием jobs при переходе `vad.has_speech` в
+  `true`.
 
 Если live-обработка сейчас не нужна, выключите live trigger. Historical watchdog
-и ручные campaigns при этом остаются доступны. Для полного прекращения новых
-запусков поставьте worker на pause.
+и ручные campaigns при этом остаются доступны. Чтобы временно запретить все
+внешние diarization-вызовы, выключите routes: текущий request может закончиться,
+но batch остановится перед следующим. Для полного прекращения запуска и
+исполнения jobs поставьте worker на pause.
 
 По умолчанию job обрабатывает 4 speech sequences; одна sequence содержит до 6
 chunks на inference request. Diarization concurrency — 1. На **Jobs** worker
@@ -347,13 +361,27 @@ custom range и batch size.
 - работает resumable и idempotent;
 - является стандартным способом заполнения backlog.
 
-Не создавайте overlapping campaigns. Если диалог находит существующую —
-откройте её progress.
+Не создавайте overlapping campaigns. Если диалог находит существующую — откройте
+её progress.
 
 Campaign объединяет continuation jobs и показывает fixed range,
 processed/total/pending chunks, batch, sequences, segments, route, rate, ETA и
 structured errors. `Counting` и ранний `Estimating` нормальны; ETA становится
 полезнее после двух успешных batches.
+
+В **Audio Pipeline → Speaker diarization** показывается общий snapshot текущей
+глобальной `missing` campaign: processed/total/pending chunks, ETA, sequences,
+segments и structured errors. `Recent jobs average` там означает сглаженную
+скорость последних jobs, а не сумму одновременно работающих GPU routes. Этот
+блок обновляется вместе с Audio Pipeline раз в 30 секунд или по кнопке
+**Refresh**.
+
+В активном job остаётся только bounded работа конкретного процесса. **This
+batch** показывает sequences относительно верхнего лимита job и обработанные им
+chunks, а **This worker** — end-to-end скорость этого job на закреплённом route.
+После завершения эта итоговая worker speed сохраняется в result и остаётся
+видимой в Jobs и Job Details; для старых jobs без сохранённого rate UI выводит
+оценку по обработанным chunks и длительности job.
 
 Отмена одного job не удаляет уже записанные segments. Но `hasMore`-chain или
 watchdog могут продолжить ту же campaign: cancel job не означает stop campaign.
@@ -390,8 +418,8 @@ building/interrupted -> failed
 1. Выбрать bounded range в **Audio Pipeline → Voice Identity**.
 2. Нажать **Re-diarize range**.
 3. Дождаться generation campaign или разобрать errors.
-4. Для `interrupted` resume допустим только при idempotent writes; иначе
-   **Mark failed** и новая чистая generation.
+4. Для `interrupted` resume допустим только при idempotent writes; иначе **Mark
+   failed** и новая чистая generation.
 5. Нажать **Compare**, проверить coverage, segments/minute, errors, fingerprint,
    embedding space и identity distribution.
 6. После QA нажать **Activate**.
@@ -415,7 +443,8 @@ backup и проверьте restore. Затем **Preview purge**, сверка
 6. Проверьте новую revision и текущий `embeddingSpaceId`.
 
 Лучше несколько разных 10–30-секундных samples, чем один длинный: разные
-комнаты, микрофоны и манера речи. Избегайте второго говорящего, музыки и overlap.
+комнаты, микрофоны и манера речи. Избегайте второго говорящего, музыки и
+overlap.
 
 ### Sample из Timeline
 
@@ -439,8 +468,8 @@ Review queue содержит активные unclassified/uncertain segments:
 - undo удаляет последнее ручное решение;
 - **Skip** оставляет segment вне training/calibration;
 - autoplay и shortcuts двигают очередь;
-- review session, окно из 100 segments и текущая позиция сохраняются на
-  backend, поэтому работу можно продолжить позже;
+- review session, окно из 100 segments и текущая позиция сохраняются на backend,
+  поэтому работу можно продолжить позже;
 - compact list показывает все 100 элементов текущего окна;
 - соседние короткие segments одного anonymous speaker можно объединить в
   playback group и разметить одним подтверждённым batch.
@@ -518,9 +547,9 @@ calibrated thresholds превращают score в identity decision.
 Cross-space matching блокируется. Если `legacy-unknown` не проходит validation,
 используйте rolling versioned re-diarization, а не принудительный match.
 
-`Classify existing` создаёт identity campaign. На Audio Pipeline, Voice Identity,
-Jobs и Job Details отображаются общий processed/total, текущий batch, Sky,
-not-Sky, uncertain, incompatible, rate и ETA. Continuation сохраняет тот же
+`Classify existing` создаёт identity campaign. На Audio Pipeline, Voice
+Identity, Jobs и Job Details отображаются общий processed/total, текущий batch,
+Sky, not-Sky, uncertain, incompatible, rate и ETA. Continuation сохраняет тот же
 `campaignId`, поэтому прогресс не возвращается к нулю между jobs. После каждого
 batch Timeline speaker-layer обновляется автоматически.
 
@@ -634,14 +663,14 @@ Standalone local:
 
 ```bash
 cd diarizator
-docker compose -p sky-diarization-local --profile cpu down
+docker compose -p mycelia-diarization-local --profile cpu down
 ```
 
 Standalone GPU:
 
 ```bash
 cd diarizator
-docker compose -p sky-diarization --profile gpu down
+docker compose -p mycelia-diarization --profile gpu down
 ```
 
 Остановка inference service не удаляет данные, но active jobs могут упасть или

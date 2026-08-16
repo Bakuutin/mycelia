@@ -1,12 +1,33 @@
 import { expect } from "@std/expect";
 import { z } from "zod";
 import {
+  buildSummarizationPendingQuery,
   buildSummarySourceRefs,
   getSummarizationRetryDelayMs,
   isTerminalSummarizationResponseError,
   parseSummaryTitleResponse,
   schema,
 } from "./summarization.ts";
+
+Deno.test("summary pending query includes due failures and stale claims", () => {
+  const now = new Date("2026-08-15T04:00:00.000Z");
+  const query = buildSummarizationPendingQuery({
+    now,
+    claimStaleMs: 10 * 60 * 1000,
+  }) as any;
+
+  expect(query["summaries.0.date"]).toEqual({ $exists: false });
+  expect(query.$and[0].$or[2]).toEqual({
+    "_summarizationClaim.startedAt": {
+      $lte: "2026-08-15T03:50:00.000Z",
+    },
+  });
+  expect(query.$or[2]).toEqual({
+    "_summarizationFailure.retryAfter": {
+      $lte: "2026-08-15T04:00:00.000Z",
+    },
+  });
+});
 
 Deno.test("summarization schema defaults and bounds batchSize", () => {
   const parsed = schema.parse({ type: "summarization" });
@@ -30,7 +51,7 @@ Deno.test("summarization schema defaults and bounds batchSize", () => {
 
 Deno.test("combined summary+title response parses JSON and fenced JSON", () => {
   expect(parseSummaryTitleResponse(
-    JSON.stringify({ summary: "We talked about cats.", title: " \"Cats\" " }),
+    JSON.stringify({ summary: "We talked about cats.", title: ' "Cats" ' }),
   )).toEqual({ summary: "We talked about cats.", title: "Cats" });
 
   expect(parseSummaryTitleResponse(
@@ -117,30 +138,38 @@ Deno.test("hasPendingWork reports jobs worth starting, not just a boolean", asyn
 
   // Empty queue: 0 jobs, and the workers collection is not even consulted.
   calls.length = 0;
-  expect(await capability.hasPendingWork!({
-    mongo: fakeMongo(0),
-    reason: "test",
-  })).toBe(0);
+  expect(
+    await capability.hasPendingWork!({
+      mongo: fakeMongo(0),
+      reason: "test",
+    }),
+  ).toBe(0);
   expect(calls.length).toBe(1);
   // The count must use the indexed subfield predicate.
   expect(calls[0].query["summaries.0.date"]).toEqual({ $exists: false });
   expect(calls[0].query.isConversation).toBe(true);
 
   // Backlog splits into ceil(pending / batchSize) jobs.
-  expect(await capability.hasPendingWork!({
-    mongo: fakeMongo(25, 10),
-    reason: "test",
-  })).toBe(3);
+  expect(
+    await capability.hasPendingWork!({
+      mongo: fakeMongo(25, 10),
+      reason: "test",
+    }),
+  ).toBe(3);
 
   // No operator override falls back to the schema default batch of 25.
-  expect(await capability.hasPendingWork!({
-    mongo: fakeMongo(26),
-    reason: "test",
-  })).toBe(2);
+  expect(
+    await capability.hasPendingWork!({
+      mongo: fakeMongo(26),
+      reason: "test",
+    }),
+  ).toBe(2);
 
   // A single stray conversation still yields exactly one job.
-  expect(await capability.hasPendingWork!({
-    mongo: fakeMongo(1, 10),
-    reason: "test",
-  })).toBe(1);
+  expect(
+    await capability.hasPendingWork!({
+      mongo: fakeMongo(1, 10),
+      reason: "test",
+    }),
+  ).toBe(1);
 });

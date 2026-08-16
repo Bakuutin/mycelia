@@ -1,7 +1,10 @@
 import { expect } from "@std/expect";
 import { Auth, defaultResourceManager } from "@/lib/auth/index.ts";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { SearchResource, type SearchRequest } from "@/lib/search/resource.server.ts";
+import {
+  type SearchRequest,
+  SearchResource,
+} from "@/lib/search/resource.server.ts";
 import { ObjectId } from "bson";
 
 // Helper to get search resource with mock DB
@@ -12,13 +15,16 @@ async function getSearchResource(auth: Auth, db: any) {
 }
 
 // Helper to insert test transcriptions
-async function insertTranscription(db: any, data: Partial<{
-  text: string;
-  start: Date;
-  end: Date;
-  duration: number;
-  segments: any[];
-}>) {
+async function insertTranscription(
+  db: any,
+  data: Partial<{
+    text: string;
+    start: Date;
+    end: Date;
+    duration: number;
+    segments: any[];
+  }>,
+) {
   const doc = {
     _id: new ObjectId(),
     text: data.text ?? "Test transcription",
@@ -33,13 +39,16 @@ async function insertTranscription(db: any, data: Partial<{
 }
 
 // Helper to insert test messages
-async function insertMessage(db: any, data: Partial<{
-  text: string;
-  platform: string;
-  chatId: ObjectId;
-  timestamp: Date;
-  raw: any;
-}>) {
+async function insertMessage(
+  db: any,
+  data: Partial<{
+    text: string;
+    platform: string;
+    chatId: ObjectId;
+    timestamp: Date;
+    raw: any;
+  }>,
+) {
   const doc = {
     _id: new ObjectId(),
     text: data.text ?? "Test message",
@@ -54,16 +63,23 @@ async function insertMessage(db: any, data: Partial<{
 }
 
 // Helper to insert test objects
-async function insertObject(db: any, data: Partial<{
-  name: string;
-  details: string;
-  isPerson: boolean;
-  isEvent: boolean;
-  isRelationship: boolean;
-  isPromise: boolean;
-  aliases: string[];
-  timeRanges: any[];
-}>) {
+async function insertObject(
+  db: any,
+  data: Partial<{
+    name: string;
+    details: string;
+    isPerson: boolean;
+    isEvent: boolean;
+    isRelationship: boolean;
+    isPromise: boolean;
+    isPlace: boolean;
+    isOrganization: boolean;
+    isProduct: boolean;
+    isProject: boolean;
+    aliases: string[];
+    timeRanges: any[];
+  }>,
+) {
   const doc = {
     _id: new ObjectId(),
     name: data.name ?? "Test Object",
@@ -93,7 +109,9 @@ Deno.test(
   withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
     const resource = await getSearchResource(admin, db);
 
-    await insertTranscription(db, { text: "We discussed therapy options today" });
+    await insertTranscription(db, {
+      text: "We discussed therapy options today",
+    });
     await insertTranscription(db, { text: "The weather is nice" });
     await insertTranscription(db, { text: "Therapy session went well" });
 
@@ -105,7 +123,11 @@ Deno.test(
 
     expect(result.source).toBe("transcriptions");
     expect(result.count).toBe(2);
-    expect(result.results.every((r: any) => r.text.toLowerCase().includes("therapy"))).toBe(true);
+    expect(
+      result.results.every((r: any) =>
+        r.text.toLowerCase().includes("therapy")
+      ),
+    ).toBe(true);
   }),
 );
 
@@ -117,8 +139,16 @@ Deno.test(
     const oldDate = new Date("2024-01-01");
     const newDate = new Date("2024-06-01");
 
-    await insertTranscription(db, { text: "Old meeting notes", start: oldDate, end: oldDate });
-    await insertTranscription(db, { text: "New meeting notes", start: newDate, end: newDate });
+    await insertTranscription(db, {
+      text: "Old meeting notes",
+      start: oldDate,
+      end: oldDate,
+    });
+    await insertTranscription(db, {
+      text: "New meeting notes",
+      start: newDate,
+      end: newDate,
+    });
 
     const result = await resource({
       action: "searchTranscriptions",
@@ -140,8 +170,16 @@ Deno.test(
     const recentDate = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
     const oldDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
 
-    await insertTranscription(db, { text: "Recent discussion", start: recentDate, end: recentDate });
-    await insertTranscription(db, { text: "Old discussion", start: oldDate, end: oldDate });
+    await insertTranscription(db, {
+      text: "Recent discussion",
+      start: recentDate,
+      end: recentDate,
+    });
+    await insertTranscription(db, {
+      text: "Old discussion",
+      start: oldDate,
+      end: oldDate,
+    });
 
     const result = await resource({
       action: "searchTranscriptions",
@@ -171,6 +209,77 @@ Deno.test(
     });
 
     expect(result.count).toBe(3);
+  }),
+);
+
+Deno.test(
+  "searchTranscriptions returns legacy segment text and pagination metadata",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+    const resource = await getSearchResource(admin, db);
+
+    for (let index = 0; index < 3; index += 1) {
+      await insertTranscription(db, {
+        text: undefined,
+        start: new Date(Date.UTC(2025, 6, 3 + index)),
+        segments: [
+          { text: "legacy" },
+          { text: `segment ${index}` },
+        ],
+      });
+    }
+
+    const result = await resource({
+      action: "searchTranscriptions",
+      query: "legacy",
+      limit: 2,
+    });
+
+    expect(result.count).toBe(2);
+    expect(result.hasMore).toBe(true);
+    expect(result.results[0].text).toContain("legacy segment");
+    expect(result.results[0].textLength).toBe(result.results[0].text.length);
+    expect(result.results[0].textTruncated).toBe(false);
+  }),
+);
+
+Deno.test(
+  "searchTranscriptions caps text and centers the window on a match",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+    const resource = await getSearchResource(admin, db);
+    const fullText = `${"a".repeat(8_500)} needle ${"b".repeat(1_000)}`;
+    await insertTranscription(db, {
+      text: undefined,
+      segments: [{ text: fullText }],
+    });
+
+    const result = await resource({
+      action: "searchTranscriptions",
+      query: "needle",
+      limit: 20,
+    });
+
+    expect(result.results[0].text.length).toBe(8_000);
+    expect(result.results[0].text).toContain("needle");
+    expect(result.results[0].textLength).toBe(fullText.length);
+    expect(result.results[0].textTruncated).toBe(true);
+  }),
+);
+
+Deno.test(
+  "searchTranscriptions treats regex metacharacters literally",
+  withFixtures(["Admin", "Mongo"], async (admin: Auth, { db }) => {
+    const resource = await getSearchResource(admin, db);
+    await insertTranscription(db, { text: "literal a.b value" });
+    await insertTranscription(db, { text: "regex-like axb value" });
+
+    const result = await resource({
+      action: "searchTranscriptions",
+      query: "a.b",
+      limit: 20,
+    });
+
+    expect(result.count).toBe(1);
+    expect(result.results[0].text).toBe("literal a.b value");
   }),
 );
 
@@ -248,128 +357,149 @@ Deno.test(
 
 Deno.test(
   "searchObjects finds by name",
-  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
-    const resource = await getSearchResource(admin, db);
+  withFixtures(
+    ["Admin", "Mongo", "Migrations"],
+    async (admin: Auth, { db }) => {
+      const resource = await getSearchResource(admin, db);
 
-    await insertObject(db, { name: "John Smith", isPerson: true });
-    await insertObject(db, { name: "Jane Doe", isPerson: true });
-    await insertObject(db, { name: "Johnny Appleseed", isPerson: true });
+      await insertObject(db, { name: "John Smith", isPerson: true });
+      await insertObject(db, { name: "Jane Doe", isPerson: true });
+      await insertObject(db, { name: "Johnny Appleseed", isPerson: true });
 
-    const result = await resource({
-      action: "searchObjects",
-      query: "doe",
-      types: ["any"],
-      limit: 20,
-    });
+      const result = await resource({
+        action: "searchObjects",
+        query: "doe",
+        types: ["any"],
+        limit: 20,
+      });
 
-    expect(result.source).toBe("objects");
-    expect(result.count).toBe(1);
-  }),
+      expect(result.source).toBe("objects");
+      expect(result.count).toBe(1);
+    },
+  ),
 );
 
 Deno.test(
   "searchObjects finds by aliases",
-  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
-    const resource = await getSearchResource(admin, db);
+  withFixtures(
+    ["Admin", "Mongo", "Migrations"],
+    async (admin: Auth, { db }) => {
+      const resource = await getSearchResource(admin, db);
 
-    await insertObject(db, { name: "Robert Johnson", aliases: ["Bob", "Bobby"] });
-    await insertObject(db, { name: "Alice Smith" });
+      await insertObject(db, {
+        name: "Robert Johnson",
+        aliases: ["Bob", "Bobby"],
+      });
+      await insertObject(db, { name: "Alice Smith" });
 
-    const result = await resource({
-      action: "searchObjects",
-      query: "Bob",
-      types: ["any"],
-      limit: 20,
-    });
+      const result = await resource({
+        action: "searchObjects",
+        query: "Bob",
+        types: ["any"],
+        limit: 20,
+      });
 
-    expect(result.count).toBe(1);
-    expect(result.results[0].name).toBe("Robert Johnson");
-  }),
+      expect(result.count).toBe(1);
+      expect(result.results[0].name).toBe("Robert Johnson");
+    },
+  ),
 );
 
 Deno.test(
   "searchObjects finds by details",
-  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
-    const resource = await getSearchResource(admin, db);
+  withFixtures(
+    ["Admin", "Mongo", "Migrations"],
+    async (admin: Auth, { db }) => {
+      const resource = await getSearchResource(admin, db);
 
-    await insertObject(db, { name: "Dr. Smith", details: "My therapist at the wellness center" });
-    await insertObject(db, { name: "John", details: "Friend from work" });
+      await insertObject(db, {
+        name: "Dr. Smith",
+        details: "My therapist at the wellness center",
+      });
+      await insertObject(db, { name: "John", details: "Friend from work" });
 
-    const result = await resource({
-      action: "searchObjects",
-      query: "therapist",
-      types: ["any"],
-      limit: 20,
-    });
+      const result = await resource({
+        action: "searchObjects",
+        query: "therapist",
+        types: ["any"],
+        limit: 20,
+      });
 
-    expect(result.count).toBe(1);
-    expect(result.results[0].name).toBe("Dr. Smith");
-  }),
+      expect(result.count).toBe(1);
+      expect(result.results[0].name).toBe("Dr. Smith");
+    },
+  ),
 );
 
 Deno.test(
   "searchObjects filters by type",
-  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
-    const resource = await getSearchResource(admin, db);
+  withFixtures(
+    ["Admin", "Mongo", "Migrations"],
+    async (admin: Auth, { db }) => {
+      const resource = await getSearchResource(admin, db);
 
-    await insertObject(db, { name: "John", isPerson: true });
-    await insertObject(db, { name: "Birthday Party", isEvent: true });
-    await insertObject(db, { name: "Call John", isPromise: true });
+      await insertObject(db, { name: "John", isPerson: true });
+      await insertObject(db, { name: "Birthday Party", isEvent: true });
+      await insertObject(db, { name: "Call John", isPromise: true });
 
-    const result = await resource({
-      action: "searchObjects",
-      query: "John",
-      types: ["person"],
-      limit: 20,
-    });
+      const result = await resource({
+        action: "searchObjects",
+        query: "John",
+        types: ["person"],
+        limit: 20,
+      });
 
-    expect(result.count).toBe(1);
-    expect(result.results[0].type).toBe("person");
-  }),
+      expect(result.count).toBe(1);
+      expect(result.results[0].type).toBe("person");
+    },
+  ),
 );
 
 Deno.test(
   "searchObjects filters and derives the new entity types",
-  withFixtures(["Admin", "Mongo", "Migrations"], async (admin: Auth, { db }) => {
-    const resource = await getSearchResource(admin, db);
+  withFixtures(
+    ["Admin", "Mongo", "Migrations"],
+    async (admin: Auth, { db }) => {
+      const resource = await getSearchResource(admin, db);
 
-    await insertObject(db, { name: "Berlin office", isPlace: true });
-    await insertObject(db, { name: "Berlin GmbH", isOrganization: true });
-    await insertObject(db, { name: "Berlin App", isProduct: true });
-    await insertObject(db, { name: "Berlin Launch", isProject: true });
-    await insertObject(db, { name: "Berlin Trip" });
+      await insertObject(db, { name: "Berlin office", isPlace: true });
+      await insertObject(db, { name: "Berlin GmbH", isOrganization: true });
+      await insertObject(db, { name: "Berlin App", isProduct: true });
+      await insertObject(db, { name: "Berlin Launch", isProject: true });
+      await insertObject(db, { name: "Berlin Trip" });
 
-    const places = await resource({
-      action: "searchObjects",
-      query: "Berlin",
-      types: ["place"],
-      limit: 20,
-    });
-    expect(places.count).toBe(1);
-    expect(places.results[0].type).toBe("place");
+      const places = await resource({
+        action: "searchObjects",
+        query: "Berlin",
+        types: ["place"],
+        limit: 20,
+      });
+      expect(places.count).toBe(1);
+      expect(places.results[0].type).toBe("place");
 
-    const orgsAndProducts = await resource({
-      action: "searchObjects",
-      query: "Berlin",
-      types: ["organization", "product"],
-      limit: 20,
-    });
-    expect(orgsAndProducts.count).toBe(2);
+      const orgsAndProducts = await resource({
+        action: "searchObjects",
+        query: "Berlin",
+        types: ["organization", "product"],
+        limit: 20,
+      });
+      expect(orgsAndProducts.count).toBe(2);
 
-    const all = await resource({
-      action: "searchObjects",
-      query: "Berlin",
-      types: ["any"],
-      limit: 20,
-    });
-    const typesByName = new Map(
-      all.results.map((r: any) => [r.name, r.type]),
-    );
-    expect(typesByName.get("Berlin GmbH")).toBe("organization");
-    expect(typesByName.get("Berlin App")).toBe("product");
-    expect(typesByName.get("Berlin Launch")).toBe("project");
-    expect(typesByName.get("Berlin Trip")).toBe("object");
-  }),
+      const all = await resource({
+        action: "searchObjects",
+        query: "Berlin",
+        types: ["any"],
+        limit: 20,
+      });
+      const typesByName = new Map(
+        all.results.map((r: any) => [r.name, r.type]),
+      );
+      expect(typesByName.get("Berlin GmbH")).toBe("organization");
+      expect(typesByName.get("Berlin App")).toBe("product");
+      expect(typesByName.get("Berlin Launch")).toBe("project");
+      expect(typesByName.get("Berlin Trip")).toBe("object");
+    },
+  ),
 );
 
 // ============================================================================
@@ -384,8 +514,16 @@ Deno.test(
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
 
-    await insertTranscription(db, { text: "Very recent note", start: fiveMinutesAgo, end: fiveMinutesAgo });
-    await insertTranscription(db, { text: "Older note", start: twoHoursAgo, end: twoHoursAgo });
+    await insertTranscription(db, {
+      text: "Very recent note",
+      start: fiveMinutesAgo,
+      end: fiveMinutesAgo,
+    });
+    await insertTranscription(db, {
+      text: "Older note",
+      start: twoHoursAgo,
+      end: twoHoursAgo,
+    });
 
     const result = await resource({
       action: "searchTranscriptions",
@@ -407,8 +545,16 @@ Deno.test(
     const oneWeekAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
     const threeWeeksAgo = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
 
-    await insertTranscription(db, { text: "This week meeting", start: oneWeekAgo, end: oneWeekAgo });
-    await insertTranscription(db, { text: "Old meeting", start: threeWeeksAgo, end: threeWeeksAgo });
+    await insertTranscription(db, {
+      text: "This week meeting",
+      start: oneWeekAgo,
+      end: oneWeekAgo,
+    });
+    await insertTranscription(db, {
+      text: "Old meeting",
+      start: threeWeeksAgo,
+      end: threeWeeksAgo,
+    });
 
     const result = await resource({
       action: "searchTranscriptions",

@@ -19,6 +19,22 @@ Deno.test(
 );
 
 Deno.test(
+  "every event or interval worker declares a pending-work preflight",
+  withFixtures(["JobWorkers"], async () => {
+    await jobRegistry.loadAllImplementations();
+    const automaticWorkers = jobRegistry.list().filter((worker) =>
+      (worker.triggers?.sources?.length ?? 0) > 0 ||
+      (worker.triggers?.interval ?? 0) > 0
+    );
+    const missing = automaticWorkers
+      .filter((worker) => typeof worker.hasPendingWork !== "function")
+      .map((worker) => worker.manifest.name);
+
+    expect(missing).toEqual([]);
+  }),
+);
+
+Deno.test(
   "jobRegistry validates VAD job data via schema",
   withFixtures(["JobWorkers"], () => {
     const vadCapability = jobRegistry.get("vad");

@@ -13,7 +13,7 @@ const DEFAULTS = {
   // Watchdog only: the backfill chain self-continues via hasMore, the
   // interval just resumes it after a broken link (timeout/crash/restart).
   tagger: { debounceMs: 5000, interval: 900 },
-  location_processing: { debounceMs: 3000, interval: 0 },
+  location_processing: { debounceMs: 3000, interval: 300 },
   diarization: { debounceMs: 5000, interval: 300 },
 } as const;
 
@@ -26,7 +26,7 @@ const FAST = {
   conversation_chunk_creator: { debounceMs: 500, interval: 30 }, // Needs polling to finalize stale chunks
   conversation_extractor_merged: { debounceMs: 1000, interval: 0 },
   tagger: { debounceMs: 1000, interval: 60 },
-  location_processing: { debounceMs: 500, interval: 0 },
+  location_processing: { debounceMs: 500, interval: 60 },
   diarization: { debounceMs: 1000, interval: 60 },
 } as const;
 

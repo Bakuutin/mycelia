@@ -12,6 +12,7 @@ import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { resolveWorkerFallbackModel } from "@/lib/llm/worker-response.ts";
 import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
+import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
 
 /**
  * Tagger Worker
@@ -180,6 +181,37 @@ Output JSON: {"results": [{"id": "<conversation id>", "tags": ["tag", ...]}]}`,
 });
 
 export type TaggerJobData = z.infer<typeof schema>;
+
+export function buildTaggerConversationQuery(
+  input: Partial<
+    Pick<TaggerJobData, "start" | "end" | "objectIds" | "force">
+  > = {},
+): Record<string, unknown> {
+  if (input.objectIds?.length) {
+    return {
+      _id: {
+        $in: input.objectIds.map((id: ObjectId | string) =>
+          id instanceof ObjectId ? id : new ObjectId(id.toString())
+        ),
+      },
+      isConversation: true,
+    };
+  }
+
+  const query: Record<string, any> = { isConversation: true };
+  if (input.start || input.end) {
+    query["timeRanges.start"] = {
+      ...(input.start ? { $gte: new Date(input.start) } : {}),
+      ...(input.end ? { $lt: new Date(input.end) } : {}),
+    };
+  }
+  if (!input.force) {
+    query["metadata.aiProvenance.taggingRuns.0.generatedAt"] = {
+      $exists: false,
+    };
+  }
+  return query;
+}
 
 // ============================================================================
 // Pure Functions
@@ -464,16 +496,18 @@ const capability: JobCapability = {
   // someone pressed Run now. The interval acts as a watchdog; the guard makes
   // idle ticks free.
   hasPendingWork: async ({ mongo }) => {
-    const untagged = await mongo({
-      action: "findOne",
+    const hasTags = await hasIndexedPendingWork(mongo, {
       collection: "objects",
-      query: {
-        isConversation: true,
-        "metadata.aiProvenance.taggingRuns.0": { $exists: false },
-      },
-      options: { projection: { _id: 1 } },
+      query: { isTag: true },
     });
-    return Boolean(untagged);
+    if (!hasTags) return 0;
+
+    const untagged = await hasIndexedPendingWork(mongo, {
+      collection: "objects",
+      query: buildTaggerConversationQuery(),
+      hint: "conversation_missing_tagging_marker_v1",
+    });
+    return untagged ? 1 : 0;
   },
   triggers: {
     sources: [],
@@ -526,39 +560,12 @@ const capability: JobCapability = {
     const validTagNames = new Set(tags.map((t) => t.name));
     const tagsPrompt = formatTagsForPrompt(tags);
 
-    // Step 2: Build query for untagged conversations
-    const dateFilter: Record<string, any> = {};
-    if (input.start) dateFilter.$gte = new Date(input.start);
-    if (input.end) dateFilter.$lt = new Date(input.end);
-
-    const conversationQuery: Record<string, any> = {
-      isConversation: true,
-    };
-
-    if (Object.keys(dateFilter).length > 0) {
-      conversationQuery["timeRanges.start"] = dateFilter;
-    }
-
     // Step 3: Fetch conversations. The untagged exclusion must live in the
     // query itself: the list action caps results, so an unfiltered fetch only
     // ever sees the newest ~1000 conversations — all long tagged — and a
     // 27k-deep backlog would never be reached.
     console.log(`[Tagger] Job ${job.id}: fetching conversations...`);
-    const conversationFilters = input.objectIds?.length
-      ? {
-        _id: {
-          $in: input.objectIds.map((id: ObjectId | string) =>
-            id instanceof ObjectId ? id : new ObjectId(id.toString())
-          ),
-        },
-        isConversation: true,
-      }
-      : input.force
-      ? conversationQuery
-      : {
-        ...conversationQuery,
-        "metadata.aiProvenance.taggingRuns.0": { $exists: false },
-      };
+    const conversationFilters = buildTaggerConversationQuery(input);
 
     // Small buffer over the limit: a few candidates may still be dropped by
     // the edge check below (tagged edges without a taggingRuns marker).
@@ -666,7 +673,7 @@ const capability: JobCapability = {
         .slice(0, input.limit + 1);
     }
 
-    const hasMore = conversationsToProcess.length > input.limit;
+    let hasMore = conversationsToProcess.length > input.limit;
     conversationsToProcess = conversationsToProcess.slice(0, input.limit);
 
     console.log(
@@ -863,6 +870,15 @@ const capability: JobCapability = {
     );
 
     const inference = summarizeInferenceUsage(inferenceRuns);
+    if (!input.force && !input.objectIds?.length) {
+      const remaining = await objects({
+        action: "list",
+        filters: buildTaggerConversationQuery(input),
+        options: { projection: { _id: 1 }, limit: 1 },
+      }) as Conversation[];
+      hasMore = remaining.length > 0;
+    }
+
     return {
       status: "completed" as const,
       success: errors.length === 0,

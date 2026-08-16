@@ -1,6 +1,7 @@
 # Development Guide
 
-This guide is for developers who want to contribute to Mycelia or run it in development mode with hot reload.
+This guide is for developers who want to contribute to Mycelia or run it in
+development mode with hot reload.
 
 ## Development Setup
 
@@ -20,16 +21,17 @@ docker compose restart nginx
 
 #### Development Mode Variables
 
-| Variable | Default | Dev Value | Effect |
-|----------|---------|-----------|--------|
-| `FRONTEND_MODE` | `prod` | `dev` | Enables Vite hot reload instead of nginx static build |
-| `BACKEND_TASK` | `start` | `dev` | Enables file watcher for auto-restart on code changes |
+| Variable        | Default | Dev Value | Effect                                                |
+| --------------- | ------- | --------- | ----------------------------------------------------- |
+| `FRONTEND_MODE` | `prod`  | `dev`     | Enables Vite hot reload instead of nginx static build |
+| `BACKEND_TASK`  | `start` | `dev`     | Enables file watcher for auto-restart on code changes |
 
 Both variables are optional and default to production mode if not set. In dev
 mode, frontend changes are handled by Vite HMR and backend changes restart the
 Deno process through `deno --watch`.
 
-Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json` dependencies, you might still need to run `docker compose build` again
+Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json`
+dependencies, you might still need to run `docker compose build` again
 
 #### Readiness and reload diagnostics
 
@@ -71,8 +73,8 @@ When a change is not visible:
      --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
    ```
 
-3. Confirm the effective commands with `docker compose config`: backend must
-   use `deno task dev`, while frontend must use `Dockerfile.dev`.
+3. Confirm the effective commands with `docker compose config`: backend must use
+   `deno task dev`, while frontend must use `Dockerfile.dev`.
 4. Source changes should reload automatically. Changes to Dockerfiles,
    dependencies, Compose configuration, or `.env` require rebuilding or
    recreating the affected service.
@@ -82,24 +84,24 @@ When a change is not visible:
 
 Ports can be customized via environment variables (in `.env` or inline):
 
-| Service | Variable | Default |
-|---------|----------|---------|
-| **Nginx (Proxy)** | `NGINX_PORT` | `4433` |
-| **Nginx (HTTP)** | `NGINX_HTTP_PORT` | `80` |
-| **Nginx (HTTPS)** | `NGINX_HTTPS_PORT` | `443` |
-| **Frontend** | `FRONTEND_PORT` | `8080` |
-| **Backend** | `BACKEND_PORT` | `5173` |
-| **Worker** | `PYTHON_WORKER_PORT` | `8000` |
-| **Database** | `MONGO_PORT` | `27017` |
+| Service           | Variable             | Default |
+| ----------------- | -------------------- | ------- |
+| **Nginx (Proxy)** | `NGINX_PORT`         | `4433`  |
+| **Nginx (HTTP)**  | `NGINX_HTTP_PORT`    | `80`    |
+| **Nginx (HTTPS)** | `NGINX_HTTPS_PORT`   | `443`   |
+| **Frontend**      | `FRONTEND_PORT`      | `8080`  |
+| **Backend**       | `BACKEND_PORT`       | `5173`  |
+| **Worker**        | `PYTHON_WORKER_PORT` | `8000`  |
+| **Database**      | `MONGO_PORT`         | `27017` |
 
 Example:
+
 ```bash
 NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
 ```
 
-
-
-For more details on networking and SSL setup, see **[NETWORKING.md](docs/NETWORKING.md)**.
+For more details on networking and SSL setup, see
+**[NETWORKING.md](docs/NETWORKING.md)**.
 
 ## Parallel Development (Two Branches at Once)
 
@@ -132,8 +134,8 @@ tested this way.
 ### Option 2: Second full stack (frontend + backend)
 
 Best when the second branch changes backend code. Bind mounts in
-`docker-compose.yml` are relative (`./frontend`, `./backend`), so a git
-worktree plus a separate Compose project name gives a fully independent stack:
+`docker-compose.yml` are relative (`./frontend`, `./backend`), so a git worktree
+plus a separate Compose project name gives a fully independent stack:
 
 ```bash
 git worktree add ../mycelia-b my-feature-branch
@@ -142,8 +144,8 @@ cp ../mycelia/.env .env
 ```
 
 Create an (uncommitted) `docker-compose.override.yml` in the worktree to remap
-the published ports and image tags — both are fixed in `docker-compose.yml`
-and would otherwise collide with the first stack:
+the published ports and image tags — both are fixed in `docker-compose.yml` and
+would otherwise collide with the first stack:
 
 ```yaml
 services:
@@ -162,10 +164,10 @@ services:
     image: bakuutin/mycelia-python:dev-b
 ```
 
-The `!override` tag is required: without it Compose *merges* the port lists
-and the duplicated host ports conflict. The image overrides prevent a rebuild
-in stack B from overwriting the `:dev` tags that stack A's next
-`--force-recreate` would pick up.
+The `!override` tag is required: without it Compose _merges_ the port lists and
+the duplicated host ports conflict. The image overrides prevent a rebuild in
+stack B from overwriting the `:dev` tags that stack A's next `--force-recreate`
+would pick up.
 
 Start the second stack under its own project name:
 
@@ -173,34 +175,34 @@ Start the second stack under its own project name:
 docker compose -p mycelia-b up -d --build
 ```
 
-Stack B is served at `https://localhost:4434` with its own containers,
-network, and volumes (`mycelia-b_mongo_data`, `mycelia-b_redis_data`), i.e. a
-fresh database — run first-time setup on it. To work with the same data,
-clone the primary database into the second stack's volume with
-`mongodump`/`mongorestore` rather than sharing the live one.
+Stack B is served at `https://localhost:4434` with its own containers, network,
+and volumes (`mycelia-b_mongo_data`, `mycelia-b_redis_data`), i.e. a fresh
+database — run first-time setup on it. To work with the same data, clone the
+primary database into the second stack's volume with `mongodump`/`mongorestore`
+rather than sharing the live one.
 
 ### Do not share one database between two backends
 
-Running two backends from different branches against the same MongoDB
-database (same `DATABASE_NAME`) is unsafe:
+Running two backends from different branches against the same MongoDB database
+(same `DATABASE_NAME`) is unsafe:
 
 - Both run BullMQ workers and periodic triggers (extraction and summarization
-  every 5 minutes) and will race to process the same jobs with different
-  branch code.
+  every 5 minutes) and will race to process the same jobs with different branch
+  code.
 - With separate Redis instances, each backend's watchdog cancels the other's
   Mongo job records as `queue_record_missing`.
 - Branches may be at different migration levels, so one backend writes schema
   the other does not know about.
 
 If the stacks must share one `mongod` instance, give each backend its own
-`DATABASE_NAME` (e.g. `mycelia_b`). Sharing the Redis instance is not
-supported at all — the second stack should always run its own.
+`DATABASE_NAME` (e.g. `mycelia_b`). Sharing the Redis instance is not supported
+at all — the second stack should always run its own.
 
 ### Resource note
 
-Each backend, mongo, and python-worker container is limited to 2 CPUs / 4 GB,
-so two full stacks are a significant memory load. If the second branch only
-touches frontend code, prefer Option 1.
+Each backend, mongo, and python-worker container is limited to 2 CPUs / 4 GB, so
+two full stacks are a significant memory load. If the second branch only touches
+frontend code, prefer Option 1.
 
 ## Frontend Development
 
@@ -226,9 +228,11 @@ deno task build
 deno task preview
 ```
 
-for mycelia url during development use: `http://localhost:3210` (non-https nginx port)
+for mycelia url during development use: `http://localhost:3210` (non-https nginx
+port)
 
 ### Tech Stack
+
 - **Deno** runtime with npm compatibility
 - **React 18** + TypeScript
 - **Vite** for build tooling
@@ -242,9 +246,9 @@ for mycelia url during development use: `http://localhost:3210` (non-https nginx
 Use `@/` alias for all imports (configured in `deno.json`):
 
 ```typescript
-import { Component } from '@/components/Component'
-import { useTimeline } from '@/hooks/useTimeline'
-import type { TimelineItem } from '@/types/timeline'
+import { Component } from "@/components/Component";
+import { useTimeline } from "@/hooks/useTimeline";
+import type { TimelineItem } from "@/types/timeline";
 ```
 
 ## Backend Development
@@ -258,7 +262,6 @@ deno task dev
 # Create an API token
 deno run -A server.ts token-create
 ```
-
 
 ## Inference Stack (GPU)
 
@@ -279,8 +282,7 @@ See [gpu/README.md](gpu/README.md) for detailed setup and VRAM requirements.
 
 ## Speaker Identification
 
-For diarization, voice enrollment, speaker recognition, and historical
-backfill:
+For diarization, voice enrollment, speaker recognition, and historical backfill:
 
 1. Start Mycelia and apply migrations.
 2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
@@ -289,7 +291,8 @@ backfill:
 5. Enroll Sky, label validation audio, and calibrate identity matching.
 6. Run a bounded identity pilot before historical backfill.
 
-See [the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
+See
+[the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
 for exact commands, UI workflow, safety gates, and troubleshooting.
 
 ## Database Migrations
@@ -318,6 +321,12 @@ For unattended local use, prefer the stable runtime (`FRONTEND_MODE=prod` and
 and the Deno watcher consume more memory, and a watcher can keep its container
 alive after the child application has failed.
 
+Docker restart policies react to a stopped container, not to an `unhealthy`
+status. In `BACKEND_TASK=dev`, Deno's watcher intentionally remains as PID 1
+after an application failure and waits for a file change, so Docker cannot
+restart it. If unattended recovery matters, use `BACKEND_TASK=start`; after a
+source or configuration change, recreate only `backend` and restart `nginx`.
+
 Check the whole stack without changing data:
 
 ```bash
@@ -327,12 +336,18 @@ docker compose logs --tail=150 mongo redis backend frontend nginx \
 curl -fkSs https://localhost:4433/readiness
 ```
 
-MongoDB and Redis now have Docker health checks, and the backend waits for both
-before starting. Once ready, the backend checks them every 30 seconds. After
-three consecutive failed checks it logs a `[SELF-HEAL]` record and exits;
-Docker's `restart: unless-stopped` policy then starts it again. The backend log
-also emits `[READY]` only after workers, periodic triggers, and maintenance are
-running.
+MongoDB and Redis have Docker health checks, and the backend also waits for the
+updates Pub/Sub subscriber to reconcile before becoming ready. Once ready, the
+backend checks all three every 30 seconds. After three consecutive failed checks
+it logs a `[SELF-HEAL]` record and exits; Docker's `restart: unless-stopped`
+policy then starts it again. The backend log also emits `[READY]` only after
+workers, periodic triggers, and maintenance are running.
+
+Browser update WebSockets share one process-scoped Redis Pub/Sub connection. The
+backend does not become ready until that subscriber passes Redis's ready check.
+If Redis reconnects, the hub restores its reference-counted channels and the
+frontend invalidates canonical API queries because Pub/Sub cannot replay events
+that were emitted during the delivery gap.
 
 Extraction and summarization triggers run every five minutes. Source failures
 are retained and retried with bounded exponential backoff:
@@ -345,13 +360,13 @@ are retained and retried with bounded exponential backoff:
   restart are cancelled with `queue_record_missing`; summarization claims are
   released and interrupted extraction chunks return to the retry backlog.
 
-Open **Jobs → Pipeline health & recovery** at
-<https://localhost:4433/jobs>. `Run now` immediately retries eligible and
-previously errored source records (bypassing backoff for that manual run).
-`Retry one failed` recreates one historical failed job while preserving the
-original failure. Resume only the affected worker if its card says it is
-paused. Do not use **Reset worker** merely to retry errors: reset drains live
-queue state and is reserved for an explicitly confirmed queue reset.
+Open **Jobs → Pipeline health & recovery** at <https://localhost:4433/jobs>.
+`Run now` immediately retries eligible and previously errored source records
+(bypassing backoff for that manual run). `Retry one failed` recreates one
+historical failed job while preserving the original failure. Resume only the
+affected worker if its card says it is paused. Do not use **Reset worker**
+merely to retry errors: reset drains live queue state and is reserved for an
+explicitly confirmed queue reset.
 
 Restart application code without touching MongoDB or Redis:
 
@@ -373,8 +388,42 @@ docker compose ps
 ```
 
 Speech-to-text is a separate external dependency. An unavailable STT provider
-blocks transcription but does not block conversation extraction or
-summarization when their LLM provider is healthy.
+blocks transcription but does not block conversation extraction or summarization
+when their LLM provider is healthy.
+
+### Automatic pending-work contract
+
+Every worker with a change-event or interval trigger must declare a cheap,
+indexed `hasPendingWork` preflight. Its eligibility predicate must be the same
+predicate used by batch selection and the final `hasMore` check, including due
+retries and stale claims. A scheduled trigger with no eligible source work must
+not create a durable job. The registry test enforces this contract for newly
+added automatic workers.
+
+Return boolean `true` when the preflight only proves that work exists and every
+free concurrency slot may claim independently. Return a number only when it is
+an actual estimate of how many jobs are worth starting; returning numeric `1`
+deliberately caps each trigger to one new job.
+
+For a historical conversation-chain recovery, use a bounded pilot before opening
+the automatic cursor to the full history:
+
+1. Record Mongo pending counts and BullMQ active/waiting state. Do not reset
+   MongoDB, Redis, or failed-job history.
+2. Enqueue `conversation_chunk_creator` with an explicit `start`/`end` range and
+   `force:false`. Confirm that transcriptions gain `chunk_id`, chunks reach
+   `completed`/`empty`, and objects plus summaries appear without repeated
+   source errors.
+3. Preserve the current pause state, pause only the affected conversation
+   queues, apply the migration and code, and wait for backend `[READY]`, Docker
+   health, `/health=200`, and `/readiness=200`.
+4. Resume only queues that were running before the change. Let the automatic
+   pending predicate drain the remaining history; do not start a duplicate
+   diarization campaign or force-reprocess existing summaries.
+5. Finish only when pending work is zero or every remainder is classified as an
+   active claim, delayed retry, or terminal failure. Repeating automatic jobs
+   with `processed:0` while eligible pending work remains is a contract
+   violation, not an idle state.
 
 ### FFmpeg Import Errors
 
@@ -388,6 +437,7 @@ summarization when their LLM provider is healthy.
 ### macOS Full Disk Access
 
 Required for accessing Voice Memos:
+
 1. System Settings → Privacy & Security → Full Disk Access
 2. Add your terminal app (Terminal, iTerm, VS Code, etc.)
 3. Restart the terminal

@@ -12,6 +12,7 @@ import {
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
+import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
 import {
   buildJsonSchemaResponseFormat,
   extractJsonFromText,
@@ -52,6 +53,7 @@ import {
  */
 
 const MERGED_EXTRACTOR_VERSION = "merged-v1";
+const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ============================================================================
 // Schema
@@ -119,6 +121,38 @@ export const schema = z.object({
 });
 
 export type MergedExtractorJobData = z.infer<typeof schema>;
+
+export function buildConversationChunkClaimQuery(
+  input: Partial<
+    Pick<MergedExtractorJobData, "start" | "end" | "retryNow">
+  > = {},
+  now = new Date(),
+): Record<string, unknown> {
+  const query: Record<string, any> = {
+    $or: [
+      { state: "ready" },
+      ...(input.retryNow ? [{ state: "error" }] : [
+        { state: "error", extractionRetryAfter: { $lte: now } },
+        { state: "error", extractionRetryAfter: { $exists: false } },
+      ]),
+      {
+        state: "processing",
+        processingStartedAt: {
+          $lt: new Date(now.getTime() - PROCESSING_TIMEOUT_MS),
+        },
+      },
+    ],
+  };
+
+  if (input.start || input.end) {
+    query.start = {
+      ...(input.start ? { $gte: new Date(input.start) } : {}),
+      ...(input.end ? { $lt: new Date(input.end) } : {}),
+    };
+  }
+
+  return query;
+}
 
 // ============================================================================
 // Response schema & parsing
@@ -291,6 +325,13 @@ const capability: JobCapability = {
     { resource: "llm/chat", action: "completions", effect: "allow" },
   ],
   maxConcurrency: 1,
+  hasPendingWork: async ({ mongo }) =>
+    await hasIndexedPendingWork(mongo, {
+        collection: "conversation_chunks",
+        query: buildConversationChunkClaimQuery(),
+      })
+      ? 1
+      : 0,
   use: async (job) => {
     const input = job.data as MergedExtractorJobData;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
@@ -302,7 +343,6 @@ const capability: JobCapability = {
       callResource("objects", input, { jwt, myceliaUrl });
     const llm = (input: any) => callResource("llm", input, { jwt, myceliaUrl });
 
-    const processingTimeoutMs = 10 * 60 * 1000;
     const errors: ConversationError[] = [];
     const inferenceRuns: InferenceProvenance[] = [];
     const artifacts: any[] = [];
@@ -322,34 +362,10 @@ const capability: JobCapability = {
       }) as ConversationChunk | null;
       chunks = chunk ? [chunk] : [];
     } else {
-      const now = new Date();
-      const stateFilter = {
-        $or: [
-          { state: "ready" },
-          // An error chunk with no retryAfter (e.g. after the 0029 repair
-          // migration cleared it) is immediately retryable.
-          ...(input.retryNow ? [{ state: "error" }] : [
-            { state: "error", extractionRetryAfter: { $lte: now } },
-            { state: "error", extractionRetryAfter: { $exists: false } },
-          ]),
-          {
-            state: "processing",
-            processingStartedAt: {
-              $lt: new Date(now.getTime() - processingTimeoutMs),
-            },
-          },
-        ],
-      };
-      const dateFilter: Record<string, any> = {};
-      if (input.start) dateFilter.$gte = new Date(input.start);
-      if (input.end) dateFilter.$lt = new Date(input.end);
-      const query: Record<string, any> = { ...stateFilter };
-      if (Object.keys(dateFilter).length > 0) query.start = dateFilter;
-
       chunks = await mongo({
         action: "find",
         collection: "conversation_chunks",
-        query,
+        query: buildConversationChunkClaimQuery(input),
         options: { sort: { start: -1 }, limit: input.limit + 1 },
       }) as ConversationChunk[];
     }
@@ -409,16 +425,7 @@ const capability: JobCapability = {
           collection: "conversation_chunks",
           query: input.force && input.chunkId ? { _id: chunk._id } : {
             _id: chunk._id,
-            $or: [
-              { state: "ready" },
-              { state: "error" },
-              {
-                state: "processing",
-                processingStartedAt: {
-                  $lt: new Date(Date.now() - processingTimeoutMs),
-                },
-              },
-            ],
+            ...buildConversationChunkClaimQuery(input),
           },
           update: {
             $set: {
@@ -482,11 +489,14 @@ const capability: JobCapability = {
           ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
           reasoning: input.reasoning ?? "off",
           category: "extraction",
-          session_id: createPromptCacheSessionId("conversation-extractor-merged", {
-            system: systemPrompt,
-            responseFormat,
-            reasoning: input.reasoning ?? "off",
-          }),
+          session_id: createPromptCacheSessionId(
+            "conversation-extractor-merged",
+            {
+              system: systemPrompt,
+              responseFormat,
+              reasoning: input.reasoning ?? "off",
+            },
+          ),
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },

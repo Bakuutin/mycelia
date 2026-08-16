@@ -247,7 +247,7 @@ def _segment_identity_key(
     sequence: 'DiarizationSequence',
     segment_index: int,
 ) -> str:
-    """Stable key used to make generation writes safe to resume."""
+    """Stable key used to make every diarization write safe to resume."""
     raw = (
         f"{run_id}:{sequence.original_id}:{sequence.min_index}:"
         f"{sequence.max_index}:{segment_index}"
@@ -737,10 +737,9 @@ def diarize_sequence(
                 "embeddingSpaceId": embedding_space_id,
                 "lifecycleStatus": lifecycle_status,
             }
-            if run_id != "legacy-v0":
-                diar_doc["segmentKey"] = _segment_identity_key(
-                    run_id, sequence, segment_index
-                )
+            diar_doc["segmentKey"] = _segment_identity_key(
+                run_id, sequence, segment_index
+            )
 
             # Add matched_speaker if cluster was matched
             cluster_id = segment.get('cluster_id')
@@ -755,19 +754,16 @@ def diarize_sequence(
                 }
                 matched_segments += 1
 
-            if run_id == "legacy-v0":
-                segment_operations.append({"insertOne": {"document": diar_doc}})
-            else:
-                segment_operations.append({
-                    "updateOne": {
-                        "filter": {
-                            "runId": run_id,
-                            "segmentKey": diar_doc["segmentKey"],
-                        },
-                        "update": {"$setOnInsert": diar_doc},
-                        "upsert": True,
+            segment_operations.append({
+                "updateOne": {
+                    "filter": {
+                        "runId": run_id,
+                        "segmentKey": diar_doc["segmentKey"],
                     },
-                })
+                    "update": {"$setOnInsert": diar_doc},
+                    "upsert": True,
+                },
+            })
 
         # One round trip per sequence: a partial write followed by a crash
         # would leave chunks unmarked and be redone from the start.

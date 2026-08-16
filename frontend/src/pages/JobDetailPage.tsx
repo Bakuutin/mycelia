@@ -35,7 +35,10 @@ import type { JobAccessLogEntry, JobInfo, JobLogEntry } from "@/types/jobs";
 import { parseJobError } from "@/lib/jobs";
 import { getJobErrorCode } from "@/lib/jobErrors";
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
-import { getDiarizationProgressView } from "@/lib/diarizationProgress";
+import {
+  getCompletedDiarizationWorkerRate,
+  getDiarizationProgressView,
+} from "@/lib/diarizationProgress";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import { buildFreshDiarizationGeneration } from "@/lib/diarizationRerun";
 import { toast } from "sonner";
@@ -728,10 +731,11 @@ export default function JobDetailPage() {
 
       {job.type === "diarization" && job.state === "active" && (() => {
         const view = getDiarizationProgressView(job.progress || {});
+        const routeName = getDiarizationJobRoute(job)?.name;
         return (
           <Card>
             <CardHeader>
-              <CardTitle>Diarization progress</CardTitle>
+              <CardTitle>Diarization batch</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {job.progress?.stage === "counting"
@@ -745,37 +749,39 @@ export default function JobDetailPage() {
                   </div>
                 )
                 : (
-                  <>
-                    {job.progress?.total_chunks != null && (
-                      <Progress value={view.percent} />
+                  <div className="space-y-2 rounded-md border bg-muted/10 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        This batch
+                      </div>
+                      {routeName && (
+                        <Badge variant="outline">{routeName}</Badge>
+                      )}
+                    </div>
+                    {view.batchPercent != null && (
+                      <Progress value={view.batchPercent} />
                     )}
-                    <div className="flex flex-wrap justify-between gap-2 text-sm">
-                      <span>{view.progressLabel}</span>
-                      {view.etaLabel && <span>{view.etaLabel}</span>}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {view.remainingLabel}
-                      {view.rateLabel
-                        ? `${view.remainingLabel ? " · " : ""}${view.rateLabel}`
-                        : ""}
-                      {job.progress?.sequences_processed != null
-                        ? ` · ${job.progress.sequences_processed} sequences`
-                        : ""}
-                      {job.progress?.segments_created != null
-                        ? ` · ${job.progress.segments_created} segments`
-                        : ""}
-                    </div>
-                    {job.progress?.campaignId && (
-                      <div className="font-mono text-xs text-muted-foreground">
-                        Campaign {job.progress.campaignId}
-                        {job.progress.batchNumber
-                          ? ` · batch ${job.progress.batchNumber}/${
-                            job.progress.estimatedBatches ?? "?"
-                          }`
-                          : ""}
+                    {view.batchProgressLabel
+                      ? (
+                        <div className="flex flex-wrap justify-between gap-2 text-sm">
+                          <span>{view.batchProgressLabel}</span>
+                          {view.batchChunksLabel && (
+                            <span>{view.batchChunksLabel}</span>
+                          )}
+                        </div>
+                      )
+                      : (
+                        <p className="text-sm text-muted-foreground">
+                          {job.progress?.message ||
+                            "Waiting for batch progress…"}
+                        </p>
+                      )}
+                    {view.workerRateLabel && (
+                      <div className="text-sm font-medium">
+                        {view.workerRateLabel}
                       </div>
                     )}
-                  </>
+                  </div>
                 )}
             </CardContent>
           </Card>
@@ -1166,6 +1172,13 @@ export default function JobDetailPage() {
             job.processedOn,
             job.finishedOn,
           );
+          const completedDiarizationWorkerRate = job.type === "diarization"
+            ? getCompletedDiarizationWorkerRate(
+              r,
+              job.processedOn,
+              job.finishedOn,
+            )
+            : null;
           const dateRange = job.data?.start && job.data?.end
             ? `${format(new Date(job.data.start), "PPp")} — ${
               format(new Date(job.data.end), "PPp")
@@ -1544,6 +1557,15 @@ export default function JobDetailPage() {
                   label: "Segments Created",
                   value: r.segments_created ?? 0,
                 },
+                ...(completedDiarizationWorkerRate != null
+                  ? [{
+                    icon: BarChart3 as LucideIcon,
+                    label: "Worker Throughput",
+                    value: `${
+                      (completedDiarizationWorkerRate * 60).toFixed(1)
+                    } chunks/min`,
+                  }]
+                  : []),
                 ...((r.errorCount ??
                     (Array.isArray(r.errors) ? r.errors.length : r.errors) ??
                     0) > 0

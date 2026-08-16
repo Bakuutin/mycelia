@@ -7,6 +7,10 @@ import {
   MAX_AUDIO_CHUNK_SECONDS,
   normalizeAudioSourceFileStats,
 } from "@/lib/audioPipelineStats";
+import {
+  getDiarizationCampaignProgressView,
+  isOpenDiarizationCampaignStatus,
+} from "@/lib/diarizationProgress";
 import { format, formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -151,8 +155,26 @@ interface PipelineStats {
     errors: number;
     byKind: Array<{ kind: string; count: number }>;
   };
+  diarizationCampaign: DiarizationCampaignStats | null;
   stages: PipelineStage[];
   recentJobs: PipelineJob[];
+}
+
+interface DiarizationCampaignStats {
+  campaignId: string;
+  status: string;
+  updatedAt?: Date;
+  processedChunks: number;
+  totalChunks: number | null;
+  pendingChunks: number | null;
+  processedSequences: number;
+  segmentsCreated: number;
+  errorCount: number;
+  chunksPerSecond: number | null;
+  etaSeconds: number | null;
+  batchNumber: number | null;
+  estimatedBatches: number | null;
+  totalEstimated: boolean;
 }
 
 interface PipelineStage {
@@ -388,6 +410,14 @@ export default function AudioPipelinePage() {
           rawStats.sourceFiles,
           rawStats.totalSessions,
         ),
+        diarizationCampaign: rawStats.diarizationCampaign
+          ? {
+            ...rawStats.diarizationCampaign,
+            updatedAt: rawStats.diarizationCampaign.updatedAt
+              ? new Date(rawStats.diarizationCampaign.updatedAt)
+              : undefined,
+          }
+          : null,
         vadLastProcessedAt: rawStats.vadLastProcessedAt
           ? new Date(rawStats.vadLastProcessedAt)
           : undefined,
@@ -440,8 +470,11 @@ export default function AudioPipelinePage() {
       setLoadingTimedOut(false);
       return;
     }
-    const timeout = window.setTimeout(() => setLoadingTimedOut(true), 16_000);
-    return () => window.clearTimeout(timeout);
+    const timeout = globalThis.setTimeout(
+      () => setLoadingTimedOut(true),
+      16_000,
+    );
+    return () => globalThis.clearTimeout(timeout);
   }, [isLoading]);
 
   const sessions = sessionsData?.sessions;
@@ -453,6 +486,18 @@ export default function AudioPipelinePage() {
 
   // Stats are now included in the sessions data
   const stats = sessionsData?.stats;
+  const diarizationCampaign = stats?.diarizationCampaign ?? null;
+  const diarizationCampaignView = diarizationCampaign
+    ? getDiarizationCampaignProgressView(diarizationCampaign)
+    : null;
+  const diarizationCampaignOpen = diarizationCampaign
+    ? isOpenDiarizationCampaignStatus(diarizationCampaign.status)
+    : false;
+  const diarizationStage = stats?.stages?.find((stage) =>
+    stage.type === "diarization"
+  );
+  const queuedDiarizationJobs = (diarizationStage?.waiting ?? 0) +
+    (diarizationStage?.delayed ?? 0);
   const vadCompletion = stats?.totalChunks
     ? Math.min((stats.chunksVadProcessed / stats.totalChunks) * 100, 100)
     : 0;
@@ -536,11 +581,16 @@ export default function AudioPipelinePage() {
         return "bg-blue-500/10 text-blue-500";
       case "processing":
       case "active":
+      case "counting":
+      case "running":
       case "delayed":
         return "bg-yellow-500/10 text-yellow-500";
       case "error":
       case "failed":
         return "bg-red-500/10 text-red-500";
+      case "interrupted":
+      case "completed_with_errors":
+        return "bg-amber-500/10 text-amber-600";
       case "empty":
         return "bg-gray-500/10 text-gray-500";
       default:
@@ -757,6 +807,148 @@ export default function AudioPipelinePage() {
               );
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card data-testid="diarization-campaign">
+        <CardHeader>
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Mic className="h-5 w-5 text-primary" />
+                Speaker diarization
+              </CardTitle>
+              <CardDescription className="mt-1">
+                Campaign-wide progress for the current global historical
+                backfill. Individual worker speed remains on each active job.
+              </CardDescription>
+            </div>
+            {diarizationCampaign && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className={getStateColor(diarizationCampaign.status)}>
+                  {diarizationCampaign.status.replaceAll("_", " ")}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {diarizationCampaign.updatedAt
+                    ? `Updated ${
+                      formatDistanceToNow(diarizationCampaign.updatedAt)
+                    } ago`
+                    : "Update time unavailable"}
+                </span>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {diarizationCampaign && diarizationCampaignView
+            ? (
+              <>
+                <div className="space-y-2">
+                  {diarizationCampaign.totalChunks != null && (
+                    <Progress
+                      value={diarizationCampaignView.percent}
+                      className="h-3"
+                    />
+                  )}
+                  <div className="flex flex-wrap justify-between gap-2 text-sm">
+                    <span>{diarizationCampaignView.progressLabel}</span>
+                    {diarizationCampaignOpen &&
+                      diarizationCampaignView.etaLabel && (
+                      <span>{diarizationCampaignView.etaLabel}</span>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {diarizationCampaign.totalChunks == null
+                      ? diarizationCampaign.status === "counting"
+                        ? "Campaign total is still being counted"
+                        : "Campaign total is unavailable"
+                      : diarizationCampaignView.remainingLabel}
+                    {diarizationCampaignView.rateLabel
+                      ? `${
+                        diarizationCampaign.totalChunks == null ||
+                          diarizationCampaignView.remainingLabel
+                          ? " · "
+                          : ""
+                      }${diarizationCampaignView.rateLabel}`
+                      : ""}
+                    {diarizationCampaign.totalEstimated
+                      ? " · Total is estimated"
+                      : ""}
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                  {[
+                    [
+                      "Sequences",
+                      diarizationCampaign.processedSequences,
+                      "text-foreground",
+                    ],
+                    [
+                      "Chunks",
+                      diarizationCampaign.processedChunks,
+                      "text-foreground",
+                    ],
+                    [
+                      "Segments",
+                      diarizationCampaign.segmentsCreated,
+                      "text-foreground",
+                    ],
+                    [
+                      "Backlog",
+                      diarizationStage?.backlog ??
+                        diarizationCampaign.pendingChunks ?? 0,
+                      "text-amber-600",
+                    ],
+                    [
+                      "Active / queued",
+                      `${
+                        diarizationStage?.active ?? 0
+                      } / ${queuedDiarizationJobs}`,
+                      "text-foreground",
+                    ],
+                    [
+                      "Errors",
+                      diarizationCampaign.errorCount,
+                      diarizationCampaign.errorCount > 0
+                        ? "text-red-500"
+                        : "text-foreground",
+                    ],
+                  ].map(([label, value, className]) => (
+                    <div key={label} className="rounded-lg bg-muted/40 p-3">
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                      <p className={`mt-1 text-xl font-semibold ${className}`}>
+                        {typeof value === "number"
+                          ? value.toLocaleString()
+                          : value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+                  <span className="break-all font-mono">
+                    Campaign {diarizationCampaign.campaignId}
+                  </span>
+                  {diarizationCampaign.batchNumber != null && (
+                    <span>
+                      Batch {diarizationCampaign.batchNumber.toLocaleString()}
+                      {diarizationCampaign.estimatedBatches != null
+                        ? ` / ${diarizationCampaign.estimatedBatches.toLocaleString()}`
+                        : ""}
+                    </span>
+                  )}
+                </div>
+              </>
+            )
+            : (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                No global diarization backfill campaign has been recorded yet.
+                Current backlog: {(diarizationStage?.backlog ?? 0)
+                  .toLocaleString()} chunks; active / queued jobs:{" "}
+                {diarizationStage?.active ?? 0} / {queuedDiarizationJobs}.
+              </div>
+            )}
         </CardContent>
       </Card>
 
@@ -1160,7 +1352,10 @@ export default function AudioPipelinePage() {
           {isLoading && loadingTimedOut
             ? (
               <div className="space-y-3 p-8 text-center text-muted-foreground">
-                <p>Source details are taking too long to load. Background workers are unaffected.</p>
+                <p>
+                  Source details are taking too long to load. Background workers
+                  are unaffected.
+                </p>
                 <Button variant="outline" onClick={() => void refetch()}>
                   Retry dashboard
                 </Button>

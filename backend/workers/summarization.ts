@@ -93,6 +93,41 @@ export const schema = z.object({
 
 export type SummarizationJobData = z.infer<typeof schema>;
 
+export function buildSummarizationPendingQuery({
+  now = new Date(),
+  claimStaleMs = getJobTimeoutMs(name, {}),
+  retryNow = false,
+}: {
+  now?: Date;
+  claimStaleMs?: number;
+  retryNow?: boolean;
+} = {}): Record<string, unknown> {
+  return {
+    isConversation: true,
+    "summaries.0.date": { $exists: false },
+    $and: [{
+      $or: [
+        { _summarizationClaim: { $exists: false } },
+        { _summarizationClaim: null },
+        {
+          "_summarizationClaim.startedAt": {
+            $lte: new Date(now.getTime() - claimStaleMs).toISOString(),
+          },
+        },
+      ],
+    }],
+    $or: [
+      { "_summarizationFailure.status": { $ne: "failed" } },
+      { "_summarizationFailure.retryAfter": { $exists: false } },
+      {
+        "_summarizationFailure.retryAfter": {
+          $lte: retryNow ? "9999-12-31T23:59:59.999Z" : now.toISOString(),
+        },
+      },
+    ],
+  };
+}
+
 export const summarySourceRefsSchema = z.object({
   schemaVersion: z.literal("v1"),
   selection: z.literal("time_range_overlap"),
@@ -894,38 +929,10 @@ async function resolveTargets(
     "objects",
     {
       action: "list",
-      filters: {
-        isConversation: true,
-        // Every summary entry carries `date`; querying the subfield instead of
-        // the ~6KB summary object keeps the conversation_missing_summary index
-        // keys small (missing fields index as null, so $exists:false stays an
-        // index-bounds scan over pending conversations only).
-        "summaries.0.date": { $exists: false },
-        // Skip conversations another summarization job is actively working
-        // on; stale claims (crashed jobs) stay eligible.
-        $and: [{
-          $or: [
-            { _summarizationClaim: { $exists: false } },
-            { _summarizationClaim: null },
-            {
-              "_summarizationClaim.startedAt": {
-                $lte: new Date(Date.now() - claimStaleMs).toISOString(),
-              },
-            },
-          ],
-        }],
-        $or: [
-          { "_summarizationFailure.status": { $ne: "failed" } },
-          { "_summarizationFailure.retryAfter": { $exists: false } },
-          {
-            "_summarizationFailure.retryAfter": {
-              $lte: jobData.retryNow
-                ? "9999-12-31T23:59:59.999Z"
-                : new Date().toISOString(),
-            },
-          },
-        ],
-      },
+      filters: buildSummarizationPendingQuery({
+        claimStaleMs,
+        retryNow: jobData.retryNow,
+      }),
       options: {
         limit: FETCH_LIMIT + 1,
         sort: { updatedAt: -1 },
@@ -1297,32 +1304,10 @@ const capability: JobCapability = {
   // worth starting, so TriggerManager enqueues nothing when the queue is
   // drained and only as many jobs as the backlog fills.
   hasPendingWork: async ({ mongo }) => {
-    const staleBefore = new Date(Date.now() - getJobTimeoutMs(name, {}))
-      .toISOString();
     const pending = await mongo({
       action: "count",
       collection: "objects",
-      query: {
-        isConversation: true,
-        // Matches the conversation_missing_summary partial index bounds.
-        "summaries.0.date": { $exists: false },
-        $and: [{
-          $or: [
-            { _summarizationClaim: { $exists: false } },
-            { _summarizationClaim: null },
-            { "_summarizationClaim.startedAt": { $lte: staleBefore } },
-          ],
-        }],
-        $or: [
-          { "_summarizationFailure.status": { $ne: "failed" } },
-          { "_summarizationFailure.retryAfter": { $exists: false } },
-          {
-            "_summarizationFailure.retryAfter": {
-              $lte: new Date().toISOString(),
-            },
-          },
-        ],
-      },
+      query: buildSummarizationPendingQuery(),
     }) as number;
     if (!pending) return 0;
     const overrides = await mongo({

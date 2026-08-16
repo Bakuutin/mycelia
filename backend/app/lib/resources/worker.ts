@@ -30,6 +30,7 @@ import {
   buildTimelineRebuildBatches,
   timelineCampaignStatus,
 } from "@/lib/jobs/timeline-recovery.ts";
+import { resolveLiveJobState } from "@/lib/jobs/job-live-state.ts";
 
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
 const WORKER_SPECIFIC_IDLE_TYPES = [
@@ -2816,23 +2817,77 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       },
     });
 
-    return jobs.map((job: any) => ({
-      id: job._id.toString(),
-      type: job.type,
-      data: job.data,
-      state: job.state,
-      progress: job.progress,
-      result: job.result,
-      trigger: job.trigger,
-      timestamp: job.createdAt.getTime(),
-      finishedOn: job.finishedAt?.getTime(),
-      processedOn: job.startedAt?.getTime(),
-      failedReason: job.failedReason,
-      restarted: job.restartInfo != null,
-      restartedFromJobId: job.restartedFromJobId,
-      restartJobId: job.restartJobId,
-      routingContext: job.data?.routingContext,
-    }));
+    // QueueEvents can be missed while the backend reloads, leaving a small
+    // number of Mongo lifecycle rows behind BullMQ. Reconcile only returned
+    // non-terminal rows; completed history does not pay an N+1 queue cost.
+    const liveStates = new Map<
+      string,
+      {
+        state: string;
+        queueState?: string;
+        queuePresent: boolean;
+        processedOn?: number;
+        finishedOn?: number;
+        result?: unknown;
+        failedReason?: string;
+      }
+    >();
+    await Promise.all(
+      jobs.filter((job: any) =>
+        ["active", "waiting", "delayed"].includes(job.state)
+      ).map(async (job: any) => {
+        const id = job._id.toString();
+        try {
+          const queueJob = await getQueue(job.type).getJob(id);
+          const queueState = queueJob ? await queueJob.getState() : undefined;
+          liveStates.set(id, {
+            state: resolveLiveJobState(job.state, queueState),
+            queueState,
+            queuePresent: queueJob != null,
+            processedOn: queueJob?.processedOn,
+            finishedOn: queueJob?.finishedOn,
+            result: queueJob?.returnvalue,
+            failedReason: queueJob?.failedReason,
+          });
+        } catch (error) {
+          console.warn(
+            `[jobs] Could not reconcile queue state for ${job.type}:${id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }),
+    );
+
+    return jobs.map((job: any) => {
+      const live = liveStates.get(job._id.toString());
+      return {
+        id: job._id.toString(),
+        type: job.type,
+        data: job.data,
+        state: live?.state ?? job.state,
+        progress: job.progress,
+        result: live?.state === "completed" && live.result !== undefined
+          ? live.result
+          : job.result,
+        trigger: job.trigger,
+        timestamp: job.createdAt.getTime(),
+        finishedOn: live?.finishedOn ?? job.finishedAt?.getTime(),
+        processedOn: live?.processedOn ?? job.startedAt?.getTime(),
+        failedReason: live?.failedReason || job.failedReason,
+        restarted: job.restartInfo != null,
+        restartedFromJobId: job.restartedFromJobId,
+        restartJobId: job.restartJobId,
+        routingContext: job.data?.routingContext,
+        updatedOn: job.updatedAt?.getTime(),
+        ...(live
+          ? {
+            queueState: live.queueState ?? null,
+            queuePresent: live.queuePresent,
+          }
+          : {}),
+      };
+    });
   }
 
   private async progressUpdate(

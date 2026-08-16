@@ -22,7 +22,7 @@ const LIVE_QUEUE_STATES = new Set([
 ]);
 
 export class MaintenanceManager {
-  private interval: number | null = null;
+  private interval: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
   async start() {

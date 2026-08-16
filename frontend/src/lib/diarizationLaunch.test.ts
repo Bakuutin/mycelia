@@ -5,6 +5,17 @@ import {
 } from "./diarizationLaunch";
 
 describe("diarization launch", () => {
+  it("builds an unbounded all-history payload by default", () => {
+    expect(buildDiarizationLaunchData({
+      batchSequences: 4,
+    })).toEqual({
+      type: "diarization",
+      mode: "missing",
+      limit: 4,
+      batchSize: 4,
+    });
+  });
+
   it("builds a safe missing-work payload without routing internals", () => {
     expect(buildDiarizationLaunchData({
       start: new Date("2026-08-03T00:00:00Z"),
@@ -36,5 +47,23 @@ describe("diarization launch", () => {
         new Date("2026-08-10T00:00:00Z"),
       )?.campaignId,
     ).toBe("campaign-1");
+  });
+
+  it("treats an all-history campaign as overlapping every live range", () => {
+    const campaigns = [{
+      campaignId: "global-campaign",
+      status: "running",
+      range: {},
+    }];
+    expect(
+      findOverlappingCampaign(
+        campaigns,
+        new Date("2026-08-03T00:00:00Z"),
+        new Date("2026-08-10T00:00:00Z"),
+      )?.campaignId,
+    ).toBe("global-campaign");
+    expect(findOverlappingCampaign(campaigns)?.campaignId).toBe(
+      "global-campaign",
+    );
   });
 });

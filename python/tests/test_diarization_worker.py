@@ -297,7 +297,7 @@ class DiarizationWorkerTest(TestCase):
 
         self.assertEqual([len(sequence.chunks) for sequence in sequences], [2, 1])
 
-    def test_sequence_segments_are_persisted_in_one_write(self):
+    def test_legacy_segments_are_idempotent_and_persisted_in_one_write(self):
         sequence = _sequence()
         writes = []
 
@@ -331,6 +331,11 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(len(writes), 1)
         self.assertEqual(writes[0]["action"], "bulkWrite")
         self.assertEqual(len(writes[0]["operations"]), 3)
+        for operation in writes[0]["operations"]:
+            update = operation["updateOne"]
+            self.assertEqual(update["filter"]["runId"], "legacy-v0")
+            self.assertTrue(update["filter"]["segmentKey"])
+            self.assertTrue(update["upsert"])
 
 
 if __name__ == "__main__":

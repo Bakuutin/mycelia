@@ -89,7 +89,11 @@ import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { getJobsListView, withJobsListView } from "@/lib/jobListView";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
-import { getDiarizationProgressView } from "@/lib/diarizationProgress";
+import {
+  formatDiarizationWorkerRate,
+  getCompletedDiarizationWorkerRate,
+  getDiarizationProgressView,
+} from "@/lib/diarizationProgress";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import {
   type DiarizationRouteConfig,
@@ -100,6 +104,8 @@ import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
 import { DiarizationLaunchDialog } from "@/components/DiarizationLaunchDialog";
+import { DiarizationRuntimeCard } from "@/components/DiarizationRuntimeCard";
+import type { DiarizationRuntimeRoute } from "@/lib/diarizationRuntime";
 
 type WorkerStatus = {
   checkedAt: string;
@@ -1112,6 +1118,13 @@ function JobProgressCell({ job }: { job: JobInfo }) {
       const diarizationErrorCount = result.errorCount ??
         (Array.isArray(result.errors) ? result.errors.length : result.errors) ??
         0;
+      const finalWorkerRateLabel = formatDiarizationWorkerRate(
+        getCompletedDiarizationWorkerRate(
+          result,
+          job.processedOn,
+          job.finishedOn,
+        ),
+      );
       if (result.message && (result.sequences_processed ?? 0) === 0) {
         return (
           <span className="text-xs text-muted-foreground">
@@ -1132,6 +1145,11 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {result.segments_created != null && (
               <span>{result.segments_created} segments</span>
             )}
+            {finalWorkerRateLabel && (
+              <span className="font-medium text-foreground">
+                {finalWorkerRateLabel}
+              </span>
+            )}
             {diarizationErrorCount > 0 && (
               <span className="text-red-400">
                 {diarizationErrorCount} errors
@@ -1147,6 +1165,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         processing: "Processing",
       };
       const progressView = getDiarizationProgressView(progress);
+      const routeName = getDiarizationJobRoute(job)?.name;
       return (
         <div className="min-w-[220px] space-y-2">
           <Badge
@@ -1156,45 +1175,48 @@ function JobProgressCell({ job }: { job: JobInfo }) {
             {stageLabels[progress.stage] ?? progress.stage}
           </Badge>
           <JobDateRange job={job} />
+          {progressView.batchProgressLabel && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span>This batch</span>
+                {routeName && (
+                  <span className="normal-case tracking-normal">
+                    {routeName}
+                  </span>
+                )}
+              </div>
+              {progressView.batchPercent != null && (
+                <Progress
+                  value={progressView.batchPercent}
+                  className="h-1.5"
+                />
+              )}
+              <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                <span>{progressView.batchProgressLabel}</span>
+                {progressView.batchChunksLabel && (
+                  <span>{progressView.batchChunksLabel}</span>
+                )}
+              </div>
+              {progressView.workerRateLabel && (
+                <div className="text-[11px] font-medium text-foreground">
+                  {progressView.workerRateLabel}
+                </div>
+              )}
+            </div>
+          )}
+          {!progressView.batchProgressLabel &&
+            typeof progress.message === "string" && progress.message && (
+            <div className="text-[11px] text-foreground">
+              <span className="font-medium">This batch:</span>{" "}
+              {progress.message}
+            </div>
+          )}
           {progress.stage === "counting" && (
             <p className="text-[11px] text-muted-foreground">
               Exact count is bounded to 5s; processing continues if it times
               out.
             </p>
           )}
-          {progress.total_chunks != null && (
-            <div className="space-y-1">
-              <Progress value={progressView.percent} className="h-1.5" />
-              <div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
-                <span>{progressView.progressLabel}</span>
-                {progressView.etaLabel && <span>{progressView.etaLabel}</span>}
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {progressView.remainingLabel}
-                {progressView.rateLabel ? ` · ${progressView.rateLabel}` : ""}
-              </div>
-            </div>
-          )}
-          {progress.stage === "processing" && progress.total_chunks == null && (
-            <div className="text-[11px] text-muted-foreground">
-              {progressView.progressLabel}
-              {progressView.remainingLabel
-                ? ` · ${progressView.remainingLabel}`
-                : ""}
-              {progressView.rateLabel ? ` · ${progressView.rateLabel}` : ""}
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            {progress.sequences_processed != null && (
-              <span>{progress.sequences_processed} sequences</span>
-            )}
-            {progress.chunks_processed != null && (
-              <span>{progress.chunks_processed} chunks</span>
-            )}
-            {progress.segments_created != null && (
-              <span>{progress.segments_created} segments</span>
-            )}
-          </div>
         </div>
       );
     }
@@ -1539,6 +1561,17 @@ export default function JobsPage() {
       : undefined,
   });
 
+  // The regular table is a history view and follows WebSocket lifecycle
+  // events. Keep a small canonical live query for the stable route/slot view:
+  // it closes the completion -> continuation gap without refetching history.
+  const { jobs: diarizationLiveJobs } = useJobsListener({
+    view: "operational",
+    types: ["diarization"],
+    statuses: ["active", "waiting", "delayed"],
+    limit: 50,
+    refetchInterval: 3000,
+  });
+
   const { data: schemas, isLoading: isLoadingSchemas } = useQuery({
     queryKey: ["job-schemas"],
     queryFn: async () => {
@@ -1674,6 +1707,67 @@ export default function JobsPage() {
         action: "get",
       }) as InferenceRoutingConfig,
   });
+
+  const routedWorkerCapacities = useMemo(() => {
+    const capacities = new Map<string, number>();
+    const stt = inferenceRoutingConfig?.transcriptionProfiles;
+    if (stt) {
+      const capacity = stt.profiles
+        .filter((profile) => profile.enabled)
+        .reduce((sum, profile) => sum + (profile.concurrency ?? 1), 0) +
+        (stt.includeEnvironment ? 1 : 0);
+      if (capacity > 0) capacities.set("transcription", capacity);
+    }
+
+    const diarization = inferenceRoutingConfig?.diarizationProfiles;
+    if (diarization) {
+      const capacity = getEnabledDiarizationCapacity(
+        diarization.profiles,
+        diarization.includeEnvironment ?? true,
+        diarization.environmentConcurrency ?? 1,
+      );
+      if (capacity > 0) capacities.set("diarization", capacity);
+    }
+    return capacities;
+  }, [inferenceRoutingConfig]);
+
+  const diarizationRuntimeRoutes = useMemo<DiarizationRuntimeRoute[]>(() => {
+    const config = inferenceRoutingConfig?.diarizationProfiles;
+    if (!config) return [];
+    const healthRoutes = pipelineHealth?.services.find((service) =>
+      service.id === "diarizator"
+    )?.routes ?? [];
+    const healthById = new Map(
+      healthRoutes.map((route) => [route.providerProfileId, route]),
+    );
+    const routes: DiarizationRuntimeRoute[] = config.profiles.map((profile) => {
+      const health = healthById.get(profile.id);
+      return {
+        id: profile.id,
+        name: profile.name,
+        baseUrl: profile.baseUrl || health?.baseUrl,
+        enabled: profile.enabled,
+        concurrency: profile.concurrency ?? 1,
+        health: health?.status,
+      };
+    });
+    const environmentHealth = healthById.get("environment");
+    const environmentJob = diarizationLiveJobs.find((job) =>
+      job.routingContext?.providerProfileId === "environment"
+    );
+    routes.push({
+      id: "environment",
+      name: environmentHealth?.providerProfileName ?? "Environment diarizator",
+      baseUrl: environmentHealth?.baseUrl ||
+        (typeof environmentJob?.data?.diarizationServerUrl === "string"
+          ? environmentJob.data.diarizationServerUrl
+          : undefined),
+      enabled: config.includeEnvironment ?? true,
+      concurrency: config.environmentConcurrency ?? 1,
+      health: environmentHealth?.status,
+    });
+    return routes;
+  }, [diarizationLiveJobs, inferenceRoutingConfig, pipelineHealth]);
 
   useEffect(() => {
     const configuredSttModel = inferenceRoutingConfig?.transcription?.model;
@@ -2981,12 +3075,14 @@ export default function JobsPage() {
         };
       }
       return {
-        active: totals.active ?? jobCounts.active,
-        waiting: totals.waiting ?? jobCounts.waiting,
+        // Live lifecycle counts come from the queue-reconciled list. Mongo
+        // aggregates remain authoritative for large terminal history only.
+        active: jobCounts.active,
+        waiting: jobCounts.waiting,
         failed: totals.failed ?? jobCounts.failed,
         completed: (totals.completed ?? jobCounts.completed) -
           totalIdleAutoRuns,
-        delayed: totals.delayed ?? jobCounts.delayed,
+        delayed: jobCounts.delayed,
         total: (totals.total ?? jobCounts.total) - totalIdleAutoRuns,
       };
     } else {
@@ -3004,11 +3100,11 @@ export default function JobsPage() {
         };
       }
       return {
-        active: totals.active,
-        waiting: totals.waiting,
+        active: jobCounts.active,
+        waiting: jobCounts.waiting,
         failed: totals.failed,
         completed: totals.completed - totals.idleAutoRuns,
-        delayed: totals.delayed,
+        delayed: jobCounts.delayed,
         total: totals.total - totals.idleAutoRuns,
       };
     }
@@ -3919,6 +4015,10 @@ export default function JobsPage() {
                                 </Button>
                               </div>
                             </div>
+                            <p className="mb-1.5 text-[9px] leading-tight text-muted-foreground">
+                              Availability reflects enabled routes only;
+                              disabled routes are not probed.
+                            </p>
                             <div className="space-y-1">
                               {routes.map((route) => (
                                 <div
@@ -4124,82 +4224,75 @@ export default function JobsPage() {
                                 return (
                                   <div
                                     key={route.providerProfileId}
-                                    className="space-y-2 rounded border bg-background p-2 text-xs"
+                                    className="flex flex-wrap items-center gap-2 rounded border bg-background p-2 text-xs md:flex-nowrap"
+                                    title={route.message}
                                   >
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <div className="min-w-0 flex-1">
-                                        <div className="font-medium">
-                                          {route.providerProfileName}
-                                        </div>
-                                        <div className="text-muted-foreground">
-                                          {route.concurrency ?? 1} parallel slot
-                                          {(route.concurrency ?? 1) === 1
-                                            ? ""
-                                            : "s"}
-                                        </div>
-                                        <div className="break-all font-mono text-muted-foreground">
-                                          {route.baseUrl}
-                                        </div>
-                                      </div>
-                                      <Badge
-                                        variant={route.status === "healthy"
-                                          ? "secondary"
-                                          : route.status === "disabled"
-                                          ? "outline"
-                                          : "destructive"}
-                                      >
-                                        {route.status === "healthy"
-                                          ? "running"
-                                          : route.status}
-                                      </Badge>
+                                    <div className="flex shrink-0 items-center gap-1.5">
+                                      <Switch
+                                        checked={route.enabled}
+                                        disabled={updateDiarizationRouteMutation
+                                          .isPending}
+                                        onCheckedChange={(enabled) =>
+                                          updateDiarizationRouteMutation.mutate(
+                                            {
+                                              profileId:
+                                                route.providerProfileId,
+                                              changes: { enabled },
+                                            },
+                                          )}
+                                        aria-label={`Enable ${route.providerProfileName}`}
+                                      />
+                                      <span className="w-6 text-muted-foreground">
+                                        {route.enabled ? "On" : "Off"}
+                                      </span>
                                     </div>
-                                    <div className="flex flex-wrap items-end gap-2">
-                                      <div className="flex h-9 items-center gap-2 rounded border px-2">
-                                        <Switch
-                                          checked={route.enabled}
-                                          disabled={updateDiarizationRouteMutation
-                                            .isPending}
-                                          onCheckedChange={(enabled) =>
-                                            updateDiarizationRouteMutation
-                                              .mutate({
-                                                profileId:
-                                                  route.providerProfileId,
-                                                changes: { enabled },
-                                              })}
-                                          aria-label={`Enable ${route.providerProfileName}`}
-                                        />
-                                        <span>
-                                          {route.enabled ? "On" : "Off"}
-                                        </span>
-                                      </div>
-                                      <div className="w-28 space-y-1">
-                                        <Label
-                                          htmlFor={`diar-priority-${route.providerProfileId}`}
-                                          className="text-[11px]"
-                                        >
-                                          Priority 1–100
-                                        </Label>
-                                        <Input
-                                          id={`diar-priority-${route.providerProfileId}`}
-                                          type="number"
-                                          min={1}
-                                          max={100}
-                                          step={1}
-                                          value={priorityDraft}
-                                          onChange={(event) =>
-                                            setDiarizationPriorityDrafts((
-                                              current,
-                                            ) => ({
-                                              ...current,
-                                              [route.providerProfileId]:
-                                                event.target.value,
-                                            }))}
-                                          className="h-8"
-                                        />
-                                      </div>
+                                    <div className="min-w-[9rem] truncate">
+                                      <span className="font-medium">
+                                        {route.providerProfileName}
+                                      </span>
+                                      <span className="text-muted-foreground">
+                                        {` · ${route.concurrency ?? 1} slot${
+                                          (route.concurrency ?? 1) === 1
+                                            ? ""
+                                            : "s"
+                                        }`}
+                                      </span>
+                                    </div>
+                                    <div
+                                      className="min-w-[11rem] flex-1 truncate font-mono text-muted-foreground"
+                                      title={route.baseUrl}
+                                    >
+                                      {route.baseUrl}
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-1.5">
+                                      <Label
+                                        htmlFor={`diar-priority-${route.providerProfileId}`}
+                                        className="text-[11px] text-muted-foreground"
+                                      >
+                                        Priority
+                                      </Label>
+                                      <Input
+                                        id={`diar-priority-${route.providerProfileId}`}
+                                        type="number"
+                                        min={1}
+                                        max={100}
+                                        step={1}
+                                        value={priorityDraft}
+                                        onChange={(event) =>
+                                          setDiarizationPriorityDrafts((
+                                            current,
+                                          ) => ({
+                                            ...current,
+                                            [route.providerProfileId]:
+                                              event.target.value,
+                                          }))}
+                                        className="h-8 w-16"
+                                        aria-label={`Priority for ${route.providerProfileName}`}
+                                      />
                                       <Button
-                                        size="sm"
+                                        size="icon"
                                         variant="outline"
+                                        className="h-8 w-8"
                                         disabled={!validPriority ||
                                           updateDiarizationRouteMutation
                                             .isPending ||
@@ -4214,14 +4307,30 @@ export default function JobsPage() {
                                               },
                                             },
                                           )}
+                                        aria-label={`Save priority for ${route.providerProfileName}`}
+                                        title="Save priority"
                                       >
-                                        <Save className="mr-1.5 h-3.5 w-3.5" />
-                                        Save priority
+                                        <Save className="h-3.5 w-3.5" />
                                       </Button>
                                     </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                      {route.message}
-                                    </div>
+                                    <Badge
+                                      variant={route.status === "healthy"
+                                        ? "secondary"
+                                        : route.status === "disabled"
+                                        ? "outline"
+                                        : "destructive"}
+                                      className="shrink-0"
+                                      aria-label={`${
+                                        route.status === "healthy"
+                                          ? "running"
+                                          : route.status
+                                      }: ${route.message}`}
+                                      title={route.message}
+                                    >
+                                      {route.status === "healthy"
+                                        ? "running"
+                                        : route.status}
+                                    </Badge>
                                   </div>
                                 );
                               })}
@@ -5156,6 +5265,10 @@ export default function JobsPage() {
                       s.type === worker.type
                     );
                     const runtime = workerStatus?.workers[worker.type];
+                    const routedCapacity = routedWorkerCapacities.get(
+                      worker.type,
+                    );
+                    const routeManaged = routedCapacity != null;
                     const liveJobs = (runtime?.active ?? 0) +
                       (runtime?.waiting ?? 0) + (runtime?.delayed ?? 0);
                     const forceStartSlots = isPaused ? 0 : Math.max(
@@ -5372,8 +5485,10 @@ export default function JobsPage() {
                               type="number"
                               min={runtime?.minConcurrency ?? 1}
                               max={runtime?.maxConcurrency ?? 8}
-                              value={concurrencyDrafts[worker.type] ??
-                                String(runtime?.desiredConcurrency ?? 1)}
+                              value={routeManaged
+                                ? String(routedCapacity)
+                                : concurrencyDrafts[worker.type] ??
+                                  String(runtime?.desiredConcurrency ?? 1)}
                               onChange={(event) =>
                                 setConcurrencyDrafts((current) => ({
                                   ...current,
@@ -5381,6 +5496,10 @@ export default function JobsPage() {
                                 }))}
                               className="h-7 w-14 px-2 text-center"
                               aria-label={`${worker.type} desired concurrency`}
+                              disabled={routeManaged}
+                              title={routeManaged
+                                ? "Managed by enabled inference-route slots"
+                                : undefined}
                             />
                             <Button
                               variant="ghost"
@@ -5388,19 +5507,26 @@ export default function JobsPage() {
                               className="h-7 w-7"
                               disabled={setWorkerConcurrencyMutation
                                 .isPending ||
-                                Number(
+                                (routeManaged
+                                  ? runtime?.desiredConcurrency ===
+                                      routedCapacity &&
+                                    runtime?.effectiveConcurrency ===
+                                      routedCapacity
+                                  : Number(
                                     concurrencyDrafts[worker.type] ??
                                       runtime?.desiredConcurrency ?? 1,
                                   ) ===
-                                  (runtime?.desiredConcurrency ?? 1)}
+                                    (runtime?.desiredConcurrency ?? 1))}
                               onClick={() =>
                                 setWorkerConcurrencyMutation.mutate({
                                   workerType: worker.type,
-                                  concurrency: Number(
-                                    concurrencyDrafts[worker.type],
-                                  ),
+                                  concurrency: routeManaged
+                                    ? routedCapacity
+                                    : Number(concurrencyDrafts[worker.type]),
                                 })}
-                              title="Save and apply concurrency"
+                              title={routeManaged
+                                ? `Sync to ${routedCapacity} enabled route slots`
+                                : "Save and apply concurrency"}
                             >
                               <Save className="h-3.5 w-3.5" />
                             </Button>
@@ -5418,6 +5544,7 @@ export default function JobsPage() {
                               ` · desired ${runtime.desiredConcurrency}`}
                             {runtime &&
                               ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
+                            {routeManaged && ` · route slots ${routedCapacity}`}
                           </div>
                           {batchCapableWorkers[worker.type] && (
                             <>
@@ -5488,22 +5615,22 @@ export default function JobsPage() {
                         <TableCell className="py-1 text-center">
                           <div className="flex items-center justify-center gap-2 text-[10px]">
                             <span
-                              className={(stats?.active ?? 0) > 0
+                              className={(runtime?.active ?? 0) > 0
                                 ? "text-blue-500"
                                 : "text-muted-foreground"}
                               title="Jobs running now"
                             >
-                              Active {stats?.active ?? 0}
+                              Active {runtime?.active ?? 0}
                             </span>
                             <span
-                              className={(stats?.waiting ?? 0) +
-                                    (stats?.delayed ?? 0) > 0
+                              className={(runtime?.waiting ?? 0) +
+                                    (runtime?.delayed ?? 0) > 0
                                 ? "text-yellow-500"
                                 : "text-muted-foreground"}
                               title="Waiting and delayed jobs"
                             >
-                              Queued {(stats?.waiting ?? 0) +
-                                (stats?.delayed ?? 0)}
+                              Queued {(runtime?.waiting ?? 0) +
+                                (runtime?.delayed ?? 0)}
                             </span>
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -5725,6 +5852,26 @@ export default function JobsPage() {
           </Button>
         </div>
       )}
+
+      {!isEmptyView && !allTypesSelected && filterTypes.size === 1 &&
+        filterTypes.has("diarization") && diarizationRuntimeRoutes.length > 0 &&
+        (
+          <DiarizationRuntimeCard
+            routes={diarizationRuntimeRoutes}
+            jobs={diarizationLiveJobs}
+            workerConcurrency={workerStatus?.workers.diarization
+              ?.effectiveConcurrency ??
+              routedWorkerCapacities.get("diarization") ?? 0}
+            syncing={setWorkerConcurrencyMutation.isPending &&
+              setWorkerConcurrencyMutation.variables?.workerType ===
+                "diarization"}
+            onSyncConcurrency={(concurrency) =>
+              setWorkerConcurrencyMutation.mutate({
+                workerType: "diarization",
+                concurrency,
+              })}
+          />
+        )}
 
       {!isEmptyView && <JobErrorStats />}
 

@@ -3,13 +3,18 @@ import { type WyomingHeader } from "@/lib/audio/wyoming.ts";
 import { Buffer } from "node:buffer";
 import type { IncomingMessage } from "node:http";
 import {
+  type AudioFormatConfig,
   createAudioChunk,
   createSourceFile,
-  type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
 import { ObjectId } from "mongodb";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
+import {
+  closeWebSocket,
+  sendWebSocket,
+  terminateWebSocket,
+} from "@/lib/websocket-transport.ts";
 import {
   OpusDecoder,
   type OpusDecoderSampleRate,
@@ -17,6 +22,7 @@ import {
 
 // Debug logging - enable with DEBUG_AUDIO_WS=true
 const DEBUG = Deno.env.get("DEBUG_AUDIO_WS") === "true";
+const WS_OPEN = 1;
 
 // Logging helper for consistent format
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -103,12 +109,17 @@ class OpusWebSocketSession {
     private ws: WebSocket | any,
   ) {
     this.sessionId = crypto.randomUUID().replace(/-/g, "").substring(0, 8);
-    log("INFO", `Opus session created`, { sessionId: this.sessionId, principal: auth.principal });
+    log("INFO", `Opus session created`, {
+      sessionId: this.sessionId,
+      principal: auth.principal,
+    });
   }
 
   async handleAudioStart(header: WyomingHeader): Promise<void> {
     if (!header.data) {
-      log("WARN", `Audio start received without data`, { sessionId: this.sessionId });
+      log("WARN", `Audio start received without data`, {
+        sessionId: this.sessionId,
+      });
       return;
     }
 
@@ -122,7 +133,7 @@ class OpusWebSocketSession {
       sessionId: this.sessionId,
       rate: sampleRate,
       timestamp: opusFormat.timestamp,
-      startTime: startTime.toISOString()
+      startTime: startTime.toISOString(),
     });
 
     this.opusFormat = opusFormat;
@@ -177,16 +188,18 @@ class OpusWebSocketSession {
         sessionId: this.sessionId,
         sourceFileId: this.sourceFileId.toString(),
         startTime: startTime.toISOString(),
-        format: `Opus ${opusFormat.rate}Hz`
+        format: `Opus ${opusFormat.rate}Hz`,
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       log("ERROR", `Failed to create SourceFile`, {
         sessionId: this.sessionId,
-        error: errorMsg
+        error: errorMsg,
       });
-      this.ws.send(
+      sendWebSocket(
+        this.ws,
         JSON.stringify({ type: "error", message: errorMsg }) + "\n",
+        `audio-opus:${this.sessionId}`,
       );
     }
   }
@@ -202,7 +215,7 @@ class OpusWebSocketSession {
       framesReceived: this.framesReceived,
       bytesReceived: this.bytesReceived,
       chunksCreated: this.chunkIndex,
-      durationSeconds: Math.round(durationSeconds * 10) / 10
+      durationSeconds: Math.round(durationSeconds * 10) / 10,
     });
 
     if (this.sourceFileId) {
@@ -211,7 +224,7 @@ class OpusWebSocketSession {
         sessionId: this.sessionId,
         sourceFileId: this.sourceFileId.toString(),
         totalChunks: this.chunkIndex,
-        bufferRemaining: this.buffer.length
+        bufferRemaining: this.buffer.length,
       });
     }
 
@@ -244,7 +257,7 @@ class OpusWebSocketSession {
         framesReceived: this.framesReceived,
         bytesReceived: this.bytesReceived,
         bufferSize: this.buffer.length,
-        chunksCreated: this.chunkIndex
+        chunksCreated: this.chunkIndex,
       });
     }
 
@@ -298,7 +311,8 @@ class OpusWebSocketSession {
       return new Date();
     }
     // Each chunk is FRAMES_PER_CHUNK frames * OPUS_FRAME_DURATION_MS milliseconds
-    const msOffset = this.chunkIndex * FRAMES_PER_CHUNK * OPUS_FRAME_DURATION_MS;
+    const msOffset = this.chunkIndex * FRAMES_PER_CHUNK *
+      OPUS_FRAME_DURATION_MS;
     return new Date(this.startedAt.getTime() + msOffset);
   }
 
@@ -398,7 +412,7 @@ class OpusWebSocketSession {
           sessionId: this.sessionId,
           chunkIndex: this.chunkIndex,
           isFinal: flushAll,
-          error: errorMsg
+          error: errorMsg,
         });
         throw error;
       }
@@ -485,13 +499,19 @@ function parseWyomingHeader(line: string): WyomingHeader | null {
   try {
     return JSON.parse(line) as WyomingHeader;
   } catch {
-    log("DEBUG", "Failed to parse Wyoming protocol header", { line: line.substring(0, 100) });
+    log("DEBUG", "Failed to parse Wyoming protocol header", {
+      line: line.substring(0, 100),
+    });
     return null;
   }
 }
 
 function handlePing(ws: WebSocket | any): void {
-  ws.send(JSON.stringify({ type: "pong" }) + "\n");
+  sendWebSocket(
+    ws,
+    JSON.stringify({ type: "pong" }) + "\n",
+    "audio-opus:ping",
+  );
 }
 
 async function createRequestFromUpgrade(
@@ -529,19 +549,25 @@ export async function handleOpusWebSocket(
 ): Promise<void> {
   log("INFO", `Opus WebSocket connection attempt`, {
     url: upgrade.url,
-    remoteAddress: upgrade.socket?.remoteAddress
+    remoteAddress: upgrade.socket?.remoteAddress,
   });
 
   const request = await createRequestFromUpgrade(upgrade);
   const auth = await authenticate(request);
 
+  if (ws.readyState !== WS_OPEN) {
+    log("INFO", `Opus WebSocket closed during authentication`);
+    return;
+  }
+
   if (!auth) {
     log("WARN", `Opus WebSocket auth failed`, { url: upgrade.url });
-    try {
-      ws.close(1008, "Unauthorized: Token is missing or invalid");
-    } catch {
-      // socket may already be closing
-    }
+    closeWebSocket(
+      ws,
+      1008,
+      "Unauthorized: Token is missing or invalid",
+      "audio-opus:auth",
+    );
     throw new Error("Unauthorized");
   }
 
@@ -551,6 +577,11 @@ export async function handleOpusWebSocket(
     auth,
     { path: "live.audio", actions: ["write"] },
   );
+
+  if (ws.readyState !== WS_OPEN) {
+    log("INFO", `Opus WebSocket closed during authorization`);
+    return;
+  }
 
   return new Promise((resolve, reject) => {
     const session = new OpusWebSocketSession(auth, ws);
@@ -644,62 +675,43 @@ export async function handleOpusWebSocket(
       data: any,
       isBinary: boolean,
     ): Promise<void> => {
-      try {
-        if (isBinary) {
-          await handleBinaryMessage(data);
-        } else {
-          await handleTextMessage(data);
-        }
-      } catch (error) {
-        console.error("Error handling Opus message:", error);
+      if (isBinary) {
+        await handleBinaryMessage(data);
+      } else {
+        await handleTextMessage(data);
       }
     };
 
-    const handleError = (error: Error) => {
-      log("ERROR", `Opus WebSocket error`, {
-        error: error.message,
-        stack: error.stack
-      });
-      cleanup();
-      reject(error);
-    };
+    let acceptingMessages = true;
+    let messageTail: Promise<void> = Promise.resolve();
+    let finalizePromise: Promise<void> | null = null;
+    let settlementPromise: Promise<void> | null = null;
+    let terminalError: Error | null = null;
 
-    const handleClose = (code: number, reason: Buffer) => {
-      const reasonStr = reason ? reason.toString() : "";
-      log("INFO", `Opus WebSocket closed`, { code, reason: reasonStr });
-      cleanup();
-      resolve();
-    };
+    const enqueueMessage = (task: () => Promise<void>): void => {
+      if (!acceptingMessages) return;
 
-    const cleanup = () => {
-      session.freeDecoder();
-      session.flushAll().catch((error) => {
-        log("ERROR", `Error flushing Opus buffer on cleanup`, {
-          error: error instanceof Error ? error.message : String(error)
+      messageTail = messageTail.then(async () => {
+        if (terminalError) return;
+        await task();
+      }).catch((error) => {
+        const messageError = error instanceof Error
+          ? error
+          : new Error(String(error));
+        log("ERROR", `Opus message task failed`, {
+          error: messageError.message,
+          stack: messageError.stack,
         });
+        failSession(messageError);
       });
-
-      if (typeof ws.off === "function") {
-        ws.off("message", handleMessage);
-        ws.off("error", handleError);
-        ws.off("close", handleClose);
-      } else if (typeof ws.removeEventListener === "function") {
-        ws.removeEventListener("message", handleMessage);
-        ws.removeEventListener("error", handleError);
-        ws.removeEventListener("close", handleClose);
-      }
     };
 
-    if (typeof ws.on === "function") {
-      ws.on("message", (data: any, isBinary: boolean) => {
-        handleMessage(data, isBinary).catch((error) => {
-          console.error("Error handling Opus message:", error);
-        });
-      });
-      ws.on("error", handleError);
-      ws.on("close", handleClose);
-    } else if (typeof ws.addEventListener === "function") {
-      ws.addEventListener("message", async (event: MessageEvent) => {
+    const handleNodeMessage = (data: any, isBinary: boolean): void => {
+      enqueueMessage(() => handleMessage(data, isBinary));
+    };
+
+    const handleDomMessage = (event: MessageEvent): void => {
+      enqueueMessage(async () => {
         let data: any = event.data;
         let isBinary = false;
 
@@ -710,22 +722,110 @@ export async function handleOpusWebSocket(
           isBinary = true;
         }
 
-        handleMessage(data, isBinary).catch((error) => {
-          console.error("Error handling Opus message:", error);
-        });
+        await handleMessage(data, isBinary);
       });
-      ws.addEventListener("error", handleError);
-      ws.addEventListener(
-        "close",
-        (event: CloseEvent) =>
-          handleClose(event.code, Buffer.from(event.reason || "")),
+    };
+
+    const handleDomClose = (event: CloseEvent): void => {
+      handleClose(event.code, Buffer.from(event.reason || ""));
+    };
+
+    const handleDomError = (event: ErrorEvent): void => {
+      handleError(
+        event.error instanceof Error
+          ? event.error
+          : new Error(event.message || "WebSocket transport error"),
       );
+    };
+
+    const finalize = (): Promise<void> => {
+      if (finalizePromise) return finalizePromise;
+
+      acceptingMessages = false;
+
+      if (typeof ws.off === "function") {
+        ws.off("message", handleNodeMessage);
+        ws.off("error", handleError);
+        ws.off("close", handleClose);
+      } else if (typeof ws.removeEventListener === "function") {
+        ws.removeEventListener("message", handleDomMessage);
+        ws.removeEventListener("error", handleDomError);
+        ws.removeEventListener("close", handleDomClose);
+      }
+
+      finalizePromise = Promise.resolve().then(async () => {
+        await messageTail;
+        try {
+          await session.flushAll();
+        } catch (error) {
+          log("ERROR", `Error flushing Opus buffer on cleanup`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        } finally {
+          session.freeDecoder();
+        }
+      });
+
+      return finalizePromise;
+    };
+
+    const settleAfterFinalize = (): void => {
+      if (settlementPromise) return;
+
+      settlementPromise = finalize().then(
+        () => terminalError ? reject(terminalError) : resolve(),
+        (finalizationError) =>
+          reject(
+            terminalError
+              ? new AggregateError(
+                [terminalError, finalizationError],
+                "WebSocket failed while finalizing buffered Opus audio",
+              )
+              : finalizationError,
+          ),
+      );
+    };
+
+    const failSession = (error: Error): void => {
+      terminalError ??= error;
+      settleAfterFinalize();
+      terminateWebSocket(ws, "audio-opus");
+    };
+
+    const handleError = (error: Error) => {
+      log("ERROR", `Opus WebSocket error`, {
+        error: error.message,
+        stack: error.stack,
+      });
+      failSession(error);
+    };
+
+    const handleClose = (code: number, reason: Buffer) => {
+      const reasonStr = reason ? reason.toString() : "";
+      log("INFO", `Opus WebSocket closed`, { code, reason: reasonStr });
+      settleAfterFinalize();
+    };
+
+    if (typeof ws.on === "function") {
+      ws.on("message", handleNodeMessage);
+      ws.on("error", handleError);
+      ws.on("close", handleClose);
+    } else if (typeof ws.addEventListener === "function") {
+      ws.addEventListener("message", handleDomMessage);
+      ws.addEventListener("error", handleDomError);
+      ws.addEventListener("close", handleDomClose);
     } else {
-      reject(
-        new Error(
-          "WebSocket object does not support 'on' or 'addEventListener' methods",
-        ),
+      const error = new Error(
+        "WebSocket object does not support 'on' or 'addEventListener' methods",
       );
+      terminalError = error;
+      settleAfterFinalize();
+    }
+
+    if (ws.readyState !== WS_OPEN && !settlementPromise) {
+      log("INFO", `Opus WebSocket closed during session setup`);
+      settleAfterFinalize();
     }
   });
 }

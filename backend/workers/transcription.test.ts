@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import {
+import transcription, {
   aggregateBatchTranscriptionResult,
   buildTranscribedChunkQuery,
   buildTranscriptionSequenceClaimQuery,
@@ -48,7 +48,9 @@ Deno.test("batch result stays empty when no sequence saved a transcription", () 
     segmentCount: 0,
   };
 
-  expect(aggregateBatchTranscriptionResult(empty, [empty, empty])).toEqual(empty);
+  expect(aggregateBatchTranscriptionResult(empty, [empty, empty])).toEqual(
+    empty,
+  );
 });
 
 Deno.test("sequence claiming recovers stale processing work", () => {
@@ -66,6 +68,29 @@ Deno.test("sequence claiming recovers stale processing work", () => {
       },
     ],
   });
+});
+
+Deno.test("automatic transcription preflight uses the claim query", async () => {
+  const calls: any[] = [];
+  const pending = await transcription.hasPendingWork?.({
+    mongo: async (input) => {
+      calls.push(input);
+      return [{ _id: "sequence" }];
+    },
+    reason: "interval",
+  });
+
+  expect(pending).toBe(1);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].action).toBe("find");
+  expect(calls[0].query.$or.map((entry: any) => entry.state)).toEqual([
+    "ready",
+    "error",
+    "processing",
+  ]);
+  expect(calls[0].options.hint).toBe(
+    "transcription_sequences_claimable_work_v1",
+  );
 });
 
 Deno.test("terminal transcription marks only chunks owned by its sequence", () => {

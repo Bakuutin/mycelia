@@ -420,8 +420,58 @@ class DiarizationJobTest(TestCase):
         self.assertEqual(progress["errors"], 0)
         self.assertEqual(progress["elapsed_seconds"], 6.0)
         self.assertEqual(progress["chunks_per_second"], 0.5)
+        self.assertEqual(progress["worker_chunks_per_second"], 0.5)
+        self.assertEqual(progress["batch_sequences_processed"], 1)
+        self.assertEqual(progress["batch_sequences_total"], 1)
+        self.assertEqual(progress["batch_chunks_processed"], 3)
         self.assertIsNone(progress["eta_seconds"])
         self.assertEqual(progress["eta_confidence"], "low")
+
+    def test_worker_rate_is_not_the_smoothed_recent_job_average(self):
+        updates = []
+        campaign = {
+            "campaignId": "diarization-rate-semantics",
+            "totalChunks": 100,
+            "processedChunks": 10,
+            "processedSequences": 2,
+            "segmentsCreated": 4,
+            "errorCount": 0,
+            "jobIds": ["job-before"],
+            "rateSamples": [2.0, 4.0],
+        }
+
+        with (
+            patch("time.monotonic", side_effect=[100.0, 106.0]),
+            patch("jobs.diarization._campaign_call", return_value=campaign),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks") as count,
+            patch(
+                "jobs.diarization.get_diarization_sequences",
+                return_value=[object()],
+            ),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={
+                    "status": "diarized",
+                    "chunks_diarized": 3,
+                    "segments": 4,
+                },
+            ),
+        ):
+            result = process_diarization_job(
+                "job-current-worker",
+                DiarizationJobData(campaignId=campaign["campaignId"], limit=1),
+                updates.append,
+            )
+
+        count.assert_not_called()
+        progress = updates[-1]
+        self.assertEqual(progress["worker_chunks_per_second"], 0.5)
+        self.assertEqual(result["worker_chunks_per_second"], 0.5)
+        self.assertNotEqual(
+            progress["chunks_per_second"],
+            progress["worker_chunks_per_second"],
+        )
 
     def test_structured_sequence_errors_are_returned(self):
         structured = {

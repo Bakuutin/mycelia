@@ -1,5 +1,9 @@
 import { expect } from "@std/expect";
-import { parseBatchTagsResponse, schema } from "./tagger.ts";
+import tagger, {
+  buildTaggerConversationQuery,
+  parseBatchTagsResponse,
+  schema,
+} from "./tagger.ts";
 
 const VALID = new Set(["work", "family", "technology"]);
 const IDS = ["aaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbb"];
@@ -9,6 +13,28 @@ Deno.test("tagger schema defaults include batching", () => {
   expect(input.batchSize).toBe(5);
   expect(input.maxTokens).toBe(1536);
   expect(input.reasoning).toBe("off");
+});
+
+Deno.test("tagger selection uses the generated marker subfield", () => {
+  expect(buildTaggerConversationQuery()).toEqual({
+    isConversation: true,
+    "metadata.aiProvenance.taggingRuns.0.generatedAt": { $exists: false },
+  });
+});
+
+Deno.test("tagger preflight skips work when no tags are configured", async () => {
+  const calls: any[] = [];
+  const pending = await tagger.hasPendingWork?.({
+    mongo: async (input) => {
+      calls.push(input);
+      return [];
+    },
+    reason: "interval",
+  });
+
+  expect(pending).toBe(0);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].query).toEqual({ isTag: true });
 });
 
 Deno.test("batch response maps ids to valid tags only", () => {

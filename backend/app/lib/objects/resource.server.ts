@@ -3,7 +3,7 @@ import { ObjectId } from "bson";
 import { Resource } from "@/lib/auth/resources.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import { zObjectId, zDateOrString } from "@myceliasdk/zod-json-schema.ts";
+import { zDateOrString, zObjectId } from "@myceliasdk/zod-json-schema.ts";
 import {
   buildTimelineObjectsPipeline,
   resolveTimelineObjectLimit,
@@ -13,93 +13,99 @@ import {
 
 const zIcon = z.union([
   z.object({
-    text: z.string().describe("Emoji or text icon (e.g., '🐯', '🏠️')")
+    text: z.string().describe("Emoji or text icon (e.g., '🐯', '🏠️')"),
   }),
   z.object({
-    base64: z.string().describe("Base64-encoded image data")
+    base64: z.string().describe("Base64-encoded image data"),
   }),
 ]);
 
 const zObjectInput = z.object({
   name: z.string().min(1).describe(
-    "Display name of the object (person, event, place, relationship, or promise)"
+    "Display name of the object (person, event, place, relationship, or promise)",
   ),
   details: z.string().nullable().optional().describe(
-    "Additional details or description. Can be markdown formatted."
+    "Additional details or description. Can be markdown formatted.",
   ),
   icon: zIcon.optional().describe(
-    "Visual icon for the object, either emoji text or base64 image"
+    "Visual icon for the object, either emoji text or base64 image",
   ),
   color: z.string().optional().describe(
-    "Color code for visual representation (e.g., '#FF5733')"
+    "Color code for visual representation (e.g., '#FF5733')",
   ),
   aliases: z.array(z.string()).optional().describe(
-    "Alternative names or identifiers for search (e.g., ['Igor', 'Tigor'])"
+    "Alternative names or identifiers for search (e.g., ['Igor', 'Tigor'])",
   ),
   isEvent: z.boolean().optional().describe(
-    "True if this object represents an event or occurrence in time"
+    "True if this object represents an event or occurrence in time",
   ),
   isPerson: z.boolean().optional().describe(
-    "True if this object represents a person or entity"
+    "True if this object represents a person or entity",
   ),
   isRelationship: z.boolean().optional().describe(
-    "True if this object represents a relationship between two other objects. Requires 'relationship' field."
+    "True if this object represents a relationship between two other objects. Requires 'relationship' field.",
   ),
   isPromise: z.boolean().optional().describe(
-    "True if this object represents a promise or commitment"
+    "True if this object represents a promise or commitment",
   ),
   isPlace: z.boolean().optional().describe(
-    "True if this object represents a physical place or location (city, country, venue)"
+    "True if this object represents a physical place or location (city, country, venue)",
   ),
   isOrganization: z.boolean().optional().describe(
-    "True if this object represents an organization, company, institution, or group"
+    "True if this object represents an organization, company, institution, or group",
   ),
   isProduct: z.boolean().optional().describe(
-    "True if this object represents a product, app, service, or piece of software"
+    "True if this object represents a product, app, service, or piece of software",
   ),
   isProject: z.boolean().optional().describe(
-    "True if this object represents a named project or initiative"
+    "True if this object represents a named project or initiative",
   ),
   isAnimal: z.boolean().optional().describe(
-    "True if this object represents an animal or pet"
+    "True if this object represents an animal or pet",
   ),
   isConcept: z.boolean().optional().describe(
-    "True if this object represents an abstract concept, topic, technology, language, or idea"
+    "True if this object represents an abstract concept, topic, technology, language, or idea",
   ),
   isMedia: z.boolean().optional().describe(
-    "True if this object represents a creative work: book, film, series, song, game, article, or fictional character"
+    "True if this object represents a creative work: book, film, series, song, game, article, or fictional character",
   ),
   starred: z.boolean().optional().describe(
-    "True if the user has starred/favorited this object"
+    "True if the user has starred/favorited this object",
   ),
   relationship: z.object({
-    object: zObjectId().describe("The object/target of the relationship (the 'to' entity)"),
-    subject: zObjectId().describe("The subject/source of the relationship (the 'from' entity)"),
+    object: zObjectId().describe(
+      "The object/target of the relationship (the 'to' entity)",
+    ),
+    subject: zObjectId().describe(
+      "The subject/source of the relationship (the 'from' entity)",
+    ),
     symmetrical: z.boolean().describe(
-      "True if relationship goes both ways (e.g., 'partner' relationship), false for directional (e.g., 'lives in')"
+      "True if relationship goes both ways (e.g., 'partner' relationship), false for directional (e.g., 'lives in')",
     ),
   }).optional().describe(
-    "Defines the relationship structure. Only used when isRelationship=true. Example: 'Me lives in Amsterdam' has subject=Me, object=Amsterdam, symmetrical=false"
+    "Defines the relationship structure. Only used when isRelationship=true. Example: 'Me lives in Amsterdam' has subject=Me, object=Amsterdam, symmetrical=false",
   ),
   location: z.object({
     latitude: z.number().describe("Geographic latitude (-90 to 90)"),
     longitude: z.number().describe("Geographic longitude (-180 to 180)"),
   }).optional().describe(
-    "Geographic coordinates for places or events with physical location"
+    "Geographic coordinates for places or events with physical location",
   ),
   timeRanges: z.array(z.object({
     start: zDateOrString().describe("Start date/time of this time period"),
-    end: zDateOrString().optional().describe("End date/time. Omit for ongoing/current periods"),
+    end: zDateOrString().optional().describe(
+      "End date/time. Omit for ongoing/current periods",
+    ),
     name: z.string().optional().describe("Optional label for this time period"),
   })).optional().describe(
-    "Time periods when this object/relationship was active. Multiple ranges supported for non-continuous periods."
+    "Time periods when this object/relationship was active. Multiple ranges supported for non-continuous periods.",
   ),
 }).loose();
 
 const createObjectSchema = z.object({
   action: z.literal("create").describe("Create a new object"),
   object: zObjectInput.describe(
-    "The object data to create. Can represent people, events, places, relationships, or promises."
+    "The object data to create. Can represent people, events, places, relationships, or promises.",
   ),
 });
 
@@ -107,13 +113,13 @@ const updateObjectSchema = z.object({
   action: z.literal("update").describe("Update a single field on an object"),
   id: z.string().describe("MongoDB ObjectId string of the object to update"),
   version: z.number().describe(
-    "Current version number for optimistic locking. Get this from the object first. Update fails if version changed."
+    "Current version number for optimistic locking. Get this from the object first. Update fails if version changed.",
   ),
   field: z.string().describe(
-    "Dot-notation path to the field to update (e.g., 'name', 'details', 'icon.text', 'timeRanges'). Set to null to remove field."
+    "Dot-notation path to the field to update (e.g., 'name', 'details', 'icon.text', 'timeRanges'). Set to null to remove field.",
   ),
   value: z.any().describe(
-    "New value for the field. Use null to remove the field entirely."
+    "New value for the field. Use null to remove the field entirely.",
   ),
 });
 
@@ -129,157 +135,171 @@ const getObjectSchema = z.object({
 
 const listObjectsSchema = z.object({
   action: z.literal("list").describe(
-    "List/search objects with filtering and pagination"
+    "List/search objects with filtering and pagination",
   ),
   view: z.enum(["full", "timeline"]).optional().describe(
-    "Use the bounded compact Timeline response instead of the legacy full array"
+    "Use the bounded compact Timeline response instead of the legacy full array",
   ),
   filters: z.record(z.string(), z.any()).optional().describe(
-    "MongoDB query filters (e.g., {'isPerson': true, 'name': 'Igor'}). Leave empty for all objects."
+    "MongoDB query filters (e.g., {'isPerson': true, 'name': 'Igor'}). Leave empty for all objects.",
   ),
   options: z.object({
     limit: z.number().optional().describe(
-      "Maximum number of results to return"
+      "Maximum number of results to return",
     ),
     skip: z.number().optional().describe(
-      "Number of results to skip for pagination"
+      "Number of results to skip for pagination",
     ),
     sort: z.record(z.string(), z.number()).optional().describe(
-      "Sort order as field:direction pairs (1=ascending, -1=descending). Example: {'createdAt': -1} for newest first"
+      "Sort order as field:direction pairs (1=ascending, -1=descending). Example: {'createdAt': -1} for newest first",
     ),
     includeRelationships: z.boolean().optional().describe(
-      "If true, join and include full related objects for relationships"
+      "If true, join and include full related objects for relationships",
     ),
     hasTimeRanges: z.boolean().optional().describe(
-      "If true, only return objects that have time ranges defined"
+      "If true, only return objects that have time ranges defined",
     ),
     searchTerm: z.union([z.string(), z.null()]).optional().describe(
-      "Search string to match against name and aliases (case-insensitive)"
+      "Search string to match against name and aliases (case-insensitive)",
     ),
     timeRangeFilter: z.object({
       start: z.string().describe("ISO 8601 date string for range start"),
       end: z.string().describe("ISO 8601 date string for range end"),
     }).optional().describe(
-      "Filter objects that overlap with the specified time range"
+      "Filter objects that overlap with the specified time range",
     ),
-  }).optional().describe("Query options for filtering, sorting, and pagination"),
+  }).optional().describe(
+    "Query options for filtering, sorting, and pagination",
+  ),
 });
 
 const getRelationshipsSchema = z.object({
   action: z.literal("getRelationships").describe(
-    "Get all relationships where this object is subject or object"
+    "Get all relationships where this object is subject or object",
   ),
   id: z.string().describe(
-    "MongoDB ObjectId string of the object whose relationships to retrieve"
+    "MongoDB ObjectId string of the object whose relationships to retrieve",
   ),
 });
 
 const getHistorySchema = z.object({
   action: z.literal("getHistory").describe(
-    "Get version history of changes to an object"
+    "Get version history of changes to an object",
   ),
   id: z.string().describe(
-    "MongoDB ObjectId string of the object whose history to retrieve"
+    "MongoDB ObjectId string of the object whose history to retrieve",
   ),
   limit: z.number().max(500).nullish().describe(
-    "Maximum number of history entries to return (default: 50, max: 500)"
+    "Maximum number of history entries to return (default: 50, max: 500)",
   ),
   skip: z.number().nullish().describe(
-    "Number of history entries to skip for pagination"
+    "Number of history entries to skip for pagination",
   ),
 });
 
 const exploreTimeRangeSchema = z.object({
   action: z.literal("exploreTimeRange").describe(
-    "Find objects that refer to a specific time range"
+    "Find objects that refer to a specific time range",
   ),
   start: zDateOrString().describe(
-    "(ISO 8601 date string or Date object)"
+    "(ISO 8601 date string or Date object)",
   ),
   end: zDateOrString().describe(
-    "(ISO 8601 date string or Date object)"
+    "(ISO 8601 date string or Date object)",
   ),
   filters: z.record(z.string(), z.any()).optional().describe(
-    "Additional MongoDB query filters to apply (e.g., {'isPerson': true})"
+    "Additional MongoDB query filters to apply (e.g., {'isPerson': true})",
   ),
   options: z.object({
     limit: z.number().optional().describe(
-      "Maximum number of results to return"
+      "Maximum number of results to return",
     ),
     skip: z.number().optional().describe(
-      "Number of results to skip for pagination"
+      "Number of results to skip for pagination",
     ),
     sort: z.record(z.string(), z.number()).optional().describe(
-      "Sort order as field:direction pairs (1=ascending, -1=descending)"
+      "Sort order as field:direction pairs (1=ascending, -1=descending)",
     ),
     includeRelationships: z.boolean().optional().describe(
-      "If true, join and include full related objects for relationships"
+      "If true, join and include full related objects for relationships",
     ),
   }).optional().describe("Query options for sorting and pagination"),
 });
 
 const getTimeRangeSchema = z.object({
   action: z.literal("getTimeRange").describe(
-    "Get the minimum and maximum dates from all object time ranges"
+    "Get the minimum and maximum dates from all object time ranges",
   ),
 });
 
 const getCountsSchema = z.object({
   action: z.literal("getCounts").describe(
-    "Get cached counts per object type. Returns cached values for fast loading."
+    "Get cached counts per object type. Returns cached values for fast loading.",
   ),
   forceRefresh: z.boolean().optional().describe(
-    "If true, recalculate counts from database and update cache"
+    "If true, recalculate counts from database and update cache",
   ),
 });
 
 const mergeObjectsSchema = z.object({
   action: z.literal("merge").describe(
-    "Merge duplicate objects into one. Loser names/aliases become winner aliases, all relationship edges are re-pointed to the winner, losers are deleted."
+    "Merge duplicate objects into one. Loser names/aliases become winner aliases, all relationship edges are re-pointed to the winner, losers are deleted.",
   ),
-  winnerId: z.string().describe("MongoDB ObjectId string of the object that survives"),
+  winnerId: z.string().describe(
+    "MongoDB ObjectId string of the object that survives",
+  ),
   loserIds: z.array(z.string()).min(1).max(20).describe(
-    "Ids of objects merged into the winner; they are deleted afterwards"
+    "Ids of objects merged into the winner; they are deleted afterwards",
   ),
   canonicalName: z.string().min(1).optional().describe(
-    "Final name for the winner (default: winner's current name). The displaced winner name becomes an alias."
+    "Final name for the winner (default: winner's current name). The displaced winner name becomes an alias.",
   ),
   version: z.number().optional().describe(
-    "Winner's expected version for optimistic locking; omit to skip the check"
+    "Winner's expected version for optimistic locking; omit to skip the check",
   ),
 });
 
 const splitObjectSchema = z.object({
   action: z.literal("split").describe(
-    "Split one object into two: create a new object and move selected relationship edges and aliases to it. Used when one object wrongly mixes two real-world entities."
+    "Split one object into two: create a new object and move selected relationship edges and aliases to it. Used when one object wrongly mixes two real-world entities.",
   ),
-  sourceId: z.string().describe("MongoDB ObjectId string of the object to split"),
+  sourceId: z.string().describe(
+    "MongoDB ObjectId string of the object to split",
+  ),
   newObject: z.object({
     name: z.string().min(1).describe("Name for the new object"),
-    details: z.string().nullish().describe("Optional details for the new object"),
-    icon: zIcon.optional().describe("Optional icon; defaults to the source's icon"),
-    color: z.string().optional().describe("Optional color; defaults to the source's color"),
-  }).describe("Fields for the new object; type flags are copied from the source"),
+    details: z.string().nullish().describe(
+      "Optional details for the new object",
+    ),
+    icon: zIcon.optional().describe(
+      "Optional icon; defaults to the source's icon",
+    ),
+    color: z.string().optional().describe(
+      "Optional color; defaults to the source's color",
+    ),
+  }).describe(
+    "Fields for the new object; type flags are copied from the source",
+  ),
   edgeIdsToMove: z.array(z.string()).default([]).describe(
-    "Ids of relationship objects to re-point from the source to the new object"
+    "Ids of relationship objects to re-point from the source to the new object",
   ),
   aliasesToMove: z.array(z.string()).default([]).describe(
-    "Aliases removed from the source and added to the new object"
+    "Aliases removed from the source and added to the new object",
   ),
   version: z.number().optional().describe(
-    "Source's expected version for optimistic locking; omit to skip the check"
+    "Source's expected version for optimistic locking; omit to skip the check",
   ),
 });
 
 const findDuplicatesSchema = z.object({
   action: z.literal("findDuplicates").describe(
-    "Find potential duplicate objects by case-insensitive name/alias collision. With objectId: candidates matching that object. Without: all collision groups."
+    "Find potential duplicate objects by case-insensitive name/alias collision. With objectId: candidates matching that object. Without: all collision groups.",
   ),
   objectId: z.string().optional().describe(
-    "Find duplicates of this specific object; omit to scan the whole collection"
+    "Find duplicates of this specific object; omit to scan the whole collection",
   ),
   limit: z.number().min(1).max(200).default(50).describe(
-    "Max candidates (objectId mode) or collision groups (scan mode) to return"
+    "Max candidates (objectId mode) or collision groups (scan mode) to return",
   ),
 });
 
@@ -455,9 +475,13 @@ export class ObjectsResource
               ],
             },
           },
-          conversation: { $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] } },
+          conversation: {
+            $sum: { $cond: [{ $eq: ["$isConversation", true] }, 1, 0] },
+          },
           place: { $sum: { $cond: [{ $eq: ["$isPlace", true] }, 1, 0] } },
-          organization: { $sum: { $cond: [{ $eq: ["$isOrganization", true] }, 1, 0] } },
+          organization: {
+            $sum: { $cond: [{ $eq: ["$isOrganization", true] }, 1, 0] },
+          },
           product: { $sum: { $cond: [{ $eq: ["$isProduct", true] }, 1, 0] } },
           project: { $sum: { $cond: [{ $eq: ["$isProject", true] }, 1, 0] } },
           animal: { $sum: { $cond: [{ $eq: ["$isAnimal", true] }, 1, 0] } },
@@ -721,7 +745,7 @@ export class ObjectsResource
           total: stats.total,
           updatedAt: stats.updatedAt,
           stale: false,
-        }
+        },
       },
       options: { upsert: true },
     });
@@ -735,32 +759,34 @@ export class ObjectsResource
         query: { _id: "counts" },
         update: { $set: { orphaned } },
       });
-    }).catch(err => console.error("Failed to refresh orphaned count:", err));
+    }).catch((err) => console.error("Failed to refresh orphaned count:", err));
 
     return stats;
   }
 
   // Get cached counts, or calculate if not exists
-  private async getCachedCounts(auth: Auth): Promise<{
-    person: number;
-    event: number;
-    relationship: number;
-    promise: number;
-    conversation: number;
-    tag: number;
-    place: number;
-    organization: number;
-    product: number;
-    project: number;
-    animal: number;
-    concept: number;
-    media: number;
-    other: number;
-    orphaned: number;
-    total: number;
-    updatedAt: Date | null;
-    stale?: boolean;
-  } | null> {
+  private async getCachedCounts(auth: Auth): Promise<
+    {
+      person: number;
+      event: number;
+      relationship: number;
+      promise: number;
+      conversation: number;
+      tag: number;
+      place: number;
+      organization: number;
+      product: number;
+      project: number;
+      animal: number;
+      concept: number;
+      media: number;
+      other: number;
+      orphaned: number;
+      total: number;
+      updatedAt: Date | null;
+      stale?: boolean;
+    } | null
+  > {
     const mongo = getMongoResource(auth);
     const cached = await mongo({
       action: "findOne",
@@ -899,7 +925,10 @@ export class ObjectsResource
             collection: "object_history",
             query: {
               objectId,
-              $or: [{ action: "delete" }, { action: "merge", field: "mergedInto" }],
+              $or: [{ action: "delete" }, {
+                action: "merge",
+                field: "mergedInto",
+              }],
             },
             options: { sort: { timestamp: -1 }, limit: 1 },
           });
@@ -956,7 +985,9 @@ export class ObjectsResource
 
         // Date fields must be stored as Dates, not the ISO strings JSON
         // callers send
-        if (input.field === "timeRanges" || input.field.startsWith("timeRanges")) {
+        if (
+          input.field === "timeRanges" || input.field.startsWith("timeRanges")
+        ) {
           input.value = reviveTimeRangeDates(input.value);
         }
 
@@ -1008,8 +1039,25 @@ export class ObjectsResource
         );
 
         // Invalidate counts cache if type-related fields changed
-        const typeFields = ["isPerson", "isEvent", "isRelationship", "isPromise", "isConversation", "isTag", "isPlace", "isOrganization", "isProduct", "isProject", "isAnimal", "isConcept", "isMedia"];
-        if (typeFields.includes(input.field) || input.field.startsWith("relationship")) {
+        const typeFields = [
+          "isPerson",
+          "isEvent",
+          "isRelationship",
+          "isPromise",
+          "isConversation",
+          "isTag",
+          "isPlace",
+          "isOrganization",
+          "isProduct",
+          "isProject",
+          "isAnimal",
+          "isConcept",
+          "isMedia",
+        ];
+        if (
+          typeFields.includes(input.field) ||
+          input.field.startsWith("relationship")
+        ) {
           await this.invalidateCountsCache(auth);
         }
 
@@ -1120,7 +1168,10 @@ export class ObjectsResource
           if (!aliasMap.has(key)) aliasMap.set(key, alias);
         }
 
-        const detailParts = [winner.details, ...losers.map((l: any) => l.details)]
+        const detailParts = [
+          winner.details,
+          ...losers.map((l: any) => l.details),
+        ]
           .filter((d, i, arr) => d && arr.indexOf(d) === i);
 
         const rangeKey = (r: any) =>
@@ -1415,7 +1466,9 @@ export class ObjectsResource
         ];
         const newDoc: any = {
           name: input.newObject.name,
-          ...(input.newObject.details ? { details: input.newObject.details } : {}),
+          ...(input.newObject.details
+            ? { details: input.newObject.details }
+            : {}),
           ...(input.newObject.icon
             ? { icon: input.newObject.icon }
             : source.icon
@@ -1428,7 +1481,9 @@ export class ObjectsResource
             : {}),
           ...(aliasesToMove.length ? { aliases: aliasesToMove } : {}),
           ...Object.fromEntries(
-            splitFlags.filter((flag) => source[flag]).map((flag) => [flag, true]),
+            splitFlags.filter((flag) => source[flag]).map((
+              flag,
+            ) => [flag, true]),
           ),
           metadata: {
             splitFrom: {
@@ -2043,14 +2098,21 @@ export class ObjectsResource
       }
 
       case "exploreTimeRange": {
-        console.log("[exploreTimeRange] Input:", JSON.stringify({
-          start: input.start,
-          end: input.end,
-          filters: input.filters,
-          options: input.options,
-          startType: typeof input.start,
-          endType: typeof input.end,
-        }, null, 2));
+        console.log(
+          "[exploreTimeRange] Input:",
+          JSON.stringify(
+            {
+              start: input.start,
+              end: input.end,
+              filters: input.filters,
+              options: input.options,
+              startType: typeof input.start,
+              endType: typeof input.end,
+            },
+            null,
+            2,
+          ),
+        );
 
         const timeRangeQuery = {
           timeRanges: {
@@ -2068,7 +2130,10 @@ export class ObjectsResource
           ? { ...input.filters, ...timeRangeQuery }
           : timeRangeQuery;
 
-        console.log("[exploreTimeRange] Constructed query:", JSON.stringify(query, null, 2));
+        console.log(
+          "[exploreTimeRange] Constructed query:",
+          JSON.stringify(query, null, 2),
+        );
 
         if (input.options?.includeRelationships) {
           const pipeline: any[] = [
@@ -2111,7 +2176,9 @@ export class ObjectsResource
           });
 
           // Sort by min timeRanges.start (default) or user-specified sort
-          pipeline.push({ $sort: input.options?.sort || { _minTimeRangeStart: 1 } });
+          pipeline.push({
+            $sort: input.options?.sort || { _minTimeRangeStart: 1 },
+          });
 
           if (input.options?.skip) {
             pipeline.push({ $skip: input.options.skip });
@@ -2122,20 +2189,24 @@ export class ObjectsResource
           }
 
           // Default projection for aggregation - include joined objects (excludes _minTimeRangeStart)
-          pipeline.push({ $project: {
-            _id: 1,
-            name: 1,
-            icon: 1,
-            timeRanges: 1,
-            summaries: { $map: { input: "$summaries", as: "s", in: "$$s.text" } },
-            isEvent: 1,
-            isPerson: 1,
-            isRelationship: 1,
-            isConversation: 1,
-            isPromise: 1,
-            subjectObject: { _id: 1, name: 1, icon: 1 },
-            objectObject: { _id: 1, name: 1, icon: 1 },
-          }});
+          pipeline.push({
+            $project: {
+              _id: 1,
+              name: 1,
+              icon: 1,
+              timeRanges: 1,
+              summaries: {
+                $map: { input: "$summaries", as: "s", in: "$$s.text" },
+              },
+              isEvent: 1,
+              isPerson: 1,
+              isRelationship: 1,
+              isConversation: 1,
+              isPromise: 1,
+              subjectObject: { _id: 1, name: 1, icon: 1 },
+              objectObject: { _id: 1, name: 1, icon: 1 },
+            },
+          });
 
           // Get total count first
           const countResult = await mongo({
@@ -2151,7 +2222,12 @@ export class ObjectsResource
             pipeline,
           });
 
-          console.log("[exploreTimeRange] Aggregate result - total:", total, "returned:", objects?.length);
+          console.log(
+            "[exploreTimeRange] Aggregate result - total:",
+            total,
+            "returned:",
+            objects?.length,
+          );
           return { total, objects };
         }
 
@@ -2176,7 +2252,9 @@ export class ObjectsResource
             name: 1,
             icon: 1,
             timeRanges: 1,
-            summaries: { $map: { input: "$summaries", as: "s", in: "$$s.text" } },
+            summaries: {
+              $map: { input: "$summaries", as: "s", in: "$$s.text" },
+            },
             isEvent: 1,
             isPerson: 1,
             isRelationship: 1,
@@ -2185,7 +2263,10 @@ export class ObjectsResource
           },
         });
 
-        console.log("[exploreTimeRange] Pipeline:", JSON.stringify(pipeline, null, 2));
+        console.log(
+          "[exploreTimeRange] Pipeline:",
+          JSON.stringify(pipeline, null, 2),
+        );
 
         // Get total count first
         const countResult = await mongo({
@@ -2201,7 +2282,12 @@ export class ObjectsResource
           pipeline,
         });
 
-        console.log("[exploreTimeRange] Result - total:", total, "returned:", objects?.length);
+        console.log(
+          "[exploreTimeRange] Result - total:",
+          total,
+          "returned:",
+          objects?.length,
+        );
 
         return { total, objects };
       }
@@ -2258,7 +2344,7 @@ export class ObjectsResource
           // If stale, trigger background refresh
           if (cached.stale) {
             // Fire and forget - don't await
-            this.refreshCounts(auth).catch(err =>
+            this.refreshCounts(auth).catch((err) =>
               console.error("Background counts refresh failed:", err)
             );
           }

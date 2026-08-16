@@ -67,16 +67,17 @@ export function resolveDiarizatorRoutes(
     concurrency: Number(profile.concurrency ?? 1),
     source: "diarization_profile",
   }));
-  if (configured?.includeEnvironment ?? true) {
-    profiles.push({
-      id: "environment",
-      name: "Environment diarizator",
-      baseUrl: environmentUrl.replace(/\/+$/, ""),
-      enabled: true,
-      priority: Number(configured?.environmentPriority ?? 50),
-      concurrency: Number(configured?.environmentConcurrency ?? 1),
-      source: "environment",
-    });
-  }
+  // Keep the deployment-managed route in status snapshots even when it is
+  // disabled. Jobs must be able to render its Off toggle so an operator can
+  // enable it again without leaving the page.
+  profiles.push({
+    id: "environment",
+    name: "Environment diarizator",
+    baseUrl: environmentUrl.replace(/\/+$/, ""),
+    enabled: configured?.includeEnvironment ?? true,
+    priority: Number(configured?.environmentPriority ?? 50),
+    concurrency: Number(configured?.environmentConcurrency ?? 1),
+    source: "environment",
+  });
   return profiles;
 }

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import {
+  buildConversationChunkClaimQuery,
   mergedResponseSchema,
   parseMergedResponse,
   schema,
@@ -41,6 +42,26 @@ Deno.test("merged extractor defaults and schema", () => {
       }],
     }).success,
   ).toBe(true);
+});
+
+Deno.test("merged extractor shares retry and stale claim eligibility", () => {
+  const now = new Date("2026-08-15T04:00:00.000Z");
+  expect(buildConversationChunkClaimQuery({}, now)).toEqual({
+    $or: [
+      { state: "ready" },
+      { state: "error", extractionRetryAfter: { $lte: now } },
+      { state: "error", extractionRetryAfter: { $exists: false } },
+      {
+        state: "processing",
+        processingStartedAt: {
+          $lt: new Date("2026-08-15T03:50:00.000Z"),
+        },
+      },
+    ],
+  });
+
+  const retryNow = buildConversationChunkClaimQuery({ retryNow: true }, now);
+  expect((retryNow.$or as any[])[1]).toEqual({ state: "error" });
 });
 
 Deno.test("merged response parses segments with metadata and boundaries", () => {

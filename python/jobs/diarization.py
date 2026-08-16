@@ -281,6 +281,10 @@ def process_diarization_job(
         "campaignId": campaign_id,
         "batchNumber": batch_number,
         "estimatedBatches": estimated_batches,
+        "batch_sequences_processed": 0,
+        "batch_sequences_total": effective_batch_size,
+        "batch_chunks_processed": 0,
+        "worker_chunks_per_second": None,
     })
     
     # Process sequences
@@ -318,6 +322,10 @@ def process_diarization_job(
             "sequences_processed": cumulative_sequences,
             "chunks_processed": cumulative_chunks,
             "segments_created": cumulative_segments,
+            "batch_sequences_processed": 0,
+            "batch_sequences_total": effective_batch_size,
+            "batch_chunks_processed": 0,
+            "worker_chunks_per_second": None,
         })
         sequences = ()
     else:
@@ -351,6 +359,14 @@ def process_diarization_job(
                 "sequences_processed": cumulative_sequences + sequences_processed,
                 "chunks_processed": cumulative_chunks + chunks_processed,
                 "segments_created": cumulative_segments + segments_created,
+                "batch_sequences_processed": sequences_processed,
+                "batch_sequences_total": effective_batch_size,
+                "batch_chunks_processed": chunks_processed,
+                "worker_chunks_per_second": (
+                    chunks_processed / max(time.monotonic() - started_at, 0.001)
+                    if chunks_processed > 0
+                    else None
+                ),
             })
             break
 
@@ -431,6 +447,13 @@ def process_diarization_job(
             "current_chunks_per_second": batch_rate,
             "eta_seconds": eta_seconds,
             "eta_confidence": "medium" if len(rate_samples) >= 5 else "low",
+            # These fields describe only this BullMQ job on its snapshotted
+            # provider route. They must not be confused with the campaign-wide
+            # counters or the smoothed recent-job rate above.
+            "batch_sequences_processed": sequences_processed,
+            "batch_sequences_total": effective_batch_size,
+            "batch_chunks_processed": chunks_processed,
+            "worker_chunks_per_second": batch_rate,
         })
         _update_campaign(campaign_id, {
             "status": "running",
@@ -531,6 +554,7 @@ def process_diarization_job(
         "sequences_processed": sequences_processed,
         "chunks_processed": chunks_processed,
         "segments_created": segments_created,
+        "worker_chunks_per_second": final_batch_rate,
         "errorCount": errors,
         "errors": error_details,
         "successfulSequences": successful_sequences,

@@ -3,13 +3,18 @@ import { type WyomingHeader } from "@/lib/audio/wyoming.ts";
 import { Buffer } from "node:buffer";
 import type { IncomingMessage } from "node:http";
 import {
+  type AudioFormatConfig,
   createAudioChunk,
   createSourceFile,
-  type AudioFormatConfig,
 } from "@/services/streaming.server.ts";
 import { ObjectId } from "bson";
 import Denque from "denque";
 import { defaultResourceManager } from "@/lib/auth/index.ts";
+import {
+  closeWebSocket,
+  sendWebSocket,
+  terminateWebSocket,
+} from "@/lib/websocket-transport.ts";
 import {
   OpusDecoder,
   type OpusDecoderSampleRate,
@@ -17,6 +22,7 @@ import {
 
 // Debug logging - enable with DEBUG_AUDIO_WS=true
 const DEBUG = Deno.env.get("DEBUG_AUDIO_WS") === "true";
+const WS_OPEN = 1;
 
 // Logging helper for consistent format
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -56,10 +62,10 @@ export type DetectedFormat = "opus" | "pcm" | "float32" | "unknown";
  */
 export function isOpusOgg(data: Uint8Array): boolean {
   return data.length >= 4 &&
-         data[0] === 0x4F && // 'O'
-         data[1] === 0x67 && // 'g'
-         data[2] === 0x67 && // 'g'
-         data[3] === 0x53;   // 'S'
+    data[0] === 0x4F && // 'O'
+    data[1] === 0x67 && // 'g'
+    data[2] === 0x67 && // 'g'
+    data[3] === 0x53; // 'S'
 }
 
 /**
@@ -151,20 +157,17 @@ function getFormatFromHeader(audioFormat: AudioFormat): DetectedFormat {
   // width=0 means Opus compressed audio (not PCM)
   if (width === 0) {
     return "opus";
-  }
-  // width=2 means 16-bit PCM (2 bytes per sample)
+  } // width=2 means 16-bit PCM (2 bytes per sample)
   else if (width === 2) {
     return "pcm";
-  }
-  // width=4 means 32-bit float (4 bytes per sample)
+  } // width=4 means 32-bit float (4 bytes per sample)
   else if (width === 4) {
     return "float32";
-  }
-  else {
+  } else {
     log("WARN", `Unknown audio width in header, defaulting to pcm`, {
       width,
       rate: audioFormat.rate,
-      channels: audioFormat.channels
+      channels: audioFormat.channels,
     });
     return "pcm";
   }
@@ -226,12 +229,17 @@ class PcmWebSocketSession {
     private ws: WebSocket | any,
   ) {
     this.sessionId = crypto.randomUUID().replace(/-/g, "").substring(0, 8);
-    log("INFO", `Session created`, { sessionId: this.sessionId, principal: auth.principal });
+    log("INFO", `Session created`, {
+      sessionId: this.sessionId,
+      principal: auth.principal,
+    });
   }
 
   async handleAudioStart(header: WyomingHeader): Promise<void> {
     if (!header.data) {
-      log("WARN", `Audio start received without data`, { sessionId: this.sessionId });
+      log("WARN", `Audio start received without data`, {
+        sessionId: this.sessionId,
+      });
       return;
     }
 
@@ -247,7 +255,7 @@ class PcmWebSocketSession {
       channels: audioFormat.channels,
       mode: audioFormat.mode,
       timestamp: audioFormat.timestamp,
-      startTime: startTime.toISOString()
+      startTime: startTime.toISOString(),
     });
 
     this.audioFormat = audioFormat;
@@ -270,7 +278,7 @@ class PcmWebSocketSession {
         log("INFO", `[AUDIO_WS] Creating in-process Opus decoder (WASM)`, {
           sessionId: this.sessionId,
           sampleRate: audioFormat.rate,
-          channels: audioFormat.channels
+          channels: audioFormat.channels,
         });
 
         const decoder = new OpusDecoder<OpusDecoderSampleRate>({
@@ -282,14 +290,18 @@ class PcmWebSocketSession {
 
         await decoder.ready;
 
-        log("INFO", `[AUDIO_WS] Opus decoder ready (in-process, zero HTTP overhead)`, {
-          sessionId: this.sessionId
-        });
+        log(
+          "INFO",
+          `[AUDIO_WS] Opus decoder ready (in-process, zero HTTP overhead)`,
+          {
+            sessionId: this.sessionId,
+          },
+        );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log("ERROR", `[AUDIO_WS] Failed to create Opus decoder`, {
           sessionId: this.sessionId,
-          error: errorMsg
+          error: errorMsg,
         });
         throw error;
       }
@@ -305,23 +317,32 @@ class PcmWebSocketSession {
       this.opusFrameCount = 0;
       this.lastFlushTime = startTime;
 
-      log("INFO", `[AUDIO_WS] Audio format calculated (Opus→PCM - byte-based)`, {
-        sessionId: this.sessionId,
-        bytesPerChunk: this.bytesPerChunk,
-        chunkDurationSeconds: CHUNK_DURATION_SECONDS,
-        note: "Opus decoded frame-by-frame to PCM, buffered as PCM"
-      });
+      log(
+        "INFO",
+        `[AUDIO_WS] Audio format calculated (Opus→PCM - byte-based)`,
+        {
+          sessionId: this.sessionId,
+          bytesPerChunk: this.bytesPerChunk,
+          chunkDurationSeconds: CHUNK_DURATION_SECONDS,
+          note: "Opus decoded frame-by-frame to PCM, buffered as PCM",
+        },
+      );
     } else {
       // PCM or float: rate * width * channels
-      bytesPerSecond = audioFormat.rate * audioFormat.width * audioFormat.channels;
+      bytesPerSecond = audioFormat.rate * audioFormat.width *
+        audioFormat.channels;
       this.bytesPerChunk = bytesPerSecond * CHUNK_DURATION_SECONDS;
 
-      log("INFO", `[AUDIO_WS] Audio format calculated (PCM/float32 - byte-based)`, {
-        sessionId: this.sessionId,
-        bytesPerSecond,
-        bytesPerChunk: this.bytesPerChunk,
-        chunkDurationSeconds: CHUNK_DURATION_SECONDS
-      });
+      log(
+        "INFO",
+        `[AUDIO_WS] Audio format calculated (PCM/float32 - byte-based)`,
+        {
+          sessionId: this.sessionId,
+          bytesPerSecond,
+          bytesPerChunk: this.bytesPerChunk,
+          chunkDurationSeconds: CHUNK_DURATION_SECONDS,
+        },
+      );
     }
 
     // Detect format from Wyoming header (PCM vs float32 based on width)
@@ -334,7 +355,7 @@ class PcmWebSocketSession {
       width: audioFormat.width,
       rate: audioFormat.rate,
       channels: audioFormat.channels,
-      declaredFormat
+      declaredFormat,
     });
 
     const metadata = {
@@ -364,21 +385,21 @@ class PcmWebSocketSession {
         sessionId: this.sessionId,
         sourceFileId: this.sourceFileId.toString(),
         startTime: startTime.toISOString(),
-        format: `${audioFormat.rate}Hz ${audioFormat.width * 8}bit ${audioFormat.channels}ch`
+        format: `${audioFormat.rate}Hz ${
+          audioFormat.width * 8
+        }bit ${audioFormat.channels}ch`,
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       log("ERROR", `[AUDIO_WS] Failed to create SourceFile`, {
         sessionId: this.sessionId,
-        error: errorMsg
+        error: errorMsg,
       });
-      try {
-        this.ws.send(
-          JSON.stringify({ type: "error", message: errorMsg }) + "\n",
-        );
-      } catch (sendError) {
-        // Ignore errors when sending (client might have disconnected)
-      }
+      sendWebSocket(
+        this.ws,
+        JSON.stringify({ type: "error", message: errorMsg }) + "\n",
+        `audio-pcm:${this.sessionId}`,
+      );
     }
   }
 
@@ -393,7 +414,7 @@ class PcmWebSocketSession {
       messagesReceived: this.messagesReceived,
       bytesReceived: this.bytesReceived,
       chunksCreated: this.chunkIndex,
-      durationSeconds: Math.round(durationSeconds * 10) / 10
+      durationSeconds: Math.round(durationSeconds * 10) / 10,
     });
 
     if (this.sourceFileId) {
@@ -403,7 +424,7 @@ class PcmWebSocketSession {
         sourceFileId: this.sourceFileId.toString(),
         totalChunks: this.chunkIndex,
         totalBytesFlushed: this.bytesFlushed,
-        bufferRemaining: this.bufferByteLength
+        bufferRemaining: this.bufferByteLength,
       });
     }
 
@@ -416,12 +437,12 @@ class PcmWebSocketSession {
         this.opusDecoder.free();
         log("INFO", `[AUDIO_WS] Freed in-process Opus decoder`, {
           sessionId: this.sessionId,
-          framesDecoded: this.opusFrameCount
+          framesDecoded: this.opusFrameCount,
         });
       } catch (error) {
         log("WARN", `[AUDIO_WS] Exception freeing Opus decoder`, {
           sessionId: this.sessionId,
-          error: error instanceof Error ? error.message : String(error)
+          error: error instanceof Error ? error.message : String(error),
         });
       }
       this.opusDecoder = null;
@@ -442,10 +463,14 @@ class PcmWebSocketSession {
       this.opusFrameCount++;
 
       if (this.messagesReceived === 1) {
-        log("INFO", `[AUDIO_WS] Opus detected - decoding frames to PCM (serialized)`, {
-          sessionId: this.sessionId,
-          opusFrameSize: audioData.byteLength
-        });
+        log(
+          "INFO",
+          `[AUDIO_WS] Opus detected - decoding frames to PCM (serialized)`,
+          {
+            sessionId: this.sessionId,
+            opusFrameSize: audioData.byteLength,
+          },
+        );
       }
 
       // Serialize Opus decoding (like Chronicle's sequential while loop)
@@ -456,7 +481,7 @@ class PcmWebSocketSession {
           if (!this.opusDecoder) {
             log("ERROR", `[OPUS_DECODE] Decoder not initialized`, {
               sessionId: this.sessionId,
-              frameNumber: this.opusFrameCount
+              frameNumber: this.opusFrameCount,
             });
             return;
           }
@@ -478,17 +503,26 @@ class PcmWebSocketSession {
             }
 
             // Convert Int16Array to bytes and buffer them
-            const pcmBytes = new Uint8Array(int16Pcm.buffer.slice(int16Pcm.byteOffset, int16Pcm.byteOffset + int16Pcm.byteLength));
+            const pcmBytes = new Uint8Array(
+              int16Pcm.buffer.slice(
+                int16Pcm.byteOffset,
+                int16Pcm.byteOffset + int16Pcm.byteLength,
+              ),
+            );
             this.buffer.push(pcmBytes);
             this.bufferByteLength += pcmBytes.length;
 
             // Log any errors from decoder
             if (result.errors && result.errors.length > 0) {
               for (const error of result.errors) {
-                log("WARN", `[OPUS_DECODE] Decoder error at frame ${this.opusFrameCount}`, {
-                  sessionId: this.sessionId,
-                  error: error.message
-                });
+                log(
+                  "WARN",
+                  `[OPUS_DECODE] Decoder error at frame ${this.opusFrameCount}`,
+                  {
+                    sessionId: this.sessionId,
+                    error: error.message,
+                  },
+                );
               }
             }
           }
@@ -500,7 +534,8 @@ class PcmWebSocketSession {
               framesProcessed: this.opusFrameCount,
               bufferedPcmBytes: this.bufferByteLength,
               targetChunkSize: this.bytesPerChunk,
-              fillPercentage: ((this.bufferByteLength / this.bytesPerChunk) * 100).toFixed(1)
+              fillPercentage:
+                ((this.bufferByteLength / this.bytesPerChunk) * 100).toFixed(1),
             });
           }
 
@@ -510,17 +545,18 @@ class PcmWebSocketSession {
               sessionId: this.sessionId,
               frameNumber: this.opusFrameCount,
               bufferedBytes: this.bufferByteLength,
-              targetBytes: this.bytesPerChunk
+              targetBytes: this.bytesPerChunk,
             });
             await this.flush(false);
           }
-
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
+          const errorMsg = error instanceof Error
+            ? error.message
+            : String(error);
           log("ERROR", `[OPUS_DECODE] Exception in WASM decoder`, {
             sessionId: this.sessionId,
             frameNumber: this.opusFrameCount,
-            error: errorMsg
+            error: errorMsg,
           });
           // Continue processing other frames
         }
@@ -533,17 +569,24 @@ class PcmWebSocketSession {
     // Note: Skip alignment for Opus (width=0) since Opus frames are variable-length
     // (but we've already decoded Opus to PCM above, so this only applies to non-Opus)
     let alignedData = audioData;
-    if (this.audioFormat && this.audioFormat.width > 0 && audioData.byteLength % this.audioFormat.width !== 0) {
+    if (
+      this.audioFormat && this.audioFormat.width > 0 &&
+      audioData.byteLength % this.audioFormat.width !== 0
+    ) {
       const misalignment = audioData.byteLength % this.audioFormat.width;
       const alignedLength = audioData.byteLength - misalignment;
 
-      log("WARN", `[AUDIO_WS] Audio data alignment issue - truncating ${misalignment} bytes`, {
-        sessionId: this.sessionId,
-        originalLength: audioData.byteLength,
-        alignedLength,
-        sampleWidth: this.audioFormat.width,
-        bitsPerSample: this.audioFormat.width * 8
-      });
+      log(
+        "WARN",
+        `[AUDIO_WS] Audio data alignment issue - truncating ${misalignment} bytes`,
+        {
+          sessionId: this.sessionId,
+          originalLength: audioData.byteLength,
+          alignedLength,
+          sampleWidth: this.audioFormat.width,
+          bitsPerSample: this.audioFormat.width * 8,
+        },
+      );
 
       // Truncate to aligned boundary (drop incomplete sample at end)
       alignedData = audioData.slice(0, alignedLength);
@@ -561,7 +604,7 @@ class PcmWebSocketSession {
         bufferSize: this.bufferByteLength,
         chunksCreated: this.chunkIndex,
         detectedFormat: this.detectedFormat,
-        opusDecodedToPcm: this.opusDecodedToPcm
+        opusDecodedToPcm: this.opusDecodedToPcm,
       });
     }
 
@@ -583,7 +626,8 @@ class PcmWebSocketSession {
       bytesPerSecond = OPUS_FRAME_SIZE_BYTES * OPUS_FRAMES_PER_SECOND;
     } else {
       // PCM or float: rate * width * channels
-      bytesPerSecond = this.audioFormat.rate * this.audioFormat.width * this.audioFormat.channels;
+      bytesPerSecond = this.audioFormat.rate * this.audioFormat.width *
+        this.audioFormat.channels;
     }
     return bytes / bytesPerSecond;
   }
@@ -644,7 +688,9 @@ class PcmWebSocketSession {
       }
 
       // Flush exactly bytesPerChunk bytes (or remaining if flushAll)
-      const bytesToFlush = flushAll ? this.bufferByteLength : this.bytesPerChunk;
+      const bytesToFlush = flushAll
+        ? this.bufferByteLength
+        : this.bytesPerChunk;
 
       if (bytesToFlush === 0) {
         break;
@@ -700,7 +746,7 @@ class PcmWebSocketSession {
           sourceFileId: this.sourceFileId?.toString(),
           format: formatConfig.format,
           sampleRate: formatConfig.sampleRate,
-          channels: formatConfig.channels
+          channels: formatConfig.channels,
         });
         this.bytesFlushed += audioData.length;
         this.chunkIndex++;
@@ -710,7 +756,7 @@ class PcmWebSocketSession {
           sessionId: this.sessionId,
           chunkIndex: this.chunkIndex,
           isFinal: flushAll,
-          error: errorMsg
+          error: errorMsg,
         });
         throw error;
       }
@@ -798,17 +844,19 @@ function parseWyomingHeader(line: string): WyomingHeader | null {
     return JSON.parse(line) as WyomingHeader;
   } catch {
     // Parse errors can happen with partial data - only log in debug mode
-    log("DEBUG", "Failed to parse Wyoming protocol header", { line: line.substring(0, 100) });
+    log("DEBUG", "Failed to parse Wyoming protocol header", {
+      line: line.substring(0, 100),
+    });
     return null;
   }
 }
 
 function handlePing(ws: WebSocket | any): void {
-  try {
-    ws.send(JSON.stringify({ type: "pong" }) + "\n");
-  } catch (error) {
-    // Ignore errors when sending (client might have disconnected)
-  }
+  sendWebSocket(
+    ws,
+    JSON.stringify({ type: "pong" }) + "\n",
+    "audio-pcm:ping",
+  );
 }
 
 async function createRequestFromUpgrade(
@@ -846,28 +894,41 @@ export async function handlePcmWebSocket(
 ): Promise<void> {
   log("INFO", `[AUDIO_WS] WebSocket connection attempt`, {
     url: upgrade.url,
-    remoteAddress: upgrade.socket?.remoteAddress
+    remoteAddress: upgrade.socket?.remoteAddress,
   });
 
   const request = await createRequestFromUpgrade(upgrade);
   const auth = await authenticate(request);
 
+  if (ws.readyState !== WS_OPEN) {
+    log("INFO", `[AUDIO_WS] WebSocket closed during authentication`);
+    return;
+  }
+
   if (!auth) {
     log("WARN", `[AUDIO_WS] WebSocket auth failed`, { url: upgrade.url });
-    try {
-      ws.close(1008, "Unauthorized: Token is missing or invalid");
-    } catch {
-      // socket may already be closing
-    }
+    closeWebSocket(
+      ws,
+      1008,
+      "Unauthorized: Token is missing or invalid",
+      "audio-pcm:auth",
+    );
     throw new Error("Unauthorized");
   }
 
-  log("INFO", `[AUDIO_WS] WebSocket authenticated`, { principal: auth.principal });
+  log("INFO", `[AUDIO_WS] WebSocket authenticated`, {
+    principal: auth.principal,
+  });
 
   await defaultResourceManager.ensureAllowed(
     auth,
     { path: "live.audio", actions: ["write"] },
   );
+
+  if (ws.readyState !== WS_OPEN) {
+    log("INFO", `[AUDIO_WS] WebSocket closed during authorization`);
+    return;
+  }
 
   return new Promise((resolve, reject) => {
     const session = new PcmWebSocketSession(auth, ws);
@@ -958,62 +1019,43 @@ export async function handlePcmWebSocket(
       data: any,
       isBinary: boolean,
     ): Promise<void> => {
-      try {
-        if (isBinary) {
-          await handleBinaryMessage(data);
-        } else {
-          await handleTextMessage(data);
-        }
-      } catch (error) {
-        console.error("[AUDIO_WS] Error handling message:", error);
+      if (isBinary) {
+        await handleBinaryMessage(data);
+      } else {
+        await handleTextMessage(data);
       }
     };
 
-    const handleError = (error: Error) => {
-      log("ERROR", `WebSocket error`, {
-        error: error.message,
-        stack: error.stack
-      });
-      cleanup();
-      reject(error);
-    };
+    let acceptingMessages = true;
+    let messageTail: Promise<void> = Promise.resolve();
+    let finalizePromise: Promise<void> | null = null;
+    let settlementPromise: Promise<void> | null = null;
+    let terminalError: Error | null = null;
 
-    const handleClose = (code: number, reason: Buffer) => {
-      const reasonStr = reason ? reason.toString() : "";
-      log("INFO", `[AUDIO_WS] WebSocket closed`, { code, reason: reasonStr });
-      cleanup();
-      resolve();
-    };
+    const enqueueMessage = (task: () => Promise<void>): void => {
+      if (!acceptingMessages) return;
 
-    const cleanup = () => {
-      session.freeDecoder();
-      session.flushAll().catch((error) => {
-        log("ERROR", `[AUDIO_WS] Error flushing buffer on cleanup`, {
-          error: error instanceof Error ? error.message : String(error)
+      messageTail = messageTail.then(async () => {
+        if (terminalError) return;
+        await task();
+      }).catch((error) => {
+        const messageError = error instanceof Error
+          ? error
+          : new Error(String(error));
+        log("ERROR", `[AUDIO_WS] Message task failed`, {
+          error: messageError.message,
+          stack: messageError.stack,
         });
+        failSession(messageError);
       });
-
-      if (typeof ws.off === "function") {
-        ws.off("message", handleMessage);
-        ws.off("error", handleError);
-        ws.off("close", handleClose);
-      } else if (typeof ws.removeEventListener === "function") {
-        ws.removeEventListener("message", handleMessage);
-        ws.removeEventListener("error", handleError);
-        ws.removeEventListener("close", handleClose);
-      }
     };
 
-    if (typeof ws.on === "function") {
-      ws.on("message", (data: any, isBinary: boolean) => {
-        handleMessage(data, isBinary).catch((error) => {
-          console.error("Error handling message:", error);
-        });
-      });
-      ws.on("error", handleError);
-      ws.on("close", handleClose);
-    } else if (typeof ws.addEventListener === "function") {
-      ws.addEventListener("message", async (event: MessageEvent) => {
+    const handleNodeMessage = (data: any, isBinary: boolean): void => {
+      enqueueMessage(() => handleMessage(data, isBinary));
+    };
+
+    const handleDomMessage = (event: MessageEvent): void => {
+      enqueueMessage(async () => {
         let data: any = event.data;
         let isBinary = false;
 
@@ -1024,22 +1066,110 @@ export async function handlePcmWebSocket(
           isBinary = true;
         }
 
-        handleMessage(data, isBinary).catch((error) => {
-          console.error("Error handling message:", error);
-        });
+        await handleMessage(data, isBinary);
       });
-      ws.addEventListener("error", handleError);
-      ws.addEventListener(
-        "close",
-        (event: CloseEvent) =>
-          handleClose(event.code, Buffer.from(event.reason || "")),
+    };
+
+    const handleDomClose = (event: CloseEvent): void => {
+      handleClose(event.code, Buffer.from(event.reason || ""));
+    };
+
+    const handleDomError = (event: ErrorEvent): void => {
+      handleError(
+        event.error instanceof Error
+          ? event.error
+          : new Error(event.message || "WebSocket transport error"),
       );
+    };
+
+    const finalize = (): Promise<void> => {
+      if (finalizePromise) return finalizePromise;
+
+      acceptingMessages = false;
+
+      if (typeof ws.off === "function") {
+        ws.off("message", handleNodeMessage);
+        ws.off("error", handleError);
+        ws.off("close", handleClose);
+      } else if (typeof ws.removeEventListener === "function") {
+        ws.removeEventListener("message", handleDomMessage);
+        ws.removeEventListener("error", handleDomError);
+        ws.removeEventListener("close", handleDomClose);
+      }
+
+      finalizePromise = Promise.resolve().then(async () => {
+        await messageTail;
+        try {
+          await session.flushAll();
+        } catch (error) {
+          log("ERROR", `[AUDIO_WS] Error flushing buffer on cleanup`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        } finally {
+          session.freeDecoder();
+        }
+      });
+
+      return finalizePromise;
+    };
+
+    const settleAfterFinalize = (): void => {
+      if (settlementPromise) return;
+
+      settlementPromise = finalize().then(
+        () => terminalError ? reject(terminalError) : resolve(),
+        (finalizationError) =>
+          reject(
+            terminalError
+              ? new AggregateError(
+                [terminalError, finalizationError],
+                "WebSocket failed while finalizing buffered PCM audio",
+              )
+              : finalizationError,
+          ),
+      );
+    };
+
+    const failSession = (error: Error): void => {
+      terminalError ??= error;
+      settleAfterFinalize();
+      terminateWebSocket(ws, "audio-pcm");
+    };
+
+    const handleError = (error: Error) => {
+      log("ERROR", `WebSocket error`, {
+        error: error.message,
+        stack: error.stack,
+      });
+      failSession(error);
+    };
+
+    const handleClose = (code: number, reason: Buffer) => {
+      const reasonStr = reason ? reason.toString() : "";
+      log("INFO", `[AUDIO_WS] WebSocket closed`, { code, reason: reasonStr });
+      settleAfterFinalize();
+    };
+
+    if (typeof ws.on === "function") {
+      ws.on("message", handleNodeMessage);
+      ws.on("error", handleError);
+      ws.on("close", handleClose);
+    } else if (typeof ws.addEventListener === "function") {
+      ws.addEventListener("message", handleDomMessage);
+      ws.addEventListener("error", handleDomError);
+      ws.addEventListener("close", handleDomClose);
     } else {
-      reject(
-        new Error(
-          "WebSocket object does not support 'on' or 'addEventListener' methods",
-        ),
+      const error = new Error(
+        "WebSocket object does not support 'on' or 'addEventListener' methods",
       );
+      terminalError = error;
+      settleAfterFinalize();
+    }
+
+    if (ws.readyState !== WS_OPEN && !settlementPromise) {
+      log("INFO", `[AUDIO_WS] WebSocket closed during session setup`);
+      settleAfterFinalize();
     }
   });
 }

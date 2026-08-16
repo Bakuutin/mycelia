@@ -1,10 +1,26 @@
 import { expect } from "@std/expect";
-import {
+import locationProcessing, {
   haversineM,
+  locationPendingImportQuery,
   segmentPoints,
   subtractIntervals,
   type TrackPoint,
 } from "./locationProcessing.ts";
+
+Deno.test("location processing watchdog recovers a lost change event", async () => {
+  expect(locationProcessing.triggers?.interval).toBeGreaterThan(0);
+
+  const calls: any[] = [];
+  const pending = await locationProcessing.hasPendingWork?.({
+    mongo: async (input) => {
+      calls.push(input);
+      return [{ _id: "import" }];
+    },
+    reason: "interval",
+  });
+  expect(pending).toBe(1);
+  expect(calls[0].query).toEqual(locationPendingImportQuery);
+});
 
 function pt(minutes: number, lat: number, lng: number): TrackPoint {
   return { ts: new Date(Date.UTC(2026, 7, 1, 0, minutes)), lat, lng };

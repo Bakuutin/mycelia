@@ -1,28 +1,41 @@
 import { apiClient } from "@/lib/api";
 
 interface ServerMessage {
-  type: "subscribed" | "unsubscribed" | "event" | "pong" | "error";
+  type:
+    | "ready"
+    | "subscribed"
+    | "unsubscribed"
+    | "event"
+    | "resync_required"
+    | "pong"
+    | "error";
   channel?: string;
   event?: string;
   data?: any;
   message?: string;
+  reason?: string;
 }
 
 type EventCallback = (event: any) => void;
+type ResyncCallback = (reason?: string) => void;
 
 export class WebSocketClient {
   private ws: WebSocket | null = null;
   private subscriptions: Map<string, Set<EventCallback>> = new Map();
+  private resyncCallbacks = new Set<ResyncCallback>();
+  private pendingEpochSubscriptions = new Set<string>();
+  private awaitingEpochResync = false;
   private reconnectTimer: number | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private reconnectDelay = 1000;
   private isConnecting = false;
   private isIntentionalClose = false;
+  private isApplicationReady = false;
   private connectionPromise: Promise<void> | null = null;
 
   async connect(): Promise<void> {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN && this.isApplicationReady) {
       return;
     }
 
@@ -31,6 +44,7 @@ export class WebSocketClient {
     }
 
     this.isConnecting = true;
+    this.isIntentionalClose = false;
     this.connectionPromise = this._connect();
 
     try {
@@ -51,55 +65,100 @@ export class WebSocketClient {
     }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const settleReady = () => {
+        if (settled) return;
+        settled = true;
+        if (timeout !== null) clearTimeout(timeout);
+        resolve();
+      };
+      const settleError = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        if (timeout !== null) clearTimeout(timeout);
+        reject(error);
+      };
+
       try {
-        this.ws = new WebSocket(wsUrl.toString());
+        const socket = new WebSocket(wsUrl.toString());
+        this.ws = socket;
+        this.isApplicationReady = false;
 
-        this.ws.onopen = () => {
-          console.log("WebSocket connected");
-          this.reconnectAttempts = 0;
-
-          for (const channel of this.subscriptions.keys()) {
-            this.sendMessage({ type: "subscribe", channel });
-          }
-
-          resolve();
+        socket.onopen = () => {
+          if (this.ws !== socket) return;
+          console.log(
+            "WebSocket transport connected; awaiting server readiness",
+          );
         };
 
-        this.ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
+          if (this.ws !== socket) return;
           try {
             const message: ServerMessage = JSON.parse(event.data);
+            if (message.type === "ready") {
+              this.handleReady();
+              settleReady();
+              return;
+            }
             this.handleMessage(message);
           } catch (error) {
             console.error("Failed to parse WebSocket message:", error);
           }
         };
 
-        this.ws.onerror = (error) => {
+        socket.onerror = (error) => {
+          if (this.ws !== socket) return;
           console.error("WebSocket error:", error);
         };
 
-        this.ws.onclose = () => {
+        socket.onclose = () => {
+          if (this.ws !== socket) return;
           console.log("WebSocket closed");
           this.ws = null;
+          this.isApplicationReady = false;
+          this.pendingEpochSubscriptions.clear();
+          this.awaitingEpochResync = false;
+          settleError(
+            new Error("WebSocket closed before application readiness"),
+          );
 
           if (!this.isIntentionalClose) {
             this.scheduleReconnect();
           }
         };
 
-        setTimeout(() => {
-          if (this.ws?.readyState !== WebSocket.OPEN) {
-            reject(new Error("WebSocket connection timeout"));
+        timeout = setTimeout(() => {
+          if (this.ws === socket && !this.isApplicationReady) {
+            settleError(new Error("WebSocket application readiness timeout"));
+            socket.close();
           }
         }, 10000);
       } catch (error) {
-        reject(error);
+        settleError(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
 
+  private handleReady(): void {
+    if (this.isApplicationReady) return;
+    this.isApplicationReady = true;
+    this.reconnectAttempts = 0;
+    console.log("WebSocket application session ready");
+
+    this.pendingEpochSubscriptions.clear();
+    this.awaitingEpochResync = this.subscriptions.size > 0;
+    for (const channel of this.subscriptions.keys()) {
+      this.pendingEpochSubscriptions.add(channel);
+      this.sendMessage({ type: "subscribe", channel });
+    }
+  }
+
   disconnect(): void {
     this.isIntentionalClose = true;
+    this.isApplicationReady = false;
+    this.pendingEpochSubscriptions.clear();
+    this.awaitingEpochResync = false;
 
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -118,7 +177,9 @@ export class WebSocketClient {
     if (!this.subscriptions.has(channel)) {
       this.subscriptions.set(channel, new Set());
 
-      if (this.ws?.readyState === WebSocket.OPEN) {
+      if (this.isApplicationReady) {
+        this.awaitingEpochResync = true;
+        this.pendingEpochSubscriptions.add(channel);
         this.sendMessage({ type: "subscribe", channel });
       }
     }
@@ -149,10 +210,17 @@ export class WebSocketClient {
     if (callbacks.size === 0) {
       this.subscriptions.delete(channel);
 
-      if (this.ws?.readyState === WebSocket.OPEN) {
+      if (this.isApplicationReady) {
+        this.pendingEpochSubscriptions.delete(channel);
         this.sendMessage({ type: "unsubscribe", channel });
+        this.completeSubscriptionEpochIfReady();
       }
     }
+  }
+
+  onResync(callback: ResyncCallback): () => void {
+    this.resyncCallbacks.add(callback);
+    return () => this.resyncCallbacks.delete(callback);
   }
 
   private handleMessage(message: ServerMessage): void {
@@ -178,10 +246,18 @@ export class WebSocketClient {
 
       case "subscribed":
         console.log(`Subscribed to channel: ${message.channel}`);
+        if (message.channel) {
+          this.pendingEpochSubscriptions.delete(message.channel);
+          this.completeSubscriptionEpochIfReady();
+        }
         break;
 
       case "unsubscribed":
         console.log(`Unsubscribed from channel: ${message.channel}`);
+        break;
+
+      case "resync_required":
+        this.notifyResync(message.reason ?? "unknown");
         break;
 
       case "error":
@@ -193,13 +269,52 @@ export class WebSocketClient {
     }
   }
 
+  private completeSubscriptionEpochIfReady(): void {
+    if (!this.awaitingEpochResync || this.pendingEpochSubscriptions.size > 0) {
+      return;
+    }
+    this.awaitingEpochResync = false;
+    this.notifyResync("subscriptions_ready");
+  }
+
+  private notifyResync(reason: string): void {
+    console.warn(
+      `WebSocket delivery gap boundary reached (${reason}); ` +
+        "subscribers must refresh canonical state",
+    );
+    for (const callback of this.resyncCallbacks) {
+      try {
+        callback(reason);
+      } catch (error) {
+        console.error("Error in WebSocket global resync callback:", error);
+      }
+    }
+    for (const [channel, callbacks] of this.subscriptions) {
+      for (const callback of callbacks) {
+        try {
+          callback({
+            channel,
+            event: "resync_required",
+            data: { reason },
+          });
+        } catch (error) {
+          console.error("Error in WebSocket resync callback:", error);
+        }
+      }
+    }
+  }
+
   private sendMessage(message: any): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN && this.isApplicationReady) {
       const messageStr = JSON.stringify(message);
       console.log(`WebSocket sending: ${messageStr}`);
       this.ws.send(messageStr);
     } else {
-      console.warn(`WebSocket not open, cannot send:`, message, `readyState: ${this.ws?.readyState}`);
+      console.warn(
+        `WebSocket not open, cannot send:`,
+        message,
+        `readyState: ${this.ws?.readyState}`,
+      );
     }
   }
 
@@ -216,7 +331,9 @@ export class WebSocketClient {
     const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts);
     this.reconnectAttempts++;
 
-    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    console.log(
+      `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`,
+    );
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -227,7 +344,7 @@ export class WebSocketClient {
   }
 
   get isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.ws?.readyState === WebSocket.OPEN && this.isApplicationReady;
   }
 }
 

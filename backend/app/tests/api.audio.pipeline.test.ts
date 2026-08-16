@@ -46,6 +46,7 @@ Deno.test(
     expect(typeof data.stats.transcriptionPendingMaximumHours).toBe("number");
     expect(typeof data.stats.sourceFiles.total).toBe("number");
     expect(Array.isArray(data.stats.sourceFiles.byKind)).toBe(true);
+    expect(data.stats.diarizationCampaign).toBeNull();
     expect(Array.isArray(data.stats.stages)).toBe(true);
     expect(data.stats.stages.map((stage: any) => stage.type)).toEqual([
       "ingestion",
@@ -65,6 +66,77 @@ Deno.test(
         ?.backlog,
     ).toBe(1);
     expect(Array.isArray(data.stats.recentJobs)).toBe(true);
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: returns the current global diarization campaign",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    await db.collection("diarization_campaigns").insertMany([
+      {
+        campaignId: "completed-newer",
+        mode: "missing",
+        status: "completed",
+        updatedAt: new Date("2026-08-16T03:00:00Z"),
+        processedChunks: 100,
+        totalChunks: 100,
+      },
+      {
+        campaignId: "global-running",
+        mode: "missing",
+        status: "running",
+        updatedAt: new Date("2026-08-16T02:00:00Z"),
+        processedChunks: 40,
+        totalChunks: 100,
+        processedSequences: 12,
+        segmentsCreated: 84,
+        errorCount: 2,
+        chunksPerSecond: 0.75,
+        etaSeconds: 80,
+        batchNumber: 4,
+        estimatedBatches: 10,
+      },
+      {
+        campaignId: "file-specific-running",
+        mode: "missing",
+        status: "running",
+        originalId: "source-file-id",
+        updatedAt: new Date("2026-08-16T04:00:00Z"),
+      },
+      {
+        campaignId: "generation-running",
+        mode: "build_generation",
+        status: "running",
+        updatedAt: new Date("2026-08-16T05:00:00Z"),
+      },
+    ]);
+
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.stats.diarizationCampaign).toMatchObject({
+      campaignId: "global-running",
+      status: "running",
+      processedChunks: 40,
+      totalChunks: 100,
+      pendingChunks: 60,
+      processedSequences: 12,
+      segmentsCreated: 84,
+      errorCount: 2,
+      chunksPerSecond: 0.75,
+      etaSeconds: 80,
+      batchNumber: 4,
+      estimatedBatches: 10,
+      totalEstimated: false,
+    });
   }),
 );
 

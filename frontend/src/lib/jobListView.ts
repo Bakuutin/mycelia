@@ -34,6 +34,36 @@ export function shouldRefreshJobsViews(eventName: string): boolean {
   return eventName === "job.completed";
 }
 
+/**
+ * WebSocket event names describe what changed, not necessarily a persisted
+ * lifecycle state. In particular, `job.progress` must never turn an active
+ * job into a synthetic `progress` state and make it disappear from filters.
+ */
+export function resolveJobEventState(
+  eventName: string,
+  payloadState: string | undefined,
+  currentState: string,
+): string {
+  if (payloadState) return payloadState;
+  switch (eventName) {
+    case "job.started":
+    case "job.active":
+      return "active";
+    case "job.waiting":
+      return "waiting";
+    case "job.delayed":
+      return "delayed";
+    case "job.completed":
+      return "completed";
+    case "job.failed":
+      return "failed";
+    case "job.cancelled":
+      return "cancelled";
+    default:
+      return currentState;
+  }
+}
+
 export function getJobsListView(searchParams: URLSearchParams): JobsListView {
   return searchParams.get("view") === "empty" ? "idle_auto" : "operational";
 }

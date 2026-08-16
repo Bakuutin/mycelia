@@ -29,6 +29,7 @@ import { requestCounter } from "@/lib/telemetry.ts";
 import { handlePcmWebSocket } from "@/services/audio.websocket.server.ts";
 import { handleOpusWebSocket } from "@/services/audio.websocket.opus.server.ts";
 import { handleUpdatesWebSocket } from "@/services/updates.websocket.server.ts";
+import { updatesPubSubHub } from "@/services/updates-pubsub.server.ts";
 import { setupResources } from "@/lib/resources/registry.ts";
 import { shutdownTelemetry } from "@/lib/telemetry.ts";
 import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
@@ -49,9 +50,13 @@ import {
 import { triggerManager } from "@/lib/jobs/trigger-manager.ts";
 import { down, status, to, up } from "@/lib/mongo/migrator.ts";
 import { setServiceReady } from "@/routes/health.ts";
+import {
+  isExpectedWebSocketDisconnect,
+  WebSocketSupervisor,
+} from "@/lib/websocket-transport.ts";
 
 let logFile: Deno.FsFile | null = null;
-let dependencyWatchdogInterval: number | null = null;
+let dependencyWatchdogInterval: ReturnType<typeof setInterval> | null = null;
 const dependencyRedis = redis.duplicate();
 let dependencyWatchdogRunning = false;
 let dependencyFailures = 0;
@@ -67,6 +72,11 @@ async function checkCriticalDependencies(): Promise<void> {
     const check = Promise.all([
       dependencyRedis.ping(),
       getRootDB().then((db) => db.command({ ping: 1 }, { timeoutMS: 5_000 })),
+      Promise.resolve().then(() => {
+        if (!updatesPubSubHub.isReady) {
+          throw new Error("updates Redis Pub/Sub is not reconciled");
+        }
+      }),
     ]);
     await Promise.race([
       check,
@@ -213,6 +223,7 @@ async function startServer(
 ) {
   const backendMode = Deno.env.get("BACKEND_TASK") ?? "start";
   const processStartedAt = new Date();
+  let applicationStartupComplete = false;
   setServiceReady(false);
   console.log(
     `[SERVICE] backend starting mode=${backendMode} pid=${Deno.pid} ` +
@@ -223,6 +234,13 @@ async function startServer(
     const db = await getRootDB();
     await ensureAllCollectionsExist(db);
   }
+  // The shared UI Pub/Sub transport is part of application readiness. Browser
+  // sessions are accepted only after its Redis ready check has completed.
+  updatesPubSubHub.onReadinessChange((ready) => {
+    if (!ready) setServiceReady(false);
+    else if (applicationStartupComplete) setServiceReady(true);
+  });
+  await updatesPubSubHub.start();
 
   const app = express();
   const httpServer = createHttpServer(app);
@@ -266,6 +284,9 @@ async function startServer(
   });
 
   const wss = new WebSocketServer({ noServer: true });
+  const webSocketSupervisor = new WebSocketSupervisor();
+  const activeWebSocketHandlers = new Set<Promise<void>>();
+  webSocketSupervisor.start();
 
   async function isUpgradeAuthenticated(request: any): Promise<boolean> {
     const authHeader = request.headers["authorization"];
@@ -283,7 +304,22 @@ async function startServer(
     return false;
   }
 
-  httpServer.on("upgrade", async (request, socket, head) => {
+  const runWebSocketHandler = (
+    label: string,
+    ws: any,
+    handler: () => Promise<void>,
+  ) => {
+    webSocketSupervisor.track(ws, label);
+    const activeHandler = handler()
+      .catch((error) => {
+        console.error(`[WS] ${label} handler failed:`, error);
+        webSocketSupervisor.fail(ws, label, error);
+      })
+      .finally(() => activeWebSocketHandlers.delete(activeHandler));
+    activeWebSocketHandlers.add(activeHandler);
+  };
+
+  const handleUpgrade = async (request: any, socket: any, head: any) => {
     if (!await isUpgradeAuthenticated(request)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -293,76 +329,54 @@ async function startServer(
     // Unified auto-detecting audio endpoint (recommended)
     if (url.pathname === "/ws/audio") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
-        handlePcmWebSocket(ws, request).catch((error) => {
-          console.error("WebSocket audio error:", error);
-          if (ws.readyState === 1) {
-            ws.close(1011, "Internal server error");
-          }
-        });
+        runWebSocketHandler(
+          "/ws/audio",
+          ws,
+          () => handlePcmWebSocket(ws, request),
+        );
       });
       // Legacy endpoints (backward compatibility)
     } else if (url.pathname === "/ws_pcm") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
-        // Add error handler immediately to catch any errors including broken pipe
-        ws.on("error", (error: Error) => {
-          // Only log non-trivial errors (broken pipe is expected on disconnect)
-          if (
-            !error.message.includes("Broken pipe") &&
-            !error.message.includes("EPIPE")
-          ) {
-            console.error("WebSocket /ws_pcm error:", error);
-          }
-        });
-
-        handlePcmWebSocket(ws, request).catch((error) => {
-          console.error("WebSocket /ws_pcm handler error:", error);
-          // Try to close, but catch any errors (e.g., if already closed)
-          try {
-            if (ws.readyState === 1) {
-              ws.close(1011, "Internal server error");
-            }
-          } catch (closeError) {
-            // Ignore errors when closing (socket might already be dead)
-          }
-        });
+        runWebSocketHandler(
+          "/ws_pcm",
+          ws,
+          () => handlePcmWebSocket(ws, request),
+        );
       });
     } else if (url.pathname === "/ws_omi") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
-        handleOpusWebSocket(ws, request).catch((error) => {
-          console.error("WebSocket Opus/OMI error:", error);
-          if (ws.readyState === 1) {
-            ws.close(1011, "Internal server error");
-          }
-        });
+        runWebSocketHandler(
+          "/ws_omi",
+          ws,
+          () => handleOpusWebSocket(ws, request),
+        );
       });
     } else if (url.pathname === "/ws") {
       wss.handleUpgrade(request, socket, head, (ws: any) => {
-        // Add error handler immediately to catch any errors including broken pipe
-        ws.on("error", (error: Error) => {
-          // Only log non-trivial errors (broken pipe is expected on disconnect)
-          if (
-            !error.message.includes("Broken pipe") &&
-            !error.message.includes("EPIPE")
-          ) {
-            console.error("WebSocket /ws error:", error);
-          }
-        });
-
-        handleUpdatesWebSocket(ws, request).catch((error) => {
-          console.error("WebSocket /ws handler error:", error);
-          // Try to close, but catch any errors (e.g., if already closed)
-          try {
-            if (ws.readyState === 1) {
-              ws.close(1011, "Internal server error");
-            }
-          } catch (closeError) {
-            // Ignore errors when closing (socket might already be dead)
-          }
-        });
+        runWebSocketHandler(
+          "/ws",
+          ws,
+          () => handleUpdatesWebSocket(ws, request),
+        );
       });
     } else {
       socket.destroy();
     }
+  };
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    // Guard the raw TCP socket synchronously. Authentication is asynchronous,
+    // and a peer may disappear before it has been upgraded to a ws instance.
+    socket.on("error", (error) => {
+      if (!isExpectedWebSocketDisconnect(error)) {
+        console.error("[WS] Raw upgrade socket failed:", error);
+      }
+    });
+    handleUpgrade(request, socket, head).catch((error) => {
+      console.error("[WS] Upgrade failed:", error);
+      socket.destroy();
+    });
   });
 
   // Request logging - enable with DEBUG_REQUESTS=true
@@ -398,7 +412,8 @@ async function startServer(
     await maintenanceManager.start();
   }
 
-  setServiceReady(true);
+  applicationStartupComplete = true;
+  setServiceReady(updatesPubSubHub.isReady);
   startDependencyWatchdog();
   console.log(
     `[READY] backend ready mode=${backendMode} workers=${!noWorkers} ` +
@@ -414,6 +429,13 @@ async function startServer(
       stopDependencyWatchdog();
       console.log(`Received shutdown signal: ${signal}`);
       httpServer?.close(console.error);
+      await webSocketSupervisor.shutdown();
+      wss.close();
+      await Promise.race([
+        Promise.allSettled([...activeWebSocketHandlers]),
+        new Promise((resolve) => setTimeout(resolve, 5_000)),
+      ]);
+      updatesPubSubHub.stop();
       await stopWorkers();
       await stopAccessLogWorker();
       await stopChangeStreamWorker();

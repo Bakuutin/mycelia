@@ -6,6 +6,7 @@ import { callResource } from "@myceliasdk/resources.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 import type { JobCapability } from "@/lib/jobs/job-registry.ts";
+import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
 
 export const schema = z.object({
   type: z.literal("location_processing"),
@@ -14,6 +15,7 @@ export const schema = z.object({
 });
 
 const name = "location_processing";
+export const locationPendingImportQuery = { status: "parsed" } as const;
 
 /** Points within this radius of the running centroid belong to one stay. */
 const STAY_RADIUS_M = 200;
@@ -320,7 +322,8 @@ export async function reverseGeocode(
   let best = candidates[0];
   let bestScore = Infinity;
   for (const c of candidates) {
-    const score = (c.distM + 500) / Math.max(1, Math.log10((c.population ?? 0) + 10));
+    const score = (c.distM + 500) /
+      Math.max(1, Math.log10((c.population ?? 0) + 10));
     if (score < bestScore) {
       bestScore = score;
       best = c;
@@ -540,12 +543,11 @@ async function use(job: Job<JobData>): Promise<JobResult> {
 
   const { default: tzLookup } = await import("tz-lookup");
 
-  const geonamesReady =
-    (await mongo({
-      action: "count",
-      collection: "geonames_cities",
-      query: {},
-    })) > 0;
+  const geonamesReady = (await mongo({
+    action: "count",
+    collection: "geonames_cities",
+    query: {},
+  })) > 0;
 
   let windows: Interval[];
   let pendingImportIds: any[] = [];
@@ -556,13 +558,15 @@ async function use(job: Job<JobData>): Promise<JobResult> {
     const pending = await mongo({
       action: "find",
       collection: "location_imports",
-      query: { status: "parsed" },
+      query: locationPendingImportQuery,
       options: { projection: { timeRange: 1 } },
     });
     pendingImportIds = pending.map((doc: any) => doc._id);
     windows = mergeWindows(
       pending.map((doc: any) => ({
-        start: new Date(new Date(doc.timeRange.start).getTime() - WINDOW_PAD_MS),
+        start: new Date(
+          new Date(doc.timeRange.start).getTime() - WINDOW_PAD_MS,
+        ),
         end: new Date(new Date(doc.timeRange.end).getTime() + WINDOW_PAD_MS),
       })),
     );
@@ -668,12 +672,11 @@ const capability: JobCapability = {
     ...getTriggerTiming("location_processing"),
   },
   hasPendingWork: async ({ mongo }) => {
-    const parsed = await mongo({
-      action: "count",
+    const parsed = await hasIndexedPendingWork(mongo, {
       collection: "location_imports",
-      query: { status: "parsed" },
+      query: locationPendingImportQuery,
     });
-    return parsed > 0;
+    return parsed ? 1 : 0;
   },
   use,
 };

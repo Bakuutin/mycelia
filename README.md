@@ -253,8 +253,8 @@ networking, and model-specific examples.
 ### Local speaker diarization (Docker)
 
 Argmax and the Mycelia diarizator are separate providers. `argmax-cli serve`
-exposes WhisperKit transcription only. `argmax-cli diarize --audio-path ...`
-is a one-shot Apple Silicon CLI that writes diarization output for one file; it
+exposes WhisperKit transcription only. `argmax-cli diarize --audio-path ...` is
+a one-shot Apple Silicon CLI that writes diarization output for one file; it
 does not expose Mycelia's required `/health`, `/diarize`, and `/embed` HTTP
 endpoints or the compatible Pyannote/WeSpeaker embedding space.
 
@@ -295,6 +295,16 @@ In **Settings → Diarization**, enable the environment route, set it to the
 highest preference (for example priority `1`), and confirm that it reports
 **Running**. See [`diarizator/README.md`](diarizator/README.md) for memory,
 remote GPU, and troubleshooting details.
+
+Turning a diarization route off blocks new jobs from that server. A request
+already in flight may finish, but the active batch checks the saved route before
+each following sequence and stops before making another request. The route
+toggle does not stop the diarizator container or remote server process.
+
+When historical diarization work exists, the automatic trigger treats the
+pending check as a boolean and immediately fills every free healthy provider
+slot. A six-route pool therefore starts up to six independent jobs without a
+five-minute one-at-a-time ramp.
 
 #### Debugging conversation re-extraction
 

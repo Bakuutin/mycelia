@@ -1,10 +1,19 @@
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "npm:ws@^8.18.0";
-import { redis } from "@/lib/redis.ts";
 import { authenticate } from "@/lib/auth/core.server.ts";
-import type { Redis } from "ioredis";
 import { getQueue } from "@/lib/jobs/queue.ts";
 import { jobRegistry } from "@/lib/jobs/job-registry.ts";
+import {
+  closeWebSocket,
+  isExpectedWebSocketDisconnect,
+  sendWebSocket,
+  terminateWebSocket,
+} from "@/lib/websocket-transport.ts";
+import {
+  type UpdatesPubSubEvent,
+  UpdatesPubSubHub,
+  updatesPubSubHub,
+} from "@/services/updates-pubsub.server.ts";
 
 export async function createRequestFromUpgrade(
   upgrade: IncomingMessage,
@@ -43,266 +52,310 @@ interface ClientMessage {
 }
 
 interface ServerMessage {
-  type: "subscribed" | "unsubscribed" | "event" | "pong" | "error";
+  type:
+    | "ready"
+    | "subscribed"
+    | "unsubscribed"
+    | "event"
+    | "resync_required"
+    | "pong"
+    | "error";
   channel?: string;
   event?: string;
-  data?: any;
+  data?: unknown;
   message?: string;
+  reason?: string;
 }
 
-class UpdatesWebSocketSession {
-  private ws: WebSocket;
-  private subscriptions: Set<string> = new Set();
-  private redisSubscriber: Redis;
+type SessionState = "new" | "open" | "closing" | "closed";
 
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    this.redisSubscriber = redis.duplicate();
-  }
+export class UpdatesWebSocketSession {
+  private readonly subscriptions = new Set<string>();
+  private state: SessionState = "new";
+  private initialization: Promise<void> | null = null;
+  private commandTail: Promise<void> = Promise.resolve();
+  private cleanupPromise: Promise<void> | null = null;
+  private removeResyncListener: (() => void) | null = null;
+  private resolveClosed: () => void = () => undefined;
+  readonly closed: Promise<void>;
 
-  async initialize(): Promise<void> {
-    if (redis.status !== "ready" && redis.status !== "connect") {
-      await redis.connect();
+  private readonly handlePubSubEvent = (event: UpdatesPubSubEvent) => {
+    if (this.state !== "open") return;
+
+    try {
+      const payload = JSON.parse(event.message);
+      this.sendMessage({
+        type: "event",
+        channel: event.channel,
+        event: payload.event,
+        data: payload.data,
+      });
+    } catch (error) {
+      console.error(
+        `[WS] Invalid Redis payload for ${event.channel}:`,
+        error,
+      );
     }
+  };
 
-    if (this.redisSubscriber.status !== "ready") {
-      await this.redisSubscriber.connect();
-    }
-
-    this.redisSubscriber.on("message", (channel: string, message: string) => {
-      try {
-        const payload = JSON.parse(message);
-        const cleanChannel = channel.replace(/^mycelia:/, "");
-
-        this.sendMessage({
-          type: "event",
-          channel: cleanChannel,
-          event: payload.event,
-          data: payload.data,
-        });
-      } catch (error) {
-        console.error("Error handling Redis message:", error);
-      }
+  constructor(
+    private readonly ws: WebSocket,
+    private readonly hub: UpdatesPubSubHub = updatesPubSubHub,
+  ) {
+    this.closed = new Promise((resolve) => {
+      this.resolveClosed = resolve;
     });
   }
 
-  async handleMessage(rawMessage: string): Promise<void> {
+  get isOpen(): boolean {
+    return this.state === "open";
+  }
+
+  initialize(): Promise<void> {
+    if (this.initialization) return this.initialization;
+    this.initialization = this.initializeInternal();
+    return this.initialization;
+  }
+
+  private async initializeInternal(): Promise<void> {
+    await this.hub.start();
+    if (this.state !== "new") return;
+
+    this.removeResyncListener = this.hub.onResync(({ reason }) => {
+      if (this.state !== "open") return;
+      this.sendMessage({ type: "resync_required", reason });
+    });
+    this.state = "open";
+    this.sendMessage({ type: "ready" });
+  }
+
+  /** Serializes all protocol commands from this browser session. */
+  enqueueMessage(rawMessage: string): Promise<void> {
+    const operation = this.commandTail.then(async () => {
+      await this.initialize();
+      if (this.state !== "open") return;
+      await this.handleMessage(rawMessage);
+    });
+
+    this.commandTail = operation.catch((error) => {
+      void this.fail(error);
+    });
+    return this.commandTail;
+  }
+
+  private async handleMessage(rawMessage: string): Promise<void> {
+    let message: ClientMessage;
     try {
-      const message: ClientMessage = JSON.parse(rawMessage);
+      message = JSON.parse(rawMessage);
+    } catch {
+      this.sendMessage({ type: "error", message: "Invalid message format" });
+      return;
+    }
 
-      switch (message.type) {
-        case "subscribe":
-          if (message.channel) {
-            if (!/^[a-zA-Z0-9._:*-]+$/.test(message.channel)) {
-              this.sendMessage({ type: "error", message: "Invalid channel name" });
-              break;
-            }
-            await this.subscribe(message.channel);
-          }
-          break;
+    switch (message.type) {
+      case "subscribe":
+        if (!message.channel) {
+          this.sendMessage({ type: "error", message: "Channel is required" });
+          return;
+        }
+        if (!isValidChannel(message.channel)) {
+          this.sendMessage({ type: "error", message: "Invalid channel name" });
+          return;
+        }
+        await this.subscribe(message.channel);
+        return;
 
-        case "unsubscribe":
-          if (message.channel) {
-            if (!/^[a-zA-Z0-9._:*-]+$/.test(message.channel)) {
-              this.sendMessage({ type: "error", message: "Invalid channel name" });
-              break;
-            }
-            await this.unsubscribe(message.channel);
-          }
-          break;
+      case "unsubscribe":
+        if (!message.channel) return;
+        if (!isValidChannel(message.channel)) {
+          this.sendMessage({ type: "error", message: "Invalid channel name" });
+          return;
+        }
+        await this.unsubscribe(message.channel);
+        return;
 
-        case "ping":
-          this.sendMessage({ type: "pong" });
-          break;
+      case "ping":
+        this.sendMessage({ type: "pong" });
+        return;
 
-        default:
-          this.sendMessage({
-            type: "error",
-            message: `Unknown message type: ${(message as any).type}`,
-          });
-      }
-    } catch (error) {
-      console.error(`WebSocket message handling error:`, error);
-      this.sendMessage({
-        type: "error",
-        message: error instanceof Error ? error.message : "Invalid message format",
-      });
+      default:
+        this.sendMessage({
+          type: "error",
+          message: `Unknown message type: ${
+            (message as { type?: unknown }).type
+          }`,
+        });
     }
   }
 
-  async subscribe(channel: string): Promise<void> {
+  private async subscribe(channel: string): Promise<void> {
     if (this.subscriptions.has(channel)) {
       this.sendMessage({ type: "subscribed", channel });
       return;
     }
 
-    const redisChannel = `mycelia:${channel}`;
-    await this.redisSubscriber.subscribe(redisChannel);
-
+    await this.hub.subscribe(channel, this.handlePubSubEvent);
     this.subscriptions.add(channel);
     this.sendMessage({ type: "subscribed", channel });
+    console.log(`[WS] Subscribed to channel: ${channel}`);
 
-    console.log(`WebSocket subscribed to channel: ${channel}`);
-
-    // Send current state for job subscriptions
     if (channel.startsWith("jobs:") && channel !== "jobs:*") {
-      const jobId = channel.replace("jobs:", "");
-      await this.sendCurrentJobState(jobId);
+      await this.sendCurrentJobState(channel.slice("jobs:".length));
     }
   }
 
-  async sendCurrentJobState(jobId: string): Promise<void> {
+  private async unsubscribe(channel: string): Promise<void> {
+    if (!this.subscriptions.has(channel)) return;
+
+    await this.hub.unsubscribe(channel, this.handlePubSubEvent);
+    this.subscriptions.delete(channel);
+    this.sendMessage({ type: "unsubscribed", channel });
+    console.log(`[WS] Unsubscribed from channel: ${channel}`);
+  }
+
+  private async sendCurrentJobState(jobId: string): Promise<void> {
     try {
-      // Try each registered job type to find the job
       for (const jobType of jobRegistry.getJobTypes()) {
         const queue = getQueue(jobType);
         const job = await queue.getJob(jobId);
+        if (!job) continue;
 
-        if (job) {
-          const state = await job.getState();
-
-          console.log(`Sending current state for job ${jobId}: ${state}`);
-
-          this.sendMessage({
-            type: "event",
-            channel: `jobs:${jobId}`,
-            event: `job.${state}`,
-            data: {
-              jobId: job.id,
-              jobType: jobType,
-              state: state,
-              progress: job.progress,
-              result: job.returnvalue,
-              failedReason: job.failedReason,
-            },
-          });
-          return;
-        }
+        const state = await job.getState();
+        this.sendMessage({
+          type: "event",
+          channel: `jobs:${jobId}`,
+          event: `job.${state}`,
+          data: {
+            jobId: job.id,
+            jobType,
+            state,
+            progress: job.progress,
+            result: job.returnvalue,
+            failedReason: job.failedReason,
+          },
+        });
+        return;
       }
-
-      console.log(`Job ${jobId} not found in any queue`);
     } catch (error) {
-      console.error(`Error fetching current state for job ${jobId}:`, error);
+      console.error(
+        `[WS] Failed to fetch current state for job ${jobId}:`,
+        error,
+      );
     }
   }
 
-  async unsubscribe(channel: string): Promise<void> {
-    if (!this.subscriptions.has(channel)) {
-      return;
-    }
-
-    const redisChannel = `mycelia:${channel}`;
-    await this.redisSubscriber.unsubscribe(redisChannel);
-
-    this.subscriptions.delete(channel);
-    this.sendMessage({ type: "unsubscribed", channel });
-
-    console.log(`WebSocket unsubscribed from channel: ${channel}`);
+  private sendMessage(message: ServerMessage): boolean {
+    return sendWebSocket(this.ws, JSON.stringify(message), "/ws");
   }
 
-  sendMessage(message: ServerMessage): void {
-    if (this.ws.readyState === 1) {
-      try {
-        this.ws.send(JSON.stringify(message));
-      } catch (error) {
-        // Ignore errors when sending (client might have disconnected)
-        // This prevents BrokenPipe errors from crashing the process
-        if (error instanceof Error && !error.message.includes("Broken pipe") && !error.message.includes("EPIPE")) {
-          console.error("Error sending WebSocket message:", error);
-        }
-      }
+  private async fail(error: unknown): Promise<void> {
+    if (this.state === "closing" || this.state === "closed") return;
+    if (!isExpectedWebSocketDisconnect(error)) {
+      console.error("[WS] Updates session command failed:", error);
     }
+    terminateWebSocket(this.ws, "/ws");
+    await this.cleanup();
   }
 
-  async cleanup(): Promise<void> {
+  cleanup(): Promise<void> {
+    if (this.cleanupPromise) return this.cleanupPromise;
+    this.cleanupPromise = this.cleanupInternal();
+    return this.cleanupPromise;
+  }
+
+  private async cleanupInternal(): Promise<void> {
+    if (this.state === "closed") return;
+    this.state = "closing";
+
     try {
-      if (this.subscriptions.size > 0) {
-        const channels = Array.from(this.subscriptions).map(ch => `mycelia:${ch}`);
-        await this.redisSubscriber.unsubscribe(...channels);
-      }
+      // Let an already-running subscribe/unsubscribe settle before taking the
+      // final subscription snapshot. Failures are handled by enqueueMessage().
+      await this.commandTail;
 
+      this.removeResyncListener?.();
+      this.removeResyncListener = null;
+
+      const subscriptions = [...this.subscriptions];
       this.subscriptions.clear();
-
-      if (this.redisSubscriber) {
-        this.redisSubscriber.disconnect();
+      const results = await Promise.allSettled(
+        subscriptions.map((channel) =>
+          this.hub.unsubscribe(channel, this.handlePubSubEvent)
+        ),
+      );
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error(
+            "[WS] Failed to release updates subscription:",
+            result.reason,
+          );
+        }
       }
-    } catch (error) {
-      console.error("Error during cleanup:", error);
+    } finally {
+      this.state = "closed";
+      this.resolveClosed();
     }
   }
+}
+
+function isValidChannel(channel: string): boolean {
+  return /^[a-zA-Z0-9._:*-]+$/.test(channel);
 }
 
 export async function handleUpdatesWebSocket(
   ws: WebSocket,
   request: IncomingMessage,
 ): Promise<void> {
-  let session: UpdatesWebSocketSession | null = null;
+  console.log("[WS] /ws connection attempt");
+
+  const req = await createRequestFromUpgrade(request);
+  const auth = await authenticate(req);
+  if (!auth) {
+    console.log("[WS] /ws authentication failed");
+    closeWebSocket(ws, 1008, "Unauthorized", "/ws");
+    return;
+  }
+  if (ws.readyState !== 1) return;
+
+  const session = new UpdatesWebSocketSession(ws);
+
+  const removeListeners = () => {
+    ws.off("message", onMessage);
+    ws.off("close", onClose);
+    ws.off("error", onError);
+  };
+  const onMessage = (data: unknown) => {
+    const rawMessage = data instanceof Uint8Array
+      ? new TextDecoder().decode(data)
+      : String(data);
+    void session.enqueueMessage(rawMessage);
+  };
+  const onClose = () => {
+    void session.cleanup();
+  };
+  const onError = (error: Error) => {
+    if (!isExpectedWebSocketDisconnect(error)) {
+      console.error("[WS] /ws socket error:", error);
+    }
+    void session.cleanup();
+  };
+
+  ws.on("message", onMessage);
+  ws.on("close", onClose);
+  ws.on("error", onError);
 
   try {
-    console.log("WebSocket /ws connection attempt");
-
-    const req = await createRequestFromUpgrade(request);
-    const auth = await authenticate(req);
-
-    if (!auth) {
-      console.log("WebSocket /ws: Authentication failed");
-      ws.close(1008, "Unauthorized");
+    await session.initialize();
+    if (!session.isOpen) {
+      await session.cleanup();
       return;
     }
-
-    console.log("WebSocket /ws: Authenticated successfully");
-
-    session = new UpdatesWebSocketSession(ws);
-
-    // Attach message handler BEFORE initializing session
-    // This prevents race condition where client sends messages before handler is ready
-    ws.on("message", async (data: any) => {
-      try {
-        const message = data.toString();
-        await session!.handleMessage(message);
-      } catch (msgError) {
-        console.error("WebSocket /ws: Error handling message:", msgError);
-      }
-    });
-
-    ws.on("close", async () => {
-      if (session) {
-        await session.cleanup();
-      }
-      console.log("WebSocket /ws: Connection closed");
-    });
-
-    ws.on("error", async (error: Error) => {
-      console.error("WebSocket /ws: Socket error:", error);
-      if (session) {
-        await session.cleanup();
-      }
-    });
-
-    try {
-      await session.initialize();
-      console.log("WebSocket /ws: Session initialized");
-    } catch (initError) {
-      console.error("WebSocket /ws: Failed to initialize session:", initError);
-      throw initError;
-    }
-
-    console.log("WebSocket /ws: Connection established successfully");
+    console.log("[WS] /ws application session ready");
+    await session.closed;
   } catch (error) {
-    console.error("WebSocket /ws: Handler error:", error);
-    try {
-      if (ws.readyState === 1) {
-        ws.close(1011, "Internal server error");
-      }
-    } catch (closeError) {
-      // Ignore errors when closing (socket might already be dead)
-    }
-    if (session) {
-      try {
-        await session.cleanup();
-      } catch (cleanupError) {
-        console.error("WebSocket /ws: Cleanup error:", cleanupError);
-      }
-    }
+    console.error("[WS] /ws failed to initialize:", error);
+    terminateWebSocket(ws, "/ws");
+    await session.cleanup();
+  } finally {
+    removeListeners();
   }
 }

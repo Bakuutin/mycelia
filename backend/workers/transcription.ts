@@ -6,6 +6,7 @@ import { callResource } from "@myceliasdk/resources.ts";
 import { combineChunks } from "@/lib/audio-combiner.ts";
 import { filterSegments } from "@/lib/transcription-filters.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
+import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
 
 // Logging helper
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -134,6 +135,14 @@ const capability: JobCapability = {
   // Runtime concurrency is configured in Jobs. Provider-aware queue routing
   // reserves each profile's slots before a job can reach this worker.
   maxConcurrency: 8,
+  hasPendingWork: async ({ mongo }) =>
+    await hasIndexedPendingWork(mongo, {
+        collection: "transcription_sequences",
+        query: buildTranscriptionSequenceClaimQuery(),
+        hint: "transcription_sequences_claimable_work_v1",
+      })
+      ? 1
+      : 0,
   use: async (job) => {
     const { sequenceId, batchSize: requestedBatchSize } = job.data as z.infer<
       typeof schema
@@ -718,7 +727,7 @@ const capability: JobCapability = {
       const remainingCount = await mongo({
         action: "count",
         collection: "transcription_sequences",
-        query: { state: "ready" },
+        query: buildTranscriptionSequenceClaimQuery(),
       }) as number;
       const hasMore = remainingCount > 0;
 
