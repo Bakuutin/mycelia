@@ -39,7 +39,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 4G
+          memory: 6G
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'"]
       interval: 10s
