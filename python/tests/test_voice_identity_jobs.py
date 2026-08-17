@@ -313,6 +313,48 @@ class DiarizationJobTest(TestCase):
         self.assertEqual(result["skippedSequences"], 1)
         self.assertEqual(result["processed"], 2)
 
+    def test_job_closes_sequence_cursor_after_filling_batch(self):
+        class ClosingIterator:
+            def __init__(self):
+                self._items = iter([object(), object()])
+                self.closed = False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._items)
+
+            def close(self):
+                self.closed = True
+
+        sequences = ClosingIterator()
+
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks", return_value=4),
+            patch(
+                "jobs.diarization.get_diarization_sequences",
+                return_value=sequences,
+            ),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={
+                    "status": "diarized",
+                    "chunks_diarized": 2,
+                    "segments": 3,
+                },
+            ),
+        ):
+            process_diarization_job(
+                "job-close-cursor",
+                DiarizationJobData(limit=1),
+                lambda _progress: None,
+            )
+
+        self.assertTrue(sequences.closed)
+
     def test_continuation_reuses_campaign_total_without_wide_recount(self):
         updates = []
         campaign = {

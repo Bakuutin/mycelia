@@ -16,6 +16,7 @@ let client: MongoClient | null = null;
 interface CursorEntry {
   cursor: any;
   expiresAt: number;
+  principal: string;
 }
 
 const cursorMap = new Map<string, CursorEntry>();
@@ -126,6 +127,7 @@ const getFirstBatchSchema = z.object({
     limit: z.number().optional(),
     skip: z.number().optional(),
     hint: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+    maxTimeMS: z.number().int().positive().optional(),
   }).optional(),
   batchSize: z.number(),
 });
@@ -135,6 +137,12 @@ const getMoreSchema = z.object({
   collection: z.string(),
   cursorId: z.string(),
   batchSize: z.number(),
+});
+
+const closeCursorSchema = z.object({
+  action: z.literal("closeCursor"),
+  collection: z.string(),
+  cursorId: z.string(),
 });
 
 const countSchema = z.object({
@@ -250,6 +258,7 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
   listIndexesSchema,
   getFirstBatchSchema,
   getMoreSchema,
+  closeCursorSchema,
   findOneAndUpdateSchema,
 ]);
 
@@ -279,6 +288,7 @@ const actionMap = {
   listIndexes: ["read"],
   getFirstBatch: ["read"],
   getMore: ["read"],
+  closeCursor: ["read"],
   findOneAndUpdate: ["read", "update"],
 } satisfies { [K in MongoRequest["action"]]: string[] };
 
@@ -309,7 +319,6 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
       ...options,
       batchSize,
     };
-    delete cursorOptions.maxTimeMS;
 
     const cursor = collection.find(query, cursorOptions);
 
@@ -338,6 +347,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     cursorMap.set(cursorId, {
       cursor,
       expiresAt: Date.now() + CURSOR_TTL_MS,
+      principal,
     });
 
     return { cursorId, data: results, hasMore };
@@ -354,6 +364,10 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     const cursorEntry = cursorMap.get(cursorId);
 
     if (!cursorEntry) {
+      return { data: [], hasMore: false };
+    }
+
+    if (cursorEntry.principal !== principal) {
       return { data: [], hasMore: false };
     }
 
@@ -395,6 +409,22 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
       }
       throw error;
     }
+  }
+
+  private async closeCursor(
+    cursorId: string,
+    principal: string,
+  ): Promise<{ closed: boolean }> {
+    cleanupExpiredCursors();
+
+    const cursorEntry = cursorMap.get(cursorId);
+    if (!cursorEntry || cursorEntry.principal !== principal) {
+      return { closed: false };
+    }
+
+    cursorMap.delete(cursorId);
+    await cursorEntry.cursor.close();
+    return { closed: true };
   }
   async getRootDB(): Promise<Db> {
     return getRootDB();
@@ -459,6 +489,8 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
             auth.principal,
           );
         }
+        case "closeCursor":
+          return this.closeCursor(input.cursorId, auth.principal);
         case "insertOne": {
           const doc = {
             ...normalizeInsertedDocument(input.collection, input.doc),

@@ -226,6 +226,54 @@ Deno.test(
 );
 
 Deno.test(
+  "closeCursor should release a live cursor immediately",
+  withFixtures([
+    "Admin",
+    "Mongo",
+  ], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    const collectionName = `close_cursor_test_${Date.now()}`;
+
+    await mongo({
+      action: "insertMany",
+      collection: collectionName,
+      docs: Array.from({ length: 4 }, (_, index) => ({ index })),
+    });
+
+    const firstBatch = await mongo({
+      action: "getFirstBatch",
+      collection: collectionName,
+      query: {},
+      options: { sort: { index: 1 }, maxTimeMS: 5_000 },
+      batchSize: 1,
+    });
+    expect(firstBatch.cursorId).not.toBe("");
+
+    const closed = await mongo({
+      action: "closeCursor",
+      collection: collectionName,
+      cursorId: firstBatch.cursorId,
+    });
+    expect(closed).toEqual({ closed: true });
+
+    const afterClose = await mongo({
+      action: "getMore",
+      collection: collectionName,
+      cursorId: firstBatch.cursorId,
+      batchSize: 1,
+    });
+    expect(afterClose).toEqual({ data: [], hasMore: false });
+
+    const closedAgain = await mongo({
+      action: "closeCursor",
+      collection: collectionName,
+      cursorId: firstBatch.cursorId,
+    });
+    expect(closedAgain).toEqual({ closed: false });
+  }),
+);
+
+Deno.test(
   "getFirstBatch should return all documents when batchSize is larger than total",
   withFixtures([
     "Admin",

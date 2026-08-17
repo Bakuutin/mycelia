@@ -129,6 +129,23 @@ Both rebuilds preserve canonical object timestamps. A failed catalog parity
 check leaves `ready: false` and `listCards` on its bounded legacy predicate. A
 density rebuild never writes the shared Timeline histogram collections.
 
+#### Historical diarization cursor guardrails
+
+Historical diarization scans `audio_chunks` through a metadata-only cursor
+(`_id`, source, sequence position, timestamps, and retry state). Each candidate
+sequence is claimed before a separate bounded lookup hydrates its audio bytes;
+losing a concurrent claim advances to the next candidate without loading audio
+or consuming the job's successful-sequence budget. The cursor uses the
+diarization work index, a 5-second Mongo deadline, and an explicit
+`mongo.closeCursor` call whenever a batch stops early.
+
+Deploy changes to this path by pausing only the diarization worker, draining its
+active jobs, recreating `backend` and `python-worker`, and then resuming the
+same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or
+Redis. After rollout, verify metadata cursor requests omit `data`, hydration is
+limited to one claimed sequence, and stopped batches leave no application cursor
+registered in the backend.
+
 #### Location import recovery
 
 Location imports use a two-phase `analyze → confirm` contract. Analysis may
