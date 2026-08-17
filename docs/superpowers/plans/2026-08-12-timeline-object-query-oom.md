@@ -358,11 +358,11 @@ cd ../frontend && deno run -A npm:vitest run \
 
 - [ ] **Step 2: Transfer implementation commits to the bind-mounted UAT checkout**
 
-From `/Users/pk/repo/mycelia`, verify only the user's `README.md` is dirty, then cherry-pick the design, plan, backend, and frontend commits by explicit hashes. Do not stage or modify `README.md`.
+From `~/repo/mycelia`, verify only the user's `README.md` is dirty, then cherry-pick the design, plan, backend, and frontend commits by explicit hashes. Do not stage or modify `README.md`.
 
 - [ ] **Step 3: Verify runtime reload boundary**
 
-Follow `DEVELOPMENT.md`: confirm backend/frontend mounts point to `/Users/pk/repo/mycelia`, confirm `BACKEND_TASK=dev` and `FRONTEND_MODE=dev`, wait for `[READY]`, verify Compose health, then require fresh `/health=200` and `/readiness=200`. Recreate only the affected application service and restart nginx if source remains stale.
+Follow `DEVELOPMENT.md`: confirm backend/frontend mounts point to `~/repo/mycelia`, confirm `BACKEND_TASK=dev` and `FRONTEND_MODE=dev`, wait for `[READY]`, verify Compose health, then require fresh `/health=200` and `/readiness=200`. Recreate only the affected application service and restart nginx if source remains stale.
 
 - [ ] **Step 4: Apply and verify migration through normal backend startup**
 
