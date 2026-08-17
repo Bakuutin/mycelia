@@ -146,6 +146,13 @@ Redis. After rollout, verify metadata cursor requests omit `data`, hydration is
 limited to one claimed sequence, and stopped batches leave no application cursor
 registered in the backend.
 
+The Audio Pipeline page does not run an exact diarization `audio_chunks` count
+on its 30-second refresh. It probes at most one indexed ready chunk: zero is
+exact, while existing work is shown either as the persisted campaign estimate
+(`≈N`, with its update time) or as `Work remains` when no estimate is available.
+Treat campaign `pendingChunks` as an operational estimate, not as an exact
+scheduler input; claiming and completion continue to use canonical chunk state.
+
 #### Location import recovery
 
 Location imports use a two-phase `analyze → confirm` contract. Analysis may

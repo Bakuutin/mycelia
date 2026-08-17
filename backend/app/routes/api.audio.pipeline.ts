@@ -21,6 +21,7 @@ const PIPELINE_STAGES = [
 
 const PIPELINE_STATS_MAX_TIME_MS = 6_000;
 const PIPELINE_DETAILS_MAX_TIME_MS = 2_000;
+const DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS = 1_000;
 const MAX_AUDIO_CHUNK_SECONDS = 10;
 
 function isMissingIndexHint(error: unknown): boolean {
@@ -72,11 +73,11 @@ function countPipelineStats(
   }) as Promise<number>;
 }
 
-async function getDiarizationBacklog(
+async function hasDiarizationBacklog(
   mongo: ReturnType<typeof getMongoResource>,
-): Promise<number> {
+): Promise<boolean> {
   const request = {
-    action: "count" as const,
+    action: "findOne" as const,
     collection: "audio_chunks",
     query: {
       "vad.has_speech": true,
@@ -87,17 +88,23 @@ async function getDiarizationBacklog(
     },
     options: {
       hint: "audio_chunks_diarization_ready_backlog_v1",
-      maxTimeMS: PIPELINE_STATS_MAX_TIME_MS,
+      projection: { _id: 1 },
+      maxTimeMS: DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS,
     },
   };
   try {
-    return await mongo(request) as number;
+    return Boolean(await mongo(request));
   } catch (error) {
     if (!isMissingIndexHint(error)) throw error;
-    return await mongo({
-      ...request,
-      options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
-    }) as number;
+    return Boolean(
+      await mongo({
+        ...request,
+        options: {
+          projection: { _id: 1 },
+          maxTimeMS: DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS,
+        },
+      }),
+    );
   }
 }
 
@@ -210,6 +217,8 @@ interface PipelineStats {
     type: string;
     label: string;
     backlog: number;
+    backlogStatus: "exact" | "estimated" | "exists" | "unavailable";
+    backlogAsOf?: Date;
     errors: number;
     paused: boolean;
     active: number;
@@ -252,6 +261,37 @@ interface DiarizationCampaignSummary {
   batchNumber: number | null;
   estimatedBatches: number | null;
   totalEstimated: boolean;
+}
+
+interface PipelineBacklogSnapshot {
+  count: number;
+  status: "exact" | "estimated" | "exists" | "unavailable";
+  asOf?: Date;
+}
+
+function getDiarizationBacklogSnapshot(
+  hasPending: boolean | null,
+  campaign: DiarizationCampaignSummary | null,
+): PipelineBacklogSnapshot {
+  if (hasPending === false) {
+    return { count: 0, status: "exact" };
+  }
+
+  if (campaign?.pendingChunks != null) {
+    return {
+      count: hasPending === true
+        ? Math.max(campaign.pendingChunks, 1)
+        : campaign.pendingChunks,
+      status: "estimated",
+      asOf: campaign.updatedAt,
+    };
+  }
+
+  if (hasPending === true) {
+    return { count: 1, status: "exists" };
+  }
+
+  return { count: 0, status: "unavailable" };
 }
 
 const GLOBAL_DIARIZATION_CAMPAIGN_QUERY = {
@@ -850,7 +890,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       pendingSequenceChunkStatsResult,
       unassignedTranscriptions,
       conversationsAwaitingSummary,
-      diarizationBacklog,
+      hasPendingDiarization,
       speakerMatchingBacklog,
       speakerIdentityBacklog,
       enrollmentBacklog,
@@ -1013,8 +1053,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       ),
       safeStat(
         "diarization backlog",
-        getDiarizationBacklog(mongo),
-        0,
+        hasDiarizationBacklog(mongo),
+        null,
       ),
       Promise.resolve(0),
       safeStat(
@@ -1133,6 +1173,10 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
     const jobStats = new Map<string, any>(
       jobStatsResult.map((row: any) => [row._id, row]),
     );
+    const diarizationBacklog = getDiarizationBacklogSnapshot(
+      hasPendingDiarization,
+      diarizationCampaign,
+    );
     const backlogs: Record<string, number> = {
       ingestion: sourceFilesStats.pending + sourceFilesStats.errors,
       vad: vadStats.chunksAwaitingVad,
@@ -1142,7 +1186,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       conversation_extractor_merged: convChunksReady + convChunksProcessing +
         convChunksError,
       summarization: conversationsAwaitingSummary,
-      diarization: diarizationBacklog,
+      diarization: diarizationBacklog.count,
       speakerMatching: speakerMatchingBacklog,
       speakerIdentity: speakerIdentityBacklog,
       enrollment: enrollmentBacklog,
@@ -1165,6 +1209,12 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         type,
         label,
         backlog: backlogs[type] ?? 0,
+        backlogStatus: type === "diarization"
+          ? diarizationBacklog.status
+          : "exact",
+        backlogAsOf: type === "diarization"
+          ? diarizationBacklog.asOf
+          : undefined,
         errors: stageErrors[type] ?? 0,
         paused: serverConfig.workers?.[type]?.paused === true,
         active: jobs.active ?? 0,
