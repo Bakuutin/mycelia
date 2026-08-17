@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams, useLocation } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
-import { ObjectId } from "bson";
 import type { Object as ObjectModel } from "@/types/objects";
 import { useDuplicateGroups } from "@/hooks/useObjectQueries";
-import { useAllTags } from "@/hooks/useTagQueries";
 import { MergeObjectDialog } from "@/components/dialogs/MergeObjectDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,23 +11,23 @@ import { Label } from "@/components/ui/label";
 import {
   ArrowLeftRight,
   ArrowRight,
-  Calendar,
-  CalendarClock,
   Box,
   Building2,
+  Calendar,
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   Combine,
+  Film,
   FolderKanban,
   Handshake,
-  Film,
   Lightbulb,
   Link2,
   Link2Off,
   MapPin,
-  PawPrint,
   MessageSquare,
   Package,
+  PawPrint,
   Plus,
   RefreshCw,
   Search,
@@ -120,7 +118,10 @@ function formatDateTime(date: Date | string | undefined) {
   });
 }
 
-function formatDuration(startDate: Date | string, endDate?: Date | string | null): string {
+function formatDuration(
+  startDate: Date | string,
+  endDate?: Date | string | null,
+): string {
   const start = typeof startDate === "string" ? new Date(startDate) : startDate;
   const end = endDate
     ? (typeof endDate === "string" ? new Date(endDate) : endDate)
@@ -146,7 +147,21 @@ function formatDuration(startDate: Date | string, endDate?: Date | string | null
 
 function getObjectType(
   object: ObjectModel,
-): "person" | "event" | "relationship" | "promise" | "conversation" | "tag" | "place" | "organization" | "product" | "project" | "animal" | "concept" | "media" | "other" {
+):
+  | "person"
+  | "event"
+  | "relationship"
+  | "promise"
+  | "conversation"
+  | "tag"
+  | "place"
+  | "organization"
+  | "product"
+  | "project"
+  | "animal"
+  | "concept"
+  | "media"
+  | "other" {
   if (object.isPromise) return "promise";
   if (object.isTag) return "tag";
   if (object.isRelationship) return "relationship";
@@ -256,7 +271,9 @@ interface ObjectCardProps {
     objectObject?: ObjectModel;
     referencesToCount?: number;
     referencesFromCount?: number;
-    tags?: Array<{ _id: string; name?: string; icon?: unknown; color?: string }>;
+    tags?: Array<
+      { _id: string; name?: string; icon?: unknown; color?: string }
+    >;
     linkedObjectsCount?: number; // For tags: number of objects linked to this tag
   };
   searchQuery: string;
@@ -264,7 +281,9 @@ interface ObjectCardProps {
   onToggleStar?: (objectId: string, currentStarred: boolean) => void;
 }
 
-function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: ObjectCardProps) {
+function ObjectCard(
+  { object, searchQuery, showType = false, onToggleStar }: ObjectCardProps,
+) {
   const isRelationship = object.isRelationship;
   const isConversation = object.isConversation;
   const hasRelationshipData = object.relationship && object.subjectObject &&
@@ -309,7 +328,9 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
             }`}
             title={object.starred ? "Remove from starred" : "Add to starred"}
           >
-            <Star className={`w-3.5 h-3.5 ${object.starred ? "fill-current" : ""}`} />
+            <Star
+              className={`w-3.5 h-3.5 ${object.starred ? "fill-current" : ""}`}
+            />
           </button>
         )}
         <div className="space-y-1">
@@ -317,7 +338,9 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
           <div className="flex items-center gap-2 min-w-0 pr-5">
             <span
               className="text-base flex-shrink-0 w-6 h-6 flex items-center justify-center rounded"
-              style={{ backgroundColor: object.color ? `${object.color}20` : undefined }}
+              style={{
+                backgroundColor: object.color ? `${object.color}20` : undefined,
+              }}
             >
               {renderIcon(object.icon)}
             </span>
@@ -329,14 +352,19 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
                     : object.name || "Unnamed"}
                 </span>
                 {showType && (
-                  <Badge variant="outline" className={`text-[10px] px-1 py-0 ${typeConfig.color}`}>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] px-1 py-0 ${typeConfig.color}`}
+                  >
                     {objectType === "other" ? "Object" : objectType}
                   </Badge>
                 )}
                 {/* Show linked objects count for tags */}
-                {objectType === "tag" && object.linkedObjectsCount !== undefined && (
+                {objectType === "tag" &&
+                  object.linkedObjectsCount !== undefined && (
                   <Badge variant="secondary" className="text-[10px] px-1 py-0">
-                    {object.linkedObjectsCount} {object.linkedObjectsCount === 1 ? "object" : "objects"}
+                    {object.linkedObjectsCount}{" "}
+                    {object.linkedObjectsCount === 1 ? "object" : "objects"}
                   </Badge>
                 )}
               </div>
@@ -377,32 +405,43 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
                 <CalendarClock className="w-2.5 h-2.5" />
                 <span>{timeRangeInfo.startFormatted}</span>
                 {timeRangeInfo.count > 1 && (
-                  <span className="text-muted-foreground/60">(+{timeRangeInfo.count - 1})</span>
+                  <span className="text-muted-foreground/60">
+                    (+{timeRangeInfo.count - 1})
+                  </span>
                 )}
               </div>
             )}
             {/* Aliases - show only if no details */}
-            {object.aliases && object.aliases.length > 0 && !object.details && !isConversation && (
-              <span className="truncate">aka {object.aliases.slice(0, 2).join(", ")}</span>
+            {object.aliases && object.aliases.length > 0 && !object.details &&
+              !isConversation && (
+              <span className="truncate">
+                aka {object.aliases.slice(0, 2).join(", ")}
+              </span>
             )}
           </div>
-          
+
           {/* Tags row */}
           {object.tags && object.tags.length > 0 && (
             <div className="flex items-center gap-1 pl-8 flex-wrap">
               <Tag className="w-2.5 h-2.5 text-muted-foreground" />
-              {object.tags.slice(0, 3).map((tag: { _id: string; name?: string; color?: string }) => (
+              {object.tags.slice(0, 3).map((
+                tag: { _id: string; name?: string; color?: string },
+              ) => (
                 <Badge
                   key={tag._id}
                   variant="outline"
                   className="text-[10px] px-1 py-0"
-                  style={tag.color ? { borderColor: tag.color, color: tag.color } : undefined}
+                  style={tag.color
+                    ? { borderColor: tag.color, color: tag.color }
+                    : undefined}
                 >
                   {tag.name || "Unnamed"}
                 </Badge>
               ))}
               {object.tags.length > 3 && (
-                <span className="text-[10px] text-muted-foreground">+{object.tags.length - 3}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  +{object.tags.length - 3}
+                </span>
               )}
             </div>
           )}
@@ -412,7 +451,21 @@ function ObjectCard({ object, searchQuery, showType = false, onToggleStar }: Obj
   );
 }
 
-type ObjectType = "person" | "event" | "relationship" | "promise" | "conversation" | "tag" | "place" | "organization" | "product" | "project" | "animal" | "concept" | "media" | "other";
+type ObjectType =
+  | "person"
+  | "event"
+  | "relationship"
+  | "promise"
+  | "conversation"
+  | "tag"
+  | "place"
+  | "organization"
+  | "product"
+  | "project"
+  | "animal"
+  | "concept"
+  | "media"
+  | "other";
 type SortOption = "name" | "updatedAt" | "createdAt";
 
 interface TypeFilterButtonProps {
@@ -422,19 +475,23 @@ interface TypeFilterButtonProps {
   onClick: () => void;
 }
 
-function TypeFilterButton({ type, count, isActive, onClick }: TypeFilterButtonProps) {
+function TypeFilterButton(
+  { type, count, isActive, onClick }: TypeFilterButtonProps,
+) {
   const config = TYPE_CONFIG[type];
   const Icon = config.icon;
 
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`
         flex items-center gap-2 px-3 py-2 rounded-lg border transition-all
-        ${isActive
+        ${
+        isActive
           ? `${config.color} border-current`
           : "bg-background border-border hover:bg-muted"
-        }
+      }
       `}
     >
       <Icon className="w-4 h-4" />
@@ -458,129 +515,111 @@ type ObjectWithRelations = ObjectModel & {
 const ITEMS_PER_TYPE = 9; // Initial items per type (3 rows of 3)
 const LOAD_MORE_COUNT = 30; // Items to load when clicking "load more"
 const MAX_ITEMS_PER_TYPE = 300; // Maximum items per type for "load all"
+const MAX_CONCURRENT_SECTION_REQUESTS = 2;
+const SECTION_REFRESH_INTERVAL_MS = 60_000;
+const SECTION_OBSERVER_ROOT_MARGIN = "400px 0px";
+const ORPHAN_COUNT_POLL_BACKOFF_MS = [2_000, 4_000, 8_000, 16_000] as const;
+
+const ALL_OBJECT_TYPES: ObjectType[] = [
+  "person",
+  "event",
+  "relationship",
+  "promise",
+  "conversation",
+  "tag",
+  "place",
+  "organization",
+  "product",
+  "project",
+  "animal",
+  "concept",
+  "media",
+  "other",
+];
+
+function createTypeRecord<T>(
+  factory: (type: ObjectType) => T,
+): Record<ObjectType, T> {
+  return Object.fromEntries(
+    ALL_OBJECT_TYPES.map((type) => [type, factory(type)]),
+  ) as Record<ObjectType, T>;
+}
+
+interface ListCardsResponse {
+  items: ObjectWithRelations[];
+  nextCursor?: string | null;
+  hasMore: boolean;
+}
+
+type TypeFetchMode = "initial" | "refresh" | "append";
+
+interface BrowseTask {
+  key: string;
+  generation: number | null;
+  run: () => Promise<void>;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Request failed";
+}
 
 const ObjectsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  // Objects grouped by type
-  const [objectsByType, setObjectsByType] = useState<Record<ObjectType, ObjectWithRelations[]>>({
-    person: [],
-    event: [],
-    relationship: [],
-    promise: [],
-    conversation: [],
-    tag: [],
-    place: [],
-    organization: [],
-    product: [],
-    project: [],
-    animal: [],
-    concept: [],
-    media: [],
-    other: [],
-  });
+  const [objectsByType, setObjectsByType] = useState<
+    Record<ObjectType, ObjectWithRelations[]>
+  >(
+    () => createTypeRecord(() => []),
+  );
   const [loadingTypes, setLoadingTypes] = useState<Set<ObjectType>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  // Note: loading state is now per-type via loadingTypes, not global
-  
-  // Track which types have been fetched (for lazy loading)
   const [fetchedTypes, setFetchedTypes] = useState<Set<ObjectType>>(new Set());
-
-  // How many items to show per type
-  const [limits, setLimits] = useState<Record<ObjectType, number>>({
-    person: ITEMS_PER_TYPE,
-    event: ITEMS_PER_TYPE,
-    relationship: ITEMS_PER_TYPE,
-    promise: ITEMS_PER_TYPE,
-    conversation: ITEMS_PER_TYPE,
-    tag: ITEMS_PER_TYPE,
-    place: ITEMS_PER_TYPE,
-    organization: ITEMS_PER_TYPE,
-    product: ITEMS_PER_TYPE,
-    project: ITEMS_PER_TYPE,
-    animal: ITEMS_PER_TYPE,
-    concept: ITEMS_PER_TYPE,
-    media: ITEMS_PER_TYPE,
-    other: ITEMS_PER_TYPE,
-  });
+  const [typeErrors, setTypeErrors] = useState<
+    Record<ObjectType, string | null>
+  >(
+    () => createTypeRecord(() => null),
+  );
 
   // Collapsed state per type - start expanded by default
-  const [collapsed, setCollapsed] = useState<Record<ObjectType, boolean>>({
-    person: false,
-    event: false,
-    relationship: false,
-    promise: false,
-    conversation: false,
-    tag: false,
-    place: false,
-    organization: false,
-    product: false,
-    project: false,
-    animal: false,
-    concept: false,
-    media: false,
-    other: false,
-  });
+  const [collapsed, setCollapsed] = useState<Record<ObjectType, boolean>>(
+    () => createTypeRecord(() => false),
+  );
 
   // Section-specific sort (for conversations: chronological vs recent)
   type SectionSortOption = "default" | "chronological" | "chronological-desc";
-  const [sectionSort, setSectionSort] = useState<Record<ObjectType, SectionSortOption>>({
-    person: "default",
-    event: "default",
-    relationship: "default",
-    promise: "default",
-    conversation: "chronological-desc", // Default to newest first for conversations
-    tag: "default",
-    place: "default",
-    organization: "default",
-    product: "default",
-    project: "default",
-    animal: "default",
-    concept: "default",
-    media: "default",
-    other: "default",
-  });
+  const [sectionSort, setSectionSort] = useState<
+    Record<ObjectType, SectionSortOption>
+  >(
+    () =>
+      createTypeRecord((type) =>
+        type === "conversation" ? "chronological-desc" : "default"
+      ),
+  );
 
   // Total counts per type from database
-  const [totalCounts, setTotalCounts] = useState<Record<ObjectType, number>>({
-    person: 0,
-    event: 0,
-    relationship: 0,
-    promise: 0,
-    conversation: 0,
-    tag: 0,
-    place: 0,
-    organization: 0,
-    product: 0,
-    project: 0,
-    animal: 0,
-    concept: 0,
-    media: 0,
-    other: 0,
-  });
+  const [totalCounts, setTotalCounts] = useState<Record<ObjectType, number>>(
+    () => createTypeRecord(() => 0),
+  );
   const [countsLoading, setCountsLoading] = useState(true);
   const [orphanedCount, setOrphanedCount] = useState<number | null>(null);
-  
-  // Track whether there might be more items per type (when filtering, we don't know exact total)
-  const [mightHaveMore, setMightHaveMore] = useState<Record<ObjectType, boolean>>({
-    person: false,
-    event: false,
-    relationship: false,
-    promise: false,
-    conversation: false,
-    tag: false,
-    place: false,
-    organization: false,
-    product: false,
-    project: false,
-    animal: false,
-    concept: false,
-    media: false,
-    other: false,
-  });
-  
+  const [orphanedRefreshing, setOrphanedRefreshing] = useState(false);
+
+  const [mightHaveMore, setMightHaveMore] = useState<
+    Record<ObjectType, boolean>
+  >(
+    () => createTypeRecord(() => false),
+  );
+
   // Starred objects section
-  const [starredObjects, setStarredObjects] = useState<ObjectWithRelations[]>([]);
+  const [starredObjects, setStarredObjects] = useState<ObjectWithRelations[]>(
+    [],
+  );
   const [starredCollapsed, setStarredCollapsed] = useState(false);
+  const [starredLoading, setStarredLoading] = useState(false);
+  const [starredError, setStarredError] = useState<string | null>(null);
+  const [starredHasMore, setStarredHasMore] = useState(false);
 
   // Duplicates scan
   const [showDuplicates, setShowDuplicates] = useState(false);
@@ -610,407 +649,386 @@ const ObjectsPage = () => {
     () => tagParam.split(",").filter(Boolean),
     [tagParam],
   );
-  const { data: allTags = [] } = useAllTags();
-
   const [localQ, setLocalQ] = useState(q);
+  const [allTags, setAllTags] = useState<ObjectWithRelations[]>([]);
+  const tagOptionsControllerRef = useRef<AbortController | null>(null);
 
-  // Get sort stage based on current sort option
-  // textScore sorting is only valid when the pipeline actually has a $text
-  // stage; the tag-filtered pipeline uses a regex match instead.
-  const getSortStage = useCallback((useTextScore = true) => {
-    if (q.trim() && useTextScore) {
-      return { $sort: { score: { $meta: "textScore" }, _id: -1 } };
-    }
-    switch (sortBy) {
-      case "name":
-        return { $sort: { name: 1, _id: -1 } };
-      case "createdAt":
-        return { $sort: { createdAt: -1, _id: -1 } };
-      case "updatedAt":
-      default:
-        return { $sort: { updatedAt: -1, _id: -1 } };
-    }
-  }, [q, sortBy]);
+  useEffect(() => {
+    const controller = new AbortController();
+    tagOptionsControllerRef.current?.abort();
+    tagOptionsControllerRef.current = controller;
+    const timer = globalThis.setTimeout(() => {
+      void callResource("objects", {
+        action: "listTagOptions",
+        ids: activeTagIds.length > 0 ? activeTagIds : undefined,
+        search: localQ.trim() || undefined,
+        limit: 32,
+      }, { signal: controller.signal }).then((result) => {
+        if (!controller.signal.aborted && Array.isArray(result?.items)) {
+          setAllTags(result.items);
+        }
+      }).catch((error) => {
+        if (!isAbortError(error)) {
+          console.error("Failed to load bounded tag options:", error);
+        }
+      });
+    }, 250);
+    return () => {
+      globalThis.clearTimeout(timer);
+      controller.abort();
+      if (tagOptionsControllerRef.current === controller) {
+        tagOptionsControllerRef.current = null;
+      }
+    };
+  }, [activeTagIds, localQ]);
 
-  // Get type match condition
-  const getTypeMatch = useCallback((type: ObjectType): Record<string, unknown> => {
-    switch (type) {
-      case "person":
-        return { isPerson: true };
-      case "event":
-        return { isEvent: true };
-      case "relationship":
-        return { isRelationship: true, isPromise: { $ne: true }, isTag: { $ne: true } };
-      case "promise":
-        return { isPromise: true };
-      case "conversation":
-        return { isConversation: true };
-      case "tag":
-        return { isTag: true };
-      case "place":
-        return { isPlace: true };
-      case "organization":
-        return { isOrganization: true };
-      case "product":
-        return { isProduct: true };
-      case "project":
-        return { isProject: true };
-      case "animal":
-        return { isAnimal: true };
-      case "concept":
-        return { isConcept: true };
-      case "media":
-        return { isMedia: true };
-      case "other":
-        return {
-          isPerson: { $ne: true },
-          isEvent: { $ne: true },
-          isRelationship: { $ne: true },
-          isPromise: { $ne: true },
-          isConversation: { $ne: true },
-          isTag: { $ne: true },
-          isPlace: { $ne: true },
-          isOrganization: { $ne: true },
-          isProduct: { $ne: true },
-          isProject: { $ne: true },
-          isAnimal: { $ne: true },
-          isConcept: { $ne: true },
-          isMedia: { $ne: true },
-        };
+  const mountedRef = useRef(true);
+  const filterGenerationRef = useRef(0);
+  const lastFilterSignatureRef = useRef<string | null>(null);
+  const objectsByTypeRef = useRef(objectsByType);
+  const fetchedTypesRef = useRef<Set<ObjectType>>(new Set());
+  const failedTypesRef = useRef<Set<ObjectType>>(new Set());
+  const loadingTypesRef = useRef<Set<ObjectType>>(new Set());
+  const scheduledTypesRef = useRef<Set<ObjectType>>(new Set());
+  const cursorsRef = useRef<Record<ObjectType, string | null>>(
+    createTypeRecord(() => null),
+  );
+  const collapsedRef = useRef(collapsed);
+  const lastFetchedAtRef = useRef<Record<ObjectType, number>>(
+    createTypeRecord(() => 0),
+  );
+  const visibleSectionsRef = useRef<Set<ObjectType>>(new Set());
+  const sectionNodesRef = useRef<Map<ObjectType, HTMLElement>>(new Map());
+  const sectionNodeCallbacksRef = useRef<
+    Map<ObjectType, (node: HTMLDivElement | null) => void>
+  >(new Map());
+  const sectionObserverRef = useRef<IntersectionObserver | null>(null);
+  const queueRef = useRef<BrowseTask[]>([]);
+  const queuedTaskKeysRef = useRef<Set<string>>(new Set());
+  const activeTaskCountRef = useRef(0);
+  const starredFetchedRef = useRef(false);
+  const starredObjectsRef = useRef<ObjectWithRelations[]>([]);
+  const starredCursorRef = useRef<string | null>(null);
+  const starredLoadingRef = useRef(false);
+  const starredScheduledRef = useRef(false);
+  const starredLastFetchedAtRef = useRef(0);
+  const cardsInFlightRef = useRef<
+    Map<
+      string,
+      {
+        promise: Promise<ListCardsResponse>;
+        controller: AbortController;
+        section: ObjectType | "starred";
+      }
+    >
+  >(new Map());
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // StrictMode replays effects. Deferring teardown lets the replay reuse
+      // the same request while a real unmount still aborts it immediately after.
+      globalThis.setTimeout(() => {
+        if (mountedRef.current) return;
+        queueRef.current = [];
+        queuedTaskKeysRef.current.clear();
+        scheduledTypesRef.current.clear();
+        for (const request of cardsInFlightRef.current.values()) {
+          request.controller.abort();
+        }
+        cardsInFlightRef.current.clear();
+      }, 0);
+    };
+  }, []);
+
+  useEffect(() => {
+    collapsedRef.current = collapsed;
+  }, [collapsed]);
+
+  useEffect(() => {
+    starredObjectsRef.current = starredObjects;
+  }, [starredObjects]);
+
+  const setTypeLoading = useCallback((type: ObjectType, loading: boolean) => {
+    const next = new Set(loadingTypesRef.current);
+    if (loading) next.add(type);
+    else next.delete(type);
+    loadingTypesRef.current = next;
+    if (mountedRef.current) setLoadingTypes(next);
+  }, []);
+
+  const requestListCards = useCallback((
+    section: ObjectType | "starred",
+    body: Record<string, unknown>,
+  ): Promise<ListCardsResponse> => {
+    const requestKey = JSON.stringify(body);
+    const existing = cardsInFlightRef.current.get(requestKey);
+    if (existing) return existing.promise;
+
+    const controller = new AbortController();
+    const promise: Promise<ListCardsResponse> = callResource(
+      "objects",
+      body,
+      { signal: controller.signal },
+    )
+      .finally(() => {
+        if (cardsInFlightRef.current.get(requestKey)?.promise === promise) {
+          cardsInFlightRef.current.delete(requestKey);
+        }
+      });
+    cardsInFlightRef.current.set(requestKey, { promise, controller, section });
+    return promise;
+  }, []);
+
+  const abortTypeRequests = useCallback(() => {
+    for (const [key, request] of cardsInFlightRef.current) {
+      if (request.section === "starred") continue;
+      request.controller.abort();
+      cardsInFlightRef.current.delete(key);
     }
   }, []);
 
-  // Fetch objects for a specific type
-  const fetchTypeObjects = useCallback(async (type: ObjectType, limit: number): Promise<ObjectWithRelations[]> => {
-    const typeMatch = getTypeMatch(type);
-    const pipeline: unknown[] = [];
+  const pumpBrowseQueue = useCallback(() => {
+    if (!mountedRef.current) return;
+    while (
+      activeTaskCountRef.current < MAX_CONCURRENT_SECTION_REQUESTS &&
+      queueRef.current.length > 0
+    ) {
+      const task = queueRef.current.shift()!;
+      if (
+        task.generation !== null &&
+        task.generation !== filterGenerationRef.current
+      ) {
+        queuedTaskKeysRef.current.delete(task.key);
+        continue;
+      }
 
-    if (activeTagIds.length > 0) {
-      // Tag filter: start from the indexed "tagged" edges
-      // (relationship.object = tag) and resolve to the tagged objects, so we
-      // never scan the whole objects collection.
-      const tagObjectIds = activeTagIds.map((id) => new ObjectId(id));
-      pipeline.push({
-        $match: {
-          isRelationship: true,
-          name: "tagged",
-          "relationship.object": { $in: tagObjectIds },
-        },
+      activeTaskCountRef.current += 1;
+      void task.run().finally(() => {
+        activeTaskCountRef.current -= 1;
+        queuedTaskKeysRef.current.delete(task.key);
+        queueMicrotask(pumpBrowseQueue);
       });
-      if (tagMode === "and" && tagObjectIds.length > 1) {
-        // AND: keep only subjects carrying every selected tag.
-        pipeline.push({
-          $group: {
-            _id: "$relationship.subject",
-            matchedTags: { $addToSet: "$relationship.object" },
-          },
-        });
-        pipeline.push({
-          $match: {
-            $expr: { $eq: [{ $size: "$matchedTags" }, tagObjectIds.length] },
-          },
-        });
-      } else {
-        pipeline.push({ $group: { _id: "$relationship.subject" } });
-      }
-      pipeline.push({
-        $lookup: {
-          from: "objects",
-          localField: "_id",
-          foreignField: "_id",
-          as: "taggedObject",
-        },
-      });
-      pipeline.push({ $unwind: "$taggedObject" });
-      pipeline.push({ $replaceRoot: { newRoot: "$taggedObject" } });
+    }
+  }, []);
 
-      const match: Record<string, unknown> = { ...typeMatch };
-      if (q.trim()) {
-        // $text only works as the very first stage, so combined with the
-        // tag filter the text search degrades to a regex match.
-        const rx = { $regex: escapeRegex(q.trim()), $options: "i" };
-        match.$or = [{ name: rx }, { aliases: rx }, { details: rx }];
-      }
-      pipeline.push({ $match: match });
-    } else {
-      const searchMatch: Record<string, unknown> = { ...typeMatch };
-      if (q.trim()) {
-        searchMatch.$text = { $search: q.trim() };
-      }
-      pipeline.push({ $match: searchMatch });
+  const enqueueBrowseTask = useCallback((task: BrowseTask) => {
+    if (!mountedRef.current || queuedTaskKeysRef.current.has(task.key)) return;
+    queuedTaskKeysRef.current.add(task.key);
+    queueRef.current.push(task);
+    pumpBrowseQueue();
+  }, [pumpBrowseQueue]);
+
+  const fetchTypePage = useCallback(async (
+    type: ObjectType,
+    mode: TypeFetchMode,
+    generation: number,
+  ) => {
+    const previousItems = objectsByTypeRef.current[type];
+    const cursor = mode === "append" ? cursorsRef.current[type] : undefined;
+    const limit = mode === "initial"
+      ? ITEMS_PER_TYPE
+      : mode === "append"
+      ? Math.min(LOAD_MORE_COUNT, MAX_ITEMS_PER_TYPE - previousItems.length)
+      : Math.min(Math.max(previousItems.length, ITEMS_PER_TYPE), 50);
+
+    setTypeLoading(type, true);
+    if (mountedRef.current) {
+      setTypeErrors((prev) => ({ ...prev, [type]: null }));
     }
 
-    // Only do expensive orphaned checks when the filter is active
-    if (showOrphanedOnly) {
-      // Relationships cannot be orphaned - they ARE the references between objects
-      // Skip fetching for relationship type when orphaned filter is active
-      if (type === "relationship") {
-        return [];
+    try {
+      const result = await requestListCards(type, {
+        action: "listCards",
+        section: type,
+        filters: {
+          search: q.trim() || undefined,
+          tagIds: activeTagIds.length > 0 ? activeTagIds : undefined,
+          tagMode,
+          orphanedOnly: showOrphanedOnly || undefined,
+        },
+        sort: sortBy,
+        cursor,
+        limit,
+      });
+
+      if (!mountedRef.current || generation !== filterGenerationRef.current) {
+        return;
       }
 
-      // OPTIMIZATION: Sort and limit BEFORE expensive lookups
-      // We fetch more than needed (5x) since some will be filtered out as non-orphaned
-      // This makes orphaned filter fast while still returning reasonable results
-      pipeline.push(getSortStage(activeTagIds.length === 0));
-      pipeline.push({ $limit: limit * 5 });
+      const items = Array.isArray(result?.items) ? result.items : [];
+      failedTypesRef.current.delete(type);
+      setObjectsByType((prev) => {
+        let nextItems = items;
+        if (mode === "append") {
+          const ids = new Set(prev[type].map((item) => item._id.toString()));
+          nextItems = [
+            ...prev[type],
+            ...items.filter((item) => !ids.has(item._id.toString())),
+          ];
+        }
+        const next = { ...prev, [type]: nextItems };
+        objectsByTypeRef.current = next;
+        return next;
+      });
 
-      // Check if this object is referenced as subject in any relationship
-      pipeline.push({
-        $lookup: {
-          from: "objects",
-          let: { objectId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                isRelationship: true,
-                $expr: { $eq: ["$relationship.subject", "$$objectId"] },
-              },
-            },
-            { $limit: 1 }, // Only need to know if any exist, not all of them
-          ],
-          as: "referencedAsSubject",
-        },
-      });
-      // Check if this object is referenced as object in any relationship
-      pipeline.push({
-        $lookup: {
-          from: "objects",
-          let: { objectId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                isRelationship: true,
-                $expr: { $eq: ["$relationship.object", "$$objectId"] },
-              },
-            },
-            { $limit: 1 }, // Only need to know if any exist, not all of them
-          ],
-          as: "referencedAsObject",
-        },
-      });
-      // Filter for orphaned objects (not referenced anywhere)
-      pipeline.push({
-        $match: {
-          $expr: {
-            $and: [
-              { $eq: [{ $size: { $ifNull: ["$referencedAsSubject", []] } }, 0] },
-              { $eq: [{ $size: { $ifNull: ["$referencedAsObject", []] } }, 0] },
-            ],
-          },
-        },
-      });
-      // Final limit after orphaned filtering
-      pipeline.push({ $limit: limit });
-    } else {
-      // OPTIMIZATION: Sort and limit BEFORE expensive lookups
-      // This way we only do lookups on the limited set of documents
-      pipeline.push(getSortStage(activeTagIds.length === 0));
-      pipeline.push({ $limit: limit });
+      cursorsRef.current[type] = result?.nextCursor ?? null;
+      const nextFetched = new Set(fetchedTypesRef.current).add(type);
+      fetchedTypesRef.current = nextFetched;
+      setFetchedTypes(nextFetched);
+      setMightHaveMore((prev) => ({
+        ...prev,
+        [type]: Boolean(result?.hasMore) && (
+          mode !== "append" ||
+          previousItems.length + items.length < MAX_ITEMS_PER_TYPE
+        ),
+      }));
+      lastFetchedAtRef.current[type] = Date.now();
+    } catch (error) {
+      if (
+        !isAbortError(error) &&
+        mountedRef.current &&
+        generation === filterGenerationRef.current
+      ) {
+        failedTypesRef.current.add(type);
+        console.error(`Failed to fetch ${type}:`, error);
+        setTypeErrors((prev) => ({ ...prev, [type]: errorMessage(error) }));
+      }
+    } finally {
+      if (generation === filterGenerationRef.current) {
+        setTypeLoading(type, false);
+      }
+    }
+  }, [
+    activeTagIds,
+    q,
+    requestListCards,
+    setTypeLoading,
+    showOrphanedOnly,
+    sortBy,
+    tagMode,
+  ]);
 
-      // Now add relationship lookups only on the limited documents
-      if (type === "relationship") {
-        pipeline.push({
-          $lookup: {
-            from: "objects",
-            localField: "relationship.subject",
-            foreignField: "_id",
-            as: "subjectObject",
-          },
-        });
-        pipeline.push({
-          $lookup: {
-            from: "objects",
-            localField: "relationship.object",
-            foreignField: "_id",
-            as: "objectObject",
-          },
-        });
-        pipeline.push({
-          $unwind: {
-            path: "$subjectObject",
-            preserveNullAndEmptyArrays: true,
-          },
-        });
-        pipeline.push({
-          $unwind: {
-            path: "$objectObject",
-            preserveNullAndEmptyArrays: true,
-          },
-        });
+  const enqueueTypeFetch = useCallback((
+    type: ObjectType,
+    mode: TypeFetchMode = "initial",
+    force = false,
+  ) => {
+    const generation = filterGenerationRef.current;
+    if (collapsedRef.current[type] || scheduledTypesRef.current.has(type)) {
+      return;
+    }
+    if (loadingTypesRef.current.has(type)) return;
+    if (force) failedTypesRef.current.delete(type);
+    if (
+      !force && mode === "initial" && failedTypesRef.current.has(type)
+    ) {
+      return;
+    }
+    if (!force && mode === "initial" && fetchedTypesRef.current.has(type)) {
+      return;
+    }
+    if (mode === "refresh" && !fetchedTypesRef.current.has(type)) return;
+    if (mode === "append") {
+      if (!fetchedTypesRef.current.has(type) || !cursorsRef.current[type]) {
+        return;
       }
-      
-      // For tags, count how many objects are linked to this tag.
-      // Tag links are "tagged" relationship edges: subject = tagged object,
-      // object = the tag itself (see backend/workers/tagger.ts).
-      if (type === "tag") {
-        pipeline.push({
-          $lookup: {
-            from: "objects",
-            let: { tagId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  isRelationship: true,
-                  name: "tagged",
-                  $expr: { $eq: ["$relationship.object", "$$tagId"] },
-                },
-              },
-              { $count: "n" },
-            ],
-            as: "linkedTagRelationships",
-          },
-        });
-        pipeline.push({
-          $addFields: {
-            linkedObjectsCount: {
-              $ifNull: [
-                { $arrayElemAt: ["$linkedTagRelationships.n", 0] },
-                0,
-              ],
-            },
-          },
-        });
-        // Clean up the array - we only need the count
-        pipeline.push({
-          $project: {
-            linkedTagRelationships: 0,
-          },
-        });
-      }
-      
-      // Fetch tags for all non-relationship/non-tag objects. Follow "tagged"
-      // edges from this object (relationship.subject) to the tag object
-      // (relationship.object).
-      if (type !== "relationship" && type !== "tag") {
-        pipeline.push({
-          $lookup: {
-            from: "objects",
-            let: { objectId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  isRelationship: true,
-                  name: "tagged",
-                  $expr: { $eq: ["$relationship.subject", "$$objectId"] },
-                },
-              },
-              { $limit: 5 }, // Limit to 5 tags per object
-              {
-                $lookup: {
-                  from: "objects",
-                  localField: "relationship.object",
-                  foreignField: "_id",
-                  as: "tagObject",
-                },
-              },
-              { $unwind: { path: "$tagObject", preserveNullAndEmptyArrays: true } },
-              {
-                $project: {
-                  _id: "$tagObject._id",
-                  name: "$tagObject.name",
-                  icon: "$tagObject.icon",
-                  color: "$tagObject.color",
-                },
-              },
-            ],
-            as: "tags",
-          },
-        });
-      }
-      // Skip reference counts for initial load - they're not critical
-      // and cause significant slowdown
+      if (objectsByTypeRef.current[type].length >= MAX_ITEMS_PER_TYPE) return;
     }
 
-    return await callResource("mongo", {
-      action: "aggregate",
-      collection: "objects",
-      pipeline,
+    scheduledTypesRef.current.add(type);
+    enqueueBrowseTask({
+      key: `${generation}:${type}:${mode}`,
+      generation,
+      run: async () => {
+        try {
+          await fetchTypePage(type, mode, generation);
+        } finally {
+          if (generation === filterGenerationRef.current) {
+            scheduledTypesRef.current.delete(type);
+          }
+        }
+      },
     });
-  }, [q, getSortStage, getTypeMatch, showOrphanedOnly, activeTagIds, tagMode]);
+  }, [enqueueBrowseTask, fetchTypePage]);
 
-  // Fetch starred objects - always fetch all starred regardless of search filter
-  // Starred section acts as "favorites" that should always be visible
-  const fetchStarredObjects = useCallback(async (): Promise<ObjectWithRelations[]> => {
-    const searchMatch: Record<string, unknown> = { starred: true };
-    // Note: We intentionally don't apply search filter to starred objects
-    // The starred section should always show all favorites regardless of search
+  const enqueueTypeFetchRef = useRef(enqueueTypeFetch);
+  enqueueTypeFetchRef.current = enqueueTypeFetch;
 
-    const pipeline: unknown[] = [
-      { $match: searchMatch },
-      { $sort: { updatedAt: -1, _id: -1 } }, // Always sort by most recently updated
-      { $limit: 50 }, // Limit starred objects
-      // Add relationship lookups for starred relationship objects
-      {
-        $lookup: {
-          from: "objects",
-          localField: "relationship.subject",
-          foreignField: "_id",
-          as: "subjectObject",
-        },
-      },
-      {
-        $lookup: {
-          from: "objects",
-          localField: "relationship.object",
-          foreignField: "_id",
-          as: "objectObject",
-        },
-      },
-      {
-        $unwind: {
-          path: "$subjectObject",
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $unwind: {
-          path: "$objectObject",
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      // Fetch tags for starred objects via their "tagged" edges
-      {
-        $lookup: {
-          from: "objects",
-          let: { objectId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                isRelationship: true,
-                name: "tagged",
-                $expr: { $eq: ["$relationship.subject", "$$objectId"] },
-              },
-            },
-            { $limit: 5 },
-            {
-              $lookup: {
-                from: "objects",
-                localField: "relationship.object",
-                foreignField: "_id",
-                as: "tagObject",
-              },
-            },
-            { $unwind: { path: "$tagObject", preserveNullAndEmptyArrays: true } },
-            {
-              $project: {
-                _id: "$tagObject._id",
-                name: "$tagObject.name",
-                icon: "$tagObject.icon",
-                color: "$tagObject.color",
-              },
-            },
-          ],
-          as: "tags",
-        },
-      },
-    ];
+  const fetchStarredPage = useCallback(async (mode: TypeFetchMode) => {
+    const previousItems = starredObjectsRef.current;
+    const cursor = mode === "append" ? starredCursorRef.current : undefined;
+    const limit = mode === "initial"
+      ? ITEMS_PER_TYPE
+      : mode === "append"
+      ? Math.min(LOAD_MORE_COUNT, MAX_ITEMS_PER_TYPE - previousItems.length)
+      : Math.min(Math.max(previousItems.length, ITEMS_PER_TYPE), 50);
+    starredLoadingRef.current = true;
+    if (mountedRef.current) {
+      setStarredLoading(true);
+      setStarredError(null);
+    }
+    try {
+      const result = await requestListCards("starred", {
+        action: "listCards",
+        section: "starred",
+        sort: "updatedAt",
+        cursor,
+        limit,
+      });
+      if (!mountedRef.current) return;
+      const items = Array.isArray(result?.items) ? result.items : [];
+      let nextItems = items;
+      if (mode === "append") {
+        const ids = new Set(previousItems.map((item) => item._id.toString()));
+        nextItems = [
+          ...previousItems,
+          ...items.filter((item) => !ids.has(item._id.toString())),
+        ];
+      }
+      starredObjectsRef.current = nextItems;
+      setStarredObjects(nextItems);
+      starredCursorRef.current = result?.nextCursor ?? null;
+      setStarredHasMore(
+        Boolean(result?.hasMore) && nextItems.length < MAX_ITEMS_PER_TYPE,
+      );
+      starredFetchedRef.current = true;
+      starredLastFetchedAtRef.current = Date.now();
+    } catch (error) {
+      if (!isAbortError(error) && mountedRef.current) {
+        console.error("Failed to fetch starred objects:", error);
+        setStarredError(errorMessage(error));
+      }
+    } finally {
+      starredLoadingRef.current = false;
+      if (mountedRef.current) setStarredLoading(false);
+    }
+  }, [requestListCards]);
 
-    return await callResource("mongo", {
-      action: "aggregate",
-      collection: "objects",
-      pipeline,
+  const enqueueStarredFetch = useCallback((
+    force = false,
+    mode: TypeFetchMode = force ? "refresh" : "initial",
+  ) => {
+    if (starredScheduledRef.current || starredLoadingRef.current) return;
+    if (!force && mode === "initial" && starredFetchedRef.current) return;
+    if (mode === "append") {
+      if (!starredFetchedRef.current || !starredCursorRef.current) return;
+      if (starredObjectsRef.current.length >= MAX_ITEMS_PER_TYPE) return;
+    }
+    starredScheduledRef.current = true;
+    enqueueBrowseTask({
+      key: `starred:${mode}`,
+      generation: null,
+      run: async () => {
+        try {
+          await fetchStarredPage(mode);
+        } finally {
+          starredScheduledRef.current = false;
+        }
+      },
     });
-  }, []); // No dependencies - starred objects don't depend on search/sort
+  }, [enqueueBrowseTask, fetchStarredPage]);
 
   // Fetch total counts per type from cached API (no search filter - absolute counts)
   const fetchCounts = useCallback(async (forceRefresh = false) => {
@@ -1040,41 +1058,14 @@ const ObjectsPage = () => {
         });
         // Orphaned might be null if calculating in background
         setOrphanedCount(result.orphaned ?? null);
-        
-        // If orphaned was loading, poll for it after a delay
-        if (result.orphanedLoading || result.orphaned === null) {
-          setTimeout(async () => {
-            try {
-              const updated = await callResource("objects", {
-                action: "getCounts",
-                forceRefresh: false,
-              });
-              if (updated?.orphaned != null) {
-                setOrphanedCount(updated.orphaned);
-              }
-            } catch {
-              // Ignore errors in background poll
-            }
-          }, 3000); // Check again after 3 seconds
-        }
+        const orphanStatus = result.meta?.orphaned?.status;
+        setOrphanedRefreshing(
+          result.orphanedLoading || orphanStatus === "refreshing",
+        );
       } else {
-        setTotalCounts({
-          person: 0,
-          event: 0,
-          relationship: 0,
-          promise: 0,
-          conversation: 0,
-          tag: 0,
-          place: 0,
-          organization: 0,
-          product: 0,
-          project: 0,
-          animal: 0,
-          concept: 0,
-          media: 0,
-          other: 0,
-        });
+        setTotalCounts(createTypeRecord(() => 0));
         setOrphanedCount(null);
+        setOrphanedRefreshing(false);
       }
     } catch (err) {
       console.error("Failed to fetch counts:", err);
@@ -1084,377 +1075,368 @@ const ObjectsPage = () => {
   }, []);
 
   useEffect(() => {
+    if (!orphanedRefreshing) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+
+    const schedulePoll = (attempt: number) => {
+      if (cancelled) return;
+      if (attempt >= ORPHAN_COUNT_POLL_BACKOFF_MS.length) {
+        setOrphanedRefreshing(false);
+        return;
+      }
+
+      timer = globalThis.setTimeout(async () => {
+        timer = null;
+        if (cancelled) return;
+
+        controller = new AbortController();
+        let keepPolling = true;
+        try {
+          const updated = await callResource("objects", {
+            action: "getCounts",
+            forceRefresh: false,
+          }, { signal: controller.signal });
+          if (cancelled) return;
+          if (updated?.orphaned != null) {
+            setOrphanedCount(updated.orphaned);
+          }
+          keepPolling = updated?.orphanedLoading === true ||
+            updated?.meta?.orphaned?.status === "refreshing";
+        } catch (error) {
+          if (isAbortError(error) || cancelled) return;
+          // A transient read failure consumes this attempt and retries with
+          // backoff. The loop remains bounded, so it cannot poll forever.
+        } finally {
+          controller = null;
+        }
+
+        if (cancelled) return;
+        if (keepPolling) schedulePoll(attempt + 1);
+        else setOrphanedRefreshing(false);
+      }, ORPHAN_COUNT_POLL_BACKOFF_MS[attempt]);
+    };
+
+    schedulePoll(0);
+    return () => {
+      cancelled = true;
+      if (timer) globalThis.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [orphanedRefreshing]);
+
+  useEffect(() => {
     fetchCounts();
   }, [fetchCounts]);
 
-  // Track if we should refetch on focus (only after initial load)
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  useEffect(() => {
+    enqueueStarredFetch();
+  }, [enqueueStarredFetch]);
 
-  // Fetch objects for a type when it's expanded (lazy loading)
-  const fetchTypeIfNeeded = useCallback(async (type: ObjectType) => {
-    // Skip if already fetched or currently loading
-    if (fetchedTypes.has(type) || loadingTypes.has(type)) return;
-    
-    setLoadingTypes(prev => new Set(prev).add(type));
-    const limit = limits[type] || ITEMS_PER_TYPE;
-    
-    try {
-      const objects = await fetchTypeObjects(type, limit);
-      setObjectsByType(prev => ({ ...prev, [type]: objects }));
-      setFetchedTypes(prev => new Set(prev).add(type));
-      // Track if there might be more (if we got exactly the limit, there could be more)
-      setMightHaveMore(prev => ({ ...prev, [type]: objects.length >= limit }));
-    } catch (err) {
-      console.error(`Failed to fetch ${type}:`, err);
-    } finally {
-      setLoadingTypes(prev => {
-        const next = new Set(prev);
-        next.delete(type);
-        return next;
-      });
+  const filterSignature = useMemo(() =>
+    JSON.stringify({
+      q: q.trim(),
+      sortBy,
+      showOrphanedOnly,
+      tagParam,
+      tagMode,
+    }), [q, showOrphanedOnly, sortBy, tagMode, tagParam]);
+
+  // Invalidate old pages immediately. The response generation check is a
+  // second guard for servers that finish work before the abort reaches them.
+  useEffect(() => {
+    if (lastFilterSignatureRef.current === filterSignature) return;
+    lastFilterSignatureRef.current = filterSignature;
+    filterGenerationRef.current += 1;
+    abortTypeRequests();
+
+    const retained = queueRef.current.filter((task) =>
+      task.generation === null
+    );
+    for (const task of queueRef.current) {
+      if (task.generation !== null) queuedTaskKeysRef.current.delete(task.key);
     }
-  }, [fetchedTypes, loadingTypes, limits, fetchTypeObjects]);
-
-  // Fetch starred objects on initial load
-  useEffect(() => {
-    const fetchStarred = async () => {
-      try {
-        const starred = await fetchStarredObjects();
-        setStarredObjects(starred);
-        setHasLoadedOnce(true);
-      } catch (err) {
-        console.error("Failed to fetch starred objects:", err);
-      }
-    };
-    fetchStarred();
-  }, [fetchStarredObjects]);
-
-  // When search/sort/filter changes, reset fetched types to refetch
-  useEffect(() => {
-    // Reset limits when search/sort changes
-    setLimits({
-      person: ITEMS_PER_TYPE,
-      event: ITEMS_PER_TYPE,
-      relationship: ITEMS_PER_TYPE,
-      promise: ITEMS_PER_TYPE,
-      conversation: ITEMS_PER_TYPE,
-      tag: ITEMS_PER_TYPE,
-      place: ITEMS_PER_TYPE,
-      organization: ITEMS_PER_TYPE,
-      product: ITEMS_PER_TYPE,
-      project: ITEMS_PER_TYPE,
-      animal: ITEMS_PER_TYPE,
-      concept: ITEMS_PER_TYPE,
-      media: ITEMS_PER_TYPE,
-      other: ITEMS_PER_TYPE,
-    });
-
-    // Reset mightHaveMore
-    setMightHaveMore({
-      person: false,
-      event: false,
-      relationship: false,
-      promise: false,
-      conversation: false,
-      tag: false,
-      place: false,
-      organization: false,
-      product: false,
-      project: false,
-      animal: false,
-      concept: false,
-      media: false,
-      other: false,
-    });
-
-    // Clear fetched types to trigger refetch when expanded
+    queueRef.current = retained;
+    scheduledTypesRef.current.clear();
+    loadingTypesRef.current = new Set();
+    setLoadingTypes(new Set());
+    fetchedTypesRef.current = new Set();
+    failedTypesRef.current.clear();
     setFetchedTypes(new Set());
+    cursorsRef.current = createTypeRecord(() => null);
+    lastFetchedAtRef.current = createTypeRecord(() => 0);
+    const emptyObjects = createTypeRecord<ObjectWithRelations[]>(() => []);
+    objectsByTypeRef.current = emptyObjects;
+    setObjectsByType(emptyObjects);
+    setMightHaveMore(createTypeRecord(() => false));
+    setTypeErrors(createTypeRecord(() => null));
 
-    // Clear current objects
-    setObjectsByType({
-      person: [],
-      event: [],
-      relationship: [],
-      promise: [],
-      conversation: [],
-      tag: [],
-      place: [],
-      organization: [],
-      product: [],
-      project: [],
-      animal: [],
-      concept: [],
-      media: [],
-      other: [],
-    });
-  }, [q, sortBy, activeTypesParam, showOrphanedOnly, tagParam, tagMode]);
-
-  // Fetch objects for expanded types
-  useEffect(() => {
-    const expandedTypes = (Object.keys(collapsed) as ObjectType[]).filter(type => !collapsed[type]);
-    for (const type of expandedTypes) {
-      fetchTypeIfNeeded(type);
-    }
-  }, [collapsed, fetchTypeIfNeeded]);
-
-  // Ref to track if a refetch is in progress (to avoid overlapping fetches)
-  const isRefetchingRef = useRef(false);
-
-  // Refetch data when page regains focus (e.g., navigating back from detail page)
-  // Only refetches expanded types for performance
-  const refetchCurrentData = useCallback(async () => {
-    // Avoid overlapping refetches
-    if (isRefetchingRef.current) return;
-    isRefetchingRef.current = true;
-
-    try {
-      // Only refetch expanded types that have been fetched before
-      const expandedTypes = (Object.keys(collapsed) as ObjectType[]).filter(
-        type => !collapsed[type] && fetchedTypes.has(type)
-      );
-
-      // Fetch expanded types and starred objects in parallel
-      const [typeResults, starred] = await Promise.all([
-        Promise.all(
-          expandedTypes.map(async (type) => ({
-            type,
-            objects: await fetchTypeObjects(type, limits[type] || ITEMS_PER_TYPE),
-          }))
-        ),
-        fetchStarredObjects(),
-      ]);
-
-      const newObjectsByType = { ...objectsByType };
-      for (const { type, objects } of typeResults) {
-        newObjectsByType[type] = objects;
+    queueMicrotask(() => {
+      for (const type of visibleSectionsRef.current) {
+        if (!collapsedRef.current[type]) enqueueTypeFetchRef.current(type);
       }
+    });
+  }, [abortTypeRequests, filterSignature]);
 
-      setObjectsByType(newObjectsByType);
-      setStarredObjects(starred);
-    } catch (err) {
-      console.error("Failed to refetch objects:", err);
-    } finally {
-      isRefetchingRef.current = false;
-    }
-  }, [collapsed, fetchedTypes, limits, fetchTypeObjects, fetchStarredObjects, objectsByType]);
+  const registerSectionNode = useCallback(
+    (type: ObjectType, node: HTMLElement | null) => {
+      const previous = sectionNodesRef.current.get(type);
+      if (previous && previous !== node) {
+        sectionObserverRef.current?.unobserve(previous);
+      }
+      if (!node) {
+        sectionNodesRef.current.delete(type);
+        visibleSectionsRef.current.delete(type);
+        return;
+      }
+      sectionNodesRef.current.set(type, node);
+      if (typeof IntersectionObserver === "undefined") {
+        visibleSectionsRef.current.add(type);
+        if (!collapsedRef.current[type]) enqueueTypeFetchRef.current(type);
+      } else {
+        sectionObserverRef.current?.observe(node);
+      }
+    },
+    [],
+  );
 
-  // Track navigation to refetch starred objects when coming back
-  const location = useLocation();
-  const lastLocationKeyRef = useRef<string | null>(null);
+  const getSectionNodeRef = useCallback((type: ObjectType) => {
+    const existing = sectionNodeCallbacksRef.current.get(type);
+    if (existing) return existing;
+    const callback = (node: HTMLDivElement | null) => {
+      registerSectionNode(type, node);
+    };
+    sectionNodeCallbacksRef.current.set(type, callback);
+    return callback;
+  }, [registerSectionNode]);
 
   useEffect(() => {
-    // Skip initial render
-    if (lastLocationKeyRef.current === null) {
-      lastLocationKeyRef.current = location.key;
+    if (typeof IntersectionObserver === "undefined") {
+      for (const type of sectionNodesRef.current.keys()) {
+        visibleSectionsRef.current.add(type);
+        if (!collapsedRef.current[type]) enqueueTypeFetchRef.current(type);
+      }
       return;
     }
 
-    // If location key changed, user navigated (e.g., back from detail page)
-    if (lastLocationKeyRef.current !== location.key) {
-      lastLocationKeyRef.current = location.key;
-      // Always refetch starred objects when navigating back (fast query)
-      fetchStarredObjects().then(setStarredObjects).catch(console.error);
-      // Also refetch counts in case they changed
-      fetchCounts();
-    }
-  }, [location.key, fetchStarredObjects, fetchCounts]);
-
-  // Track last fetch time to avoid excessive refetches
-  const lastFetchTimeRef = useRef<number>(Date.now());
-  const MIN_REFETCH_INTERVAL = 30000; // 30 seconds minimum between refetches
-
-  // Refetch when browser tab regains visibility (but not too often)
-  useEffect(() => {
-    if (!hasLoadedOnce) return;
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        const now = Date.now();
-        // Only refetch if it's been more than 30 seconds since last fetch
-        if (now - lastFetchTimeRef.current > MIN_REFETCH_INTERVAL) {
-          lastFetchTimeRef.current = now;
-          refetchCurrentData();
-          fetchCounts();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const type = (entry.target as HTMLElement).dataset.objectSection as
+          | ObjectType
+          | undefined;
+        if (!type || !ALL_OBJECT_TYPES.includes(type)) continue;
+        if (entry.isIntersecting) {
+          visibleSectionsRef.current.add(type);
+          if (!collapsedRef.current[type]) enqueueTypeFetchRef.current(type);
+        } else {
+          visibleSectionsRef.current.delete(type);
         }
       }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    }, { rootMargin: SECTION_OBSERVER_ROOT_MARGIN });
+    sectionObserverRef.current = observer;
+    for (const node of sectionNodesRef.current.values()) observer.observe(node);
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      observer.disconnect();
+      if (sectionObserverRef.current === observer) {
+        sectionObserverRef.current = null;
+      }
     };
-  }, [hasLoadedOnce, refetchCurrentData, fetchCounts]);
+  }, []);
+
+  // Refetch only visible, already-loaded sections that are actually stale.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (
+        starredFetchedRef.current &&
+        now - starredLastFetchedAtRef.current >= SECTION_REFRESH_INTERVAL_MS
+      ) {
+        enqueueStarredFetch(true);
+      }
+      for (const type of visibleSectionsRef.current) {
+        if (
+          !collapsedRef.current[type] &&
+          fetchedTypesRef.current.has(type) &&
+          now - lastFetchedAtRef.current[type] >= SECTION_REFRESH_INTERVAL_MS
+        ) {
+          enqueueTypeFetch(type, "refresh");
+        }
+      }
+      void fetchCounts();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [enqueueStarredFetch, enqueueTypeFetch, fetchCounts]);
 
   // Load more for a specific type
-  const loadMore = useCallback(async (type: ObjectType) => {
-    const currentLimit = limits[type];
-    const newLimit = Math.min(currentLimit + LOAD_MORE_COUNT, MAX_ITEMS_PER_TYPE);
-
-    setLoadingTypes((prev) => new Set(prev).add(type));
-
-    try {
-      const objects = await fetchTypeObjects(type, newLimit);
-      setObjectsByType((prev) => ({ ...prev, [type]: objects }));
-      setLimits((prev) => ({ ...prev, [type]: newLimit }));
-      // Update mightHaveMore: if we got fewer than requested, there are no more
-      setMightHaveMore((prev) => ({ ...prev, [type]: objects.length >= newLimit }));
-    } catch (err) {
-      console.error(`Failed to load more ${type}:`, err);
-    } finally {
-      setLoadingTypes((prev) => {
-        const next = new Set(prev);
-        next.delete(type);
-        return next;
-      });
-    }
-  }, [limits, fetchTypeObjects]);
+  const loadMore = useCallback((type: ObjectType) => {
+    enqueueTypeFetch(type, "append");
+  }, [enqueueTypeFetch]);
 
   // Toggle star on an object
-  const toggleStar = useCallback(async (objectId: string, currentStarred: boolean) => {
-    const newStarred = !currentStarred;
-    
-    // Store the removed object for undo - we'll capture it via functional update
-    let removedObject: ObjectWithRelations | undefined;
-    // Store the found object when adding to starred
-    let foundObject: ObjectWithRelations | undefined;
-    
-    // Optimistically update the UI - update both objectsByType and starredObjects
-    setObjectsByType((prev) => {
-      const updated = { ...prev };
-      for (const type of Object.keys(updated) as ObjectType[]) {
-        // While iterating, find the object if we're adding to starred
-        if (newStarred && !foundObject) {
-          const obj = updated[type].find((o) => o._id.toString() === objectId);
-          if (obj) foundObject = obj;
-        }
-        updated[type] = updated[type].map((obj) =>
-          obj._id.toString() === objectId
-            ? { ...obj, starred: newStarred }
-            : obj
-        );
-      }
-      return updated;
-    });
-    
-    // Update starred objects list
-    if (newStarred) {
-      // Add to starred using the object found during objectsByType update
-      // Use a small delay to ensure foundObject is captured from the synchronous setObjectsByType callback
-      setStarredObjects((prev) => {
-        const alreadyExists = prev.some((obj) => obj._id.toString() === objectId);
-        if (alreadyExists) return prev;
-        if (foundObject) {
-          return [{ ...foundObject, starred: true }, ...prev];
-        }
-        return prev;
-      });
-    } else {
-      // Find and store the object before removing (for undo) using functional update
-      setStarredObjects((prev) => {
-        removedObject = prev.find((obj) => obj._id.toString() === objectId);
-        return prev.filter((obj) => obj._id.toString() !== objectId);
-      });
-    }
+  const toggleStar = useCallback(
+    async (objectId: string, currentStarred: boolean) => {
+      const newStarred = !currentStarred;
 
-    // Helper to revert changes
-    const revertChanges = () => {
+      // Store the removed object for undo - we'll capture it via functional update
+      let removedObject: ObjectWithRelations | undefined;
+      // Store the found object when adding to starred
+      let foundObject: ObjectWithRelations | undefined;
+
+      // Optimistically update the UI - update both objectsByType and starredObjects
       setObjectsByType((prev) => {
         const updated = { ...prev };
         for (const type of Object.keys(updated) as ObjectType[]) {
+          // While iterating, find the object if we're adding to starred
+          if (newStarred && !foundObject) {
+            const obj = updated[type].find((o) =>
+              o._id.toString() === objectId
+            );
+            if (obj) foundObject = obj;
+          }
           updated[type] = updated[type].map((obj) =>
             obj._id.toString() === objectId
-              ? { ...obj, starred: currentStarred }
+              ? { ...obj, starred: newStarred }
               : obj
           );
         }
         return updated;
       });
-      if (removedObject) {
-        setStarredObjects((prev) => [removedObject!, ...prev]);
+
+      // Update starred objects list
+      if (newStarred) {
+        // Add to starred using the object found during objectsByType update
+        // Use a small delay to ensure foundObject is captured from the synchronous setObjectsByType callback
+        setStarredObjects((prev) => {
+          const alreadyExists = prev.some((obj) =>
+            obj._id.toString() === objectId
+          );
+          if (alreadyExists) return prev;
+          if (foundObject) {
+            return [{ ...foundObject, starred: true }, ...prev];
+          }
+          return prev;
+        });
       } else {
-        setStarredObjects((prev) => prev.filter((obj) => obj._id.toString() !== objectId));
+        // Find and store the object before removing (for undo) using functional update
+        setStarredObjects((prev) => {
+          removedObject = prev.find((obj) => obj._id.toString() === objectId);
+          return prev.filter((obj) => obj._id.toString() !== objectId);
+        });
       }
-    };
 
-    try {
-      // Get current version first
-      const current = await callResource("objects", {
-        action: "get",
-        id: objectId,
-      });
-      
-      await callResource("objects", {
-        action: "update",
-        id: objectId,
-        version: current.version ?? 0,
-        field: "starred",
-        value: newStarred,
-      });
+      // Helper to revert changes
+      const revertChanges = () => {
+        setObjectsByType((prev) => {
+          const updated = { ...prev };
+          for (const type of Object.keys(updated) as ObjectType[]) {
+            updated[type] = updated[type].map((obj) =>
+              obj._id.toString() === objectId
+                ? { ...obj, starred: currentStarred }
+                : obj
+            );
+          }
+          return updated;
+        });
+        if (removedObject) {
+          setStarredObjects((prev) => [removedObject!, ...prev]);
+        } else {
+          setStarredObjects((prev) =>
+            prev.filter((obj) => obj._id.toString() !== objectId)
+          );
+        }
+      };
 
-      // Show undo toast when removing from starred
-      if (!newStarred && removedObject) {
-        // Capture the object data at this moment for the undo action
-        const capturedObject = { ...removedObject };
-        toast("Removed from starred", {
-          action: {
-            label: "Undo",
-            onClick: async () => {
-              // Optimistically restore the object to starred
-              setStarredObjects((prev) => [{ ...capturedObject, starred: true }, ...prev]);
-              setObjectsByType((prev) => {
-                const updated = { ...prev };
-                for (const type of Object.keys(updated) as ObjectType[]) {
-                  updated[type] = updated[type].map((obj) =>
-                    obj._id.toString() === objectId
-                      ? { ...obj, starred: true }
-                      : obj
-                  );
-                }
-                return updated;
-              });
-              
-              try {
-                // Get current version and update
-                const current = await callResource("objects", {
-                  action: "get",
-                  id: objectId,
-                });
-                await callResource("objects", {
-                  action: "update",
-                  id: objectId,
-                  version: current.version ?? 0,
-                  field: "starred",
-                  value: true,
-                });
-              } catch (err) {
-                console.error("Failed to undo star removal:", err);
-                // Revert the optimistic update
-                setStarredObjects((prev) => prev.filter((obj) => obj._id.toString() !== objectId));
+      try {
+        // Get current version first
+        const current = await callResource("objects", {
+          action: "get",
+          id: objectId,
+        });
+
+        await callResource("objects", {
+          action: "update",
+          id: objectId,
+          version: current.version ?? 0,
+          field: "starred",
+          value: newStarred,
+        });
+
+        // Show undo toast when removing from starred
+        if (!newStarred && removedObject) {
+          // Capture the object data at this moment for the undo action
+          const capturedObject = { ...removedObject };
+          toast("Removed from starred", {
+            action: {
+              label: "Undo",
+              onClick: async () => {
+                // Optimistically restore the object to starred
+                setStarredObjects((
+                  prev,
+                ) => [{ ...capturedObject, starred: true }, ...prev]);
                 setObjectsByType((prev) => {
                   const updated = { ...prev };
                   for (const type of Object.keys(updated) as ObjectType[]) {
                     updated[type] = updated[type].map((obj) =>
                       obj._id.toString() === objectId
-                        ? { ...obj, starred: false }
+                        ? { ...obj, starred: true }
                         : obj
                     );
                   }
                   return updated;
                 });
-                toast.error("Failed to restore starred status");
-              }
+
+                try {
+                  // Get current version and update
+                  const current = await callResource("objects", {
+                    action: "get",
+                    id: objectId,
+                  });
+                  await callResource("objects", {
+                    action: "update",
+                    id: objectId,
+                    version: current.version ?? 0,
+                    field: "starred",
+                    value: true,
+                  });
+                } catch (err) {
+                  console.error("Failed to undo star removal:", err);
+                  // Revert the optimistic update
+                  setStarredObjects((prev) =>
+                    prev.filter((obj) => obj._id.toString() !== objectId)
+                  );
+                  setObjectsByType((prev) => {
+                    const updated = { ...prev };
+                    for (const type of Object.keys(updated) as ObjectType[]) {
+                      updated[type] = updated[type].map((obj) =>
+                        obj._id.toString() === objectId
+                          ? { ...obj, starred: false }
+                          : obj
+                      );
+                    }
+                    return updated;
+                  });
+                  toast.error("Failed to restore starred status");
+                }
+              },
             },
-          },
-          duration: 5000,
-        });
+            duration: 5000,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to toggle star:", err);
+        revertChanges();
+        toast.error("Failed to update starred status");
       }
-    } catch (err) {
-      console.error("Failed to toggle star:", err);
-      revertChanges();
-      toast.error("Failed to update starred status");
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     setLocalQ(q);
@@ -1543,8 +1525,16 @@ const ObjectsPage = () => {
   }
 
   function toggleCollapsed(type: ObjectType) {
-    setCollapsed((prev) => ({ ...prev, [type]: !prev[type] }));
-    // If expanding and not yet fetched, it will be fetched by the useEffect
+    const expanding = collapsedRef.current[type];
+    const next = {
+      ...collapsedRef.current,
+      [type]: !collapsedRef.current[type],
+    };
+    collapsedRef.current = next;
+    setCollapsed(next);
+    if (expanding && visibleSectionsRef.current.has(type)) {
+      enqueueTypeFetch(type);
+    }
   }
 
   function clearAllFilters() {
@@ -1560,31 +1550,35 @@ const ObjectsPage = () => {
   // Determine which types to show based on filters
   // Order: conversations first, then people, events, relationships, promises, tags, other
   const visibleTypes = useMemo(() => {
-    const typeOrder: ObjectType[] = ["conversation", "person", "event", "place", "organization", "product", "project", "animal", "concept", "media", "relationship", "promise", "tag", "other"];
-    
+    const typeOrder: ObjectType[] = [
+      "conversation",
+      "person",
+      "event",
+      "place",
+      "organization",
+      "product",
+      "project",
+      "animal",
+      "concept",
+      "media",
+      "relationship",
+      "promise",
+      "tag",
+      "other",
+    ];
+
     if (activeTypes.size === 0) {
       // Show all types that have items (in database)
       return typeOrder.filter((type) => totalCounts[type] > 0);
     }
     // Show only selected types that have results
     return typeOrder.filter(
-      (type) => activeTypes.has(type) && totalCounts[type] > 0
+      (type) => activeTypes.has(type) && totalCounts[type] > 0,
     );
   }, [activeTypes, totalCounts]);
 
   const hasActiveFilters = q.trim() || activeTypes.size > 0 ||
     showOrphanedOnly || activeTagIds.length > 0;
-
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-3xl font-bold">Objects</h1>
-        <div className="border rounded-lg p-8 text-center">
-          <p className="text-red-500">Error: {error}</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -1708,19 +1702,23 @@ const ObjectsPage = () => {
           onClick={toggleOrphaned}
           className="flex items-center gap-2"
         >
-          {showOrphanedOnly ? (
-            <>
-              <Link2Off className="w-4 h-4" />
-              Orphaned Only
-            </>
-          ) : (
-            <>
-              <Link2 className="w-4 h-4" />
-              Show Orphaned
-            </>
-          )}
+          {showOrphanedOnly
+            ? (
+              <>
+                <Link2Off className="w-4 h-4" />
+                Orphaned Only
+              </>
+            )
+            : (
+              <>
+                <Link2 className="w-4 h-4" />
+                Show Orphaned
+              </>
+            )}
           <Badge variant="secondary" className="text-xs ml-1">
-            {countsLoading ? "..." : (orphanedCount === null ? "..." : orphanedCount)}
+            {countsLoading
+              ? "..."
+              : (orphanedCount === null ? "..." : orphanedCount)}
           </Badge>
         </Button>
 
@@ -1749,7 +1747,9 @@ const ObjectsPage = () => {
           className="flex items-center gap-1"
           title="Refresh counts"
         >
-          <RefreshCw className={`w-4 h-4 ${countsLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`w-4 h-4 ${countsLoading ? "animate-spin" : ""}`}
+          />
         </Button>
 
         <div className="flex items-center gap-2 ml-auto">
@@ -1757,8 +1757,7 @@ const ObjectsPage = () => {
           <Select
             value={sortBy}
             onValueChange={(value: SortOption) =>
-              updateFilters(q, activeTypes, value, showOrphanedOnly)
-            }
+              updateFilters(q, activeTypes, value, showOrphanedOnly)}
           >
             <SelectTrigger className="w-40">
               <SelectValue />
@@ -1778,14 +1777,18 @@ const ObjectsPage = () => {
           {countsLoading
             ? "Loading counts..."
             : hasActiveFilters
-              ? `${activeTypes.size > 0
-                  ? Array.from(activeTypes).reduce((sum, t) => sum + totalCounts[t], 0)
-                  : grandTotal
-                } objects found`
-              : `${grandTotal} objects in database`}
+            ? `${
+              activeTypes.size > 0
+                ? Array.from(activeTypes).reduce(
+                  (sum, t) => sum + totalCounts[t],
+                  0,
+                )
+                : grandTotal
+            } objects found`
+            : `${grandTotal} objects in database`}
         </span>
         <span className="text-xs text-muted-foreground/60">
-          (expand sections to load items)
+          (sections load as they approach the viewport)
         </span>
         {hasActiveFilters && (
           <Button
@@ -1832,7 +1835,9 @@ const ObjectsPage = () => {
             </Badge>
           </div>
           {duplicateGroupsLoading && (
-            <p className="text-sm text-muted-foreground">Scanning for name collisions...</p>
+            <p className="text-sm text-muted-foreground">
+              Scanning for name collisions...
+            </p>
           )}
           {!duplicateGroupsLoading && duplicateGroups.length === 0 && (
             <p className="text-sm text-muted-foreground">
@@ -1850,8 +1855,13 @@ const ObjectsPage = () => {
                     "{group.key}"
                   </span>
                   {group.objects.map((obj: any, index: number) => (
-                    <span key={obj._id.toString()} className="flex items-center gap-2 min-w-0">
-                      {index > 0 && <span className="text-muted-foreground">·</span>}
+                    <span
+                      key={obj._id.toString()}
+                      className="flex items-center gap-2 min-w-0"
+                    >
+                      {index > 0 && (
+                        <span className="text-muted-foreground">·</span>
+                      )}
                       <Link
                         to={`/objects/${obj._id.toString()}`}
                         className="text-sm font-medium hover:underline truncate"
@@ -1897,20 +1907,28 @@ const ObjectsPage = () => {
       {(grandTotal > 0 || countsLoading) && (
         <div className="space-y-4">
           {/* Starred Section - shown at top if there are starred objects */}
-          {starredObjects.length > 0 && (
+          {(starredObjects.length > 0 || starredLoading || starredError) && (
             <Collapsible
               open={!starredCollapsed}
               onOpenChange={() => setStarredCollapsed(!starredCollapsed)}
             >
-              <div id="starred-section" className="border rounded-lg border-yellow-200 bg-yellow-50/30 dark:border-yellow-900/50 dark:bg-yellow-900/10">
+              <div
+                id="starred-section"
+                className="border rounded-lg border-yellow-200 bg-yellow-50/30 dark:border-yellow-900/50 dark:bg-yellow-900/10"
+              >
                 <div className="flex items-center p-4 gap-2">
                   <CollapsibleTrigger asChild>
-                    <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
-                      {starredCollapsed ? (
-                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                      ) : (
-                        <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                      )}
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left"
+                    >
+                      {starredCollapsed
+                        ? (
+                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                        )
+                        : (
+                          <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                        )}
                       <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
                       <h2 className="text-lg font-semibold">Starred</h2>
                       <Badge variant="outline" className="font-semibold">
@@ -1920,20 +1938,53 @@ const ObjectsPage = () => {
                     </button>
                   </CollapsibleTrigger>
                 </div>
-                
+
                 <CollapsibleContent>
                   <div className="p-3 pt-0">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                      {starredObjects.map((object) => (
-                        <ObjectCard
-                          key={object._id.toString()}
-                          object={object}
-                          searchQuery={q}
-                          showType={true}
-                          onToggleStar={toggleStar}
-                        />
-                      ))}
-                    </div>
+                    {starredError
+                      ? (
+                        <div className="min-h-[7rem] flex flex-col items-center justify-center gap-2 text-sm text-destructive">
+                          <span>Could not load starred objects.</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => enqueueStarredFetch(true)}
+                          >
+                            Retry
+                          </Button>
+                        </div>
+                      )
+                      : starredLoading && starredObjects.length === 0
+                      ? (
+                        <p className="min-h-[7rem] flex items-center justify-center text-sm text-muted-foreground">
+                          Loading starred objects...
+                        </p>
+                      )
+                      : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                          {starredObjects.map((object) => (
+                            <ObjectCard
+                              key={object._id.toString()}
+                              object={object}
+                              searchQuery={q}
+                              showType
+                              onToggleStar={toggleStar}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    {starredHasMore && starredObjects.length > 0 && (
+                      <div className="mt-3 flex items-center justify-center">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => enqueueStarredFetch(false, "append")}
+                          disabled={starredLoading}
+                        >
+                          {starredLoading ? "Loading..." : "Load more starred"}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </CollapsibleContent>
               </div>
@@ -1945,9 +1996,9 @@ const ObjectsPage = () => {
             const config = TYPE_CONFIG[type];
             const Icon = config.icon;
             const loaded = typeObjects.length;
-            // When filtering, use mightHaveMore; otherwise compare against total
-            const hasActiveFilter = q.trim() || showOrphanedOnly;
-            const hasMore = hasActiveFilter ? mightHaveMore[type] : (loaded < totalCounts[type]);
+            const hasActiveFilter = q.trim() || showOrphanedOnly ||
+              activeTagIds.length > 0;
+            const hasMore = mightHaveMore[type];
             const isCollapsed = collapsed[type];
             const isLoadingMore = loadingTypes.has(type);
             const currentSort = sectionSort[type];
@@ -1957,20 +2008,24 @@ const ObjectsPage = () => {
             const sortedObjects = currentSort === "default"
               ? typeObjects
               : [...typeObjects].sort((a, b) => {
-                  const aTime = a.timeRanges?.[0]?.start;
-                  const bTime = b.timeRanges?.[0]?.start;
+                const aTime = a.timeRanges?.[0]?.start;
+                const bTime = b.timeRanges?.[0]?.start;
 
-                  if (!aTime && !bTime) return 0;
-                  if (!aTime) return 1;
-                  if (!bTime) return -1;
+                if (!aTime && !bTime) return 0;
+                if (!aTime) return 1;
+                if (!bTime) return -1;
 
-                  const aDate = typeof aTime === "string" ? new Date(aTime) : aTime;
-                  const bDate = typeof bTime === "string" ? new Date(bTime) : bTime;
+                const aDate = typeof aTime === "string"
+                  ? new Date(aTime)
+                  : aTime;
+                const bDate = typeof bTime === "string"
+                  ? new Date(bTime)
+                  : bTime;
 
-                  return currentSort === "chronological"
-                    ? aDate.getTime() - bDate.getTime()  // Oldest first
-                    : bDate.getTime() - aDate.getTime(); // Newest first
-                });
+                return currentSort === "chronological"
+                  ? aDate.getTime() - bDate.getTime() // Oldest first
+                  : bDate.getTime() - aDate.getTime(); // Newest first
+              });
 
             return (
               <Collapsible
@@ -1978,22 +2033,34 @@ const ObjectsPage = () => {
                 open={!isCollapsed}
                 onOpenChange={() => toggleCollapsed(type)}
               >
-                <div className="border rounded-lg">
+                <div
+                  ref={getSectionNodeRef(type)}
+                  data-object-section={type}
+                  className="border rounded-lg"
+                >
                   <div className="flex items-center p-4 gap-2">
                     <CollapsibleTrigger asChild>
-                      <button className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left">
-                        {isCollapsed ? (
-                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                        )}
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 flex-1 hover:bg-muted/50 -m-2 p-2 rounded transition-colors text-left"
+                      >
+                        {isCollapsed
+                          ? (
+                            <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                          )
+                          : (
+                            <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                          )}
                         <Icon className="w-5 h-5 text-muted-foreground" />
-                        <h2 className="text-lg font-semibold">{config.label}</h2>
+                        <h2 className="text-lg font-semibold">
+                          {config.label}
+                        </h2>
                         <Badge variant="outline" className="font-semibold">
-                          {hasActiveFilter 
+                          {hasActiveFilter
                             ? (hasMore ? `${loaded}+` : loaded)
-                            : (loaded < totalCounts[type] ? `${loaded} / ${totalCounts[type]}` : totalCounts[type])
-                          }
+                            : (loaded < totalCounts[type]
+                              ? `${loaded} / ${totalCounts[type]}`
+                              : totalCounts[type])}
                         </Badge>
                         <div className="flex-1" />
                       </button>
@@ -2003,12 +2070,17 @@ const ObjectsPage = () => {
                     {showTimeSort && !isCollapsed && (
                       <div className="flex items-center gap-1">
                         <Button
-                          variant={currentSort === "chronological-desc" ? "secondary" : "ghost"}
+                          variant={currentSort === "chronological-desc"
+                            ? "secondary"
+                            : "ghost"}
                           size="sm"
                           className="h-7 text-xs"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSectionSort(prev => ({ ...prev, [type]: "chronological-desc" }));
+                            setSectionSort((prev) => ({
+                              ...prev,
+                              [type]: "chronological-desc",
+                            }));
                           }}
                           title="Newest first"
                         >
@@ -2016,12 +2088,17 @@ const ObjectsPage = () => {
                           Newest
                         </Button>
                         <Button
-                          variant={currentSort === "chronological" ? "secondary" : "ghost"}
+                          variant={currentSort === "chronological"
+                            ? "secondary"
+                            : "ghost"}
                           size="sm"
                           className="h-7 text-xs"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSectionSort(prev => ({ ...prev, [type]: "chronological" }));
+                            setSectionSort((prev) => ({
+                              ...prev,
+                              [type]: "chronological",
+                            }));
                           }}
                           title="Oldest first"
                         >
@@ -2033,47 +2110,89 @@ const ObjectsPage = () => {
                   </div>
 
                   <CollapsibleContent>
-                    <div className="p-3 pt-0">
-                      {(isLoadingMore && !fetchedTypes.has(type)) || (typeObjects.length === 0 && loadingTypes.has(type)) ? (
-                        <p className="text-sm text-muted-foreground py-4 text-center">
-                          Loading {config.label.toLowerCase()}...
-                        </p>
-                      ) : typeObjects.length === 0 && fetchedTypes.has(type) ? (
-                        <p className="text-sm text-muted-foreground py-4 text-center">
-                          No {config.label.toLowerCase()} found
-                        </p>
-                      ) : typeObjects.length === 0 ? (
-                        <p className="text-sm text-muted-foreground py-4 text-center">
-                          Loading...
-                        </p>
-                      ) : (
-                        <>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                            {sortedObjects.map((object) => (
-                              <ObjectCard
-                                key={object._id.toString()}
-                                object={object}
-                                searchQuery={q}
-                                showType={true}
-                                onToggleStar={toggleStar}
-                              />
-                            ))}
+                    <div className="p-3 pt-0 min-h-[7rem]">
+                      {typeErrors[type]
+                        ? (
+                          <div className="min-h-[7rem] flex flex-col items-center justify-center gap-2 text-sm text-destructive">
+                            <span>
+                              Could not load {config.label.toLowerCase()}.
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                enqueueTypeFetch(
+                                  type,
+                                  fetchedTypes.has(type)
+                                    ? "refresh"
+                                    : "initial",
+                                  true,
+                                )}
+                            >
+                              Retry
+                            </Button>
                           </div>
-
-                          {hasMore && (
-                            <div className="mt-3 flex items-center justify-center">
+                        )
+                        : typeObjects.length === 0 && isLoadingMore
+                        ? (
+                          <p className="min-h-[7rem] flex items-center justify-center text-sm text-muted-foreground">
+                            Loading {config.label.toLowerCase()}...
+                          </p>
+                        )
+                        : typeObjects.length === 0 && fetchedTypes.has(type)
+                        ? (
+                          <div className="min-h-[7rem] flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+                            <span>
+                              {hasMore
+                                ? `No ${config.label.toLowerCase()} in the current candidate page`
+                                : `No ${config.label.toLowerCase()} found`}
+                            </span>
+                            {hasMore && (
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => loadMore(type)}
                                 disabled={isLoadingMore}
                               >
-                                {isLoadingMore ? "Loading..." : `Load more`}
+                                Continue searching
                               </Button>
+                            )}
+                          </div>
+                        )
+                        : typeObjects.length === 0
+                        ? (
+                          <p className="min-h-[7rem] flex items-center justify-center text-sm text-muted-foreground">
+                            Scroll to load {config.label.toLowerCase()}
+                          </p>
+                        )
+                        : (
+                          <>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                              {sortedObjects.map((object) => (
+                                <ObjectCard
+                                  key={object._id.toString()}
+                                  object={object}
+                                  searchQuery={q}
+                                  showType
+                                  onToggleStar={toggleStar}
+                                />
+                              ))}
                             </div>
-                          )}
-                        </>
-                      )}
+
+                            {hasMore && (
+                              <div className="mt-3 flex items-center justify-center">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => loadMore(type)}
+                                  disabled={isLoadingMore}
+                                >
+                                  {isLoadingMore ? "Loading..." : `Load more`}
+                                </Button>
+                              </div>
+                            )}
+                          </>
+                        )}
                     </div>
                   </CollapsibleContent>
                 </div>

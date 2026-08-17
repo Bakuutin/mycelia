@@ -9,6 +9,7 @@ import createDefaultQueryTester from "sift";
 import { Filter } from "mongodb";
 import { Auth } from "../auth/index.ts";
 import { env } from "#/env.ts";
+import { withObjectListCategories } from "@/lib/objects/list-categories.ts";
 
 let client: MongoClient | null = null;
 
@@ -160,6 +161,7 @@ const insertManySchema = z.object({
 
 const updateBaseOptions = z.object({
   upsert: z.boolean().optional(),
+  touchUpdatedAt: z.boolean().optional(),
 }).optional();
 
 const updateOneSchema = z.object({
@@ -203,6 +205,7 @@ const bulkWriteSchema = z.object({
   operations: z.array(z.record(z.string(), z.any())),
   options: z.object({
     ordered: z.boolean().optional(),
+    touchUpdatedAt: z.boolean().optional(),
   }).optional(),
 });
 
@@ -227,6 +230,7 @@ const findOneAndUpdateSchema = z.object({
     sort: z.record(z.string(), z.any()).optional(),
     returnDocument: z.enum(["before", "after"]).optional(),
     upsert: z.boolean().optional(),
+    touchUpdatedAt: z.boolean().optional(),
   }).optional(),
 });
 
@@ -251,6 +255,13 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
 
 export type MongoRequest = z.infer<typeof mongoRequestSchema>;
 export type MongoResponse = any;
+
+export function normalizeInsertedDocument(
+  collection: string,
+  doc: Record<string, any>,
+): Record<string, any> {
+  return collection === "objects" ? withObjectListCategories(doc) : doc;
+}
 
 const actionMap = {
   count: ["read"],
@@ -449,33 +460,47 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
           );
         }
         case "insertOne": {
-          const doc = { ...input.doc, updatedAt: new Date() };
+          const doc = {
+            ...normalizeInsertedDocument(input.collection, input.doc),
+            updatedAt: new Date(),
+          };
           return collection.insertOne(doc);
         }
         case "insertMany": {
-          const docs = input.docs.map(doc => ({ ...doc, updatedAt: new Date() }));
+          const docs = input.docs.map((doc) => ({
+            ...normalizeInsertedDocument(input.collection, doc),
+            updatedAt: new Date(),
+          }));
           return collection.insertMany(docs);
         }
         case "updateOne": {
           const update = { ...input.update };
-          if (update.$set) {
-            update.$set = { ...update.$set, updatedAt: new Date() };
-          } else {
-            update.$set = { updatedAt: new Date() };
+          if (input.options?.touchUpdatedAt !== false) {
+            if (update.$set) {
+              update.$set = { ...update.$set, updatedAt: new Date() };
+            } else {
+              update.$set = { updatedAt: new Date() };
+            }
           }
-          return collection.updateOne(input.query, update, input.options);
+          const { touchUpdatedAt: _touchUpdatedAt, ...options } =
+            input.options ?? {};
+          return collection.updateOne(input.query, update, options);
         }
         case "updateMany": {
           const update = { ...input.update };
-          if (update.$set) {
-            update.$set = { ...update.$set, updatedAt: new Date() };
-          } else {
-            update.$set = { updatedAt: new Date() };
+          if (input.options?.touchUpdatedAt !== false) {
+            if (update.$set) {
+              update.$set = { ...update.$set, updatedAt: new Date() };
+            } else {
+              update.$set = { updatedAt: new Date() };
+            }
           }
+          const { touchUpdatedAt: _touchUpdatedAt, ...options } =
+            input.options ?? {};
           return collection.updateMany(
             input.query,
             update,
-            input.options,
+            options,
           );
         }
         case "deleteOne":
@@ -487,13 +512,20 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
         case "aggregate":
           return collection.aggregate(input.pipeline, input.options).toArray();
         case "bulkWrite": {
+          const touchUpdatedAt = input.options?.touchUpdatedAt !== false;
           const operations = input.operations.map((op: any) => {
             if (op.insertOne) {
               return {
                 ...op,
                 insertOne: {
                   ...op.insertOne,
-                  document: { ...op.insertOne.document, updatedAt: new Date() },
+                  document: {
+                    ...normalizeInsertedDocument(
+                      input.collection,
+                      op.insertOne.document,
+                    ),
+                    updatedAt: new Date(),
+                  },
                 },
               };
             }
@@ -503,7 +535,7 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
                 insertMany: {
                   ...op.insertMany,
                   documents: op.insertMany.documents.map((doc: any) => ({
-                    ...doc,
+                    ...normalizeInsertedDocument(input.collection, doc),
                     updatedAt: new Date(),
                   })),
                 },
@@ -512,20 +544,24 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
             if (op.updateOne) {
               const updateOp = op.updateOne;
               const update = { ...updateOp.update };
-              if (update.$set) {
-                update.$set = { ...update.$set, updatedAt: new Date() };
-              } else {
-                update.$set = { updatedAt: new Date() };
+              if (touchUpdatedAt) {
+                if (update.$set) {
+                  update.$set = { ...update.$set, updatedAt: new Date() };
+                } else {
+                  update.$set = { updatedAt: new Date() };
+                }
               }
               return { ...op, updateOne: { ...updateOp, update } };
             }
             if (op.updateMany) {
               const updateOp = op.updateMany;
               const update = { ...updateOp.update };
-              if (update.$set) {
-                update.$set = { ...update.$set, updatedAt: new Date() };
-              } else {
-                update.$set = { updatedAt: new Date() };
+              if (touchUpdatedAt) {
+                if (update.$set) {
+                  update.$set = { ...update.$set, updatedAt: new Date() };
+                } else {
+                  update.$set = { updatedAt: new Date() };
+                }
               }
               return { ...op, updateMany: { ...updateOp, update } };
             }
@@ -535,13 +571,21 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
                 ...op,
                 replaceOne: {
                   ...replaceOp,
-                  replacement: { ...replaceOp.replacement, updatedAt: new Date() },
+                  replacement: {
+                    ...normalizeInsertedDocument(
+                      input.collection,
+                      replaceOp.replacement,
+                    ),
+                    ...(touchUpdatedAt ? { updatedAt: new Date() } : {}),
+                  },
                 },
               };
             }
             return op;
           });
-          return collection.bulkWrite(operations as any, input.options);
+          const { touchUpdatedAt: _touchUpdatedAt, ...options } =
+            input.options ?? {};
+          return collection.bulkWrite(operations as any, options);
         }
         case "createIndex":
           return collection.createIndex(input.index, input.options);
@@ -554,18 +598,25 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
           return collection.indexes();
         case "findOneAndUpdate": {
           const update = { ...input.update };
-          if (update.$set) {
-            update.$set = { ...update.$set, updatedAt: new Date() };
-          } else {
-            update.$set = { updatedAt: new Date() };
+          if (input.options?.touchUpdatedAt !== false) {
+            if (update.$set) {
+              update.$set = { ...update.$set, updatedAt: new Date() };
+            } else {
+              update.$set = { updatedAt: new Date() };
+            }
           }
-          const options: any = { ...input.options };
+          const { touchUpdatedAt: _touchUpdatedAt, ...options } =
+            input.options ?? {};
           if (options.returnDocument === "before") {
             options.returnDocument = "before";
           } else if (options.returnDocument === "after") {
             options.returnDocument = "after";
           }
-          const result = await collection.findOneAndUpdate(input.query, update, options);
+          const result = await collection.findOneAndUpdate(
+            input.query,
+            update,
+            options,
+          );
           // MongoDB driver returns the document directly (or null if not found)
           return result;
         }

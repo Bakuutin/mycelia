@@ -1,7 +1,33 @@
 import { EJSON } from "bson";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { getCurrentJWT } from "./auth";
-import { object } from "zod";
+
+export interface CallResourceOptions {
+  signal?: AbortSignal;
+}
+
+/**
+ * EJSON serializes object properties whose value is `undefined` as `null`,
+ * unlike JSON.stringify, which omits them. Resource schemas use optional
+ * fields to distinguish an omitted value from an explicit null, so preserve
+ * normal JSON request semantics while leaving BSON values (Date/ObjectId,
+ * etc.) intact for EJSON.
+ */
+function omitUndefinedObjectProperties(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(omitUndefinedObjectProperties);
+  }
+  if (value === null || typeof value !== "object") return value;
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, nested]) =>
+      nested === undefined ? [] : [[key, omitUndefinedObjectProperties(nested)]]
+    ),
+  );
+}
 
 export class ApiClient {
   private jwtCache: { token: string | null; expiry: number } | null = null;
@@ -51,7 +77,7 @@ export class ApiClient {
     const { apiEndpoint } = this.getConfig();
     const url = `${apiEndpoint}${path}`;
 
-    const headers = new Headers()
+    const headers = new Headers();
 
     for (const [key, value] of Object.entries(await this.getAuthHeaders())) {
       headers.set(key, value);
@@ -128,10 +154,15 @@ export class ApiClient {
     }
   }
 
-  async callResource(resource: string, body: any): Promise<any> {
+  async callResource(
+    resource: string,
+    body: any,
+    options: CallResourceOptions = {},
+  ): Promise<any> {
     const response = await this.fetch(`/api/resource/${resource}`, {
       method: "POST",
-      body: EJSON.stringify(body),
+      body: EJSON.stringify(omitUndefinedObjectProperties(body)),
+      signal: options.signal,
     });
     return EJSON.parse(await response.text());
   }
@@ -142,6 +173,10 @@ export const apiClient = new ApiClient();
 // Backwards compatibility alias
 export const api = apiClient;
 
-export const callResource = (resource: string, body: any) => {
-  return apiClient.callResource(resource, body);
+export const callResource = (
+  resource: string,
+  body: any,
+  options?: CallResourceOptions,
+) => {
+  return apiClient.callResource(resource, body, options);
 };

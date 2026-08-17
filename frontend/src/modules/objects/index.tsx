@@ -22,6 +22,8 @@ import {
   getRangeYOffset,
   type PlacedObjectRange,
 } from "./relationshipConnectors.ts";
+import { useObjectDensity } from "./useObjectDensity.ts";
+import { ObjectDensityBars } from "./ObjectDensityBars.tsx";
 
 const laneHeight = 40; // Half the previous height for more compact display
 const topMargin = 4;
@@ -590,6 +592,7 @@ export const ObjectsLayer: () => Layer = () => {
       const { objects, loading, error, detailDeferred } = useFilteredObjects({
         width,
       });
+      const density = useObjectDensity({ width, enabled: detailDeferred });
       const setSpanningObjects = useSpanningObjectsStore(
         (state) => state.setSpanningObjects,
       );
@@ -720,7 +723,18 @@ export const ObjectsLayer: () => Layer = () => {
               Object detail unavailable — zoom or refresh to retry
             </text>
           )}
-          {detailDeferred && (
+          {detailDeferred &&
+            (density.ready || density.buckets.length > 0) && (
+            <ObjectDensityBars buckets={density.buckets} xFor={xFor} />
+          )}
+          {detailDeferred && density.loading && !density.ready &&
+            density.buckets.length === 0 && (
+            <text x={8} y={18} fontSize={11} fill="currentColor" opacity={0.6}>
+              Loading object density…
+            </text>
+          )}
+          {detailDeferred && !density.loading && !density.ready &&
+            !density.error && density.buckets.length === 0 && (
             <text
               x={8}
               y={18}
@@ -728,7 +742,12 @@ export const ObjectsLayer: () => Layer = () => {
               fill="currentColor"
               opacity={0.6}
             >
-              Zoom in to load individual objects
+              Object density is being built — zoom in for details
+            </text>
+          )}
+          {detailDeferred && density.error && (
+            <text x={8} y={18} fontSize={11} fill="#b45309">
+              Object density unavailable — zoom in for details
             </text>
           )}
         </svg>

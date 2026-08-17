@@ -26,6 +26,8 @@ your own words.
 - Multi-resolution views (5 min, 1 hour, 1 day, 1 week).
 - Transcript-synced audio playback with jump controls.
 - Track visibility controls, object overlays, and event creation from selection.
+- Persisted object-density bars at far zoom; individual object intervals load
+  only when the scale is detailed enough.
 - Quick presets (last hour, today, yesterday, this week, and more).
 
 ### Location Tracks & Map
@@ -58,6 +60,8 @@ your own words.
 - Summary comparison (side-by-side, star/favorite).
 - Autosave with per-field throttling and version history.
 - Full-text search, category filtering, and relationship graph.
+- Lazy, cursor-paginated object sections with bounded backend queries and
+  independent cached count freshness.
 
 ### Background Processing
 
