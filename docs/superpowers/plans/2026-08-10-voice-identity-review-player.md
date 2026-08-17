@@ -212,7 +212,7 @@ Expected: focused tests pass and type-check exits 0.
 - [ ] **Step 1: Verify runtime ownership and readiness**
 
 Follow `DEVELOPMENT.md` readiness diagnostics. Confirm backend/frontend mounts
-point to `/Users/pk/repo/mycelia`, effective mode is `BACKEND_TASK=dev` and
+point to `~/repo/mycelia`, effective mode is `BACKEND_TASK=dev` and
 `FRONTEND_MODE=dev`, `[READY]` is present, Compose services are healthy, and
 `/readiness` succeeds. Recreate only a stale application service and restart
 nginx if required.
