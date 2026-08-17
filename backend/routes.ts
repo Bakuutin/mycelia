@@ -13,6 +13,10 @@ import { apiFilesUploadHandler } from "@/routes/api.files.upload.ts";
 import { apiAudioStreamHandler } from "@/routes/api.audio.stream.ts";
 import { apiAudioUploadHandler } from "@/routes/api.audio.upload.ts";
 import { apiLocationUploadHandler } from "@/routes/api.location.upload.ts";
+import {
+  apiLocationImportsAnalyzeHandler,
+  apiLocationImportsConfirmHandler,
+} from "@/routes/api.location.imports.ts";
 import { apiAudioWavHandler } from "@/routes/api.audio.wav.ts";
 import { mcpGetHandler, mcpPostHandler } from "@/routes/mcp.ts";
 import { llmChatCompletionsHandler } from "@/routes/llm.chat.completions.ts";
@@ -46,20 +50,43 @@ export function registerRoutes(app: Express): void {
   app.post("/api/chat", asyncHandler(apiChatHandler));
   app.get("/api/audio/pipeline", asyncHandler(apiAudioPipelineHandler));
   app.get("/api/files/:id", apiFilesIdHandler);
-  app.post("/api/files/upload", withRateLimit(
-    { keyGenerator: uploadKeyGenerator, limit: 20, windowSeconds: 60 },
-    apiFilesUploadHandler,
-  ));
+  app.post(
+    "/api/files/upload",
+    withRateLimit(
+      { keyGenerator: uploadKeyGenerator, limit: 20, windowSeconds: 60 },
+      apiFilesUploadHandler,
+    ),
+  );
   app.get("/api/audio/stream", apiAudioStreamHandler);
-  app.post("/api/audio/upload", withRateLimit(
-    { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
-    apiAudioUploadHandler,
-  ));
+  app.post(
+    "/api/audio/upload",
+    withRateLimit(
+      { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
+      apiAudioUploadHandler,
+    ),
+  );
   app.get("/api/audio/wav", apiAudioWavHandler);
-  app.post("/api/location/upload", withRateLimit(
-    { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
-    apiLocationUploadHandler,
-  ));
+  app.post(
+    "/api/location/upload",
+    withRateLimit(
+      { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
+      apiLocationUploadHandler,
+    ),
+  );
+  app.post(
+    "/api/location/imports/analyze",
+    withRateLimit(
+      { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
+      apiLocationImportsAnalyzeHandler,
+    ),
+  );
+  app.post(
+    "/api/location/imports/:previewId/confirm",
+    withRateLimit(
+      { keyGenerator: uploadKeyGenerator, limit: 20, windowSeconds: 60 },
+      apiLocationImportsConfirmHandler,
+    ),
+  );
   app.get("/mcp", mcpGetHandler);
   app.post("/mcp", mcpPostHandler);
   app.post("/llm/chat/completions", llmChatCompletionsHandler);

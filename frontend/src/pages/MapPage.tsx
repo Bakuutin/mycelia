@@ -4,11 +4,14 @@ import { useMap } from "react-leaflet";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
+  Bookmark,
   Clock,
   Database,
   Loader2,
   MapPin,
   MessageSquare,
+  Route,
   Upload,
   X,
 } from "lucide-react";
@@ -21,19 +24,31 @@ import { callResource } from "@/lib/api";
 import { useTimelineRange } from "@/stores/timelineRange";
 import {
   useConversationsOnMap,
+  useLocationConflicts,
   useLocationLiveUpdates,
   useLocationSegments,
   useLocationStatus,
+  useRecordedLocationTracks,
+  useSavedPlaces,
 } from "@/hooks/useLocationQueries";
-import { LocationMap, formatDurationShort } from "@/components/location/LocationMap";
+import {
+  formatDurationShort,
+  LocationMap,
+} from "@/components/location/LocationMap";
 import { ConversationClustersLayer } from "@/components/location/ConversationClustersLayer";
 import { ImportTracksDialog } from "@/components/location/ImportTracksDialog";
+import {
+  RecordedTracksLayer,
+  SavedPlacesLayer,
+} from "@/components/location/LocationSourceLayers";
+import { LocationConflictReviewDialog } from "@/components/location/LocationConflictReviewDialog";
 import { AssignLocationDialog } from "@/components/location/AssignLocationDialog";
 import { GeotagsSheet } from "@/components/location/GeotagsSheet";
 import type {
   ConversationMapGroup,
   LocationPlace,
   LocationSegment,
+  SavedPlace,
 } from "@/types/location";
 import { placeColor } from "@/types/location";
 
@@ -89,9 +104,12 @@ const MapPage = () => {
   const { start, end, setRange } = useTimelineRange();
   const { data: status } = useLocationStatus();
   const [showConversations, setShowConversations] = useState(true);
+  const [showSavedPlaces, setShowSavedPlaces] = useState(true);
+  const [showRecordedTracks, setShowRecordedTracks] = useState(false);
   const [conversationsAllTime, setConversationsAllTime] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [geotagsOpen, setGeotagsOpen] = useState(false);
+  const [conflictsOpen, setConflictsOpen] = useState(false);
   const [assignRange, setAssignRange] = useState<
     { start: Date; end: Date } | null
   >(null);
@@ -100,6 +118,9 @@ const MapPage = () => {
   >(null);
   const [selectedSegment, setSelectedSegment] = useState<
     LocationSegment | null
+  >(null);
+  const [selectedSavedPlace, setSelectedSavedPlace] = useState<
+    SavedPlace | null
   >(null);
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
   const [downloadingGeonames, setDownloadingGeonames] = useState(false);
@@ -113,9 +134,33 @@ const MapPage = () => {
     enabled: showConversations,
     allTime: conversationsAllTime,
   });
+  const { data: savedPlacesData } = useSavedPlaces(showSavedPlaces);
+  const { data: recordedTracksData } = useRecordedLocationTracks(
+    showRecordedTracks,
+  );
+  const { data: conflictsData } = useLocationConflicts("pending", true);
 
   const segments = segmentsData?.segments ?? [];
   const hasData = status?.hasData ?? true;
+  const sourceBoundsPoints = useMemo<Array<[number, number]>>(() => {
+    const points: Array<[number, number]> = [];
+    if (showSavedPlaces) {
+      for (const place of savedPlacesData?.places ?? []) {
+        points.push([place.loc.coordinates[1], place.loc.coordinates[0]]);
+      }
+    }
+    if (showRecordedTracks) {
+      for (const track of recordedTracksData?.tracks ?? []) {
+        for (const [lng, lat] of track.path ?? []) points.push([lat, lng]);
+      }
+    }
+    return points;
+  }, [
+    recordedTracksData?.tracks,
+    savedPlacesData?.places,
+    showRecordedTracks,
+    showSavedPlaces,
+  ]);
 
   // Places currently on the map, aggregated for the chip strip under it.
   const placeChips = useMemo<PlaceChip[]>(() => {
@@ -242,6 +287,7 @@ const MapPage = () => {
       return;
     }
     setSelectedGroup(null);
+    setSelectedSavedPlace(null);
     setSelectedSegment(segment);
   };
 
@@ -289,6 +335,33 @@ const MapPage = () => {
           )}
         </div>
 
+        <div className="flex items-center gap-2">
+          <Switch
+            id="show-saved-places"
+            checked={showSavedPlaces}
+            onCheckedChange={setShowSavedPlaces}
+          />
+          <Label
+            htmlFor="show-saved-places"
+            className="flex items-center gap-1 text-sm"
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            Saved places
+          </Label>
+          <Switch
+            id="show-recorded-tracks"
+            checked={showRecordedTracks}
+            onCheckedChange={setShowRecordedTracks}
+          />
+          <Label
+            htmlFor="show-recorded-tracks"
+            className="flex items-center gap-1 text-sm"
+          >
+            <Route className="h-3.5 w-3.5" />
+            Recorded tracks
+          </Label>
+        </div>
+
         <div className="ml-auto flex items-center gap-2">
           {isLoading && (
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -314,6 +387,16 @@ const MapPage = () => {
             <MapPin className="mr-2 h-4 w-4" />
             Geotags
           </Button>
+          {(conflictsData?.total ?? 0) > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConflictsOpen(true)}
+            >
+              <AlertTriangle className="mr-2 h-4 w-4 text-amber-600" />
+              Review conflicts ({conflictsData!.total})
+            </Button>
+          )}
           <Button size="sm" onClick={() => setImportOpen(true)}>
             <Upload className="mr-2 h-4 w-4" />
             Import tracks
@@ -324,128 +407,153 @@ const MapPage = () => {
       {/* Map + side panel */}
       <div className="flex min-h-0 flex-1 gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="isolate min-h-0 flex-1 overflow-hidden rounded-lg border">
-          {!hasData
-            ? (
-              <div className="flex h-full items-center justify-center">
-                <Card className="max-w-md">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <MapPin className="h-5 w-5" />
-                      No location data yet
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm text-muted-foreground">
-                    <ol className="list-inside list-decimal space-y-1">
-                      <li>
-                        Download the places database (one time, ~13 MB) so
-                        stays get city names.
-                      </li>
-                      <li>
-                        Export a track from Organic Maps: track →{" "}
-                        <span className="font-medium">Share → GPX/KML</span>.
-                      </li>
-                      <li>Import the files here.</li>
-                    </ol>
-                    <div className="flex gap-2 pt-1">
-                      {status && !status.geonamesReady && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={startGeonamesDownload}
-                          disabled={downloadingGeonames}
-                        >
-                          <Database className="mr-2 h-4 w-4" />
-                          Download places
+          <div className="isolate min-h-0 flex-1 overflow-hidden rounded-lg border">
+            {!hasData
+              ? (
+                <div className="flex h-full items-center justify-center">
+                  <Card className="max-w-md">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <MapPin className="h-5 w-5" />
+                        No location data yet
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm text-muted-foreground">
+                      <ol className="list-inside list-decimal space-y-1">
+                        <li>
+                          Download the places database (one time, ~13 MB) so
+                          stays get city names.
+                        </li>
+                        <li>
+                          Export a track from Organic Maps: track →{" "}
+                          <span className="font-medium">Share → GPX/KML</span>.
+                        </li>
+                        <li>Import the files here.</li>
+                      </ol>
+                      <div className="flex gap-2 pt-1">
+                        {status && !status.geonamesReady && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={startGeonamesDownload}
+                            disabled={downloadingGeonames}
+                          >
+                            <Database className="mr-2 h-4 w-4" />
+                            Download places
+                          </Button>
+                        )}
+                        <Button size="sm" onClick={() => setImportOpen(true)}>
+                          <Upload className="mr-2 h-4 w-4" />
+                          Import tracks
                         </Button>
-                      )}
-                      <Button size="sm" onClick={() => setImportOpen(true)}>
-                        <Upload className="mr-2 h-4 w-4" />
-                        Import tracks
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            )
-            : (
-              <LocationMap
-                segments={segments}
-                selectedSegmentId={selectedSegment
-                  ? String(selectedSegment._id)
-                  : null}
-                onSegmentClick={handleSegmentClick}
-              >
-                {showConversations && (
-                  <ConversationClustersLayer
-                    groups={conversationsData?.groups ?? []}
-                    onSelectGroup={(group) => {
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )
+              : (
+                <LocationMap
+                  segments={segments}
+                  extraBoundsPoints={sourceBoundsPoints}
+                  selectedSegmentId={selectedSegment
+                    ? String(selectedSegment._id)
+                    : null}
+                  onSegmentClick={handleSegmentClick}
+                >
+                  {showConversations && (
+                    <ConversationClustersLayer
+                      groups={conversationsData?.groups ?? []}
+                      onSelectGroup={(group) => {
+                        setSelectedSegment(null);
+                        setSelectedSavedPlace(null);
+                        setSelectedGroup(group);
+                      }}
+                    />
+                  )}
+                  {showRecordedTracks && (
+                    <RecordedTracksLayer
+                      tracks={recordedTracksData?.tracks ?? []}
+                    />
+                  )}
+                  {showSavedPlaces && (
+                    <SavedPlacesLayer
+                      places={savedPlacesData?.places ?? []}
+                      onSelect={(place) => {
+                        setSelectedGroup(null);
+                        setSelectedSegment(null);
+                        setSelectedSavedPlace(place);
+                        setFlyTarget([
+                          place.loc.coordinates[1],
+                          place.loc.coordinates[0],
+                        ]);
+                      }}
+                    />
+                  )}
+                  <FlyTo target={flyTarget} />
+                </LocationMap>
+              )}
+          </div>
+
+          {/* Places currently on the map: clickable cluster chips */}
+          {placeChips.length > 0 && (
+            <div className="flex max-h-24 shrink-0 flex-wrap gap-1.5 overflow-y-auto">
+              {placeChips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
+                  title={`${formatPlace(chip.place)} — ${chip.stayCount} stay${
+                    chip.stayCount === 1 ? "" : "s"
+                  }`}
+                  onClick={() => {
+                    setFlyTarget([
+                      chip.loc.coordinates[1],
+                      chip.loc.coordinates[0],
+                    ]);
+                    if (chip.group) {
                       setSelectedSegment(null);
-                      setSelectedGroup(group);
+                      setSelectedSavedPlace(null);
+                      setSelectedGroup(chip.group);
+                    } else if (chip.longestStay) {
+                      setSelectedGroup(null);
+                      setSelectedSavedPlace(null);
+                      setSelectedSegment(chip.longestStay);
+                    }
+                  }}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor: placeColor(chip.place, chip.manual),
                     }}
                   />
-                )}
-                <FlyTo target={flyTarget} />
-              </LocationMap>
-            )}
+                  <span className="max-w-40 truncate font-medium">
+                    {formatPlace(chip.place)}
+                  </span>
+                  {chip.dwellMs > 0 && (
+                    <span className="text-muted-foreground">
+                      {formatDurationShort(chip.dwellMs)}
+                    </span>
+                  )}
+                  {chip.conversationCount > 0 && (
+                    <span className="text-muted-foreground">
+                      💬 {chip.conversationCount}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Places currently on the map: clickable cluster chips */}
-        {placeChips.length > 0 && (
-          <div className="flex max-h-24 shrink-0 flex-wrap gap-1.5 overflow-y-auto">
-            {placeChips.map((chip) => (
-              <button
-                key={chip.key}
-                type="button"
-                className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
-                title={`${formatPlace(chip.place)} — ${
-                  chip.stayCount
-                } stay${chip.stayCount === 1 ? "" : "s"}`}
-                onClick={() => {
-                  setFlyTarget([
-                    chip.loc.coordinates[1],
-                    chip.loc.coordinates[0],
-                  ]);
-                  if (chip.group) {
-                    setSelectedSegment(null);
-                    setSelectedGroup(chip.group);
-                  } else if (chip.longestStay) {
-                    setSelectedGroup(null);
-                    setSelectedSegment(chip.longestStay);
-                  }
-                }}
-              >
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{
-                    backgroundColor: placeColor(chip.place, chip.manual),
-                  }}
-                />
-                <span className="max-w-40 truncate font-medium">
-                  {formatPlace(chip.place)}
-                </span>
-                {chip.dwellMs > 0 && (
-                  <span className="text-muted-foreground">
-                    {formatDurationShort(chip.dwellMs)}
-                  </span>
-                )}
-                {chip.conversationCount > 0 && (
-                  <span className="text-muted-foreground">
-                    💬 {chip.conversationCount}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-        </div>
-
-        {(selectedGroup || selectedSegment) && (
+        {(selectedGroup || selectedSegment || selectedSavedPlace) && (
           <Card className="flex w-80 shrink-0 flex-col overflow-hidden">
             <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
               <CardTitle className="text-base">
                 {selectedGroup
                   ? formatPlace(selectedGroup.place)
+                  : selectedSavedPlace
+                  ? selectedSavedPlace.displayName || "Saved place"
                   : formatPlace(selectedSegment!.place)}
               </CardTitle>
               <Button
@@ -455,6 +563,7 @@ const MapPage = () => {
                 onClick={() => {
                   setSelectedGroup(null);
                   setSelectedSegment(null);
+                  setSelectedSavedPlace(null);
                 }}
               >
                 <X className="h-4 w-4" />
@@ -485,6 +594,50 @@ const MapPage = () => {
                     <Clock className="mr-2 h-4 w-4" />
                     Open in timeline
                   </Button>
+                </div>
+              )}
+
+              {selectedSavedPlace && (
+                <div className="space-y-3 text-sm">
+                  {selectedSavedPlace.description && (
+                    <p>{selectedSavedPlace.description}</p>
+                  )}
+                  {(selectedSavedPlace.featureTypes?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {selectedSavedPlace.featureTypes!.map((feature) => (
+                        <Badge key={feature} variant="secondary">
+                          {feature}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  <p className="font-mono text-xs text-muted-foreground">
+                    {selectedSavedPlace.loc.coordinates[1].toFixed(6)},{" "}
+                    {selectedSavedPlace.loc.coordinates[0].toFixed(6)}
+                  </p>
+                  {selectedSavedPlace.sourceTimestamp && (
+                    <p className="text-xs text-muted-foreground">
+                      Saved at {new Date(selectedSavedPlace.sourceTimestamp)
+                        .toLocaleString()}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Sources:{" "}
+                    {(selectedSavedPlace.sourceRefs ?? []).map((source) =>
+                      source.format.toUpperCase()
+                    ).join(", ") || "unknown"}
+                  </p>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      Original metadata
+                    </summary>
+                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-muted p-2">
+                      {JSON.stringify({
+                        canonical: selectedSavedPlace.metadata ?? {},
+                        sources: selectedSavedPlace.sourceRefs ?? [],
+                      }, null, 2)}
+                    </pre>
+                  </details>
                 </div>
               )}
 
@@ -566,6 +719,10 @@ const MapPage = () => {
             setSelectedSegment(segment);
           }
         }}
+      />
+      <LocationConflictReviewDialog
+        open={conflictsOpen}
+        onOpenChange={setConflictsOpen}
       />
       <AssignLocationDialog
         open={assignRange !== null}

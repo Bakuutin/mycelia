@@ -61,6 +61,11 @@ An ordinary frontend `src/` edit uses HMR without a full restart. Editing
 frontend `[READY]` record. A backend source edit restarts the Deno process and
 may keep `/readiness` unavailable while worker startup checks run.
 
+The dependency watchdog uses its own one-connection MongoDB pool. Long-running
+imports and worker rebuilds may make ordinary queries slower, but they must not
+starve the watchdog or cause `[SELF-HEAL]` restarts from an application-pool
+`connection checkout` timeout.
+
 When a change is not visible:
 
 1. Run `git status --short` and preserve unrelated work from parallel agents.
@@ -81,6 +86,28 @@ When a change is not visible:
 5. After recreating frontend or backend, restart nginx because the container IP
    may have changed: `docker compose restart nginx`.
 6. Do not restart MongoDB or Redis for an application-code reload.
+
+#### Location import recovery
+
+Location imports use a two-phase `analyze → confirm` contract. Analysis may
+stage an original in the `location_files` GridFS bucket, but it does not change
+the canonical timeline. Confirmation writes an import in `committing` state,
+uses idempotent point upserts, publishes newly-owned points, and only then sets
+the import to `parsed`. The location worker also listens for this status update.
+
+Migration `0050_location_import_review.ts` backfills `importIds[]` on legacy
+points and marks points whose scalar `importId` has no `location_imports`
+document as `visible: false, recoveryState: "orphaned"`. Before repairing a
+failed legacy upload:
+
+1. identify the exact import id, GridFS id, point count/hash and time range;
+2. create and validate local dumps of `location_points`, `location_imports`,
+   `location_files.files` and `location_files.chunks`;
+3. re-analyze the original file and confirm it so identical hidden points are
+   safely re-owned instead of inserted twice;
+4. verify the receipt/counts, processing status and canonical point range;
+5. delete only the verified superseded GridFS object. Never infer an orphan or
+   delete points by filename/date range alone.
 
 Ports can be customized via environment variables (in `.env` or inline):
 

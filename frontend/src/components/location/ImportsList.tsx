@@ -24,12 +24,13 @@ export function ImportsList({
   const { data: imports, isLoading } = useLocationImports(enabled);
   const deleteImport = useDeleteLocationImport();
   const { confirmAction } = useActionDialog();
+  const number = new Intl.NumberFormat();
 
   const handleDelete = async (imp: LocationImport) => {
     const ok = await confirmAction({
       title: `Delete import "${imp.filename}"?`,
       description:
-        `${imp.pointCount} GPS points will be deleted. Segments for that period will be rebuilt without them.`,
+        "This source file and its metadata links will be removed. GPS points shared with another import will be kept.",
       actionLabel: "Delete import",
       destructive: true,
     });
@@ -38,8 +39,8 @@ export function ImportsList({
       const result = await deleteImport.mutateAsync(String(imp._id));
       toast.success(
         `Import deleted (${
-          result?.deletedPoints ?? imp.pointCount
-        } points removed).`,
+          number.format(result?.deletedPoints ?? 0)
+        } source-only points removed).`,
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete");
@@ -66,11 +67,40 @@ export function ImportsList({
               <Badge variant="secondary" className="uppercase">
                 {imp.format}
               </Badge>
+              {imp.status !== "processed" && (
+                <Badge
+                  variant={imp.status === "failed" || imp.status === "error"
+                    ? "destructive"
+                    : "outline"}
+                >
+                  {imp.status === "parsed" ? "processing" : imp.status}
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
-              {imp.pointCount} pts
-              {(imp.dedupedCount ?? 0) > 0 && ` · ${imp.dedupedCount} dup`}
-              {imp.skippedCount > 0 && ` · ${imp.skippedCount} no time`}
+              {imp.receipt
+                ? (
+                  <>
+                    {number.format(imp.receipt.newPoints ?? imp.pointCount)} new
+                    {imp.receipt.matchedPoints > 0 &&
+                      ` · ${number.format(imp.receipt.matchedPoints)} linked`}
+                    {imp.receipt.tracks > 0 &&
+                      ` · ${number.format(imp.receipt.tracks)} tracks`}
+                    {imp.receipt.bookmarks > 0 &&
+                      ` · ${number.format(imp.receipt.bookmarks)} places`}
+                    {imp.receipt.conflictGroups > 0 &&
+                      ` · ${number.format(imp.receipt.conflictGroups)} review`}
+                  </>
+                )
+                : (
+                  <>
+                    {number.format(imp.pointCount)} pts
+                    {(imp.dedupedCount ?? 0) > 0 &&
+                      ` · ${number.format(imp.dedupedCount ?? 0)} linked`}
+                    {imp.skippedCount > 0 &&
+                      ` · ${number.format(imp.skippedCount)} skipped`}
+                  </>
+                )}
               {imp.timeRange?.start && (
                 <>
                   {" · "}
@@ -87,6 +117,7 @@ export function ImportsList({
                 size="icon"
                 className="h-7 w-7"
                 title="Show this period on the map"
+                aria-label={`Show ${imp.filename} period on the map`}
                 onClick={() => onShowOnMap(imp)}
               >
                 <Crosshair className="h-3.5 w-3.5" />
@@ -97,6 +128,7 @@ export function ImportsList({
               size="icon"
               className="h-7 w-7 text-destructive hover:text-destructive"
               title="Delete import and its points"
+              aria-label={`Delete import ${imp.filename}`}
               onClick={() => handleDelete(imp)}
               disabled={deleteImport.isPending}
             >

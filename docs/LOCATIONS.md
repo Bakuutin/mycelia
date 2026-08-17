@@ -1,7 +1,7 @@
 # Location Tracks
 
 Import GPS tracks from navigation apps (Organic Maps and anything else that
-exports GPX/KML), see where you were on the timeline and on a dedicated map,
+exports GPX/KML/KMZ), see where you were on the timeline and on a dedicated map,
 and let Mycelia derive timezone periods from your movements so timeline times
 are always displayed correctly.
 
@@ -13,12 +13,17 @@ are always displayed correctly.
    dataset (~235k cities) into MongoDB — reverse geocoding then works fully
    offline, no coordinates ever leave your server.
 2. **Export a track from your navigation app.**
-   - *Organic Maps*: open the track (Bookmarks & Tracks) → share/export →
-     choose **GPX** (preferred) or **KML/KMZ**.
+   - *Organic Maps / CoMaps*: open Bookmarks & Tracks → share/export. Keep both
+     **GPX** and **KMZ** when available: GPX is a useful independent archive;
+     KMZ carries richer localized names, categories, styles and saved-place
+     metadata. They can be imported in either order without duplicating the
+     GPS path.
    - Any other app that produces GPX 1.1 track files (`<trkpt>` with `<time>`)
      or KML `gx:Track` works too.
 3. **Import** on the **Map** page: click **Import tracks** and drop the files
-   in (or use the file picker). Multiple files at once are fine.
+   in (or use the file picker). Mycelia analyzes each file without changing the
+   timeline, shows new/matched/conflicting data and the existing source files,
+   then waits for explicit confirmation.
 4. **Enable the Locations track** on the timeline: Timeline → layers button
    (Track visibility) → toggle **Locations**. The track is off by default and
    performs zero requests until enabled. After your first successful import it
@@ -57,9 +62,18 @@ All movements for a selectable period:
   to zoom in. Clicking a single place opens the list of its conversations
   (switchable between the selected period and all time); each entry links to
   the conversation and re-centers the map on its spot.
-- **Import tracks** button — upload dialog with drag & drop, per-file results
-  (imported / deduplicated / skipped counts) and the list of previous imports
-  with delete.
+- **Saved places** (toggle) — bookmarks from GPX/KML/KMZ with source names,
+  localized variants, descriptions, categories, color/icon metadata and the
+  time the bookmark was saved. A bookmark timestamp is never interpreted as
+  proof that you were at that coordinate.
+- **Recorded tracks** (toggle) — source track/route geometry with its original
+  name, color and width. Untimed `LineString`/GPX routes are map-only and never
+  generate stays or timezone periods.
+- **Import tracks** button — preview/confirm import with a durable receipt:
+  new GPS points, linked matches, tracks/routes, saved places and review items.
+- **Review conflicts** appears when two source files contain different
+  coordinate sets at the same timestamp. The existing path remains canonical
+  until you choose the current or incoming candidate.
 
 ### Conversation details
 
@@ -92,11 +106,15 @@ assignment — shown as source chips everywhere.
   reappears). Deleting a *derived* geotag permanently deletes the GPS points
   behind it — re-importing the same file will not restore them (they stay
   deduplicated away). Deleting a whole import (Settings → Maps or the import
-  dialog) removes all its points.
-- **Duplicates / overlapping tracks**: points from overlapping imports are
-  deduplicated by timestamp+coordinates and merged during segmentation — a
-  segment then simply lists several source files. A manual assignment always
-  wins: all derived segments (stays, moves and gaps) are clipped around it.
+  dialog) removes that source and its metadata links; a canonical GPS point is
+  deleted only when no other committed import references it.
+- **Duplicates / overlapping tracks**: exact timestamp+coordinate matches gain
+  another provenance link instead of another canonical point. Partial overlap
+  imports only the unambiguous additions. Different coordinate sets at one
+  timestamp are retained in a review queue and excluded from processing until
+  explicitly selected. Multiple coordinates at one timestamp are valid when
+  the complete source sets match. A manual assignment always wins: all derived
+  segments (stays, moves and gaps) are clipped around it.
 
 ## Settings → Maps
 
@@ -121,9 +139,15 @@ the API (`location.delete-segment`); deleting restores the derived gap.
 
 ## How processing works
 
-- Raw points land in `location_points` (deduplicated by
-  `timestamp+lat+lng`, so overlapping exports are safe; identical files are
-  skipped by content hash).
+- Import is a staged saga: `/api/location/imports/analyze` parses and stages the
+  source without timeline writes; `/api/location/imports/:previewId/confirm`
+  rechecks the database revision and commits idempotently. Newly-owned points
+  remain invisible until every batch and metadata entity is durable.
+- Canonical observations live in `location_points`, with `importIds[]` and
+  source references. `location_tracks` stores typed recorded tracks/routes;
+  `location_bookmarks` stores saved places; `location_point_conflicts` stores
+  deferred coordinate candidates. GPX/KMZ enrichment fills missing fields and
+  preserves every source variant; it never silently replaces manual metadata.
 - The `location_processing` worker (triggered automatically after each import)
   segments points into **stays** (≥10 min within ~200 m), **moves**
   (Douglas-Peucker-simplified paths) and **gaps** (>30 min silences), reverse
@@ -133,9 +157,9 @@ the API (`location.delete-segment`); deleting restores the derived gap.
 
 ## Limits and notes
 
-- KML `LineString` geometry has no per-point timestamps and cannot be placed
-  on a timeline — such coordinates are counted as "skipped" in the import
-  results. Use GPX or KML with `gx:Track` for recorded tracks.
+- KML `LineString` and untimed GPX geometry cannot be placed on the timeline,
+  but they are retained as named map routes rather than discarded. Invalid or
+  structurally unmatched records are reported separately as skipped.
 - Map tiles are fetched from openstreetmap.org. For heavy use or full
   offline operation, point the tile URL in
   `frontend/src/components/location/LocationMap.tsx` at your own tile server.

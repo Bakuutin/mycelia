@@ -5,8 +5,11 @@ import type {
   ConversationMapGroup,
   GeonamesCity,
   LocationImport,
+  LocationPointConflict,
   LocationSegment,
   LocationStatus,
+  RecordedLocationTrack,
+  SavedPlace,
 } from "@/types/location";
 
 export const locationKeys = {
@@ -19,10 +22,19 @@ export const locationKeys = {
     [...locationKeys.all, "forRange", start, end] as const,
   places: (query: string) => [...locationKeys.all, "places", query] as const,
   imports: () => [...locationKeys.all, "imports"] as const,
+  savedPlaces: () => [...locationKeys.all, "savedPlaces"] as const,
+  recordedTracks: () => [...locationKeys.all, "recordedTracks"] as const,
+  conflicts: (status?: string) =>
+    [...locationKeys.all, "conflicts", status ?? "all"] as const,
   geotags: (filters: Record<string, unknown>) =>
     [...locationKeys.all, "geotags", filters] as const,
   conversationsOnMap: (start?: number, end?: number) =>
-    [...locationKeys.all, "conversationsOnMap", start ?? "all", end ?? "all"] as const,
+    [
+      ...locationKeys.all,
+      "conversationsOnMap",
+      start ?? "all",
+      end ?? "all",
+    ] as const,
 };
 
 export function useLocationStatus(enabled = true) {
@@ -112,6 +124,66 @@ export function useLocationImports(enabled = true) {
     queryFn: () => callResource("location", { action: "list-imports" }),
     enabled,
     staleTime: 15 * 1000,
+  });
+}
+
+export function useSavedPlaces(enabled = true) {
+  return useQuery<{ places: SavedPlace[]; total: number }>({
+    queryKey: locationKeys.savedPlaces(),
+    queryFn: () =>
+      callResource("location", {
+        action: "list-saved-places",
+        limit: 2000,
+        skip: 0,
+      }),
+    enabled,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useRecordedLocationTracks(enabled = true) {
+  return useQuery<{ tracks: RecordedLocationTrack[]; total: number }>({
+    queryKey: locationKeys.recordedTracks(),
+    queryFn: () =>
+      callResource("location", {
+        action: "list-recorded-tracks",
+        limit: 500,
+        skip: 0,
+      }),
+    enabled,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useLocationConflicts(
+  status: "pending" | "resolved" | undefined = "pending",
+  enabled = true,
+) {
+  return useQuery<{ conflicts: LocationPointConflict[]; total: number }>({
+    queryKey: locationKeys.conflicts(status),
+    queryFn: () =>
+      callResource("location", {
+        action: "list-conflicts",
+        ...(status ? { status } : {}),
+        limit: 100,
+        skip: 0,
+      }),
+    enabled,
+    staleTime: 15 * 1000,
+  });
+}
+
+export function useResolveLocationConflict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      id: string;
+      resolution: "keep_existing" | "use_incoming" | "defer";
+      candidateImportId?: string;
+    }) => callResource("location", { action: "resolve-conflict", ...input }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: locationKeys.all });
+    },
   });
 }
 

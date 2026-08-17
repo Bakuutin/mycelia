@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getRedisResource } from "@/lib/redis.ts";
 
@@ -27,7 +27,7 @@ async function checkRateLimit(
   key: string,
   limit: number,
   windowSeconds: number,
-  redis: Awaited<ReturnType<typeof getRedisResource>>
+  redis: Awaited<ReturnType<typeof getRedisResource>>,
 ): Promise<RateLimitResult> {
   const rateLimitKey = `${RATE_LIMIT_PREFIX}${key}`;
 
@@ -54,7 +54,7 @@ async function checkRateLimit(
 
 /**
  * Decorator function that wraps an Express request handler with rate limiting
- * 
+ *
  * @example
  * ```ts
  * export const oauthAuthorizeHandler = withRateLimit(
@@ -71,9 +71,9 @@ async function checkRateLimit(
  */
 export function withRateLimit(
   options: RateLimitOptions,
-  handler: (req: Request, res: Response) => Promise<void> | void
-): (req: Request, res: Response) => Promise<void> {
-  return async (req: Request, res: Response) => {
+  handler: RequestHandler,
+): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const auth = await getServerAuth();
       const redis = await getRedisResource(auth);
@@ -83,26 +83,27 @@ export function withRateLimit(
         key,
         options.limit,
         options.windowSeconds,
-        redis
+        redis,
       );
 
       if (!rateLimitCheck.allowed) {
         res.status(429).json({
           error: "too_many_requests",
-          error_description: options.errorMessage || "Rate limit exceeded. Please try again later.",
+          error_description: options.errorMessage ||
+            "Rate limit exceeded. Please try again later.",
         });
         return;
       }
 
-      await handler(req, res);
+      await handler(req, res, next);
     } catch (error) {
       console.error("Rate limit error:", error);
       // Fail closed: if rate limiting is unavailable, reject rather than allow through
       res.status(503).json({
         error: "service_unavailable",
-        error_description: "Rate limiting service unavailable. Please try again later.",
+        error_description:
+          "Rate limiting service unavailable. Please try again later.",
       });
     }
   };
 }
-

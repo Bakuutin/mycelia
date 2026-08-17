@@ -35,6 +35,8 @@ export interface TrackPoint {
   lng: number;
   /** Source import this point came from (provenance). */
   importId?: unknown;
+  /** All source imports for a deduplicated canonical point. */
+  importIds?: unknown[];
 }
 
 export interface Segment {
@@ -54,6 +56,9 @@ export interface Segment {
 function importIdsOf(points: TrackPoint[]): unknown[] {
   const seen = new Map<string, unknown>();
   for (const p of points) {
+    for (const importId of p.importIds ?? []) {
+      if (importId != null) seen.set(String(importId), importId);
+    }
     if (p.importId != null) seen.set(String(p.importId), p.importId);
   }
   return [...seen.values()];
@@ -256,22 +261,40 @@ export function subtractIntervals(
 
 type MongoCall = (input: any) => Promise<any>;
 
-async function loadPoints(
+export async function loadPoints(
   mongo: MongoCall,
   start: Date,
   end: Date,
 ): Promise<TrackPoint[]> {
   const points: TrackPoint[] = [];
-  let cursor = new Date(start.getTime() - 1);
+  let cursorTs = new Date(start.getTime() - 1);
+  let cursorId: unknown = null;
   while (true) {
+    const cursorQuery = cursorId == null
+      ? { ts: { $gt: cursorTs, $lte: end } }
+      : {
+        $and: [
+          { ts: { $lte: end } },
+          {
+            $or: [
+              { ts: { $gt: cursorTs } },
+              { ts: cursorTs, _id: { $gt: cursorId } },
+            ],
+          },
+        ],
+      };
     const batch = await mongo({
       action: "find",
       collection: "location_points",
-      query: { ts: { $gt: cursor, $lte: end } },
+      query: {
+        ...cursorQuery,
+        visible: true,
+        selection: "accepted",
+      },
       options: {
-        sort: { ts: 1 },
+        sort: { ts: 1, _id: 1 },
         limit: POINT_BATCH,
-        projection: { ts: 1, loc: 1, importId: 1 },
+        projection: { ts: 1, loc: 1, importId: 1, importIds: 1 },
       },
     });
     for (const doc of batch) {
@@ -280,10 +303,12 @@ async function loadPoints(
         lng: doc.loc.coordinates[0],
         lat: doc.loc.coordinates[1],
         importId: doc.importId,
+        importIds: doc.importIds,
       });
     }
     if (batch.length < POINT_BATCH) break;
-    cursor = new Date(batch[batch.length - 1].ts);
+    cursorTs = new Date(batch[batch.length - 1].ts);
+    cursorId = batch[batch.length - 1]._id;
   }
   return points;
 }
@@ -666,6 +691,14 @@ const capability: JobCapability = {
         filter: {
           event: "mongo.change",
           "data.operationType": "insert",
+        },
+      },
+      {
+        channel: "mycelia:mongo:location_imports",
+        name: "auto_committed_import",
+        filter: {
+          event: "mongo.change",
+          "data.operationType": "update",
         },
       },
     ],

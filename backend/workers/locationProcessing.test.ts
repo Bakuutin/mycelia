@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import locationProcessing, {
   haversineM,
+  loadPoints,
   locationPendingImportQuery,
   segmentPoints,
   subtractIntervals,
@@ -92,6 +93,36 @@ Deno.test("segments carry importIds provenance from their points", async () => {
   const segments = await segmentPoints(points);
   const stay = segments.find((s) => s.type === "stay")!;
   expect(stay.importIds).toEqual(["importA", "importB"]);
+});
+
+Deno.test("loadPoints preserves more than one batch at the same timestamp", async () => {
+  const ts = new Date("2026-08-01T00:00:00Z");
+  const docs = Array.from({ length: 10_005 }, (_, index) => ({
+    _id: index + 1,
+    ts,
+    loc: { type: "Point", coordinates: [44.8 + index / 1e7, 41.7] },
+    importIds: ["source"],
+    visible: true,
+    selection: "accepted",
+  }));
+  const calls: any[] = [];
+  const loaded = await loadPoints(
+    async (input) => {
+      calls.push(input);
+      expect(input.query.visible).toBe(true);
+      expect(input.query.selection).toBe("accepted");
+      const afterId = input.query.$and?.[1]?.$or?.[1]?._id?.$gt ?? 0;
+      return docs.filter((doc) => doc._id > afterId).slice(
+        0,
+        input.options.limit,
+      );
+    },
+    ts,
+    ts,
+  );
+  expect(loaded.length).toBe(10_005);
+  expect(calls.length).toBe(2);
+  expect(loaded[10_004].importIds).toEqual(["source"]);
 });
 
 Deno.test("subtractIntervals clips around blocked ranges", () => {

@@ -5,6 +5,8 @@ import { type Auth } from "@/lib/auth/core.server.ts";
 import { type Resource } from "@/lib/auth/resources.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getJobsResource } from "@/lib/resources/worker.ts";
+import { getFsResource } from "@/lib/mongo/fs.server.ts";
+import { bumpLocationImportRevision } from "@/lib/location/import.server.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
 const SEGMENTS = "location_segments";
@@ -12,6 +14,9 @@ const POINTS = "location_points";
 const IMPORTS = "location_imports";
 const GEONAMES = "geonames_cities";
 const TZ_PERIODS = "timeline_timezone_periods";
+const TRACKS = "location_tracks";
+const BOOKMARKS = "location_bookmarks";
+const CONFLICTS = "location_point_conflicts";
 
 /** Window padding used when re-running processing around an edit. */
 const REPROCESS_PAD_MS = 6 * 60 * 60 * 1000;
@@ -111,6 +116,32 @@ const deleteImportSchema = z.object({
   id: z.string().refine(ObjectId.isValid, "Invalid import id"),
 });
 
+const listSavedPlacesSchema = z.object({
+  action: z.literal("list-saved-places"),
+  limit: z.number().int().min(1).max(2000).default(500),
+  skip: z.number().int().min(0).default(0),
+});
+
+const listRecordedTracksSchema = z.object({
+  action: z.literal("list-recorded-tracks"),
+  limit: z.number().int().min(1).max(500).default(100),
+  skip: z.number().int().min(0).default(0),
+});
+
+const listLocationConflictsSchema = z.object({
+  action: z.literal("list-conflicts"),
+  status: z.enum(["pending", "resolved"]).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+  skip: z.number().int().min(0).default(0),
+});
+
+const resolveLocationConflictSchema = z.object({
+  action: z.literal("resolve-conflict"),
+  id: z.string().refine(ObjectId.isValid, "Invalid conflict id"),
+  resolution: z.enum(["keep_existing", "use_incoming", "defer"]),
+  candidateImportId: z.string().refine(ObjectId.isValid).optional(),
+});
+
 export const locationRequestSchema = z.discriminatedUnion("action", [
   listSegmentsSchema,
   atSchema,
@@ -124,6 +155,10 @@ export const locationRequestSchema = z.discriminatedUnion("action", [
   statusSchema,
   listImportsSchema,
   deleteImportSchema,
+  listSavedPlacesSchema,
+  listRecordedTracksSchema,
+  listLocationConflictsSchema,
+  resolveLocationConflictSchema,
 ]);
 
 export type LocationRequest = z.input<typeof locationRequestSchema>;
@@ -281,13 +316,21 @@ export class LocationResource
         const [before] = await mongo({
           action: "find",
           collection: POINTS,
-          query: { ts: { $lte: time } },
+          query: {
+            ts: { $lte: time },
+            visible: true,
+            selection: "accepted",
+          },
           options: { sort: { ts: -1 }, limit: 1 },
         });
         const [after] = await mongo({
           action: "find",
           collection: POINTS,
-          query: { ts: { $gt: time } },
+          query: {
+            ts: { $gt: time },
+            visible: true,
+            selection: "accepted",
+          },
           options: { sort: { ts: 1 }, limit: 1 },
         });
         const candidates = [before, after].filter(Boolean).filter((p) =>
@@ -338,7 +381,12 @@ export class LocationResource
           .reduce(
             (sum, s) =>
               sum +
-              overlapMs(new Date(s.start), new Date(s.end), input.start, input.end),
+              overlapMs(
+                new Date(s.start),
+                new Date(s.end),
+                input.start,
+                input.end,
+              ),
             0,
           );
 
@@ -781,9 +829,7 @@ export class LocationResource
           const range = conv.timeRanges?.[0];
           if (!range?.start) continue;
           const convStart = new Date(range.start).getTime();
-          const convEnd = range.end
-            ? new Date(range.end).getTime()
-            : convStart;
+          const convEnd = range.end ? new Date(range.end).getTime() : convStart;
           if (input.start && convEnd < input.start.getTime()) continue;
           const mid = (convStart + convEnd) / 2;
 
@@ -841,27 +887,43 @@ export class LocationResource
       }
 
       case "status": {
-        const [pointCount, segmentCount, geonamesCount, lastImport, geoMeta] =
-          await Promise.all([
-            mongo({ action: "count", collection: POINTS, query: {} }),
-            mongo({ action: "count", collection: SEGMENTS, query: {} }),
-            mongo({ action: "count", collection: GEONAMES, query: {} }),
-            mongo({
-              action: "find",
-              collection: IMPORTS,
-              query: {},
-              options: { sort: { createdAt: -1 }, limit: 1 },
-            }).then((docs: any[]) => docs[0] ?? null),
-            mongo({
-              action: "findOne",
-              collection: "location_meta",
-              query: { key: "geonames" },
-            }),
-          ]);
-        return {
-          hasData: pointCount > 0 || segmentCount > 0,
+        const [
           pointCount,
           segmentCount,
+          bookmarkCount,
+          recordedTrackCount,
+          geonamesCount,
+          lastImport,
+          geoMeta,
+        ] = await Promise.all([
+          mongo({
+            action: "count",
+            collection: POINTS,
+            query: { visible: true, selection: "accepted" },
+          }),
+          mongo({ action: "count", collection: SEGMENTS, query: {} }),
+          mongo({ action: "count", collection: BOOKMARKS, query: {} }),
+          mongo({ action: "count", collection: TRACKS, query: {} }),
+          mongo({ action: "count", collection: GEONAMES, query: {} }),
+          mongo({
+            action: "find",
+            collection: IMPORTS,
+            query: {},
+            options: { sort: { createdAt: -1 }, limit: 1 },
+          }).then((docs: any[]) => docs[0] ?? null),
+          mongo({
+            action: "findOne",
+            collection: "location_meta",
+            query: { key: "geonames" },
+          }),
+        ]);
+        return {
+          hasData: pointCount > 0 || segmentCount > 0 || bookmarkCount > 0 ||
+            recordedTrackCount > 0,
+          pointCount,
+          segmentCount,
+          bookmarkCount,
+          recordedTrackCount,
           geonamesReady: geonamesCount > 0,
           geonamesCount,
           geonamesRefreshedAt: geoMeta?.refreshedAt ?? null,
@@ -879,6 +941,174 @@ export class LocationResource
         });
       }
 
+      case "list-saved-places": {
+        const query = { reviewStatus: { $ne: "rejected" } };
+        const [places, total] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: BOOKMARKS,
+            query,
+            options: {
+              sort: { sourceTimestamp: -1, displayName: 1 },
+              limit: input.limit,
+              skip: input.skip,
+            },
+          }),
+          mongo({ action: "count", collection: BOOKMARKS, query }),
+        ]);
+        return { places, total };
+      }
+
+      case "list-recorded-tracks": {
+        const [tracks, total] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: TRACKS,
+            query: {},
+            options: {
+              sort: { "metadata.sourceTimestamp": -1, displayName: 1 },
+              limit: input.limit,
+              skip: input.skip,
+            },
+          }),
+          mongo({ action: "count", collection: TRACKS, query: {} }),
+        ]);
+        return { tracks, total };
+      }
+
+      case "list-conflicts": {
+        const query = input.status ? { status: input.status } : {};
+        const [conflicts, total] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: CONFLICTS,
+            query,
+            options: {
+              sort: { ts: 1 },
+              limit: input.limit,
+              skip: input.skip,
+            },
+          }),
+          mongo({ action: "count", collection: CONFLICTS, query }),
+        ]);
+        return { conflicts, total };
+      }
+
+      case "resolve-conflict": {
+        const conflictId = new ObjectId(input.id);
+        const conflict = await mongo({
+          action: "findOne",
+          collection: CONFLICTS,
+          query: { _id: conflictId },
+        });
+        if (!conflict) return { success: false, error: "Conflict not found" };
+        if (input.resolution === "defer") {
+          await mongo({
+            action: "updateOne",
+            collection: CONFLICTS,
+            query: { _id: conflictId },
+            update: {
+              $set: {
+                status: "pending",
+                resolution: "defer",
+                decidedAt: new Date(),
+                decidedBy: auth.principal || "web",
+              },
+            },
+          });
+          return { success: true, status: "pending" };
+        }
+
+        if (input.resolution === "use_incoming") {
+          const candidate = (conflict.candidates ?? []).find((item: any) =>
+            !input.candidateImportId ||
+            String(item.importId) === input.candidateImportId
+          );
+          if (!candidate) {
+            return { success: false, error: "Candidate not found" };
+          }
+          const candidateImport = await mongo({
+            action: "findOne",
+            collection: IMPORTS,
+            query: { _id: new ObjectId(String(candidate.importId)) },
+          });
+          if (!candidateImport?.committedAt) {
+            return {
+              success: false,
+              error: "Candidate import is not committed",
+            };
+          }
+          const existingHashes = (conflict.existingPoints ?? []).map((
+            point: any,
+          ) => point.hash);
+          if (existingHashes.length > 0) {
+            await mongo({
+              action: "updateMany",
+              collection: POINTS,
+              query: { hash: { $in: existingHashes } },
+              update: { $set: { selection: "rejected", visible: false } },
+            });
+          }
+          const operations = (candidate.points ?? []).map((point: any) => ({
+            updateOne: {
+              filter: { hash: point.hash },
+              update: {
+                $set: {
+                  ts: new Date(conflict.ts),
+                  loc: point.loc,
+                  ...(point.ele !== undefined ? { ele: point.ele } : {}),
+                  selection: "accepted",
+                  visible: true,
+                  importId: candidate.importId,
+                  visibilityOwner: candidate.importId,
+                },
+                $setOnInsert: {
+                  _id: new ObjectId(),
+                  hash: point.hash,
+                  createdAt: new Date(),
+                },
+                $addToSet: { importIds: candidate.importId },
+              },
+              upsert: true,
+            },
+          }));
+          if (operations.length > 0) {
+            await mongo({
+              action: "bulkWrite",
+              collection: POINTS,
+              operations,
+              options: { ordered: false },
+            });
+          }
+        }
+
+        await mongo({
+          action: "updateOne",
+          collection: CONFLICTS,
+          query: { _id: conflictId },
+          update: {
+            $set: {
+              status: "resolved",
+              resolution: input.resolution,
+              ...(input.candidateImportId
+                ? { selectedImportId: new ObjectId(input.candidateImportId) }
+                : {}),
+              decidedAt: new Date(),
+              decidedBy: auth.principal || "web",
+            },
+          },
+        });
+        await bumpLocationImportRevision(mongo);
+        const timestamp = new Date(conflict.ts);
+        await this.enqueueReprocess(
+          auth,
+          timestamp,
+          new Date(timestamp.getTime() + 1),
+          "Location conflict resolved; regenerating derived segments",
+        );
+        return { success: true, status: "resolved" };
+      }
+
       case "delete-import": {
         const importId = new ObjectId(input.id);
         const importDoc = await mongo({
@@ -888,16 +1118,76 @@ export class LocationResource
         });
         if (!importDoc) return { success: false, error: "Import not found" };
 
-        const deleted = await mongo({
+        const deletedLegacy = await mongo({
           action: "deleteMany",
           collection: POINTS,
-          query: { importId },
+          query: { importId, importIds: { $exists: false } },
+        });
+        const deletedSole = await mongo({
+          action: "deleteMany",
+          collection: POINTS,
+          query: {
+            $and: [{ importIds: importId }, { importIds: { $size: 1 } }],
+          },
+        });
+        await mongo({
+          action: "updateMany",
+          collection: POINTS,
+          query: { importIds: importId },
+          update: {
+            $pull: { importIds: importId, sourceRefs: { importId } },
+          },
+        });
+        for (const collection of [TRACKS, BOOKMARKS]) {
+          await mongo({
+            action: "deleteMany",
+            collection,
+            query: {
+              $and: [
+                { "sourceRefs.importId": importId },
+                { sourceRefs: { $size: 1 } },
+              ],
+            },
+          });
+          await mongo({
+            action: "updateMany",
+            collection,
+            query: { "sourceRefs.importId": importId },
+            update: { $pull: { sourceRefs: { importId } } },
+          });
+        }
+        await mongo({
+          action: "updateMany",
+          collection: CONFLICTS,
+          query: { sourceImportIds: importId },
+          update: {
+            $pull: {
+              sourceImportIds: importId,
+              candidates: { importId },
+            },
+          },
         });
         await mongo({
           action: "deleteOne",
           collection: IMPORTS,
           query: { _id: importId },
         });
+        if (importDoc.fileId) {
+          try {
+            const fs = await getFsResource(auth);
+            await fs({
+              action: "delete",
+              bucket: "location_files",
+              id: String(importDoc.fileId),
+            });
+          } catch (error) {
+            console.warn(
+              "[location] Import source removed but GridFS cleanup failed:",
+              error instanceof Error ? error.message : error,
+            );
+          }
+        }
+        await bumpLocationImportRevision(mongo);
         if (importDoc.timeRange?.start && importDoc.timeRange?.end) {
           await this.enqueueReprocess(
             auth,
@@ -906,7 +1196,11 @@ export class LocationResource
             "Import deleted; regenerating derived segments",
           );
         }
-        return { success: true, deletedPoints: deleted.deletedCount ?? 0 };
+        return {
+          success: true,
+          deletedPoints: (deletedLegacy.deletedCount ?? 0) +
+            (deletedSole.deletedCount ?? 0),
+        };
       }
     }
   }

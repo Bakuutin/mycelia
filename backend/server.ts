@@ -24,6 +24,7 @@ import { createInterface } from "node:readline/promises";
 import cors from "npm:cors@2.8.5";
 import { createServer as createHttpServer } from "node:http";
 import { WebSocketServer } from "npm:ws@^8.18.0";
+import { MongoClient } from "mongodb";
 
 import { requestCounter } from "@/lib/telemetry.ts";
 import { handlePcmWebSocket } from "@/services/audio.websocket.server.ts";
@@ -58,6 +59,16 @@ import {
 let logFile: Deno.FsFile | null = null;
 let dependencyWatchdogInterval: ReturnType<typeof setInterval> | null = null;
 const dependencyRedis = redis.duplicate();
+// Keep liveness probes out of the application pool. Large, legitimate writes
+// (for example a location import) can occupy that pool long enough for a
+// checkout timeout to look like a database outage and trigger a needless
+// self-heal restart.
+const dependencyMongo = new MongoClient(env.MONGO_URL, {
+  maxPoolSize: 1,
+  maxConnecting: 1,
+  serverSelectionTimeoutMS: 5_000,
+  waitQueueTimeoutMS: 5_000,
+});
 let dependencyWatchdogRunning = false;
 let dependencyFailures = 0;
 
@@ -71,7 +82,10 @@ async function checkCriticalDependencies(): Promise<void> {
   try {
     const check = Promise.all([
       dependencyRedis.ping(),
-      getRootDB().then((db) => db.command({ ping: 1 }, { timeoutMS: 5_000 })),
+      dependencyMongo.db(env.DATABASE_NAME).command(
+        { ping: 1 },
+        { timeoutMS: 5_000 },
+      ),
       Promise.resolve().then(() => {
         if (!updatesPubSubHub.isReady) {
           throw new Error("updates Redis Pub/Sub is not reconciled");
@@ -128,6 +142,7 @@ function stopDependencyWatchdog(): void {
   clearInterval(dependencyWatchdogInterval);
   dependencyWatchdogInterval = null;
   dependencyRedis.disconnect();
+  void dependencyMongo.close().catch(() => {});
 }
 
 function setupLogging() {
