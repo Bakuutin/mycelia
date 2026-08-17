@@ -1,7 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileUp, Loader2, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FileUp,
+  Loader2,
+  Upload,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,28 +19,52 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useTrackVisibilityStore } from "@/stores/trackVisibilityStore";
-import {
-  locationKeys,
-  useLocationImports,
-} from "@/hooks/useLocationQueries";
+import { locationKeys, useLocationImports } from "@/hooks/useLocationQueries";
 import { ImportsList } from "./ImportsList";
-import type { LocationImport } from "@/types/location";
+import type {
+  LocationImport,
+  LocationImportCounts,
+  LocationImportPreview,
+} from "@/types/location";
 
-interface ImportResult {
+interface PreviewFailure {
   filename: string;
+  error: { code: string; message: string };
+}
+
+interface ImportReceipt {
   importId?: string;
-  pointsImported: number;
-  pointsDeduplicated: number;
-  pointsSkipped: number;
   duplicate?: boolean;
-  error?: string;
+  status?: string;
+  counts: LocationImportCounts;
 }
 
 interface ImportTracksDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** "Show on map" action for a listed import (optional). */
   onShowImportOnMap?: (imp: LocationImport) => void;
+}
+
+const number = new Intl.NumberFormat();
+
+function count(value: number): string {
+  return number.format(value ?? 0);
+}
+
+function isFailure(
+  preview: LocationImportPreview | PreviewFailure,
+): preview is PreviewFailure {
+  return "error" in preview;
+}
+
+function confirmLabel(preview: LocationImportPreview): string {
+  if (preview.counts.newPoints > 0) {
+    return `Import ${count(preview.counts.newPoints)} new points`;
+  }
+  if (preview.counts.bookmarks > 0 || preview.counts.tracks > 0) {
+    return "Add metadata and saved places";
+  }
+  return "Link as an additional source";
 }
 
 export function ImportTracksDialog({
@@ -42,65 +72,108 @@ export function ImportTracksDialog({
   onOpenChange,
   onShowImportOnMap,
 }: ImportTracksDialogProps) {
-  const [isUploading, setIsUploading] = useState(false);
-  const [results, setResults] = useState<ImportResult[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [previews, setPreviews] = useState<
+    Array<LocationImportPreview | PreviewFailure>
+  >([]);
+  const [confirming, setConfirming] = useState<Set<string>>(new Set());
+  const [receipts, setReceipts] = useState<Record<string, ImportReceipt>>({});
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const { data: imports } = useLocationImports(open);
   const { visibleTracks, toggleTrack } = useTrackVisibilityStore();
 
-  const uploadFiles = useCallback(async (files: File[]) => {
+  const analyzeFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
-    setIsUploading(true);
-    setResults([]);
+    setIsAnalyzing(true);
+    setPreviews([]);
+    setReceipts({});
     try {
       const formData = new FormData();
       for (const file of files) formData.append("files", file);
       const authHeaders = await api.getAuthHeaders();
-      const response = await fetch(`${api.baseURL}/api/location/upload`, {
-        method: "POST",
-        body: formData,
-        headers: authHeaders, // No Content-Type — browser sets the boundary
-      });
-      if (!response.ok) {
-        throw new Error(`Upload failed: ${response.status}`);
-      }
-      const data = await response.json();
-      setResults(data.results ?? []);
-
-      const imported = (data.results ?? []).reduce(
-        (sum: number, r: ImportResult) => sum + (r.pointsImported ?? 0),
-        0,
+      const response = await fetch(
+        `${api.baseURL}/api/location/imports/analyze`,
+        { method: "POST", body: formData, headers: authHeaders },
       );
-      if (imported > 0) {
-        toast.success(
-          `Imported ${imported} location points. Processing into stays and timezones…`,
-        );
-        // Make the result visible right away for first-time users.
-        if (!visibleTracks.includes("locations")) toggleTrack("locations");
-      } else if (data.results?.every((r: ImportResult) => r.duplicate)) {
-        toast.info("These files were already imported.");
-      }
-      queryClient.invalidateQueries({ queryKey: locationKeys.all });
-    } catch (err) {
+      if (!response.ok) throw new Error(`Analysis failed (${response.status})`);
+      const data = await response.json();
+      setPreviews(data.results ?? []);
+    } catch (error) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to upload tracks",
+        error instanceof Error
+          ? error.message
+          : "The files could not be analyzed.",
       );
     } finally {
-      setIsUploading(false);
+      setIsAnalyzing(false);
+    }
+  }, []);
+
+  const confirmPreview = useCallback(async (preview: LocationImportPreview) => {
+    setConfirming((current) => new Set(current).add(preview.previewId));
+    try {
+      const authHeaders = await api.getAuthHeaders();
+      const response = await fetch(
+        `${api.baseURL}/api/location/imports/${preview.previewId}/confirm`,
+        { method: "POST", headers: authHeaders },
+      );
+      const data = await response.json();
+      if (response.status === 409 && data.preview) {
+        setPreviews((current) =>
+          current.map((item) =>
+            !isFailure(item) && item.previewId === preview.previewId
+              ? data.preview
+              : item
+          )
+        );
+        toast.info("Location data changed. Review the refreshed analysis.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(
+          data.error?.message ?? "The import could not be committed.",
+        );
+      }
+      const receipt = data.receipt as ImportReceipt;
+      setReceipts((current) => ({
+        ...current,
+        [preview.previewId]: receipt,
+      }));
+      if (receipt.counts?.newPoints > 0) {
+        toast.success(
+          `Imported ${count(receipt.counts.newPoints)} new location points.`,
+        );
+        if (!visibleTracks.includes("locations")) toggleTrack("locations");
+      } else {
+        toast.success("Metadata and source provenance were saved.");
+      }
+      queryClient.invalidateQueries({ queryKey: locationKeys.all });
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The import could not be committed.",
+      );
+    } finally {
+      setConfirming((current) => {
+        const next = new Set(current);
+        next.delete(preview.previewId);
+        return next;
+      });
     }
   }, [queryClient, toggleTrack, visibleTracks]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Import GPS tracks</DialogTitle>
+          <DialogTitle>Import GPS tracks and saved places</DialogTitle>
           <DialogDescription>
-            GPX, KML or KMZ exports from Organic Maps and other navigation
-            apps. Points without timestamps are skipped; re-importing the same
-            data is safe.
+            GPX, KML and KMZ files are analyzed first. Nothing is added to your
+            timeline until you review and confirm. Saved places and untimed
+            routes stay separate from GPS whereabouts.
           </DialogDescription>
         </DialogHeader>
 
@@ -108,15 +181,15 @@ export function ImportTracksDialog({
           className={`flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed p-6 text-center transition-colors ${
             dragOver ? "border-primary bg-primary/5" : "border-border"
           }`}
-          onDragOver={(e) => {
-            e.preventDefault();
+          onDragOver={(event) => {
+            event.preventDefault();
             setDragOver(true);
           }}
           onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
+          onDrop={(event) => {
+            event.preventDefault();
             setDragOver(false);
-            uploadFiles(Array.from(e.dataTransfer.files));
+            analyzeFiles(Array.from(event.dataTransfer.files));
           }}
         >
           <FileUp className="h-8 w-8 text-muted-foreground" />
@@ -126,13 +199,13 @@ export function ImportTracksDialog({
           <Button
             variant="outline"
             size="sm"
-            disabled={isUploading}
+            disabled={isAnalyzing}
             onClick={() => fileInputRef.current?.click()}
           >
-            {isUploading
+            {isAnalyzing
               ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               : <Upload className="mr-2 h-4 w-4" />}
-            Choose files
+            {isAnalyzing ? "Analyzing…" : "Choose files"}
           </Button>
           <input
             ref={fileInputRef}
@@ -140,37 +213,173 @@ export function ImportTracksDialog({
             accept=".gpx,.kml,.kmz"
             multiple
             className="hidden"
-            onChange={(e) => {
-              uploadFiles(Array.from(e.target.files ?? []));
-              e.target.value = "";
+            onChange={(event) => {
+              analyzeFiles(Array.from(event.target.files ?? []));
+              event.target.value = "";
             }}
           />
         </div>
 
-        {results.length > 0 && (
-          <div className="space-y-1 text-sm">
-            {results.map((r) => (
-              <div
-                key={r.filename}
-                className="flex items-center justify-between gap-2"
+        <div aria-live="polite" className="space-y-3">
+          {previews.map((preview) => {
+            if (isFailure(preview)) {
+              return (
+                <div
+                  key={preview.filename}
+                  role="alert"
+                  className="rounded-md border border-destructive/40 p-3 text-sm"
+                >
+                  <p className="font-medium">{preview.filename}</p>
+                  <p className="text-muted-foreground">
+                    {preview.error.message}
+                  </p>
+                </div>
+              );
+            }
+            const receipt = receipts[preview.previewId];
+            const c = receipt?.counts ?? preview.counts;
+            return (
+              <section
+                key={preview.previewId}
+                className="space-y-2 rounded-md border p-3 text-sm"
               >
-                <span className="truncate">{r.filename}</span>
-                {r.error
-                  ? <Badge variant="destructive">{r.error}</Badge>
-                  : r.duplicate
-                  ? <Badge variant="secondary">already imported</Badge>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate font-medium">{preview.filename}</p>
+                  <Badge variant="secondary" className="uppercase">
+                    {preview.format}
+                  </Badge>
+                </div>
+
+                {receipt
+                  ? (
+                    <div className="flex items-start gap-2 text-emerald-700 dark:text-emerald-400">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                      <p>
+                        Added {count(c.newPoints)} new · linked{" "}
+                        {count(c.matchedPoints)}
+                        {c.tracks > 0 && ` · ${count(c.tracks)} tracks`}
+                        {c.bookmarks > 0 &&
+                          ` · ${count(c.bookmarks)} saved places`}
+                      </p>
+                    </div>
+                  )
+                  : preview.exactFileMatch
+                  ? (
+                    <div>
+                      <p className="font-medium">
+                        This file is already imported.
+                      </p>
+                      <p className="text-muted-foreground">
+                        It matches “{preview.exactFileMatch.filename}”
+                        {preview.exactFileMatch.createdAt &&
+                          ` from ${
+                            new Date(preview.exactFileMatch.createdAt)
+                              .toLocaleString()
+                          }`}.
+                      </p>
+                    </div>
+                  )
                   : (
-                    <span className="shrink-0 text-muted-foreground">
-                      +{r.pointsImported}
-                      {r.pointsDeduplicated > 0 &&
-                        ` · ${r.pointsDeduplicated} dup`}
-                      {r.pointsSkipped > 0 && ` · ${r.pointsSkipped} no time`}
-                    </span>
+                    <>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                        <div>
+                          <strong>{count(c.newPoints)}</strong>
+                          <br />new GPS points
+                        </div>
+                        <div>
+                          <strong>{count(c.matchedPoints)}</strong>
+                          <br />already present
+                        </div>
+                        <div>
+                          <strong>{count(c.tracks)}</strong>
+                          <br />tracks/routes
+                        </div>
+                        <div>
+                          <strong>{count(c.bookmarks)}</strong>
+                          <br />saved places
+                        </div>
+                      </div>
+                      {(c.untimedCoordinates > 0 ||
+                        c.withinFileDuplicates > 0) && (
+                        <p className="text-xs text-muted-foreground">
+                          {c.untimedCoordinates > 0 &&
+                            `${
+                              count(c.untimedCoordinates)
+                            } untimed route coordinates will be saved for the map.`}
+                          {c.untimedCoordinates > 0 &&
+                            c.withinFileDuplicates > 0 && " "}
+                          {c.withinFileDuplicates > 0 &&
+                            `${
+                              count(c.withinFileDuplicates)
+                            } repeated points inside the file will be linked once.`}
+                        </p>
+                      )}
+                      {preview.duplicateSources.length > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          Existing matches:{" "}
+                          {preview.duplicateSources.slice(0, 3).map((source) =>
+                            `${source.filename} (${
+                              count(source.matchedPoints)
+                            })`
+                          ).join(", ")}.
+                        </p>
+                      )}
+                      {c.conflictGroups > 0 && (
+                        <div className="flex gap-2 rounded bg-amber-500/10 p-2 text-xs">
+                          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+                          <p>
+                            {count(c.conflictGroups)}{" "}
+                            times contain different coordinate sets. They will
+                            be saved for review and will not change the current
+                            route.
+                          </p>
+                        </div>
+                      )}
+                      {c.metadataReview > 0 && (
+                        <details className="rounded bg-muted/60 p-2 text-xs">
+                          <summary className="cursor-pointer font-medium">
+                            {count(c.metadataReview)}{" "}
+                            metadata differences retained for review
+                          </summary>
+                          <div className="mt-2 space-y-1 font-mono text-muted-foreground">
+                            {preview.metadataDifferences.map((
+                              difference,
+                              index,
+                            ) => (
+                              <p
+                                key={`${difference.kind}-${
+                                  difference.hash ?? difference.coordinateHash
+                                }-${index}`}
+                              >
+                                {difference.kind === "elevation"
+                                  ? `Elevation: existing ${difference.existing} m, incoming ${difference.incoming} m (${difference.hash})`
+                                  : `Multiple saved places share ${difference.coordinateHash}; the incoming item stays separate.`}
+                              </p>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      <div className="flex items-center justify-between gap-3 pt-1">
+                        <p className="text-xs text-muted-foreground">
+                          Existing canonical coordinates will not be replaced.
+                        </p>
+                        <Button
+                          size="sm"
+                          disabled={!preview.canConfirm ||
+                            confirming.has(preview.previewId)}
+                          onClick={() => confirmPreview(preview)}
+                        >
+                          {confirming.has(preview.previewId) &&
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          {confirmLabel(preview)}
+                        </Button>
+                      </div>
+                    </>
                   )}
-              </div>
-            ))}
-          </div>
-        )}
+              </section>
+            );
+          })}
+        </div>
 
         {(imports?.length ?? 0) > 0 && (
           <div className="space-y-1">

@@ -41,6 +41,7 @@ function segmentLatLngs(segment: LocationSegment): LatLngExpression[] {
 
 export function segmentsBounds(
   segments: LocationSegment[],
+  extraPoints: Array<[number, number]> = [],
 ): LatLngBoundsExpression | null {
   let minLat = Infinity;
   let maxLat = -Infinity;
@@ -56,6 +57,7 @@ export function segmentsBounds(
     if (s.loc) feed(s.loc.coordinates[1], s.loc.coordinates[0]);
     for (const [lng, lat] of s.path ?? []) feed(lat, lng);
   }
+  for (const [lat, lng] of extraPoints) feed(lat, lng);
   if (!Number.isFinite(minLat)) return null;
   const latPad = Math.max(0.005, (maxLat - minLat) * 0.1);
   const lngPad = Math.max(0.005, (maxLng - minLng) * 0.1);
@@ -115,6 +117,7 @@ export interface LocationMapProps {
   onSegmentClick?: (segment: LocationSegment) => void;
   children?: React.ReactNode;
   scrollWheelZoom?: boolean;
+  extraBoundsPoints?: Array<[number, number]>;
 }
 
 export function LocationMap({
@@ -125,11 +128,14 @@ export function LocationMap({
   onSegmentClick,
   children,
   scrollWheelZoom = true,
+  extraBoundsPoints,
 }: LocationMapProps) {
   const tileUrl = useSettingsStore((state) => state.mapTileUrl);
   const bounds = useMemo(
-    () => (fitToSegments ? segmentsBounds(segments) : null),
-    [segments, fitToSegments],
+    () => (fitToSegments
+      ? segmentsBounds(segments, extraBoundsPoints ?? [])
+      : null),
+    [segments, fitToSegments, extraBoundsPoints],
   );
 
   const stays = segments.filter(
@@ -165,8 +171,8 @@ export function LocationMap({
             : undefined}
         >
           <Tooltip sticky>
-            Assumed route · {formatDurationShort(segmentDurationMs(s))} without
-            data
+            Assumed route · {formatDurationShort(segmentDurationMs(s))}{" "}
+            without data
           </Tooltip>
         </Polyline>
       ))}

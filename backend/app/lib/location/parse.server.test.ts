@@ -55,15 +55,47 @@ const KML_LINESTRING = `<?xml version="1.0" encoding="UTF-8"?>
   </Document>
 </kml>`;
 
+const KML_BOOKMARK = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:mwm="https://comaps.app">
+  <Document>
+    <name>My Places</name>
+    <ExtendedData>
+      <mwm:lastModified>2026-08-17T11:59:39Z</mwm:lastModified>
+      <mwm:accessRules>Local</mwm:accessRules>
+    </ExtendedData>
+    <Placemark>
+      <name>Torgvas Abano</name>
+      <description>Hot spring</description>
+      <TimeStamp><when>2026-08-01T08:00:00Z</when></TimeStamp>
+      <styleUrl>#placemark-cyan</styleUrl>
+      <Point><coordinates>45.493027,42.25548,0</coordinates></Point>
+      <ExtendedData>
+        <mwm:name>
+          <mwm:lang code="default">თორღვას გოგირდის აბანო</mwm:lang>
+          <mwm:lang code="en">Torgvas Abano</mwm:lang>
+        </mwm:name>
+        <mwm:customName><mwm:lang code="default">Bath</mwm:lang></mwm:customName>
+        <mwm:featureTypes><mwm:value>natural-hot_spring</mwm:value></mwm:featureTypes>
+        <mwm:icon>Sights</mwm:icon>
+        <mwm:scale>15</mwm:scale>
+        <mwm:visibility>1</mwm:visibility>
+      </ExtendedData>
+    </Placemark>
+  </Document>
+</kml>`;
+
 Deno.test("parseGpx extracts timestamped points, skips the rest", () => {
-  const { points, skipped } = parseGpx(GPX);
-  expect(points.length).toBe(3);
-  expect(skipped).toBe(1); // trkpt without <time>
-  // Sorted by time: wpt at 06:00 comes first.
-  expect(points[0].lat).toBeCloseTo(41.7);
-  expect(points[0].ts.toISOString()).toBe("2026-08-01T06:00:00.000Z");
-  expect(points[1].ele).toBeCloseTo(450.2);
-  expect(points[1].lng).toBeCloseTo(44.8271);
+  const { points, tracks, bookmarks, skipped, untimedCoordinates } = parseGpx(
+    GPX,
+  );
+  expect(points.length).toBe(2);
+  expect(tracks.length).toBe(1);
+  expect(bookmarks.length).toBe(1);
+  expect(skipped).toBe(0);
+  expect(untimedCoordinates).toBe(1);
+  expect(points[0].ele).toBeCloseTo(450.2);
+  expect(points[0].lng).toBeCloseTo(44.8271);
+  expect(bookmarks[0].lat).toBeCloseTo(41.7);
 });
 
 Deno.test("parseGpx rejects non-GPX documents", () => {
@@ -81,9 +113,31 @@ Deno.test("parseKml reads gx:Track when/coord pairs", () => {
 });
 
 Deno.test("parseKml counts LineString coords as skipped (no timestamps)", () => {
-  const { points, skipped } = parseKml(KML_LINESTRING);
+  const { points, tracks, skipped, untimedCoordinates } = parseKml(
+    KML_LINESTRING,
+  );
   expect(points.length).toBe(0);
-  expect(skipped).toBe(3);
+  expect(tracks[0].kind).toBe("untimed-path");
+  expect(tracks[0].coordinates.length).toBe(3);
+  expect(skipped).toBe(0);
+  expect(untimedCoordinates).toBe(3);
+});
+
+Deno.test("parseKml keeps bookmarks and typed metadata out of GPS points", () => {
+  const result = parseKml(KML_BOOKMARK);
+  expect(result.points.length).toBe(0);
+  expect(result.bookmarks.length).toBe(1);
+  expect(result.datasetMetadata.name).toBe("My Places");
+  expect(result.datasetMetadata.sourceTimestamp?.toISOString()).toBe(
+    "2026-08-17T11:59:39.000Z",
+  );
+  expect(result.bookmarks[0].sourceTimestamp?.toISOString()).toBe(
+    "2026-08-01T08:00:00.000Z",
+  );
+  expect(result.bookmarks[0].customNames?.default).toBe("Bath");
+  expect(result.bookmarks[0].localizedNames?.en).toBe("Torgvas Abano");
+  expect(result.bookmarks[0].featureTypes).toEqual(["natural-hot_spring"]);
+  expect(result.bookmarks[0].style?.icon).toBe("cyan");
 });
 
 Deno.test("parseKmz unwraps doc.kml", () => {
@@ -109,5 +163,5 @@ Deno.test("detectFormat maps extensions", () => {
 Deno.test("parseTrackFile dispatches by format", () => {
   const bytes = new TextEncoder().encode(GPX);
   const { points } = parseTrackFile("gpx", bytes);
-  expect(points.length).toBe(3);
+  expect(points.length).toBe(2);
 });

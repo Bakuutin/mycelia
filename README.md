@@ -30,11 +30,14 @@ your own words.
 
 ### Location Tracks & Map
 
-- Import GPS tracks from Organic Maps and other navigators (GPX, KML/KMZ).
+- Preview and safely import overlapping GPS tracks (GPX, KML/KMZ), keeping
+  provenance, named source routes and rich KMZ saved-place metadata without
+  turning bookmark timestamps into false whereabouts.
 - Opt-in Locations row on the timeline: stays with city labels, movements, and
   grey "assumed" gaps; click a band to see where it was on a mini-map.
 - Dedicated Map page: movements over any period with automatic simplification,
-  dwell-time-sized stay circles, and conversation clusters you can browse.
+  dwell-time-sized stay circles, saved places/source tracks, coordinate review,
+  and conversation clusters you can browse.
 - Fully offline reverse geocoding (GeoNames) and automatic timezone periods
   derived from your movements; manual location assignment for ranges without
   data. See [LOCATIONS.md](docs/LOCATIONS.md) for the full manual.

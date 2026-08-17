@@ -6,6 +6,59 @@ import { ensureAllCollectionsExist } from "@/lib/mongo/collections.ts";
 import { up as configureExplicitLlmRouting } from "../../migrations/0019_explicit_llm_model_routing.ts";
 import { up as separateSummaryPromptModel } from "../../migrations/0023_separate_summary_prompt_model.ts";
 import { up as configureLlmProviderRouting } from "../../migrations/0024_llm_provider_routing.ts";
+import { up as upgradeLocationImports } from "../../migrations/0050_location_import_review.ts";
+
+Deno.test(
+  "location import migration backfills provenance and quarantines orphan points",
+  withFixtures(["Mongo"], async ({ db }) => {
+    const importId = new ObjectId();
+    const orphanImportId = new ObjectId();
+    await db.collection("location_imports").insertOne({
+      _id: importId,
+      filename: "committed.gpx",
+      status: "processed",
+      createdAt: new Date("2026-08-01T00:00:00Z"),
+    });
+    await db.collection("location_points").insertMany([
+      {
+        ts: new Date("2026-08-01T00:00:00Z"),
+        importId,
+        hash: "valid",
+      },
+      {
+        ts: new Date("2026-08-02T00:00:00Z"),
+        importId: orphanImportId,
+        hash: "orphan",
+      },
+    ]);
+
+    await upgradeLocationImports(db);
+    await upgradeLocationImports(db);
+
+    const valid = await db.collection("location_points").findOne({
+      hash: "valid",
+    });
+    const orphan = await db.collection("location_points").findOne({
+      hash: "orphan",
+    });
+    const imported = await db.collection("location_imports").findOne({
+      _id: importId,
+    });
+    expect(valid?.visible).toBe(true);
+    expect(valid?.selection).toBe("accepted");
+    expect(valid?.importIds?.map(String)).toEqual([String(importId)]);
+    expect(orphan?.visible).toBe(false);
+    expect(orphan?.recoveryState).toBe("orphaned");
+    expect(imported?.committedAt).toEqual(
+      new Date("2026-08-01T00:00:00Z"),
+    );
+    expect(
+      await db.collection("location_points").indexExists(
+        "location_point_canonical_cursor_v1",
+      ),
+    ).toBe(true);
+  }),
+);
 
 Deno.test(
   "migrations can run",
@@ -154,11 +207,13 @@ Deno.test(
 
     const config = await db.collection("configs").findOne({ _id: configId });
     const profiles = config?.llmProfiles?.profiles;
-    expect(profiles?.map((profile: Record<string, unknown>) => ({
-      id: profile.id,
-      enabled: profile.enabled,
-      priority: profile.priority,
-    }))).toEqual([
+    expect(
+      profiles?.map((profile: Record<string, unknown>) => ({
+        id: profile.id,
+        enabled: profile.enabled,
+        priority: profile.priority,
+      })),
+    ).toEqual([
       { id: "primary", enabled: false, priority: 50 },
       { id: "secondary", enabled: true, priority: 50 },
     ]);

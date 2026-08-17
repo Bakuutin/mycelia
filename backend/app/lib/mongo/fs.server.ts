@@ -37,10 +37,17 @@ const findSchema = z.object({
   query: z.record(z.string(), z.any()).optional(),
 });
 
+const deleteSchema = z.object({
+  action: z.literal("delete"),
+  bucket: z.string(),
+  id: zObjectId(),
+});
+
 const fsRequestSchema = z.discriminatedUnion("action", [
   uploadSchema,
   downloadSchema,
   findSchema,
+  deleteSchema,
 ]);
 
 type FsRequest = z.infer<typeof fsRequestSchema>;
@@ -94,6 +101,13 @@ export class FsResource implements Resource<FsRequest, FsResponse> {
       case "find": {
         const query = input.query || {};
         return bucket.find(query).toArray();
+      }
+      case "delete": {
+        const id = typeof input.id === "string"
+          ? new ObjectId(input.id)
+          : input.id;
+        await bucket.delete(id);
+        return { success: true };
       }
       default:
         throw new Error("Unknown action");
