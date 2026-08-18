@@ -40,6 +40,15 @@ DIARIZATION_CONTINUITY_THRESHOLD = float(os.environ.get('DIARIZATION_CONTINUITY_
 MAX_SEQUENCE_GAP = timedelta(
     seconds=float(os.environ.get('DIARIZATION_MAX_GAP_SECONDS', '60'))
 )
+DIARIZATION_CURSOR_MAX_TIME_MS = 5_000
+DIARIZATION_HYDRATE_MAX_TIME_MS = 5_000
+DIARIZATION_METADATA_PROJECTION = {
+    '_id': 1,
+    'original_id': 1,
+    'index': 1,
+    'start': 1,
+    'diarizationFailure': 1,
+}
 
 # Cache for speaker profiles (refreshed periodically)
 _speaker_profiles_cache: list = []
@@ -437,60 +446,73 @@ def get_diarization_sequences(limit=10, filters=None, max_sequence_length=MAX_SE
 
     base_filters = _build_pending_chunk_filters(filters, include_diarized=include_diarized)
 
-    for chunk in mongo_cursor('audio_chunks', base_filters, {
+    cursor = mongo_cursor('audio_chunks', base_filters, {
+        "projection": DIARIZATION_METADATA_PROJECTION,
         "sort": {"start": 1},  # Sort ascending to get consecutive chunks
-    }):
-        if limit is not None and yielded >= limit:
-            break
+        "hint": (
+            "audio_chunks_diarization_coverage_v1"
+            if include_diarized
+            else "audio_chunks_diarization_pending_v2"
+        ),
+        "maxTimeMS": DIARIZATION_CURSOR_MAX_TIME_MS,
+    })
+    try:
+        for chunk in cursor:
+            if limit is not None and yielded >= limit:
+                break
 
-        original_id = chunk['original_id']
-        start = chunk['start']
+            original_id = chunk['original_id']
+            start = chunk['start']
 
-        # Clean up old sequences that are too far in the past
-        for existing_id, seq in tuple(sequences_by_id.items()):
-            if start - seq.start > timedelta(seconds=600):
-                if not seq.is_continuation or len(seq.chunks) > 1:
-                    yield seq
-                    yielded += 1
-                del sequences_by_id[existing_id]
+            # Clean up old sequences that are too far in the past
+            for existing_id, seq in tuple(sequences_by_id.items()):
+                if start - seq.start > timedelta(seconds=600):
+                    if not seq.is_continuation or len(seq.chunks) > 1:
+                        yield seq
+                        yielded += 1
+                    del sequences_by_id[existing_id]
 
-        seq = sequences_by_id.get(original_id)
+            seq = sequences_by_id.get(original_id)
 
-        # Break the sequence when the chunks stop being consecutive, or when
-        # the recording paused long enough that joining them would send mostly
-        # silence to the diarizer.
-        if seq and (
-            seq.max_index + 1 != chunk['index']
-            or start - seq.last['start'] > MAX_SEQUENCE_GAP
-        ):
-            assert chunk not in seq.chunks
-            yield seq
-            yielded += 1
-            del sequences_by_id[original_id]
-            seq = None
+            # Break the sequence when the chunks stop being consecutive, or when
+            # the recording paused long enough that joining them would send mostly
+            # silence to the diarizer.
+            if seq and (
+                seq.max_index + 1 != chunk['index']
+                or start - seq.last['start'] > MAX_SEQUENCE_GAP
+            ):
+                assert chunk not in seq.chunks
+                yield seq
+                yielded += 1
+                del sequences_by_id[original_id]
+                seq = None
 
-        if original_id not in sequences_by_id:
-            try:
-                seq = sequences_by_id[original_id] = DiarizationSequence(
+            if original_id not in sequences_by_id:
+                try:
+                    seq = sequences_by_id[original_id] = DiarizationSequence(
+                        original_id=original_id,
+                        chunks=[]
+                    )
+                except Exception as e:
+                    log_info(f"ERROR: Creating diarization sequence for {original_id}: {e}")
+                    continue
+
+            seq.chunks.append(chunk)
+
+            # If we've reached max sequence length, yield it and create continuation
+            if len(seq.chunks) >= max_sequence_length:
+                seq.is_partial = True
+                yield seq
+                yielded += 1
+                sequences_by_id[original_id] = DiarizationSequence(
                     original_id=original_id,
-                    chunks=[]
+                    chunks=[chunk],
+                    is_continuation=True,
                 )
-            except Exception as e:
-                log_info(f"ERROR: Creating diarization sequence for {original_id}: {e}")
-                continue
-
-        seq.chunks.append(chunk)
-
-        # If we've reached max sequence length, yield it and create continuation
-        if len(seq.chunks) >= max_sequence_length:
-            seq.is_partial = True
-            yield seq
-            yielded += 1
-            sequences_by_id[original_id] = DiarizationSequence(
-                original_id=original_id,
-                chunks=[chunk],
-                is_continuation=True,
-            )
+    finally:
+        close_cursor = getattr(cursor, 'close', None)
+        if close_cursor:
+            close_cursor()
 
     # Yield remaining sequences
     if limit is None or yielded < limit:
@@ -547,33 +569,20 @@ def _get_claim_owner(chunk_id: ObjectId) -> Optional[str]:
     return None
 
 
-def count_pending_chunks_for_original(original_id: ObjectId) -> Optional[int]:
-    filters = {'original_id': original_id}
-    query = _build_pending_chunk_filters(filters)
-    try:
-        result = call_resource('mongo', {
-            "action": "count",
-            "collection": "audio_chunks",
-            "query": query,
-            "options": {
-                "hint": "audio_chunks_diarization_ready_backlog_v1",
-                "maxTimeMS": 5_000,
-            },
-        })
-        return int(result) if result is not None else None
-    except Exception as exc:
-        # This count is diagnostic only. Inference, persistence, and chunk
-        # completion have already succeeded, so a slow historical count must
-        # not turn the sequence into a retry and duplicate GPU work.
-        log_info(
-            f'Pending chunk count unavailable for original {original_id}: {exc}'
-        )
-        return None
-
-
-def claim_sequence(seq: DiarizationSequence, worker_id: str) -> tuple[bool, Optional[str]]:
+def claim_sequence(
+    seq: DiarizationSequence,
+    worker_id: str,
+    *,
+    include_diarized: bool = False,
+) -> tuple[bool, Optional[str]]:
     chunk_ids = [chunk['_id'] for chunk in seq.chunks]
-    success = claim_chunks(chunk_ids, worker_id)
+    success = claim_chunks(
+        chunk_ids,
+        worker_id,
+        required_filters=_build_pending_chunk_filters(
+            include_diarized=include_diarized,
+        ),
+    )
 
     if not success:
         release_sequence(seq, worker_id)
@@ -581,6 +590,52 @@ def claim_sequence(seq: DiarizationSequence, worker_id: str) -> tuple[bool, Opti
         return False, owner
 
     return True, None
+
+
+def hydrate_claimed_sequence(
+    seq: DiarizationSequence,
+    worker_id: str,
+) -> DiarizationSequence:
+    """Load audio bytes only after every candidate chunk belongs to this worker."""
+    if all('data' in chunk for chunk in seq.chunks):
+        return seq
+
+    chunk_ids = [chunk['_id'] for chunk in seq.chunks]
+    result = call_resource('mongo', {
+        "action": "find",
+        "collection": "audio_chunks",
+        "query": {
+            '_id': {'$in': chunk_ids},
+            'processing_by': worker_id,
+        },
+        "options": {
+            "projection": {
+                '_id': 1,
+                'original_id': 1,
+                'index': 1,
+                'start': 1,
+                'data': 1,
+                'diarizationFailure': 1,
+            },
+            "limit": len(chunk_ids),
+            "hint": "_id_",
+            "maxTimeMS": DIARIZATION_HYDRATE_MAX_TIME_MS,
+        },
+    })
+    docs = result.get('data', []) if isinstance(result, dict) else result
+    by_id = {doc['_id']: doc for doc in docs or []}
+    missing_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in by_id]
+    if missing_ids:
+        raise RuntimeError(
+            f"Could not hydrate {len(missing_ids)} claimed audio chunk(s)"
+        )
+
+    return DiarizationSequence(
+        original_id=seq.original_id,
+        chunks=[by_id[chunk_id] for chunk_id in chunk_ids],
+        is_partial=seq.is_partial,
+        is_continuation=seq.is_continuation,
+    )
 
 
 def release_sequence(seq: DiarizationSequence, worker_id: str):
@@ -616,11 +671,39 @@ def diarize_sequence(
     payload_duration = 0.0
 
     try:
-        claimed, claimed_by = claim_sequence(sequence, worker_id)
+        claimed, claimed_by = claim_sequence(
+            sequence,
+            worker_id,
+            include_diarized=not mark_chunks,
+        )
         if not claimed:
             claimant_text = f' by {claimed_by}' if claimed_by else ''
             log_info(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  skipped (claimed{claimant_text})')
             return {"status": "skipped", "chunks": 0, "chunks_diarized": 0, "duration": 0, "segments": 0}
+
+        try:
+            sequence = hydrate_claimed_sequence(sequence, worker_id)
+        except Exception as exc:
+            release_sequence(sequence, worker_id)
+            detail = {
+                "category": "mongo_hydration",
+                "message": str(exc),
+                "retryable": True,
+                "status": "will_retry",
+            }
+            log_info(
+                f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
+                f'ERROR: claimed audio hydration failed: {exc}'
+            )
+            return {
+                "status": "error",
+                "error": str(exc),
+                "errorDetail": detail,
+                "chunks": 0,
+                "chunks_diarized": 0,
+                "duration": time.time() - start_time,
+                "segments": 0,
+            }
 
         # Combine chunks into WAV file
         wav_file, total_samples = combine_chunks_to_wav(sequence)
@@ -676,11 +759,9 @@ def diarize_sequence(
             chunk_rate = (chunks_marked / duration) if chunks_marked and duration > 0 else None
             chunk_rate_display = f'{chunk_rate:.2f} ch/s' if chunk_rate else 'n/a'
             remaining_in_sequence = max(chunks_count - chunks_marked, 0)
-            remaining_for_original = count_pending_chunks_for_original(sequence.original_id)
-            remaining_original_display = remaining_for_original if remaining_for_original is not None else 'unknown'
             log_info(
                 f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
-                f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}, orig_left={remaining_original_display}) @ {chunk_rate_display}  '
+                f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}) @ {chunk_rate_display}  '
                 f'no_segments  payload={payload_bytes / (1024 * 1024):.2f} MiB/{payload_duration:.1f}s'
             )
             return {
@@ -787,12 +868,10 @@ def diarize_sequence(
         chunk_rate = (chunks_marked / duration) if chunks_marked and duration > 0 else None
         chunk_rate_display = f'{chunk_rate:.2f} ch/s' if chunk_rate else 'n/a'
         remaining_in_sequence = max(chunks_count - chunks_marked, 0)
-        remaining_for_original = count_pending_chunks_for_original(sequence.original_id)
-        remaining_original_display = remaining_for_original if remaining_for_original is not None else 'unknown'
         matched_info = f', matched={matched_segments}' if matched_segments else ''
         log_info(
             f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
-            f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}, orig_left={remaining_original_display}) @ {chunk_rate_display}  '
+            f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}) @ {chunk_rate_display}  '
             f'diarized  {saved_segments} segments{matched_info}  payload={payload_bytes / (1024 * 1024):.2f} MiB/{payload_duration:.1f}s'
         )
         return {

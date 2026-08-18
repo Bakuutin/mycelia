@@ -181,6 +181,8 @@ interface PipelineStage {
   type: string;
   label: string;
   backlog: number;
+  backlogStatus?: "exact" | "estimated" | "exists" | "unavailable";
+  backlogAsOf?: Date;
   errors: number;
   paused: boolean;
   active: number;
@@ -235,10 +237,31 @@ function stageState(stage: PipelineStage): {
   if (stage.errors > 0) {
     return { label: `${stage.errors} errors`, className: "text-red-600" };
   }
+  if (stage.backlogStatus === "unavailable") {
+    return { label: "Backlog unavailable", className: "text-muted-foreground" };
+  }
   if (stage.backlog > 0) {
     return { label: "Waiting for worker", className: "text-amber-600" };
   }
   return { label: "Caught up", className: "text-green-600" };
+}
+
+function stageBacklogValue(stage: PipelineStage): string {
+  if (stage.backlogStatus === "unavailable") return "—";
+  if (stage.backlogStatus === "exists") return "Work remains";
+  const count = stage.backlog.toLocaleString();
+  return stage.backlogStatus === "estimated" ? `≈${count}` : count;
+}
+
+function stageBacklogLabel(stage: PipelineStage): string {
+  if (stage.backlogStatus === "unavailable") return "backlog unavailable";
+  if (stage.backlogStatus === "exists") return "exact count deferred";
+  if (stage.backlogStatus === "estimated") {
+    return stage.backlogAsOf
+      ? `estimated · updated ${formatDistanceToNow(stage.backlogAsOf)} ago`
+      : "estimated items waiting";
+  }
+  return "items waiting";
 }
 
 function formatWorkerType(type: string): string {
@@ -437,6 +460,9 @@ export default function AudioPipelinePage() {
         },
         stages: (rawStats.stages ?? []).map((stage) => ({
           ...stage,
+          backlogAsOf: stage.backlogAsOf
+            ? new Date(stage.backlogAsOf)
+            : undefined,
           latestJob: stage.latestJob
             ? {
               ...stage.latestJob,
@@ -787,10 +813,10 @@ export default function AudioPipelinePage() {
                     {index + 1}. {stage.label}
                   </p>
                   <p className="mt-2 text-2xl font-semibold">
-                    {stage.backlog.toLocaleString()}
+                    {stageBacklogValue(stage)}
                   </p>
                   <p className="text-[11px] text-muted-foreground">
-                    items waiting
+                    {stageBacklogLabel(stage)}
                   </p>
                   <p className={`mt-2 text-xs font-medium ${state.className}`}>
                     {state.label}
@@ -896,8 +922,12 @@ export default function AudioPipelinePage() {
                     ],
                     [
                       "Backlog",
-                      diarizationStage?.backlog ??
-                        diarizationCampaign.pendingChunks ?? 0,
+                      diarizationStage
+                        ? stageBacklogValue(diarizationStage)
+                        : `≈${
+                          (diarizationCampaign.pendingChunks ?? 0)
+                            .toLocaleString()
+                        }`,
                       "text-amber-600",
                     ],
                     [
@@ -944,8 +974,9 @@ export default function AudioPipelinePage() {
             : (
               <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
                 No global diarization backfill campaign has been recorded yet.
-                Current backlog: {(diarizationStage?.backlog ?? 0)
-                  .toLocaleString()} chunks; active / queued jobs:{" "}
+                Current backlog: {diarizationStage
+                  ? stageBacklogValue(diarizationStage)
+                  : "unavailable"}; active / queued jobs:{" "}
                 {diarizationStage?.active ?? 0} / {queuedDiarizationJobs}.
               </div>
             )}

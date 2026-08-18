@@ -13,6 +13,9 @@ from bson import ObjectId
 from .resources import call_resource
 
 
+logger = logging.getLogger(__name__)
+
+
 def setup_worker_logging(log_name: str) -> logging.Logger:
     """
     Set up logging for a worker with rotating file handler.
@@ -62,31 +65,54 @@ def mongo_cursor(collection: str, query: dict, options: dict, batch_size: int = 
     Yields:
         Documents from the collection
     """
-    result = call_resource('mongo', {
-        "action": "getFirstBatch",
-        "collection": collection,
-        "query": query,
-        "options": options,
-        "batchSize": batch_size,
-    })
-    cursor_id = result.get("cursorId")
-
-    while result.get("data", []):
-        for c in result['data']:
-            yield c
-
-        if not result.get("hasMore", False):
-            return
-
+    cursor_id = None
+    try:
         result = call_resource('mongo', {
-            "action": "getMore",
+            "action": "getFirstBatch",
             "collection": collection,
-            "cursorId": cursor_id,
+            "query": query,
+            "options": options,
             "batchSize": batch_size,
         })
+        cursor_id = result.get("cursorId")
+
+        while result.get("data", []):
+            for c in result['data']:
+                yield c
+
+            if not result.get("hasMore", False):
+                cursor_id = None
+                return
+
+            result = call_resource('mongo', {
+                "action": "getMore",
+                "collection": collection,
+                "cursorId": cursor_id,
+                "batchSize": batch_size,
+            })
+    finally:
+        if cursor_id:
+            try:
+                call_resource('mongo', {
+                    "action": "closeCursor",
+                    "collection": collection,
+                    "cursorId": cursor_id,
+                })
+            except Exception as exc:
+                logger.warning(
+                    "Could not close Mongo cursor %s for %s: %s",
+                    cursor_id,
+                    collection,
+                    exc,
+                )
 
 
-def claim_chunks(chunk_ids: list[ObjectId], worker_id: str, collection: str = 'audio_chunks') -> bool:
+def claim_chunks(
+    chunk_ids: list[ObjectId],
+    worker_id: str,
+    collection: str = 'audio_chunks',
+    required_filters: dict | None = None,
+) -> bool:
     """
     Claim chunks for processing by setting processing_by field.
 
@@ -98,13 +124,17 @@ def claim_chunks(chunk_ids: list[ObjectId], worker_id: str, collection: str = 'a
     Returns:
         True if all chunks were successfully claimed, False otherwise
     """
+    query = {
+        '_id': {'$in': chunk_ids},
+        'processing_by': None,
+    }
+    if required_filters:
+        query.update(required_filters)
+
     result = call_resource('mongo', {
         "action": "updateMany",
         "collection": collection,
-        "query": {
-            '_id': {'$in': chunk_ids},
-            'processing_by': None
-        },
+        "query": query,
         "update": {
             '$set': {'processing_by': worker_id, 'claimed_at': datetime.now(tz=UTC)},
         }

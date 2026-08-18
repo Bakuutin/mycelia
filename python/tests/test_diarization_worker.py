@@ -21,9 +21,10 @@ from diarization_worker import (  # noqa: E402
     _segment_identity_key,
     _failure_retry_state,
     _get_overlap_segments,
-    count_pending_chunks_for_original,
+    claim_sequence,
     diarize_sequence,
     get_diarization_sequences,
+    hydrate_claimed_sequence,
     mark_as_diarized,
 )
 
@@ -35,8 +36,20 @@ def _sequence(*, partial: bool = False) -> DiarizationSequence:
         original_id=original_id,
         is_partial=partial,
         chunks=[
-            {"_id": ObjectId(), "original_id": original_id, "index": 0, "start": now},
-            {"_id": ObjectId(), "original_id": original_id, "index": 1, "start": now},
+            {
+                "_id": ObjectId(),
+                "original_id": original_id,
+                "index": 0,
+                "start": now,
+                "data": b"opus-0",
+            },
+            {
+                "_id": ObjectId(),
+                "original_id": original_id,
+                "index": 1,
+                "start": now,
+                "data": b"opus-1",
+            },
         ],
     )
 
@@ -62,14 +75,87 @@ def _diarize_response(segments: int = 3) -> SimpleNamespace:
 
 
 class DiarizationWorkerTest(TestCase):
-    def test_original_pending_count_is_best_effort(self):
+    def test_sequence_cursor_reads_metadata_only_with_deadline_and_hint(self):
         original_id = ObjectId()
+        start = datetime(2024, 1, 1, tzinfo=UTC)
+        chunk = {
+            "_id": ObjectId(),
+            "original_id": original_id,
+            "index": 0,
+            "start": start,
+        }
+
+        with patch(
+            "diarization_worker.mongo_cursor",
+            return_value=iter([chunk]),
+        ) as cursor:
+            sequences = list(get_diarization_sequences(limit=1))
+
+        self.assertEqual(len(sequences), 1)
+        options = cursor.call_args.args[2]
+        self.assertNotIn("data", options["projection"])
+        self.assertEqual(options["hint"], "audio_chunks_diarization_pending_v2")
+        self.assertEqual(options["maxTimeMS"], 5_000)
+
+    def test_claimed_sequence_hydrates_only_owned_ids_in_original_order(self):
+        sequence = _sequence()
+        metadata = DiarizationSequence(
+            original_id=sequence.original_id,
+            chunks=[
+                {key: value for key, value in chunk.items() if key != "data"}
+                for chunk in sequence.chunks
+            ],
+        )
+        hydrated_docs = list(reversed(sequence.chunks))
 
         with patch(
             "diarization_worker.call_resource",
-            side_effect=RuntimeError("count timed out"),
+            return_value=hydrated_docs,
+        ) as call:
+            hydrated = hydrate_claimed_sequence(metadata, "worker-1")
+
+        request = call.call_args.args[1]
+        self.assertEqual(request["query"]["processing_by"], "worker-1")
+        self.assertEqual(request["options"]["limit"], len(metadata.chunks))
+        self.assertEqual(request["options"]["maxTimeMS"], 5_000)
+        self.assertEqual(
+            [chunk["_id"] for chunk in hydrated.chunks],
+            [chunk["_id"] for chunk in metadata.chunks],
+        )
+        self.assertTrue(all("data" in chunk for chunk in hydrated.chunks))
+
+    def test_lost_claim_never_hydrates_audio(self):
+        sequence = _sequence()
+        for chunk in sequence.chunks:
+            chunk.pop("data")
+
+        with (
+            patch(
+                "diarization_worker.claim_sequence",
+                return_value=(False, "other-worker"),
+            ),
+            patch("diarization_worker.hydrate_claimed_sequence") as hydrate,
         ):
-            self.assertIsNone(count_pending_chunks_for_original(original_id))
+            result = diarize_sequence(sequence, "worker-1")
+
+        self.assertEqual(result["status"], "skipped")
+        hydrate.assert_not_called()
+
+    def test_claim_rechecks_pending_state_before_hydration(self):
+        sequence = _sequence()
+
+        with patch(
+            "diarization_worker.claim_chunks",
+            return_value=True,
+        ) as claim:
+            claimed, owner = claim_sequence(sequence, "worker-1")
+
+        self.assertTrue(claimed)
+        self.assertIsNone(owner)
+        required = claim.call_args.kwargs["required_filters"]
+        self.assertIsNone(required["processing_by"])
+        self.assertIsNone(required["diarized_at"])
+        self.assertTrue(required["vad.has_speech"])
 
     def test_similarity_threshold_is_sent_as_query_parameter(self):
         data, params = _build_diarization_request_fields("[]")

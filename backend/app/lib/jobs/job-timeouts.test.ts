@@ -43,3 +43,7 @@ Deno.test("manual summarization jobs keep the flat timeout", () => {
     batchSize: 25,
   })).toBe(DEFAULT_JOB_TIMEOUT_MS);
 });
+
+Deno.test("object density rebuild has a controlled one-hour timeout", () => {
+  expect(getJobTimeoutMs("objectTimelineDensityRebuild", {})).toBe(3_600_000);
+});

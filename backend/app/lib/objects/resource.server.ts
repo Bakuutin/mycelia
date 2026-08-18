@@ -10,6 +10,22 @@ import {
   TIMELINE_OBJECT_MAX_TIME_MS,
   TIMELINE_OBJECT_RANGE_INDEX,
 } from "./timeline-query.ts";
+import {
+  deriveObjectListCategories,
+  OBJECT_LIST_CATEGORIES,
+  OBJECT_LIST_TYPE_FLAGS,
+} from "./list-categories.ts";
+import { listObjectCards } from "./list-cards.ts";
+import {
+  isObjectListCatalogReady,
+  repairObjectListCatalog,
+} from "./list-catalog.ts";
+import { getObjectTimelineDensity } from "./timeline-density.server.ts";
+import {
+  OBJECT_DENSITY_RESOLUTIONS,
+  TIMELINE_OBJECT_CATEGORIES,
+} from "./timeline-density.ts";
+import { listTagOptions } from "./tag-options.ts";
 
 const zIcon = z.union([
   z.object({
@@ -100,7 +116,13 @@ const zObjectInput = z.object({
   })).optional().describe(
     "Time periods when this object/relationship was active. Multiple ranges supported for non-continuous periods.",
   ),
-}).loose();
+}).loose().refine(
+  (object) =>
+    !Object.keys(object).some((field) =>
+      field === "_listCategories" || field.startsWith("_listCategories.")
+    ),
+  { message: "Internal object projection fields cannot be supplied" },
+);
 
 const createObjectSchema = z.object({
   action: z.literal("create").describe("Create a new object"),
@@ -115,7 +137,12 @@ const updateObjectSchema = z.object({
   version: z.number().describe(
     "Current version number for optimistic locking. Get this from the object first. Update fails if version changed.",
   ),
-  field: z.string().describe(
+  field: z.string().refine(
+    (field) =>
+      field !== "_listCategories" &&
+      !field.startsWith("_listCategories."),
+    { message: "Internal object projection fields cannot be updated" },
+  ).describe(
     "Dot-notation path to the field to update (e.g., 'name', 'details', 'icon.text', 'timeRanges'). Set to null to remove field.",
   ),
   value: z.any().describe(
@@ -241,6 +268,75 @@ const getCountsSchema = z.object({
   ),
 });
 
+// EJSON represents JavaScript `undefined` object properties as `null`. Accept
+// that wire representation for optional fields while keeping handlers on the
+// simpler `undefined` contract. Explicitly nullable domain fields use their own
+// schemas and are unaffected.
+const ejsonOptional = <T extends z.ZodTypeAny>(schema: T) =>
+  schema.nullish().transform((value) => value ?? undefined);
+
+const listCardsSchema = z.object({
+  action: z.literal("listCards").describe(
+    "List one bounded Objects-page card section with cursor pagination",
+  ),
+  section: z.enum([...OBJECT_LIST_CATEGORIES, "starred"]),
+  filters: ejsonOptional(z.object({
+    search: ejsonOptional(z.string().max(200)),
+    tagIds: ejsonOptional(
+      z.array(
+        z.string().refine((value) => ObjectId.isValid(value), {
+          message: "Invalid tag ObjectId",
+        }),
+      ).max(20),
+    ),
+    tagMode: ejsonOptional(z.enum(["and", "or"])),
+    orphanedOnly: ejsonOptional(z.boolean()),
+  })),
+  sort: ejsonOptional(z.enum(["updatedAt", "createdAt", "name"])),
+  cursor: ejsonOptional(z.string().max(2048)),
+  limit: ejsonOptional(z.number().int().min(1).max(50)),
+});
+
+const repairListCatalogSchema = z.object({
+  action: z.literal("repairListCatalog").describe(
+    "Backfill one bounded batch of the internal object browse catalog and validate parity at completion",
+  ),
+  batchSize: z.number().int().min(1).max(1000).nullish().transform((value) =>
+    value ?? 1000
+  ),
+});
+
+const listTagOptionsSchema = z.object({
+  action: z.literal("listTagOptions").describe(
+    "Read a bounded compact set of tag options for the Objects-page filter",
+  ),
+  ids: ejsonOptional(
+    z.array(
+      z.string().refine((value) => ObjectId.isValid(value), {
+        message: "Invalid tag ObjectId",
+      }),
+    ).max(20),
+  ),
+  search: ejsonOptional(z.string().max(200)),
+  limit: z.number().int().min(1).max(50).nullish().transform((value) =>
+    value ?? 32
+  ),
+});
+
+const getDensitySchema = z.object({
+  action: z.literal("getDensity").describe(
+    "Read bounded persisted object interval-start density for the Timeline",
+  ),
+  start: zDateOrString(),
+  end: zDateOrString(),
+  resolution: ejsonOptional(z.enum(OBJECT_DENSITY_RESOLUTIONS)),
+  categories: ejsonOptional(
+    z.array(z.enum(TIMELINE_OBJECT_CATEGORIES)).max(
+      TIMELINE_OBJECT_CATEGORIES.length,
+    ),
+  ),
+});
+
 const mergeObjectsSchema = z.object({
   action: z.literal("merge").describe(
     "Merge duplicate objects into one. Loser names/aliases become winner aliases, all relationship edges are re-pointed to the winner, losers are deleted.",
@@ -339,6 +435,10 @@ const objectsRequestSchema = z.discriminatedUnion("action", [
   exploreTimeRangeSchema,
   getTimeRangeSchema,
   getCountsSchema,
+  listCardsSchema,
+  listTagOptionsSchema,
+  repairListCatalogSchema,
+  getDensitySchema,
   mergeObjectsSchema,
   splitObjectSchema,
   findDuplicatesSchema,
@@ -382,6 +482,22 @@ function objectRef(
 ): { id: string; name: string; type: string; url: string } {
   const id = String(doc._id);
   return { id, name: doc.name, type: objectType(doc), url: `/objects/${id}` };
+}
+
+export function stripObjectListInternals(value: any): any {
+  if (Array.isArray(value)) return value.map(stripObjectListInternals);
+  if (
+    value == null || typeof value !== "object" || value instanceof Date ||
+    value instanceof ObjectId ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, nested]) =>
+      key === "_listCategories" ? [] : [[key, stripObjectListInternals(nested)]]
+    ),
+  );
 }
 
 /**
@@ -431,6 +547,8 @@ export class ObjectsResource
     request: objectsRequestSchema as z.ZodType<ObjectsRequest>,
     response: z.any(),
   };
+  private typeCountsRefreshPromise: Promise<void> | null = null;
+  private orphanedRefreshPromise: Promise<void> | null = null;
 
   // Calculate type counts (fast)
   private async refreshTypeCounts(auth: Auth): Promise<{
@@ -521,6 +639,7 @@ export class ObjectsResource
       action: "aggregate",
       collection: "objects",
       pipeline: countsPipeline,
+      options: { maxTimeMS: 8_000 },
     });
     const result = countsResult[0] as {
       person: number;
@@ -540,7 +659,11 @@ export class ObjectsResource
       total: number;
     } | undefined;
 
-    return result || {
+    if (result) {
+      delete (result as any)._id;
+      return result;
+    }
+    return {
       person: 0,
       event: 0,
       relationship: 0,
@@ -559,7 +682,7 @@ export class ObjectsResource
     };
   }
 
-  // Calculate orphaned count (slow - uses $lookup)
+  // Calculate orphaned count with two indexed, non-correlated lookups.
   private async refreshOrphanedCount(auth: Auth): Promise<number> {
     const mongo = getMongoResource(auth);
 
@@ -572,27 +695,25 @@ export class ObjectsResource
       {
         $lookup: {
           from: "objects",
-          let: { objectId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                isRelationship: true,
-                $expr: {
-                  $or: [
-                    { $eq: ["$relationship.subject", "$$objectId"] },
-                    { $eq: ["$relationship.object", "$$objectId"] },
-                  ],
-                },
-              },
-            },
-            { $limit: 1 },
-          ],
-          as: "references",
+          localField: "_id",
+          foreignField: "relationship.subject",
+          pipeline: [{ $match: { isRelationship: true } }, { $limit: 1 }],
+          as: "subjectReferences",
+        },
+      },
+      {
+        $lookup: {
+          from: "objects",
+          localField: "_id",
+          foreignField: "relationship.object",
+          pipeline: [{ $match: { isRelationship: true } }, { $limit: 1 }],
+          as: "objectReferences",
         },
       },
       {
         $match: {
-          references: { $size: 0 },
+          subjectReferences: { $size: 0 },
+          objectReferences: { $size: 0 },
         },
       },
       { $count: "total" },
@@ -602,6 +723,7 @@ export class ObjectsResource
       action: "aggregate",
       collection: "objects",
       pipeline: orphanedPipeline,
+      options: { maxTimeMS: 8_000 },
     });
     return orphanedResult[0]?.total ?? 0;
   }
@@ -816,6 +938,203 @@ export class ObjectsResource
     };
   }
 
+  private async refreshTypeCountsSingleflight(auth: Auth): Promise<void> {
+    if (this.typeCountsRefreshPromise) return this.typeCountsRefreshPromise;
+    this.typeCountsRefreshPromise = (async () => {
+      const mongo = getMongoResource(auth);
+      try {
+        const counts = await this.refreshTypeCounts(auth);
+        const asOf = new Date();
+        await mongo({
+          action: "updateOne",
+          collection: "object_stats",
+          query: { _id: "counts" },
+          update: {
+            $set: {
+              ...counts,
+              typeCountsUpdatedAt: asOf,
+              typeCountsStatus: "fresh",
+              stale: false,
+            },
+          },
+          options: { upsert: true },
+        });
+      } catch (error) {
+        await mongo({
+          action: "updateOne",
+          collection: "object_stats",
+          query: { _id: "counts" },
+          update: {
+            $set: {
+              typeCountsStatus: "stale",
+              typeCountsLastErrorAt: new Date(),
+              stale: true,
+            },
+          },
+          options: { upsert: true },
+        });
+        console.error("Failed to refresh object type counts:", error);
+      }
+    })().finally(() => {
+      this.typeCountsRefreshPromise = null;
+    });
+    return this.typeCountsRefreshPromise;
+  }
+
+  private async refreshOrphanedCountSingleflight(
+    auth: Auth,
+    force = false,
+  ): Promise<void> {
+    if (this.orphanedRefreshPromise) return this.orphanedRefreshPromise;
+    const mongo = getMongoResource(auth);
+    this.orphanedRefreshPromise = (async () => {
+      if (!force) {
+        const cached = await mongo({
+          action: "findOne",
+          collection: "object_stats",
+          query: { _id: "counts" },
+        });
+        const retryAfter = cached?.orphanedRetryAfter
+          ? new Date(cached.orphanedRetryAfter).getTime()
+          : 0;
+        if (retryAfter > Date.now()) return;
+      }
+      try {
+        const orphaned = await this.refreshOrphanedCount(auth);
+        await mongo({
+          action: "updateOne",
+          collection: "object_stats",
+          query: { _id: "counts" },
+          update: {
+            $set: {
+              orphaned,
+              orphanedUpdatedAt: new Date(),
+              orphanedStatus: "fresh",
+            },
+            $unset: { orphanedRetryAfter: "" },
+          },
+          options: { upsert: true },
+        });
+      } catch (error) {
+        const cached = await mongo({
+          action: "findOne",
+          collection: "object_stats",
+          query: { _id: "counts" },
+        });
+        await mongo({
+          action: "updateOne",
+          collection: "object_stats",
+          query: { _id: "counts" },
+          update: {
+            $set: {
+              orphanedStatus: cached?.orphaned == null
+                ? "unavailable"
+                : "stale",
+              orphanedLastErrorAt: new Date(),
+              orphanedRetryAfter: new Date(Date.now() + 60_000),
+            },
+          },
+          options: { upsert: true },
+        });
+        console.error("Failed to refresh orphaned object count:", error);
+      }
+    })().finally(() => {
+      this.orphanedRefreshPromise = null;
+    });
+    return this.orphanedRefreshPromise;
+  }
+
+  private formatCounts(
+    cached: any,
+    refreshing: { typeCounts?: boolean; orphaned?: boolean } = {},
+  ) {
+    const typeAsOf = cached?.typeCountsUpdatedAt ?? cached?.updatedAt ?? null;
+    const orphanedAsOf = cached?.orphanedUpdatedAt ?? null;
+    const typeStatus = refreshing.typeCounts
+      ? "refreshing"
+      : cached?.typeCountsStatus ?? (typeAsOf ? "stale" : "unavailable");
+    const orphanedStatus = refreshing.orphaned
+      ? "refreshing"
+      : cached?.orphanedStatus ??
+        (cached?.orphaned == null ? "unavailable" : "stale");
+    return {
+      person: cached?.person ?? 0,
+      event: cached?.event ?? 0,
+      relationship: cached?.relationship ?? 0,
+      promise: cached?.promise ?? 0,
+      conversation: cached?.conversation ?? 0,
+      tag: cached?.tag ?? 0,
+      place: cached?.place ?? 0,
+      organization: cached?.organization ?? 0,
+      product: cached?.product ?? 0,
+      project: cached?.project ?? 0,
+      animal: cached?.animal ?? 0,
+      concept: cached?.concept ?? 0,
+      media: cached?.media ?? 0,
+      other: cached?.other ?? 0,
+      orphaned: cached?.orphaned ?? null,
+      total: cached?.total ?? 0,
+      updatedAt: typeAsOf,
+      stale: typeStatus !== "fresh",
+      orphanedLoading: orphanedStatus === "refreshing" &&
+        cached?.orphaned == null,
+      meta: {
+        typeCounts: { status: typeStatus, asOf: typeAsOf },
+        orphaned: { status: orphanedStatus, asOf: orphanedAsOf },
+      },
+    };
+  }
+
+  private async getCountsV2(auth: Auth, forceRefresh = false) {
+    const mongo = getMongoResource(auth);
+    let cached = await mongo({
+      action: "findOne",
+      collection: "object_stats",
+      query: { _id: "counts" },
+    });
+
+    if (forceRefresh) {
+      await Promise.all([
+        this.refreshTypeCountsSingleflight(auth),
+        this.refreshOrphanedCountSingleflight(auth, true),
+      ]);
+      cached = await mongo({
+        action: "findOne",
+        collection: "object_stats",
+        query: { _id: "counts" },
+      });
+      return this.formatCounts(cached);
+    }
+
+    if (!cached || cached.typeCountsUpdatedAt == null) {
+      await this.refreshTypeCountsSingleflight(auth);
+      cached = await mongo({
+        action: "findOne",
+        collection: "object_stats",
+        query: { _id: "counts" },
+      });
+      void this.refreshOrphanedCountSingleflight(auth);
+      return this.formatCounts(cached, { orphaned: true });
+    }
+
+    const typeAge = Date.now() - new Date(cached.typeCountsUpdatedAt).getTime();
+    const orphanedAge = cached.orphanedUpdatedAt
+      ? Date.now() - new Date(cached.orphanedUpdatedAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    const refreshTypes = cached.stale === true ||
+      cached.typeCountsStatus !== "fresh" || typeAge >= 60_000;
+    const orphanedRetrySuppressed = cached.orphanedRetryAfter &&
+      new Date(cached.orphanedRetryAfter).getTime() > Date.now();
+    const refreshOrphaned = !orphanedRetrySuppressed &&
+      (cached.orphanedStatus !== "fresh" || orphanedAge >= 5 * 60_000);
+    if (refreshTypes) void this.refreshTypeCountsSingleflight(auth);
+    if (refreshOrphaned) void this.refreshOrphanedCountSingleflight(auth);
+    return this.formatCounts(cached, {
+      typeCounts: refreshTypes,
+      orphaned: refreshOrphaned,
+    });
+  }
+
   // Invalidate counts cache (called after create/update/delete)
   private async invalidateCountsCache(auth: Auth): Promise<void> {
     const mongo = getMongoResource(auth);
@@ -824,7 +1143,13 @@ export class ObjectsResource
       action: "updateOne",
       collection: "object_stats",
       query: { _id: "counts" },
-      update: { $set: { stale: true } },
+      update: {
+        $set: {
+          stale: true,
+          typeCountsStatus: "stale",
+          orphanedStatus: "stale",
+        },
+      },
       options: { upsert: true },
     });
   }
@@ -861,6 +1186,10 @@ export class ObjectsResource
   }
 
   async use(input: ObjectsRequest): Promise<ObjectsResponse> {
+    return stripObjectListInternals(await this.useInternal(input));
+  }
+
+  private async useInternal(input: ObjectsRequest): Promise<ObjectsResponse> {
     const auth = await getServerAuth(); // already checked objects permissions
     const mongo = await getMongoResource(auth);
 
@@ -869,6 +1198,7 @@ export class ObjectsResource
         const now = new Date();
         const doc = {
           ...input.object,
+          _listCategories: deriveObjectListCategories(input.object),
           version: 1,
           createdAt: now,
           updatedAt: now,
@@ -1008,6 +1338,17 @@ export class ObjectsResource
           };
         }
 
+        const typeFields = OBJECT_LIST_TYPE_FLAGS.map(([flag]) => flag);
+        if (typeFields.includes(input.field)) {
+          const next = { ...current };
+          if (input.value === null || input.value === undefined) {
+            delete next[input.field];
+          } else {
+            next[input.field] = input.value;
+          }
+          updateDoc.$set._listCategories = deriveObjectListCategories(next);
+        }
+
         await mongo({
           action: "updateOne",
           collection: "objects",
@@ -1039,21 +1380,6 @@ export class ObjectsResource
         );
 
         // Invalidate counts cache if type-related fields changed
-        const typeFields = [
-          "isPerson",
-          "isEvent",
-          "isRelationship",
-          "isPromise",
-          "isConversation",
-          "isTag",
-          "isPlace",
-          "isOrganization",
-          "isProduct",
-          "isProject",
-          "isAnimal",
-          "isConcept",
-          "isMedia",
-        ];
         if (
           typeFields.includes(input.field) ||
           input.field.startsWith("relationship")
@@ -1236,6 +1562,10 @@ export class ObjectsResource
             $set[flag] = true;
           }
         }
+        $set._listCategories = deriveObjectListCategories({
+          ...winner,
+          ...$set,
+        });
         if (detailParts.length) $set.details = detailParts.join("\n\n---\n\n");
         if (timeRanges.length) $set.timeRanges = timeRanges;
         if (Object.keys(messenger).length) $set.messenger = messenger;
@@ -1496,6 +1826,7 @@ export class ObjectsResource
           version: 1,
           createdAt: new Date(),
         };
+        newDoc._listCategories = deriveObjectListCategories(newDoc);
 
         const insertResult = await mongo({
           action: "insertOne",
@@ -1806,6 +2137,24 @@ export class ObjectsResource
           update: { $unset: { _summarizationClaim: "" } },
         });
         return { released: result?.modifiedCount ?? 0 };
+      }
+
+      case "listCards": {
+        const catalogReady = await isObjectListCatalogReady(mongo);
+        return await listObjectCards(mongo, input, catalogReady);
+      }
+
+      case "listTagOptions": {
+        const catalogReady = await isObjectListCatalogReady(mongo);
+        return await listTagOptions(mongo, input, catalogReady);
+      }
+
+      case "repairListCatalog": {
+        return await repairObjectListCatalog(mongo, input.batchSize);
+      }
+
+      case "getDensity": {
+        return await getObjectTimelineDensity(input);
       }
 
       case "list": {
@@ -2332,27 +2681,7 @@ export class ObjectsResource
       }
 
       case "getCounts": {
-        // Get cached counts or calculate if not available
-        if (input.forceRefresh) {
-          // Full refresh including orphaned count
-          return await this.refreshCounts(auth);
-        }
-
-        const cached = await this.getCachedCounts(auth);
-        if (cached) {
-          // Return cached data immediately (even if stale)
-          // If stale, trigger background refresh
-          if (cached.stale) {
-            // Fire and forget - don't await
-            this.refreshCounts(auth).catch((err) =>
-              console.error("Background counts refresh failed:", err)
-            );
-          }
-          return cached;
-        }
-
-        // No cache exists - do quick refresh (type counts only, orphaned in background)
-        return await this.refreshTypeCountsOnly(auth);
+        return await this.getCountsV2(auth, input.forceRefresh === true);
       }
 
       default:
@@ -2365,6 +2694,10 @@ export class ObjectsResource
       create: ["create"],
       get: ["read"],
       list: ["read"],
+      listCards: ["read"],
+      listTagOptions: ["read"],
+      repairListCatalog: ["update"],
+      getDensity: ["read"],
       update: ["update"],
       delete: ["delete"],
       getRelationships: ["read"],

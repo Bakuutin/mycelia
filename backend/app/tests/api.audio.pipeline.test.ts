@@ -62,9 +62,8 @@ Deno.test(
       "enrollment",
     ]);
     expect(
-      data.stats.stages.find((stage: any) => stage.type === "diarization")
-        ?.backlog,
-    ).toBe(1);
+      data.stats.stages.find((stage: any) => stage.type === "diarization"),
+    ).toMatchObject({ backlog: 1, backlogStatus: "exists" });
     expect(Array.isArray(data.stats.recentJobs)).toBe(true);
   }),
 );
@@ -151,6 +150,43 @@ Deno.test(
     expect(response.status).toBe(200);
     const data = await response.json();
     expect(data.sessions.length).toBeLessThanOrEqual(5);
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: labels persisted diarization backlog as estimated",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    await db.collection("audio_chunks").insertOne({
+      start: new Date("2026-08-16T00:00:00Z"),
+      vad: { has_speech: true },
+    });
+    await db.collection("diarization_campaigns").insertOne({
+      campaignId: "global-running",
+      mode: "missing",
+      status: "running",
+      updatedAt: new Date("2026-08-16T02:00:00Z"),
+      processedChunks: 40,
+      pendingChunks: 60,
+      totalChunks: 100,
+    });
+
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(
+      data.stats.stages.find((stage: any) => stage.type === "diarization"),
+    ).toMatchObject({
+      backlog: 60,
+      backlogStatus: "estimated",
+    });
   }),
 );
 

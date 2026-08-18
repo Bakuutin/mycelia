@@ -470,6 +470,10 @@ def process_diarization_job(
         })
         if sequences_processed >= effective_batch_size:
             break
+
+    close_sequences = getattr(sequences, "close", None)
+    if close_sequences:
+        close_sequences()
     
     retryable_failure = any(
         bool(detail.get("retryable")) for detail in error_details

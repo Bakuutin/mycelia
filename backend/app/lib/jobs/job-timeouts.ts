@@ -47,6 +47,9 @@ export function getJobTimeoutMs(
   jobType: string,
   data?: Partial<JobData> | Record<string, unknown>,
 ): number {
+  if (jobType === "objectTimelineDensityRebuild") {
+    return 60 * 60 * 1000;
+  }
   if (jobType === "summarization") {
     return getSummarizationTimeoutMs(data as Record<string, unknown>);
   }

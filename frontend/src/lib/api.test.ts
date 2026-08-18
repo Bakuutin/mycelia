@@ -296,5 +296,57 @@ describe("ApiClient", () => {
       expect(result.date).toBeInstanceOf(Date);
       expect(result.date.toISOString()).toBe("2024-01-15T00:00:00.000Z");
     });
+
+    it("omits undefined object fields instead of sending them as null", async () => {
+      const mockResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue('{"items":[]}'),
+      };
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
+      (auth.getCurrentJWT as any).mockResolvedValue("jwt-token");
+
+      await client.callResource("objects", {
+        action: "listCards",
+        section: "person",
+        filters: {
+          search: undefined,
+          tagIds: undefined,
+          tagMode: "and",
+          orphanedOnly: undefined,
+          explicitNull: null,
+        },
+        cursor: undefined,
+        limit: 9,
+      });
+
+      const [, init] = ((globalThis as any).fetch as any).mock.calls[0];
+      expect(JSON.parse(init.body)).toEqual({
+        action: "listCards",
+        section: "person",
+        filters: { tagMode: "and", explicitNull: null },
+        limit: 9,
+      });
+    });
+
+    it("forwards an AbortSignal to the resource request", async () => {
+      const controller = new AbortController();
+      const mockResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue('{"items":[]}'),
+      };
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
+      (auth.getCurrentJWT as any).mockResolvedValue("jwt-token");
+
+      await client.callResource(
+        "objects",
+        { action: "listCards", section: "person" },
+        { signal: controller.signal },
+      );
+
+      expect((globalThis as any).fetch).toHaveBeenCalledWith(
+        "http://localhost:8000/api/resource/objects",
+        expect.objectContaining({ signal: controller.signal }),
+      );
+    });
   });
 });

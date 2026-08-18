@@ -87,6 +87,72 @@ When a change is not visible:
    may have changed: `docker compose restart nginx`.
 6. Do not restart MongoDB or Redis for an application-code reload.
 
+#### Objects browse and Timeline density rollout
+
+The Objects page does not run MongoDB aggregation pipelines in the browser. Each
+section uses the bounded `objects.listCards` action: 9 cards on the first page,
+cursor-based pages of up to 30 afterwards, at most two section requests at once,
+and a 3-second database deadline. Sections are loaded as they approach the
+viewport. Cached type counts refresh separately from the more expensive orphan
+count; a failed orphan refresh keeps the last value instead of replacing it with
+zero.
+
+Two manual-only Jobs tasks prepare the indexed projections used by this path:
+
+- `objectListCatalogBackfill` fills `_listCategories` in batches of 1000 and
+  enables the catalog only after missing/mismatch and legacy-count parity checks
+  pass.
+- `objectTimelineDensityRebuild` builds the isolated `object_timeline_density`
+  projection in 31-day source windows. At a far zoom, the Timeline reads only
+  this projection and makes no raw object-list request.
+
+For an existing database, use a controlled rollout:
+
+1. In **Jobs**, pause the `diarization` worker and wait for its active job to
+   finish. Pausing prevents new work; it does not kill an active job.
+2. Recreate only the changed backend/frontend application services, restart
+   nginx, and wait for backend `[READY]`, `/readiness = 200`, and healthy app
+   containers. Migrations `0051`, `0052`, and `0053` create the indexes, empty
+   projection collections, and durable density queue. `0053` idempotently
+   repairs installations that recorded an earlier `0052` before the queue and
+   state fields existed. Do not restart MongoDB or Redis.
+3. Run one `objectListCatalogBackfill` job. Its `hasMore` continuations drain
+   the catalog automatically; verify `object_list_state` has
+   `schemaVersion: 1, ready: true` before treating indexed section reads as
+   active.
+4. Run one `objectTimelineDensityRebuild` job. Enable/accept the far-zoom bars
+   only after `object_timeline_density_state._id = "current"` reports
+   `ready: true` and `building: false`.
+5. Recheck MongoDB load and application readiness, then resume diarization.
+
+Both rebuilds preserve canonical object timestamps. A failed catalog parity
+check leaves `ready: false` and `listCards` on its bounded legacy predicate. A
+density rebuild never writes the shared Timeline histogram collections.
+
+#### Historical diarization cursor guardrails
+
+Historical diarization scans `audio_chunks` through a metadata-only cursor
+(`_id`, source, sequence position, timestamps, and retry state). Each candidate
+sequence is claimed before a separate bounded lookup hydrates its audio bytes;
+losing a concurrent claim advances to the next candidate without loading audio
+or consuming the job's successful-sequence budget. The cursor uses the
+diarization work index, a 5-second Mongo deadline, and an explicit
+`mongo.closeCursor` call whenever a batch stops early.
+
+Deploy changes to this path by pausing only the diarization worker, draining its
+active jobs, recreating `backend` and `python-worker`, and then resuming the
+same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or
+Redis. After rollout, verify metadata cursor requests omit `data`, hydration is
+limited to one claimed sequence, and stopped batches leave no application cursor
+registered in the backend.
+
+The Audio Pipeline page does not run an exact diarization `audio_chunks` count
+on its 30-second refresh. It probes at most one indexed ready chunk: zero is
+exact, while existing work is shown either as the persisted campaign estimate
+(`≈N`, with its update time) or as `Work remains` when no estimate is available.
+Treat campaign `pendingChunks` as an operational estimate, not as an exact
+scheduler input; claiming and completion continue to use canonical chunk state.
+
 #### Location import recovery
 
 Location imports use a two-phase `analyze → confirm` contract. Analysis may
