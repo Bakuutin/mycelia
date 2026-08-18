@@ -35,15 +35,13 @@ export async function buildTriggeredJobData(
 export function isHealthBlockedEnqueueError(message: string): boolean {
   return message.includes("health check") ||
     message.includes("No healthy STT provider profiles are available") ||
-    message.includes(
-      "All enabled STT provider concurrency slots are reserved",
-    ) ||
-    message.includes(
-      "All healthy diarizator provider concurrency slots are reserved",
-    ) ||
-    message.includes("No healthy diarizator route is available") ||
-    message.includes("Diarizator route reservation is temporarily busy") ||
-    message.includes("has no free concurrency slots");
+    message.includes("No healthy diarizator route is available");
+}
+
+export function isCapacityBlockedEnqueueError(message: string): boolean {
+  return message.includes("concurrency slots are reserved") ||
+    message.includes("has no free concurrency slots") ||
+    message.includes("route reservation is temporarily busy");
 }
 
 export function getTriggerFreeSlots(
@@ -317,11 +315,24 @@ export class TriggerManager {
       };
       let enqueued = 0;
       for (let index = 0; index < freeSlots; index += 1) {
-        await enqueueJob(
-          triggeredJobData as any,
-          enqueueOptions,
-        );
-        enqueued += 1;
+        try {
+          await enqueueJob(
+            triggeredJobData as any,
+            enqueueOptions,
+          );
+          enqueued += 1;
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          if (!isCapacityBlockedEnqueueError(message)) throw error;
+          log("DEBUG", "Provider capacity reached while filling worker slots", {
+            jobName,
+            reason,
+            enqueued,
+          });
+          break;
+        }
       }
       log("INFO", `Jobs enqueued successfully`, {
         jobName,

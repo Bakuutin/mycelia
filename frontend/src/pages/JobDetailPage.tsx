@@ -539,7 +539,7 @@ export default function JobDetailPage() {
       ) {
         const [health, runs] = await Promise.all([
           api.callResource("jobs", {
-            action: "pipeline_health",
+            action: "services_health",
             force: true,
           }) as Promise<any>,
           api.callResource("speaker-segments", {

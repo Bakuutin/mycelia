@@ -69,6 +69,9 @@ your own words.
 
 - BullMQ job queue backed by Redis.
 - Worker management UI with pause/resume, statistics, and success rates.
+- Lightweight provider health checks, with corpus-wide pipeline and identity
+  counts available through explicit calculate buttons instead of dashboard
+  polling.
 - Pipeline ordering and progress tracking.
 - Configurable worker defaults and prompt templates.
 - Failed-job bulk retry, obsolete-failure dismissal, VAD queue recovery, and

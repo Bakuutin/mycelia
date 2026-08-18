@@ -13,6 +13,7 @@ import {
   removeLocationEntitySourceRefs,
 } from "@/lib/location/import.server.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
+import { createSingleFlightBackoff } from "@/lib/location/query-backoff.ts";
 
 const SEGMENTS = "location_segments";
 const POINTS = "location_points";
@@ -24,6 +25,19 @@ const TRACK_GEOMETRY = "location_track_geometry";
 const BOOKMARKS = "location_bookmarks";
 const CONFLICTS = "location_point_conflicts";
 const METADATA_CONFLICTS = "location_metadata_conflicts";
+const MAP_CONVERSATION_RANGE_INDEX = "objects_conversation_time_range_start_v1";
+const MAP_CONVERSATION_TIMEOUT_BACKOFF_MS = 60 * 1000;
+
+function isMongoDeadlineError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; codeName?: unknown } | null;
+  return candidate?.code === 50 || candidate?.codeName === "MaxTimeMSExpired" ||
+    /MaxTimeMSExpired|operation exceeded time limit/i.test(String(error));
+}
+
+const runMapConversationQuery = createSingleFlightBackoff<any[]>({
+  backoffMs: MAP_CONVERSATION_TIMEOUT_BACKOFF_MS,
+  isDeadlineError: isMongoDeadlineError,
+});
 
 /** Window padding used when re-running processing around an edit. */
 const REPROCESS_PAD_MS = 6 * 60 * 60 * 1000;
@@ -106,6 +120,7 @@ const updateSegmentSchema = z.object({
 
 const conversationsOnMapSchema = z.object({
   action: z.literal("conversations-on-map"),
+  manual: z.literal(true),
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
 });
@@ -840,23 +855,40 @@ export class LocationResource
           }
         }
 
-        const conversations: any[] = [];
-        for (const window of windows) {
-          const batch = await mongo({
-            action: "find",
-            collection: "objects",
-            query: {
-              isConversation: true,
-              "timeRanges.0.start": { $gte: window.start, $lt: window.end },
-            },
-            options: {
-              sort: { "timeRanges.0.start": -1 },
-              limit: 1000,
-              projection: { name: 1, icon: 1, timeRanges: 1 },
-            },
-          });
-          conversations.push(...batch);
-        }
+        // One indexed OR query replaces one Mongo cursor per stay window. Use
+        // the indexed multikey field rather than timeRanges.0.start, which
+        // cannot use the compound conversation range index.
+        const mapQueryKey = windows.map((window) =>
+          `${window.start.getTime()}:${window.end.getTime()}`
+        ).join("|");
+        const conversationRows = windows.length === 0
+          ? []
+          : await runMapConversationQuery(mapQueryKey, async () =>
+            await mongo({
+              action: "find",
+              collection: "objects",
+              query: {
+                isConversation: true,
+                $or: windows.map((window) => ({
+                  "timeRanges.start": {
+                    $gte: window.start,
+                    $lt: window.end,
+                  },
+                })),
+              },
+              options: {
+                limit: 10_000,
+                projection: { name: 1, icon: 1, timeRanges: 1 },
+                hint: MAP_CONVERSATION_RANGE_INDEX,
+                maxTimeMS: 5_000,
+              },
+            }) as any[]);
+        const conversations = [...new Map<string, any>(
+          conversationRows.map((conversation) => [
+            String(conversation._id),
+            conversation,
+          ]),
+        ).values()];
 
         const groups = new Map<string, {
           key: string;

@@ -330,7 +330,6 @@ export function PipelineDetailSection({
 
 export default function AudioPipelinePage() {
   const { confirmAction } = useActionDialog();
-  const [autoRefresh, setAutoRefresh] = useState(true);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(
     new Set(),
   );
@@ -503,7 +502,10 @@ export default function AudioPipelinePage() {
       };
     },
     retry: false,
-    refetchInterval: autoRefresh ? 30_000 : false,
+    enabled: false,
+    // This endpoint contains exact corpus-wide counters. Keep refresh manual so
+    // an open dashboard cannot become a recurring Mongo workload.
+    refetchInterval: false,
   });
 
   useEffect(() => {
@@ -562,7 +564,9 @@ export default function AudioPipelinePage() {
   ) ?? [];
   const stagesWithErrors = stats?.stages?.filter((stage) => stage.errors > 0) ??
     [];
-  const pipelineHealth = (isError || loadingTimedOut) && !stats
+  const pipelineHealth = !stats && !isFetching && !isError
+    ? "idle"
+    : (isError || loadingTimedOut) && !stats
     ? "error"
     : !stats
     ? "loading"
@@ -704,21 +708,11 @@ export default function AudioPipelinePage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Audio Pipeline</h1>
           <p className="text-muted-foreground">
-            Live state from source ingestion through conversations and summaries
+            Manual snapshot from source ingestion through conversations and
+            summaries
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant={autoRefresh ? "default" : "outline"}
-            size="sm"
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            data-testid="auto-refresh-toggle"
-          >
-            <Activity
-              className={`h-4 w-4 mr-2 ${autoRefresh ? "animate-pulse" : ""}`}
-            />
-            {autoRefresh ? "Live" : "Paused"}
-          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -729,7 +723,7 @@ export default function AudioPipelinePage() {
             <RefreshCw
               className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`}
             />
-            Refresh
+            Calculate current stats
           </Button>
         </div>
       </div>
@@ -738,7 +732,7 @@ export default function AudioPipelinePage() {
       <VoiceIdentityOperations />
 
       <Card
-        className={pipelineHealth === "loading"
+        className={pipelineHealth === "idle" || pipelineHealth === "loading"
           ? "border-muted bg-muted/10"
           : pipelineHealth === "error"
           ? "border-red-500/50 bg-red-500/5"
@@ -753,7 +747,9 @@ export default function AudioPipelinePage() {
       >
         <CardContent className="flex flex-col justify-between gap-4 pt-6 md:flex-row md:items-center">
           <div className="flex items-start gap-3">
-            {pipelineHealth === "loading"
+            {pipelineHealth === "idle"
+              ? <RefreshCw className="mt-0.5 h-5 w-5 text-muted-foreground" />
+              : pipelineHealth === "loading"
               ? <RefreshCw className="mt-0.5 h-5 w-5 animate-spin" />
               : pipelineHealth === "error"
               ? <AlertCircle className="mt-0.5 h-5 w-5 text-red-600" />
@@ -768,10 +764,14 @@ export default function AudioPipelinePage() {
               : <CheckCircle2 className="mt-0.5 h-5 w-5 text-green-600" />}
             <div>
               <p className="font-semibold capitalize">
-                Pipeline {pipelineHealth}
+                {pipelineHealth === "idle"
+                  ? "Pipeline snapshot not calculated"
+                  : `Pipeline ${pipelineHealth}`}
               </p>
               <p className="text-sm text-muted-foreground">
-                {pipelineHealth === "loading"
+                {pipelineHealth === "idle"
+                  ? "Use Calculate current stats to run the exact dashboard queries."
+                  : pipelineHealth === "loading"
                   ? "Loading source, backlog, worker, and job state."
                   : pipelineHealth === "error"
                   ? pipelineError instanceof Error
@@ -1455,6 +1455,12 @@ export default function AudioPipelinePage() {
             ? (
               <div className="p-8 text-center text-muted-foreground">
                 Loading sessions...
+              </div>
+            )
+            : !sessionsData
+            ? (
+              <div className="p-8 text-center text-muted-foreground">
+                Calculate current stats to load recent audio sources.
               </div>
             )
             : !sessions?.length

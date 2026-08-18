@@ -279,12 +279,14 @@ export function useConversationsOnMap(
       allTime ? undefined : start?.getTime(),
       allTime ? undefined : end?.getTime(),
     ),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       callResource("location", {
         action: "conversations-on-map",
+        manual: true,
         ...(allTime ? {} : { start, end }),
-      }),
+      }, { signal }),
     enabled: enabled && (allTime || (!!start && !!end)),
+    retry: false,
     staleTime: 60 * 1000,
     placeholderData: (prev) => prev,
   });

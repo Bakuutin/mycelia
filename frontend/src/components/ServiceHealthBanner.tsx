@@ -9,12 +9,12 @@ export interface ExternalServiceHealthSummary {
   message: string;
 }
 
-interface PipelineHealthResponse {
+interface ServicesHealthResponse {
   services?: ExternalServiceHealthSummary[];
 }
 
 export function getBlockingService(
-  data: PipelineHealthResponse | undefined,
+  data: ServicesHealthResponse | undefined,
   serviceId: string,
 ): ExternalServiceHealthSummary | undefined {
   const service = data?.services?.find((candidate) =>
@@ -29,10 +29,10 @@ export function ServiceHealthBanner({
   serviceId?: string;
 }) {
   const { data } = useQuery({
-    queryKey: ["pipeline-health", "service-banner"],
+    queryKey: ["services-health", "service-banner"],
     queryFn: () =>
-      callResource("jobs", { action: "pipeline_health" }) as Promise<
-        PipelineHealthResponse
+      callResource("jobs", { action: "services_health" }) as Promise<
+        ServicesHealthResponse
       >,
     refetchInterval: 30_000,
   });
@@ -49,7 +49,9 @@ export function ServiceHealthBanner({
         <p className="font-medium">{service.label} is {service.status}</p>
         <p className="text-muted-foreground">{service.message}</p>
         {serviceId === "diarizator" && (
-          <p className="mt-1 font-mono text-xs">cd diarizator &amp;&amp; docker compose --profile cpu up -d</p>
+          <p className="mt-1 font-mono text-xs">
+            cd diarizator &amp;&amp; docker compose --profile cpu up -d
+          </p>
         )}
       </div>
     </div>

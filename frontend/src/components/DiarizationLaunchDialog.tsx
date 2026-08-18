@@ -73,7 +73,7 @@ export function DiarizationLaunchDialog() {
     enabled: open,
     queryFn: () =>
       api.callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       }),
   });

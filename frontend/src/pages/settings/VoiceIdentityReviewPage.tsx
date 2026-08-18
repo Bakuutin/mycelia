@@ -155,12 +155,6 @@ type IdentityStatus = {
   calibrations: Array<
     { calibrationId: string; status: string; updatedAt?: Date }
   >;
-  classification: {
-    identified: number;
-    unknown: number;
-    uncertain: number;
-    unclassified: number;
-  };
   latestJob?: {
     _id: unknown;
     state: string;
@@ -185,6 +179,16 @@ type IdentityStatus = {
     currentJobId?: string;
     range?: { start?: Date | string; end?: Date | string };
   } | null;
+};
+
+type IdentityClassificationSnapshot = {
+  asOf: Date | string;
+  classification: {
+    identified: number;
+    unknown: number;
+    uncertain: number;
+    unclassified: number;
+  };
 };
 
 export default function VoiceIdentityReviewPage() {
@@ -256,7 +260,27 @@ export default function VoiceIdentityReviewPage() {
         action: "identity-status",
         profileId,
       }) as Promise<IdentityStatus>,
-    refetchInterval: 15_000,
+    refetchInterval: (query) => {
+      const status = (query.state.data as IdentityStatus | undefined)
+        ?.latestCampaign?.status;
+      return status && ["queued", "counting", "running"].includes(status)
+        ? 15_000
+        : false;
+    },
+  });
+  const {
+    data: classificationSnapshot,
+    error: classificationError,
+    isFetching: isCalculatingClassification,
+    refetch: calculateClassification,
+  } = useQuery<IdentityClassificationSnapshot>({
+    queryKey: ["speaker-identity-classification"],
+    queryFn: () =>
+      callResource("speaker-segments", {
+        action: "identity-classification",
+      }) as Promise<IdentityClassificationSnapshot>,
+    enabled: false,
+    retry: false,
   });
   const identityCampaignView = identityStatus?.latestCampaign
     ? getSpeakerIdentityProgressView({
@@ -268,10 +292,10 @@ export default function VoiceIdentityReviewPage() {
     })
     : null;
   const { data: pipelineHealth, isLoading: isLoadingHealth } = useQuery<any>({
-    queryKey: ["pipeline-health", "voice-identity"],
+    queryKey: ["services-health", "voice-identity"],
     queryFn: () =>
       callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       }),
     refetchInterval: 30_000,
@@ -1774,30 +1798,51 @@ export default function VoiceIdentityReviewPage() {
         </CardContent>
       </Card>
       <Card>
-        <CardHeader>
-          <CardTitle>Classify existing — current results</CardTitle>
-          <CardDescription>
-            Identity matching reuses stored diarization embeddings; it does not
-            rerun VAD, STT, or diarization.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
+          <div>
+            <CardTitle>Classify existing — current results</CardTitle>
+            <CardDescription>
+              Exact global distribution scans active diarizations only when you
+              request it. Campaign progress remains lightweight and live.
+            </CardDescription>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void calculateClassification()}
+            disabled={isCalculatingClassification}
+          >
+            <RefreshCw
+              className={`mr-2 h-4 w-4 ${
+                isCalculatingClassification ? "animate-spin" : ""
+              }`}
+            />
+            {classificationSnapshot ? "Recalculate exact" : "Calculate exact"}
+          </Button>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-5">
             <div className="rounded-md border p-3">
-              <strong>{identityStatus?.classification.identified ?? 0}</strong>
+              <strong>
+                {classificationSnapshot?.classification.identified ?? "—"}
+              </strong>
               <br />identified
             </div>
             <div className="rounded-md border p-3">
-              <strong>{identityStatus?.classification.unknown ?? 0}</strong>
+              <strong>
+                {classificationSnapshot?.classification.unknown ?? "—"}
+              </strong>
               <br />unknown
             </div>
             <div className="rounded-md border p-3">
-              <strong>{identityStatus?.classification.uncertain ?? 0}</strong>
+              <strong>
+                {classificationSnapshot?.classification.uncertain ?? "—"}
+              </strong>
               <br />uncertain
             </div>
             <div className="rounded-md border p-3">
               <strong>
-                {identityStatus?.classification.unclassified ?? 0}
+                {classificationSnapshot?.classification.unclassified ?? "—"}
               </strong>
               <br />unclassified
             </div>
@@ -1806,6 +1851,19 @@ export default function VoiceIdentityReviewPage() {
               <br />latest job
             </div>
           </div>
+          {classificationSnapshot && (
+            <p className="text-xs text-muted-foreground">
+              Exact snapshot:{" "}
+              {new Date(classificationSnapshot.asOf).toLocaleString()}
+            </p>
+          )}
+          {classificationError && (
+            <p className="text-xs text-red-600">
+              {classificationError instanceof Error
+                ? classificationError.message
+                : "Exact classification scan failed"}
+            </p>
+          )}
           {identityStatus?.latestCampaign && identityCampaignView && (
             <div className="space-y-2 rounded-lg border bg-muted/20 p-4 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">

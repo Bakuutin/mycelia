@@ -11,6 +11,7 @@ import { getConfigResource } from "@/lib/config/resource.server.ts";
 import { getJobTimeoutMinutes } from "@/lib/jobs/job-timeouts.ts";
 import { env } from "#/env.ts";
 import { buildUntypedScanFilters } from "../../../workers/entityTyping.ts";
+import { buildTaggerConversationQuery } from "../../../workers/tagger.ts";
 import {
   assertJobServicesHealthy,
   getExternalServicesHealth,
@@ -33,6 +34,21 @@ import {
 import { resolveLiveJobState } from "@/lib/jobs/job-live-state.ts";
 
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
+const PIPELINE_HEALTH_CACHE_TTL_MS = 5 * 60 * 1000;
+const PIPELINE_HEALTH_TIMEOUT_BACKOFF_MS = 2 * 60 * 1000;
+let pipelineHealthCache: {
+  value: Record<string, any>;
+  computedAt: number;
+} | null = null;
+let pipelineHealthInFlight: Promise<Record<string, any>> | null = null;
+let pipelineHealthRetryAfter = 0;
+let pipelineHealthLastError: string | null = null;
+
+function isMongoDeadlineError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; codeName?: unknown } | null;
+  return candidate?.code === 50 || candidate?.codeName === "MaxTimeMSExpired" ||
+    /MaxTimeMSExpired|operation exceeded time limit/i.test(String(error));
+}
 const WORKER_SPECIFIC_IDLE_TYPES = [
   "vad",
   "conversation_chunk_creator",
@@ -335,6 +351,11 @@ const PipelineHealthSchema = z.object({
   force: z.boolean().optional(),
 });
 
+const ServicesHealthSchema = z.object({
+  action: z.literal("services_health"),
+  force: z.boolean().optional(),
+});
+
 const TimelineIntegrityReportSchema = z.object({
   action: z.literal("timeline_integrity_report"),
 });
@@ -410,6 +431,7 @@ const RequestSchema = z.union([
   StatsSchema,
   ErrorStatsSchema,
   PipelineHealthSchema,
+  ServicesHealthSchema,
   TimelineIntegrityReportSchema,
   TimelineBookkeepingRepairSchema,
   StartTimelineRebuildSchema,
@@ -657,6 +679,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.errorStats(input, auth);
       case "pipeline_health":
         return this.pipelineHealth(input, auth);
+      case "services_health":
+        return this.servicesHealth(input);
       case "timeline_integrity_report":
         return this.timelineIntegrityReport(auth);
       case "timeline_bookkeeping_repair":
@@ -1637,7 +1661,90 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     };
   }
 
+  private async servicesHealth(
+    input: z.infer<typeof ServicesHealthSchema>,
+  ) {
+    return {
+      checkedAt: new Date().toISOString(),
+      services: await getExternalServicesHealth(input.force ?? false),
+    };
+  }
+
   private async pipelineHealth(
+    input: z.infer<typeof PipelineHealthSchema>,
+    auth: Auth,
+  ): Promise<Record<string, any>> {
+    const now = Date.now();
+    const force = input.force === true;
+    const cached = pipelineHealthCache;
+    if (
+      !force && cached && now - cached.computedAt < PIPELINE_HEALTH_CACHE_TTL_MS
+    ) {
+      return {
+        ...cached.value,
+        snapshot: {
+          status: "cached",
+          asOf: new Date(cached.computedAt).toISOString(),
+        },
+      };
+    }
+    if (!force && now < pipelineHealthRetryAfter) {
+      if (cached) {
+        return {
+          ...cached.value,
+          snapshot: {
+            status: "stale-timeout",
+            asOf: new Date(cached.computedAt).toISOString(),
+            retryAfter: new Date(pipelineHealthRetryAfter).toISOString(),
+          },
+        };
+      }
+      throw new Error(
+        `Exact pipeline counts are in timeout backoff until ${
+          new Date(pipelineHealthRetryAfter).toISOString()
+        }${pipelineHealthLastError ? `: ${pipelineHealthLastError}` : ""}`,
+      );
+    }
+    if (pipelineHealthInFlight) return await pipelineHealthInFlight;
+
+    pipelineHealthInFlight = this.computePipelineHealth(input, auth)
+      .then((value) => {
+        const computedAt = Date.now();
+        pipelineHealthCache = { value, computedAt };
+        pipelineHealthRetryAfter = 0;
+        pipelineHealthLastError = null;
+        return {
+          ...value,
+          snapshot: {
+            status: "fresh",
+            asOf: new Date(computedAt).toISOString(),
+          },
+        };
+      })
+      .catch((error) => {
+        if (!isMongoDeadlineError(error)) throw error;
+        pipelineHealthRetryAfter = Date.now() +
+          PIPELINE_HEALTH_TIMEOUT_BACKOFF_MS;
+        pipelineHealthLastError = String(error);
+        if (!pipelineHealthCache) throw error;
+        return {
+          ...pipelineHealthCache.value,
+          snapshot: {
+            status: "stale-timeout",
+            asOf: new Date(pipelineHealthCache.computedAt).toISOString(),
+            retryAfter: new Date(pipelineHealthRetryAfter).toISOString(),
+            warning:
+              "Exact pipeline counts timed out; serving the previous snapshot until the retry backoff expires.",
+          },
+        };
+      })
+      .finally(() => {
+        pipelineHealthInFlight = null;
+      });
+    return await pipelineHealthInFlight;
+  }
+
+  private async computePipelineHealth(
     input: z.infer<typeof PipelineHealthSchema>,
     auth: Auth,
   ) {
@@ -1698,15 +1805,20 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           // Subfield predicate matches the conversation_missing_summary index.
           "summaries.0.date": { $exists: false },
         },
+        options: {
+          hint: "conversation_missing_summary",
+          maxTimeMS: 5_000,
+        },
       }),
       // Conversations no tagging pass has touched yet (extraction-time
       // tagging and the tagger both record aiProvenance.taggingRuns).
       mongo({
         action: "count",
         collection: "objects",
-        query: {
-          isConversation: true,
-          "metadata.aiProvenance.taggingRuns.0": { $exists: false },
+        query: buildTaggerConversationQuery(),
+        options: {
+          hint: "conversation_missing_tagging_marker_v1",
+          maxTimeMS: 5_000,
         },
       }),
       // Objects with no type flag and no entity_typing attempt marker —
@@ -1715,6 +1827,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         action: "count",
         collection: "objects",
         query: buildUntypedScanFilters(false),
+        options: { maxTimeMS: 5_000 },
       }),
       mongo({
         action: "aggregate",
@@ -1761,7 +1874,15 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         options: {
           sort: { finishedAt: -1 },
           limit: 5,
-          projection: { _id: 1, result: 1, finishedAt: 1 },
+          projection: {
+            _id: 1,
+            finishedAt: 1,
+            "result.batchSize": 1,
+            "result.processed": 1,
+            "result.batchSequences": 1,
+          },
+          hint: "jobs_transcription_completed_finishedAt_v1",
+          maxTimeMS: 3_000,
         },
       }),
       getConfigResource(auth).then((configResource) =>
@@ -3208,43 +3329,21 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const staleCutoff = new Date(Date.now() - 15 * 60 * 1000);
     // TODO: worker specific logic should belong to the worker file
 
-    // Get overall counts by status (across ALL jobs, not limited)
-    const statusCountsPipeline = [
-      { $match: { dismissedAt: { $exists: false } } },
-      {
-        $group: {
-          _id: "$state",
-          count: { $sum: 1 },
-        },
-      },
-    ];
-
-    const statusCounts = await mongo({
-      action: "aggregate",
-      collection: "jobs",
-      pipeline: statusCountsPipeline,
-    });
-
-    // Convert to a map
-    const byStatus: Record<string, number> = {
-      active: 0,
-      waiting: 0,
-      completed: 0,
-      failed: 0,
-      delayed: 0,
-      cancelled: 0,
-    };
-    let total = 0;
-    for (const item of statusCounts) {
-      if (item._id) {
-        byStatus[item._id] = item.count;
-        total += item.count;
-      }
-    }
-
-    // Aggregate job statistics by type
+    // This is a manual dashboard snapshot. Derive per-state and per-type totals
+    // in one corpus pass instead of the former two full collection scans.
     const pipeline = [
       { $match: { dismissedAt: { $exists: false } } },
+      {
+        $set: {
+          _statsCompletedAt: {
+            $cond: [
+              { $eq: ["$state", "completed"] },
+              { $toLong: "$createdAt" },
+              null,
+            ],
+          },
+        },
+      },
       {
         $group: {
           _id: "$type",
@@ -3278,6 +3377,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           failed: {
             $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] },
           },
+          cancelled: {
+            $sum: { $cond: [{ $eq: ["$state", "cancelled"] }, 1, 0] },
+          },
           // Calculate empty jobs based on result fields
           emptyRuns: {
             $sum: {
@@ -3308,14 +3410,11 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
               ],
             },
           },
-          // Get timestamps for frequency calculation (last 20)
           recentTimestamps: {
-            $push: {
-              $cond: [
-                { $eq: ["$state", "completed"] },
-                { $toLong: "$createdAt" },
-                null,
-              ],
+            $topN: {
+              n: 20,
+              sortBy: { _statsCompletedAt: -1 },
+              output: "$_statsCompletedAt",
             },
           },
         },
@@ -3330,6 +3429,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           delayed: 1,
           completed: 1,
           failed: 1,
+          cancelled: 1,
           emptyRuns: 1,
           idleAutoRuns: 1,
           successRate: {
@@ -3339,18 +3439,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
               { $multiply: [{ $divide: ["$completed", "$totalRuns"] }, 100] },
             ],
           },
-          // Filter out nulls and get last 20 timestamps
           recentTimestamps: {
-            $slice: [
-              {
-                $filter: {
-                  input: "$recentTimestamps",
-                  as: "ts",
-                  cond: { $ne: ["$$ts", null] },
-                },
-              },
-              -20,
-            ],
+            $filter: {
+              input: "$recentTimestamps",
+              as: "ts",
+              cond: { $ne: ["$$ts", null] },
+            },
           },
         },
       },
@@ -3360,7 +3454,24 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       action: "aggregate",
       collection: "jobs",
       pipeline,
+      options: { maxTimeMS: 10_000 },
     });
+
+    const byStatus: Record<string, number> = {
+      active: 0,
+      waiting: 0,
+      completed: 0,
+      failed: 0,
+      delayed: 0,
+      cancelled: 0,
+    };
+    let total = 0;
+    for (const stat of stats) {
+      total += Number(stat.totalRuns ?? 0);
+      for (const state of Object.keys(byStatus)) {
+        byStatus[state] += Number(stat[state] ?? 0);
+      }
+    }
 
     // Calculate frequency from timestamps
     const staleClaims = await mongo({
@@ -3562,6 +3673,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       case "error_stats":
         return [{ path: ["jobs"], actions: ["read"] }];
       case "pipeline_health":
+      case "services_health":
       case "timeline_integrity_report":
         return [{ path: ["jobs"], actions: ["read"] }];
       case "timeline_bookkeeping_repair":

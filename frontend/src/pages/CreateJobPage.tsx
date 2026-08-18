@@ -39,7 +39,7 @@ export default function CreateJobPage() {
     enabled: needsVoiceProfile,
     queryFn: () =>
       api.callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       }),
   });
@@ -206,7 +206,7 @@ export default function CreateJobPage() {
                       : undefined}
                     onSubmit={(data: any) => onSubmit(data.formData)}
                     disabled={enqueueMutation.isPending || !dependencyReady}
-                    noHtml5Validate={true}
+                    noHtml5Validate
                     showErrorList={false}
                     liveValidate={false}
                   >

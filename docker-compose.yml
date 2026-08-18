@@ -12,7 +12,10 @@ services:
     environment:
       - REDIS_PASSWORD
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      test: [
+        "CMD-SHELL",
+        "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG",
+      ]
       interval: 10s
       timeout: 3s
       # Redis refuses connections until the RDB is fully loaded, which takes
@@ -38,14 +41,22 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: "2.0"
           memory: 6G
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'"]
-      interval: 10s
+      # The native Go client avoids the short CPU/PID burst caused by starting
+      # Node-based mongosh every 30 seconds. Exec form also guarantees Docker
+      # stops the actual probe on timeout instead of orphaning shell children.
+      test:
+        - CMD
+        - mongostat
+        - --rowcount=1
+        - --noheaders
+        - --uri=mongodb://127.0.0.1:27017/admin?directConnection=true&serverSelectionTimeoutMS=1500&connectTimeoutMS=1500&socketTimeoutMS=1500
+      interval: 30s
       timeout: 5s
-      start_period: 20s
-      retries: 12
+      start_period: 60s
+      retries: 4
 
   # mongo-search:
   #   image: mongodb/mongodb-community-search:latest
@@ -128,10 +139,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: "2.0"
           memory: 4G
         reservations:
-          cpus: '0.2'
+          cpus: "0.2"
           memory: 1G
 
   python-worker:
@@ -167,11 +178,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: "2.0"
           memory: 4G
         reservations:
-            cpus: '0.5'
-            memory: 1G
+          cpus: "0.5"
+          memory: 1G
 
   # Optional local CPU diarizator. Keeping it in the main Compose project gives
   # backend and python-worker a stable service-DNS route and avoids unreliable
@@ -204,7 +215,10 @@ services:
       AUDIO_BACKEND: ${AUDIO_BACKEND:-soundfile}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:$${SPEAKER_SERVICE_PORT:-8085}/ready"]
+      test: [
+        "CMD-SHELL",
+        "curl -fsS http://localhost:$${SPEAKER_SERVICE_PORT:-8085}/ready",
+      ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -226,8 +240,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-
-
 
 volumes:
   redis_data:

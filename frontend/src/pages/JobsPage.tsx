@@ -187,6 +187,11 @@ type PipelineBacklog = {
 
 type PipelineHealth = {
   checkedAt: string;
+  snapshot?: {
+    status: "fresh" | "cached" | "stale-timeout";
+    asOf: string;
+    retryAfter?: string;
+  };
   services: ExternalServiceHealth[];
   backlogs: Partial<
     Record<
@@ -228,6 +233,10 @@ type PipelineHealth = {
     }>;
   };
 };
+
+type ServicesHealth = Pick<PipelineHealth, "checkedAt" | "services">;
+
+const EMPTY_EXTERNAL_SERVICES: ExternalServiceHealth[] = [];
 
 type ModelAlias = "small" | "medium" | "large";
 
@@ -1638,7 +1647,22 @@ export default function JobsPage() {
   }, [workerStatus]);
 
   const {
+    data: servicesHealth,
+    isFetching: isFetchingServicesHealth,
+  } = useQuery({
+    queryKey: ["services-health", "jobs-page"],
+    queryFn: async () => {
+      return await api.callResource("jobs", {
+        action: "services_health",
+      }) as ServicesHealth;
+    },
+    refetchInterval: false,
+    staleTime: 15_000,
+  });
+
+  const {
     data: pipelineHealth,
+    error: pipelineHealthError,
     isFetching: isFetchingPipelineHealth,
     refetch: refetchPipelineHealth,
   } = useQuery({
@@ -1648,11 +1672,17 @@ export default function JobsPage() {
         action: "pipeline_health",
       }) as PipelineHealth;
     },
-    // Probe providers only from the explicit Refresh/Test actions. Continuous
-    // polling wakes local Argmax servers through /v1/models.
+    enabled: false,
     refetchInterval: false,
-    staleTime: 15000,
   });
+
+  const services = servicesHealth?.services ?? pipelineHealth?.services ??
+    EMPTY_EXTERNAL_SERVICES;
+  const markPipelineHealthStale = () =>
+    queryClient.invalidateQueries({
+      queryKey: ["pipeline-health"],
+      refetchType: "none",
+    });
 
   const {
     data: timelineIntegrity,
@@ -1673,21 +1703,18 @@ export default function JobsPage() {
   });
 
   const transcriptionModelByProfileId = useMemo(() => {
-    const stt = pipelineHealth?.services.find((service) =>
-      service.id === "stt"
-    );
+    const stt = services.find((service) => service.id === "stt");
     return new Map(
       stt?.routes?.filter((route) => Boolean(route.model)).map((route) => [
         route.providerProfileId,
         route.model!,
       ]) ?? [],
     );
-  }, [pipelineHealth]);
+  }, [services]);
 
   useEffect(() => {
-    const routes = pipelineHealth?.services.find((service) =>
-      service.id === "diarizator"
-    )?.routes;
+    const routes = services.find((service) => service.id === "diarizator")
+      ?.routes;
     if (!routes) return;
     setDiarizationPriorityDrafts((current) => {
       const next = { ...current };
@@ -1698,7 +1725,7 @@ export default function JobsPage() {
       }
       return next;
     });
-  }, [pipelineHealth]);
+  }, [services]);
 
   const { data: inferenceRoutingConfig } = useQuery({
     queryKey: ["inference-routing-config"],
@@ -1734,7 +1761,7 @@ export default function JobsPage() {
   const diarizationRuntimeRoutes = useMemo<DiarizationRuntimeRoute[]>(() => {
     const config = inferenceRoutingConfig?.diarizationProfiles;
     if (!config) return [];
-    const healthRoutes = pipelineHealth?.services.find((service) =>
+    const healthRoutes = services.find((service) =>
       service.id === "diarizator"
     )?.routes ?? [];
     const healthById = new Map(
@@ -1767,7 +1794,7 @@ export default function JobsPage() {
       health: environmentHealth?.status,
     });
     return routes;
-  }, [diarizationLiveJobs, inferenceRoutingConfig, pipelineHealth]);
+  }, [diarizationLiveJobs, inferenceRoutingConfig, services]);
 
   useEffect(() => {
     const configuredSttModel = inferenceRoutingConfig?.transcription?.model;
@@ -1787,8 +1814,14 @@ export default function JobsPage() {
     [inferenceRoutingConfig],
   );
 
-  // Fetch job statistics from backend (aggregates ALL jobs, not just the 1000 loaded in frontend)
-  const { data: jobStatsResponse } = useQuery({
+  // Lifetime run history is a corpus-wide aggregation. Keep the live queue on
+  // worker-status and calculate history only when the operator requests it.
+  const {
+    data: jobStatsResponse,
+    error: jobStatsError,
+    isFetching: isFetchingJobStats,
+    refetch: refetchJobStats,
+  } = useQuery({
     queryKey: ["job-stats"],
     queryFn: async () => {
       const response = await api.callResource("jobs", {
@@ -1821,12 +1854,13 @@ export default function JobsPage() {
         };
       };
     },
-    staleTime: 30000, // Refresh every 30 seconds
+    enabled: false,
+    retry: false,
   });
 
   const refreshWorkerViews = () => {
     refetchWorkerStatus();
-    refetchPipelineHealth();
+    void markPipelineHealthStale();
     queryClient.invalidateQueries({ queryKey: ["jobs"] });
     queryClient.invalidateQueries({ queryKey: ["job-stats"] });
   };
@@ -2102,7 +2136,7 @@ export default function JobsPage() {
       }));
       queryClient.invalidateQueries({ queryKey: ["worker-batch-sizes"] });
       if (result.workerType === "transcription") {
-        refetchPipelineHealth();
+        void markPipelineHealthStale();
       }
     },
     onError: (error) =>
@@ -2188,7 +2222,7 @@ export default function JobsPage() {
     },
     onSuccess: () => {
       refetchWorkerStatus();
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
     },
   });
 
@@ -2213,7 +2247,7 @@ export default function JobsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
     },
     onError: (error) => {
       toast.error(
@@ -2256,7 +2290,7 @@ export default function JobsPage() {
       );
       setTimelineAuditRequested(true);
       void refetchTimelineIntegrity();
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
     },
     onError: (error) => {
       toast.error(
@@ -2354,7 +2388,7 @@ export default function JobsPage() {
       );
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
     },
     onError: (error) => {
       toast.error(
@@ -2374,7 +2408,7 @@ export default function JobsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
     },
     onError: (error) => {
       toast.error(
@@ -2386,12 +2420,12 @@ export default function JobsPage() {
   const testServicesMutation = useMutation({
     mutationFn: async () => {
       return await api.callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
-      }) as PipelineHealth;
+      }) as ServicesHealth;
     },
     onSuccess: (result) => {
-      queryClient.setQueryData(["pipeline-health"], result);
+      queryClient.setQueryData(["services-health", "jobs-page"], result);
     },
     onError: (error) => {
       toast.error(
@@ -2403,9 +2437,9 @@ export default function JobsPage() {
   const testServiceMutation = useMutation({
     mutationFn: async (serviceId: "stt" | "llm") => {
       const fresh = await api.callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
-      }) as PipelineHealth;
+      }) as ServicesHealth;
 
       if (serviceId === "stt") {
         const modelsResult = await api.callResource("transcription", {
@@ -2431,7 +2465,7 @@ export default function JobsPage() {
       return { serviceId, health: fresh };
     },
     onSuccess: ({ serviceId, health }) => {
-      queryClient.setQueryData(["pipeline-health"], health);
+      queryClient.setQueryData(["services-health", "jobs-page"], health);
       const service = health.services.find((item) => item.id === serviceId);
       setServiceTestResults((current) => ({
         ...current,
@@ -2495,18 +2529,18 @@ export default function JobsPage() {
       }
       return enabled
         ? await api.callResource("jobs", {
-          action: "pipeline_health",
+          action: "services_health",
           force: true,
-        }) as PipelineHealth
+        }) as ServicesHealth
         : null;
     },
     onSuccess: (health, { profileId, enabled }) => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
       if (health) {
-        queryClient.setQueryData(["pipeline-health"], health);
+        queryClient.setQueryData(["services-health", "jobs-page"], health);
       } else {
-        queryClient.setQueryData<PipelineHealth | undefined>(
-          ["pipeline-health"],
+        queryClient.setQueryData<ServicesHealth | undefined>(
+          ["services-health", "jobs-page"],
           (current) =>
             current
               ? {
@@ -2598,7 +2632,7 @@ export default function JobsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
       setServiceTestResults((current) => ({
         ...current,
         llm: "Route promoted. New LLM requests prefer it.",
@@ -2625,7 +2659,7 @@ export default function JobsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
-      refetchPipelineHealth();
+      void markPipelineHealthStale();
       setServiceTestResults((current) => ({
         ...current,
         stt: "STT model saved. New transcription jobs will use it.",
@@ -2688,18 +2722,18 @@ export default function JobsPage() {
       // confirm it came back. Disabling does not probe the server.
       return enabled
         ? await api.callResource("jobs", {
-          action: "pipeline_health",
+          action: "services_health",
           force: true,
-        }) as PipelineHealth
+        }) as ServicesHealth
         : null;
     },
     onSuccess: (health, { profileId, enabled }) => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
       if (health) {
-        queryClient.setQueryData(["pipeline-health"], health);
+        queryClient.setQueryData(["services-health", "jobs-page"], health);
       } else {
-        queryClient.setQueryData<PipelineHealth | undefined>(
-          ["pipeline-health"],
+        queryClient.setQueryData<ServicesHealth | undefined>(
+          ["services-health", "jobs-page"],
           (current) =>
             current
               ? {
@@ -2765,13 +2799,13 @@ export default function JobsPage() {
         });
       }
       return await api.callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
-      }) as PipelineHealth;
+      }) as ServicesHealth;
     },
     onSuccess: (health, { profileId, changes }) => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
-      queryClient.setQueryData(["pipeline-health"], health);
+      queryClient.setQueryData(["services-health", "jobs-page"], health);
       if (changes.priority != null) {
         setDiarizationPriorityDrafts((current) => ({
           ...current,
@@ -2883,13 +2917,13 @@ export default function JobsPage() {
       }
 
       return await api.callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
-      }) as PipelineHealth;
+      }) as ServicesHealth;
     },
     onSuccess: (health, { serviceId, enabled }) => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
-      queryClient.setQueryData(["pipeline-health"], health);
+      queryClient.setQueryData(["services-health", "jobs-page"], health);
       toast.success(
         `${
           serviceId === "diarizator" ? "Diarization" : serviceId.toUpperCase()
@@ -3846,7 +3880,7 @@ export default function JobsPage() {
                 className="h-8 px-2.5 text-xs"
                 onClick={() => testServicesMutation.mutate()}
                 disabled={testServicesMutation.isPending ||
-                  isFetchingPipelineHealth}
+                  isFetchingServicesHealth}
               >
                 <RefreshCw
                   className={`mr-2 h-4 w-4 ${
@@ -3882,7 +3916,7 @@ export default function JobsPage() {
           </div>
         </CardHeader>
         <CardContent className="px-3 pb-3 pt-0">
-          {!pipelineHealth
+          {!servicesHealth && !pipelineHealth
             ? (
               <div className="text-sm text-muted-foreground">
                 Checking external services…
@@ -3891,7 +3925,7 @@ export default function JobsPage() {
             : (
               <>
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {pipelineHealth.services.map((service) => {
+                  {services.map((service) => {
                     const allPausedForService = service.usedBy.every(
                       (workerType) => workerStatus?.workers[workerType]?.paused,
                     );
@@ -4088,7 +4122,7 @@ export default function JobsPage() {
                     id="routing-details"
                     className="mt-3 grid gap-3 xl:grid-cols-2"
                   >
-                    {pipelineHealth.services.map((service) => {
+                    {services.map((service) => {
                       const allPausedForService = service.usedBy.every(
                         (workerType) =>
                           workerStatus?.workers[workerType]?.paused,
@@ -4655,164 +4689,214 @@ export default function JobsPage() {
 
       <Card>
         <CardHeader className="px-3 py-2.5">
-          <CardTitle className="text-base">Work ready now</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            Domain backlog is counted independently of whether upstream workers
-            are enabled. Failed job history is retained.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Work ready now</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Exact corpus-wide counts run only on request. Failed job history
+                is retained.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2.5 text-xs"
+              onClick={() => void refetchPipelineHealth()}
+              disabled={isFetchingPipelineHealth}
+            >
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${
+                  isFetchingPipelineHealth ? "animate-spin" : ""
+                }`}
+              />
+              {pipelineHealth
+                ? "Refresh exact snapshot"
+                : "Calculate exact backlog"}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="px-3 pb-3 pt-0">
           {!pipelineHealth
             ? (
-              <div className="text-sm text-muted-foreground">
-                Calculating backlog…
+              <div
+                className={`text-sm ${
+                  pipelineHealthError ? "text-red-500" : "text-muted-foreground"
+                }`}
+              >
+                {isFetchingPipelineHealth
+                  ? "Calculating exact backlog…"
+                  : pipelineHealthError instanceof Error
+                  ? pipelineHealthError.message
+                  : "Exact backlog has not been calculated in this session."}
               </div>
             )
             : (
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-                {([
-                  ["transcription", "Ready for transcription", "stt"],
-                  [
-                    "conversation_extractor_merged",
-                    "Ready for conversation extraction",
-                    "llm",
-                  ],
-                  ["summarization", "Summary candidates", "llm"],
-                  ["tagger", "Untagged conversations", "llm"],
-                  ["entity_typing", "Untyped objects", "llm"],
-                ] as const).map(([workerType, label, serviceId]) => {
-                  const backlog = pipelineHealth.backlogs[workerType];
-                  if (!backlog) return null;
-                  const service = pipelineHealth.services.find((item) =>
-                    item.id === serviceId
-                  );
-                  const stats = jobTypeStats.find((item) =>
-                    item.type === workerType
-                  );
-                  const busy = (stats?.active ?? 0) + (stats?.waiting ?? 0) > 0;
-                  const workerPaused =
-                    workerStatus?.workers[workerType]?.paused ?? false;
-                  const runnable = service?.status === "healthy" &&
-                    !workerPaused && !busy;
-                  const availableWork = backlog.ready +
-                    (backlog.retryableErrors ?? 0);
-                  const blockedReason = workerPaused
-                    ? "Worker is paused"
-                    : service?.status !== "healthy"
-                    ? `${service?.label ?? serviceId} is ${
-                      service?.status ?? "unavailable"
-                    }; enable a healthy route`
-                    : busy
-                    ? "A job is already active or waiting"
-                    : availableWork === 0
-                    ? "No new or retryable source work"
-                    : null;
-                  return (
-                    <div
-                      key={workerType}
-                      className="space-y-2 rounded-md border p-2.5"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="text-xs font-medium leading-tight">
-                          {label}
+              <>
+                <div className="mb-2 text-[10px] text-muted-foreground">
+                  Exact snapshot as of {new Date(
+                    pipelineHealth.snapshot?.asOf ?? pipelineHealth.checkedAt,
+                  ).toLocaleString()}
+                  {pipelineHealth.snapshot?.status === "cached"
+                    ? " · cached"
+                    : pipelineHealth.snapshot?.status === "stale-timeout"
+                    ? " · last successful snapshot; refresh timed out"
+                    : ""}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                  {([
+                    ["transcription", "Ready for transcription", "stt"],
+                    [
+                      "conversation_extractor_merged",
+                      "Ready for conversation extraction",
+                      "llm",
+                    ],
+                    ["summarization", "Summary candidates", "llm"],
+                    ["tagger", "Untagged conversations", "llm"],
+                    ["entity_typing", "Untyped objects", "llm"],
+                  ] as const).map(([workerType, label, serviceId]) => {
+                    const backlog = pipelineHealth.backlogs[workerType];
+                    if (!backlog) return null;
+                    const service = services.find((item) =>
+                      item.id === serviceId
+                    );
+                    const stats = jobTypeStats.find((item) =>
+                      item.type === workerType
+                    );
+                    const busy = (stats?.active ?? 0) +
+                        (stats?.waiting ?? 0) >
+                      0;
+                    const workerPaused =
+                      workerStatus?.workers[workerType]?.paused ?? false;
+                    const runnable = service?.status === "healthy" &&
+                      !workerPaused && !busy;
+                    const availableWork = backlog.ready +
+                      (backlog.retryableErrors ?? 0);
+                    const blockedReason = workerPaused
+                      ? "Worker is paused"
+                      : service?.status !== "healthy"
+                      ? `${service?.label ?? serviceId} is ${
+                        service?.status ?? "unavailable"
+                      }; enable a healthy route`
+                      : busy
+                      ? "A job is already active or waiting"
+                      : availableWork === 0
+                      ? "No new or retryable source work"
+                      : null;
+                    return (
+                      <div
+                        key={workerType}
+                        className="space-y-2 rounded-md border p-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="text-xs font-medium leading-tight">
+                            {label}
+                          </div>
+                          <div className="text-xl font-semibold leading-none">
+                            {backlog.ready}
+                          </div>
                         </div>
-                        <div className="text-xl font-semibold leading-none">
-                          {backlog.ready}
-                        </div>
-                      </div>
-                      <div className="space-y-0.5 text-[10px] leading-tight text-muted-foreground">
-                        {backlog.processing != null && (
-                          <div>Processing: {backlog.processing}</div>
-                        )}
-                        {backlog.retryableErrors != null && (
+                        <div className="space-y-0.5 text-[10px] leading-tight text-muted-foreground">
+                          {backlog.processing != null && (
+                            <div>Processing: {backlog.processing}</div>
+                          )}
+                          {backlog.retryableErrors != null && (
+                            <div>
+                              Retryable source errors: {backlog.retryableErrors}
+                            </div>
+                          )}
+                          {backlog.missingTotal != null && (
+                            <div>
+                              Conversations missing summaries:{" "}
+                              {backlog.missingTotal}
+                            </div>
+                          )}
+                          {backlog.blockedWithoutTranscripts != null && (
+                            <div>
+                              Blocked without transcript:{" "}
+                              {backlog.blockedWithoutTranscripts}
+                            </div>
+                          )}
                           <div>
-                            Retryable source errors: {backlog.retryableErrors}
+                            Unretried failed jobs: {backlog.failedJobsUnretried}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <Button
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
+                            onClick={() =>
+                              runBacklogMutation.mutate(workerType)}
+                            disabled={!runnable || availableWork === 0 ||
+                              runBacklogMutation.isPending}
+                            title={blockedReason ?? undefined}
+                          >
+                            <Play className="mr-1 h-3 w-3" />
+                            Run now
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
+                            onClick={async () => {
+                              if (
+                                await confirmAction({
+                                  title: `Retry failed ${workerType} jobs?`,
+                                  description:
+                                    `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
+                                  actionLabel: "Retry failed jobs",
+                                })
+                              ) {
+                                retryFailedMutation.mutate({
+                                  workerType,
+                                  failedCount: backlog.failedJobsUnretried,
+                                });
+                              }
+                            }}
+                            disabled={service?.status !== "healthy" ||
+                              backlog.failedJobsUnretried === 0 ||
+                              retryFailedMutation.isPending}
+                            title={service?.status !== "healthy"
+                              ? `${
+                                service?.label ?? serviceId
+                              } must have a healthy route`
+                              : undefined}
+                          >
+                            <RefreshCw className="mr-1 h-3 w-3" />
+                            Retry ({backlog.failedJobsUnretried})
+                          </Button>
+                        </div>
+                        {blockedReason && (
+                          <div
+                            className={`text-[10px] leading-tight ${
+                              service?.status !== "healthy"
+                                ? "text-red-500"
+                                : workerPaused
+                                ? "text-amber-500"
+                                : "text-blue-500"
+                            }`}
+                            title={service?.status !== "healthy"
+                              ? service?.message
+                              : blockedReason}
+                          >
+                            {blockedReason}
                           </div>
                         )}
-                        {backlog.missingTotal != null && (
-                          <div>
-                            Conversations missing summaries:{" "}
-                            {backlog.missingTotal}
-                          </div>
-                        )}
-                        {backlog.blockedWithoutTranscripts != null && (
-                          <div>
-                            Blocked without transcript:{" "}
-                            {backlog.blockedWithoutTranscripts}
-                          </div>
-                        )}
-                        <div>
-                          Unretried failed jobs: {backlog.failedJobsUnretried}
-                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button
-                          size="sm"
-                          className="h-7 px-2 text-[11px]"
-                          onClick={() => runBacklogMutation.mutate(workerType)}
-                          disabled={!runnable || availableWork === 0 ||
-                            runBacklogMutation.isPending}
-                          title={blockedReason ?? undefined}
-                        >
-                          <Play className="mr-1 h-3 w-3" />
-                          Run now
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 px-2 text-[11px]"
-                          onClick={async () => {
-                            if (
-                              await confirmAction({
-                                title: `Retry failed ${workerType} jobs?`,
-                                description:
-                                  `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
-                                actionLabel: "Retry failed jobs",
-                              })
-                            ) {
-                              retryFailedMutation.mutate({
-                                workerType,
-                                failedCount: backlog.failedJobsUnretried,
-                              });
-                            }
-                          }}
-                          disabled={service?.status !== "healthy" ||
-                            backlog.failedJobsUnretried === 0 ||
-                            retryFailedMutation.isPending}
-                          title={service?.status !== "healthy"
-                            ? `${
-                              service?.label ?? serviceId
-                            } must have a healthy route`
-                            : undefined}
-                        >
-                          <RefreshCw className="mr-1 h-3 w-3" />
-                          Retry ({backlog.failedJobsUnretried})
-                        </Button>
-                      </div>
-                      {blockedReason && (
-                        <div
-                          className={`text-[10px] leading-tight ${
-                            service?.status !== "healthy"
-                              ? "text-red-500"
-                              : workerPaused
-                              ? "text-amber-500"
-                              : "text-blue-500"
-                          }`}
-                          title={service?.status !== "healthy"
-                            ? service?.message
-                            : blockedReason}
-                        >
-                          {blockedReason}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           {pipelineHealth?.recovery && (
             <div className="mt-4 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
               {pipelineHealth.recovery.note}
+            </div>
+          )}
+          {pipelineHealth && pipelineHealthError instanceof Error && (
+            <div className="mt-3 text-xs text-red-500">
+              Refresh failed:{" "}
+              {pipelineHealthError.message}. Showing the last successful
+              snapshot.
             </div>
           )}
         </CardContent>
@@ -5185,6 +5269,32 @@ export default function JobsPage() {
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Workers</CardTitle>
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => void refetchJobStats()}
+                disabled={isFetchingJobStats}
+              >
+                <RefreshCw
+                  className={`mr-1.5 h-3.5 w-3.5 ${
+                    isFetchingJobStats ? "animate-spin" : ""
+                  }`}
+                />
+                {jobStatsResponse
+                  ? "Refresh run history"
+                  : "Calculate run history"}
+              </Button>
+              {jobStatsError && (
+                <span
+                  className="text-red-500"
+                  title={jobStatsError instanceof Error
+                    ? jobStatsError.message
+                    : "Run history calculation failed"}
+                >
+                  Run history failed
+                </span>
+              )}
               <span>{sortedWorkers.length} configured</span>
               {somePaused && (
                 <Badge
@@ -5326,14 +5436,14 @@ export default function JobsPage() {
                                   className="h-7 w-7"
                                   aria-label={`Clear ${worker.type} queue`}
                                   disabled={clearQueueMutation.isPending ||
-                                    ((stats?.waiting ?? 0) +
-                                        (stats?.delayed ?? 0) === 0)}
+                                    ((runtime?.waiting ?? 0) +
+                                        (runtime?.delayed ?? 0) === 0)}
                                   onClick={() =>
                                     handleClearWorkerQueue(
                                       worker.type,
-                                      stats?.active ?? 0,
-                                      stats?.waiting ?? 0,
-                                      stats?.delayed ?? 0,
+                                      runtime?.active ?? 0,
+                                      runtime?.waiting ?? 0,
+                                      runtime?.delayed ?? 0,
                                     )}
                                 >
                                   <Trash2 className="h-3.5 w-3.5 text-destructive" />
@@ -5426,10 +5536,10 @@ export default function JobsPage() {
                                   onClick={() =>
                                     handleResetWorker(
                                       worker.type,
-                                      stats?.active ?? 0,
-                                      stats?.waiting ?? 0,
-                                      stats?.delayed ?? 0,
-                                      stats?.staleClaims ?? 0,
+                                      runtime?.active ?? 0,
+                                      runtime?.waiting ?? 0,
+                                      runtime?.delayed ?? 0,
+                                      runtime?.staleClaims ?? 0,
                                     )}
                                 >
                                   <Trash2 className="mr-2 h-4 w-4" />
@@ -5635,19 +5745,19 @@ export default function JobsPage() {
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <span
-                                  className={((stats?.staleActive ?? 0) +
-                                      (stats?.staleClaims ?? 0)) > 0
+                                  className={((runtime?.staleActive ?? 0) +
+                                      (runtime?.staleClaims ?? 0)) > 0
                                     ? "cursor-help text-amber-500"
                                     : "text-muted-foreground"}
                                 >
-                                  Stale {(stats?.staleActive ?? 0) +
-                                    (stats?.staleClaims ?? 0)}
+                                  Stale {(runtime?.staleActive ?? 0) +
+                                    (runtime?.staleClaims ?? 0)}
                                 </span>
                               </TooltipTrigger>
                               <TooltipContent>
-                                {stats?.staleActive ?? 0} stale active job(s),
+                                {runtime?.staleActive ?? 0} stale active job(s),
                                 {" "}
-                                {stats?.staleClaims ?? 0} stale claim(s)
+                                {runtime?.staleClaims ?? 0} stale claim(s)
                               </TooltipContent>
                             </Tooltip>
                           </div>
@@ -5660,13 +5770,13 @@ export default function JobsPage() {
                                 : "text-muted-foreground"}
                               title="Failed runs"
                             >
-                              Failed {stats?.failed ?? 0}
+                              Failed {stats?.failed ?? "—"}
                             </span>
                             <span
                               className="text-muted-foreground"
                               title="Total runs"
                             >
-                              Runs {stats?.totalRuns ?? 0}
+                              Runs {stats?.totalRuns ?? "—"}
                             </span>
                             <Badge
                               variant="secondary"
@@ -5689,7 +5799,7 @@ export default function JobsPage() {
                               className="text-muted-foreground"
                               title="Empty runs"
                             >
-                              Empty {stats?.emptyRuns ?? 0}
+                              Empty {stats?.emptyRuns ?? "—"}
                             </span>
                           </div>
                         </TableCell>

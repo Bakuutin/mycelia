@@ -77,7 +77,7 @@ describe("TranscriptionSettingsPage", () => {
           message: "Deployment-managed route",
         });
       }
-      if (resource === "jobs" && input.action === "pipeline_health") {
+      if (resource === "jobs" && input.action === "services_health") {
         return Promise.resolve({
           services: [{
             id: "stt",

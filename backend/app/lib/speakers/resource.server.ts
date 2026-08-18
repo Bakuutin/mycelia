@@ -180,6 +180,9 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     profileId: objectId,
   }),
   z.object({
+    action: z.literal("identity-classification"),
+  }),
+  z.object({
     action: z.literal("list-identity-campaigns"),
     profileId: objectId.optional(),
     runId: z.string().optional(),
@@ -1794,7 +1797,6 @@ export class SpeakerSegmentsResource
         const [
           annotations,
           calibrations,
-          identityCounts,
           latestJobs,
           latestCampaigns,
         ] = await Promise.all([
@@ -1827,20 +1829,6 @@ export class SpeakerSegmentsResource
             options: { sort: { createdAt: -1 }, limit: 10 },
           }),
           mongo({
-            action: "aggregate",
-            collection: "diarizations",
-            pipeline: [
-              { $match: { lifecycleStatus: "active" } },
-              {
-                $group: {
-                  _id: "$speakerIdentity.identityState",
-                  count: { $sum: 1 },
-                },
-              },
-            ],
-            options: { maxTimeMS: 10_000 },
-          }),
-          mongo({
             action: "find",
             collection: "jobs",
             query: { type: "speakerIdentity" },
@@ -1863,7 +1851,7 @@ export class SpeakerSegmentsResource
             query: { profileId: input.profileId },
             options: { sort: { updatedAt: -1 }, limit: 1 },
           }),
-        ]) as [any[], any[], any[], any[], any[]];
+        ]) as [any[], any[], any[], any[]];
         const recordings = new Map<
           string,
           { id: string; sky: number; notSky: number }
@@ -1893,9 +1881,6 @@ export class SpeakerSegmentsResource
             recordings.set(recordingId, row);
           }
         }
-        const classified = Object.fromEntries(
-          identityCounts.map((row) => [row._id ?? "unclassified", row.count]),
-        );
         return {
           labels: {
             sky,
@@ -1908,14 +1893,36 @@ export class SpeakerSegmentsResource
             })).sort((a, b) => b.total - a.total),
           },
           calibrations,
+          latestJob: latestJobs[0] ?? null,
+          latestCampaign: latestCampaigns[0] ?? null,
+        };
+      }
+      case "identity-classification": {
+        const identityCounts = await mongo({
+          action: "aggregate",
+          collection: "diarizations",
+          pipeline: [
+            { $match: { lifecycleStatus: "active" } },
+            {
+              $group: {
+                _id: "$speakerIdentity.identityState",
+                count: { $sum: 1 },
+              },
+            },
+          ],
+          options: { maxTimeMS: 10_000 },
+        }) as any[];
+        const classified = Object.fromEntries(
+          identityCounts.map((row) => [row._id ?? "unclassified", row.count]),
+        );
+        return {
+          asOf: new Date(),
           classification: {
             identified: classified.identified ?? 0,
             unknown: classified.unknown ?? 0,
             uncertain: classified.uncertain ?? 0,
             unclassified: classified.unclassified ?? 0,
           },
-          latestJob: latestJobs[0] ?? null,
-          latestCampaign: latestCampaigns[0] ?? null,
         };
       }
       case "list-identity-campaigns": {

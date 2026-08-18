@@ -11,6 +11,7 @@ import {
   Loader2,
   MapPin,
   MessageSquare,
+  RefreshCw,
   Route,
   Upload,
   X,
@@ -105,7 +106,7 @@ const MapPage = () => {
   const navigate = useNavigate();
   const { start, end, setRange } = useTimelineRange();
   const { data: status } = useLocationStatus();
-  const [showConversations, setShowConversations] = useState(true);
+  const [showConversations, setShowConversations] = useState(false);
   const [showSavedPlaces, setShowSavedPlaces] = useState(true);
   const [showRecordedTracks, setShowRecordedTracks] = useState(false);
   const [conversationsAllTime, setConversationsAllTime] = useState(false);
@@ -135,7 +136,12 @@ const MapPage = () => {
     maxPoints: maxPointsForRange(rangeMs),
   });
   useLocationLiveUpdates();
-  const { data: conversationsData } = useConversationsOnMap(start, end, {
+  const {
+    data: conversationsData,
+    error: conversationsError,
+    isFetching: isFetchingConversations,
+    refetch: refetchConversations,
+  } = useConversationsOnMap(start, end, {
     enabled: showConversations,
     allTime: conversationsAllTime,
   });
@@ -319,18 +325,29 @@ const MapPage = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <Switch
-            id="show-conversations"
-            checked={showConversations}
-            onCheckedChange={setShowConversations}
-          />
-          <Label
-            htmlFor="show-conversations"
-            className="flex items-center gap-1 text-sm"
+          <Button
+            variant={showConversations ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => {
+              if (showConversations && conversationsError) {
+                void refetchConversations();
+                return;
+              }
+              setShowConversations((current) => !current);
+            }}
+            disabled={isFetchingConversations}
           >
-            <MessageSquare className="h-3.5 w-3.5" />
-            Conversations
-          </Label>
+            {isFetchingConversations
+              ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              : <MessageSquare className="mr-1.5 h-3.5 w-3.5" />}
+            {isFetchingConversations
+              ? "Loading conversations…"
+              : conversationsError
+              ? "Retry conversations"
+              : showConversations
+              ? "Hide conversations"
+              : "Load conversations"}
+          </Button>
           {showConversations && (
             <>
               <Switch

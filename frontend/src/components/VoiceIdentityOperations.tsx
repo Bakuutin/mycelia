@@ -207,7 +207,7 @@ export function VoiceIdentityOperations() {
         });
       }
       const health = await callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       }) as any;
       const service = health.services?.find((item: any) =>

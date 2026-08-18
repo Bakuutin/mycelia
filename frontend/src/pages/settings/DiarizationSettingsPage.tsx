@@ -58,7 +58,7 @@ export default function DiarizationSettingsPage() {
     setRefreshing(true);
     try {
       const pipeline = await callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       });
       const service = pipeline?.services?.find((item: { id: string }) =>

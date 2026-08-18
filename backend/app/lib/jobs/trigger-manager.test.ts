@@ -3,6 +3,7 @@ import {
   acquireTriggerRun,
   buildTriggeredJobData,
   getTriggerFreeSlots,
+  isCapacityBlockedEnqueueError,
   isHealthBlockedEnqueueError,
 } from "./trigger-manager.ts";
 
@@ -48,7 +49,7 @@ Deno.test("workers without trigger data builders keep the legacy payload", async
   });
 });
 
-Deno.test("STT provider health failures receive the short trigger retry", () => {
+Deno.test("only provider health failures receive the short trigger retry", () => {
   expect(isHealthBlockedEnqueueError(
     "No healthy STT provider profiles are available",
   )).toBe(true);
@@ -57,20 +58,38 @@ Deno.test("STT provider health failures receive the short trigger retry", () => 
   );
   expect(isHealthBlockedEnqueueError(
     "All enabled STT provider concurrency slots are reserved",
-  )).toBe(true);
+  )).toBe(false);
   expect(isHealthBlockedEnqueueError(
     "STT provider local has no free concurrency slots",
-  )).toBe(true);
+  )).toBe(false);
   expect(isHealthBlockedEnqueueError(
     "All healthy diarizator provider concurrency slots are reserved",
-  )).toBe(true);
+  )).toBe(false);
   expect(isHealthBlockedEnqueueError(
     "No healthy diarizator route is available. GPU is still loading",
   )).toBe(true);
   expect(isHealthBlockedEnqueueError(
     "Diarizator route reservation is temporarily busy",
-  )).toBe(true);
+  )).toBe(false);
   expect(isHealthBlockedEnqueueError(
     "Transcription job is missing its provider routing snapshot",
   )).toBe(false);
+});
+
+Deno.test("provider capacity is a normal bounded trigger stop", () => {
+  expect(isCapacityBlockedEnqueueError(
+    "All enabled STT provider concurrency slots are reserved",
+  )).toBe(true);
+  expect(isCapacityBlockedEnqueueError(
+    "STT provider local has no free concurrency slots",
+  )).toBe(true);
+  expect(isCapacityBlockedEnqueueError(
+    "All healthy diarizator provider concurrency slots are reserved",
+  )).toBe(true);
+  expect(isCapacityBlockedEnqueueError(
+    "Diarizator route reservation is temporarily busy",
+  )).toBe(true);
+  expect(isCapacityBlockedEnqueueError("provider health check failed")).toBe(
+    false,
+  );
 });

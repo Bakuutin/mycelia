@@ -99,7 +99,7 @@ const TranscriptionSettingsPage = () => {
     setRefreshing(true);
     try {
       const pipeline = await callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       });
       const stt = pipeline?.services?.find((service: { id: string }) =>

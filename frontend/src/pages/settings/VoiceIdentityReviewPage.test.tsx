@@ -48,7 +48,6 @@ const profile = {
 const emptyStatus = {
   labels: { sky: 39, notSky: 40, total: 79, recordings: 4 },
   calibrations: [],
-  classification: { identified: 0, unknown: 0, uncertain: 0, unclassified: 2 },
 };
 const emptyPreview = {
   profile: {
@@ -172,6 +171,50 @@ describe("VoiceIdentityReviewPage", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("option", { name: "No saved sessions" }))
       .toBeInTheDocument();
+  });
+
+  it("runs the global identity classification only from the manual button", async () => {
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile]);
+      if (resource === "jobs") return Promise.resolve({ services: [] });
+      if (input.action === "identity-status") {
+        return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "identity-classification") {
+        return Promise.resolve({
+          asOf: "2026-08-18T08:00:00.000Z",
+          classification: {
+            identified: 10,
+            unknown: 2,
+            uncertain: 3,
+            unclassified: 4,
+          },
+        });
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(emptyPreview);
+      }
+      if (input.action === "list-review-sessions") return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    const calculate = await screen.findByRole("button", {
+      name: "Calculate exact",
+    });
+    expect(mockCallResource).not.toHaveBeenCalledWith(
+      "speaker-segments",
+      expect.objectContaining({ action: "identity-classification" }),
+    );
+
+    fireEvent.click(calculate);
+
+    await screen.findByRole("button", { name: "Recalculate exact" });
+    expect(mockCallResource).toHaveBeenCalledWith("speaker-segments", {
+      action: "identity-classification",
+    });
+    expect(screen.getByText("10")).toBeInTheDocument();
   });
 
   it("resumes a server session, commits a decision, advances, and undoes it", async () => {

@@ -9,6 +9,7 @@ import { getRedisConnectedForMs } from "@/lib/redis.ts";
 import { isJobRunningLocally } from "./processor.ts";
 import { canTrustMissingQueueRecords } from "./orphan-reaper.ts";
 import { releaseStaleAudioChunkClaims } from "./audio-claim-reaper.ts";
+import { releaseCompletedSummarizationClaims } from "./summarization-claim-reaper.ts";
 
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
@@ -171,19 +172,13 @@ export class MaintenanceManager {
   private async releaseCompletedSummarizationClaims() {
     const auth = await getServerAuth();
     const mongo = await getMongoResource(auth);
-    const result = await mongo({
-      action: "updateMany",
-      collection: "objects",
-      query: {
-        "_summarizationClaim.jobId": { $exists: true },
-        "summaries.0": { $exists: true },
-      },
-      update: { $unset: { _summarizationClaim: "" } },
-    });
+    const result = await releaseCompletedSummarizationClaims(mongo);
 
-    if ((result.modifiedCount ?? 0) > 0) {
+    if (result.modified > 0) {
       console.warn(
-        `[SELF-HEAL] Released ${result.modifiedCount} completed summarization claim(s).`,
+        `[SELF-HEAL] Released ${result.modified} completed summarization claim(s).${
+          result.hasMore ? " More bounded cleanup work remains." : ""
+        }`,
       );
     }
   }

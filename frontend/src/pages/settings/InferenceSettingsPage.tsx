@@ -174,7 +174,7 @@ const InferenceSettingsPage = () => {
     setRefreshing(true);
     try {
       const pipeline = await callResource("jobs", {
-        action: "pipeline_health",
+        action: "services_health",
         force: true,
       });
       const llm = pipeline?.services?.find((service: { id: string }) =>

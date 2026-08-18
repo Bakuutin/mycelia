@@ -212,6 +212,7 @@ class DiarizationWorkerTest(TestCase):
         options = cursor.call_args.args[2]
         self.assertNotIn("data", options["projection"])
         self.assertEqual(options["hint"], "audio_chunks_diarization_pending_v2")
+        self.assertEqual(options["limit"], 5_000)
         self.assertEqual(options["maxTimeMS"], 5_000)
 
     def test_claimed_sequence_hydrates_only_owned_ids_in_original_order(self):

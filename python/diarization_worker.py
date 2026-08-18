@@ -44,6 +44,7 @@ MAX_SEQUENCE_GAP = timedelta(
     seconds=float(os.environ.get('DIARIZATION_MAX_GAP_SECONDS', '60'))
 )
 DIARIZATION_CURSOR_MAX_TIME_MS = 5_000
+DIARIZATION_CURSOR_MAX_DOCUMENTS = 5_000
 DIARIZATION_HYDRATE_MAX_TIME_MS = 5_000
 DIARIZATION_METADATA_PROJECTION = {
     '_id': 1,
@@ -563,6 +564,10 @@ def get_diarization_sequences(limit=10, filters=None, max_sequence_length=MAX_SE
             if include_diarized
             else "audio_chunks_diarization_pending_v2"
         ),
+        # A worker may lose recording leases to another concurrent lane. Bound
+        # how much shared historical metadata one job can walk before yielding
+        # its slot; the continuation watchdog can start a fresh bounded pass.
+        "limit": DIARIZATION_CURSOR_MAX_DOCUMENTS,
         "maxTimeMS": DIARIZATION_CURSOR_MAX_TIME_MS,
     })
     try:

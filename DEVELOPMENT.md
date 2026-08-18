@@ -150,14 +150,64 @@ batches leave no application cursor registered in the backend, and expired
 `diarization_recording_leases` can be acquired by a new worker.
 
 The Audio Pipeline page does not run an exact diarization `audio_chunks` count
-on its 30-second refresh. It probes at most one indexed ready chunk: zero is
-exact, while existing work is shown either as the persisted campaign estimate
-(`≈N`, with its update time) or as `Work remains` when no estimate is available.
-Treat campaign `pendingChunks` as an operational estimate, not as an exact
-scheduler input; claiming and completion continue to use canonical chunk state.
-Campaign totals are atomically accounted once per job. Rate and ETA come from
-recent `diarization_campaign_rate_samples` across every provider lane; compare
+on a timer. Its full source/backlog/session snapshot is loaded only through
+**Calculate current stats**. Within that snapshot, diarization probes at most
+one indexed ready chunk: zero is exact, while existing work is shown either as
+the persisted campaign estimate (`≈N`, with its update time) or as
+`Work
+remains` when no estimate is available. Treat campaign `pendingChunks` as
+an operational estimate, not as an exact scheduler input; claiming and
+completion continue to use canonical chunk state. Campaign totals are atomically
+accounted once per job. Rate and ETA come from recent
+`diarization_campaign_rate_samples` across every provider lane; compare
 `usefulAudioRealtimeMultiple` rather than adding per-worker rates manually.
+
+#### Mongo dashboard load guardrails
+
+Keep live service availability separate from corpus-wide statistics:
+
+- Jobs and settings use `services_health` for provider checks. The **Work ready
+  now** exact backlog is disabled on page load and runs only through **Calculate
+  exact backlog**.
+- The Workers table gets live queue depth from `worker-status`. Lifetime run
+  history runs only through **Calculate run history** and uses one bounded,
+  deadline-limited aggregation instead of two full collection scans.
+- A successful exact pipeline snapshot is cached for five minutes and concurrent
+  callers share one calculation. A Mongo deadline starts a two-minute retry
+  backoff; the last successful snapshot is retained when available.
+- Voice identity status reads profile/campaign metadata only. The global active
+  diarization classification `$group` runs only through **Calculate exact**.
+- Completed summarization claims are released in indexed batches of at most 100
+  per maintenance pass. Do not replace this with an unbounded `updateMany`
+  predicate over all objects.
+- The Map conversation overlay is off by default and runs only through **Load
+  conversations**. It sends one bounded, indexed range query, cancels stale
+  browser requests, and does not retry a database deadline automatically. The
+  backend requires the explicit `manual: true` request marker, so an old browser
+  bundle cannot keep the former automatic polling behavior alive. Identical
+  server requests share one query, and a database deadline starts a one-minute
+  backoff for that same window so stale browser tabs cannot amplify the timeout.
+  Historical diarization metadata cursors stop after 5000 documents per job and
+  retain the five-second deadline.
+
+Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
+for recent completed transcription batch history and the compound Map index for
+conversation time ranges. Apply pending migrations before relying on the new
+query hints.
+
+Mongo's Compose health check is an exec-form, one-row native `mongostat` probe
+every 30 seconds, with 1.5-second connection/server/socket deadlines and a
+5-second container timeout. It avoids both timed-out shell accumulation and the
+short CPU/PID burst from starting Node-based `mongosh` for every probe. Because
+health-check configuration is attached at container creation, apply this
+particular Compose change only during a planned Mongo restart:
+
+```bash
+docker compose up -d --force-recreate mongo
+docker compose ps mongo
+```
+
+Recreating Mongo is not required for backend or frontend source reloads.
 
 #### Location import recovery
 
