@@ -158,23 +158,63 @@ failure. A restart does not load a new image and does not change pool capacity.
 
 Use an immutable tag containing the date and source commit:
 
-For a Portainer-managed NVIDIA host, prefer building on that Docker endpoint
-instead of uploading the multi-gigabyte image. The Dockerfile defaults to the
-`cu126` dependency extra, so the Portainer build form does not need a build
-argument. Create a minimal build context:
+### Remote build from a source archive (recommended)
+
+Prefer building on the remote Docker endpoint instead of uploading the
+multi-gigabyte image. The remote host needs Docker Buildx, sufficient disk,
+and outbound registry/package access, but the build itself does not require an
+attached GPU. From the Mycelia repository root, create a commit-exact archive:
 
 ```bash
-IMAGE_TAG="$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-tar -czf "/tmp/mycelia-diarization-build-${IMAGE_TAG}.tar.gz" \
-  -C diarizator Dockerfile pyproject.toml uv.lock src
+IMAGE_TAG="$(date +%Y%m%d)-$(git rev-parse --short=8 HEAD)"
+SOURCE_ARCHIVE="/tmp/mycelia-diarization-source-${IMAGE_TAG}.tar.gz"
+
+git archive \
+  --format=tar.gz \
+  --output="${SOURCE_ARCHIVE}" \
+  HEAD:diarizator
+shasum -a 256 "${SOURCE_ARCHIVE}"
+scp "${SOURCE_ARCHIVE}" user@gpu-server:~/
 ```
 
-In Portainer, open **Images → Build a new image**, set the name to
-`mycelia-diarization:<IMAGE_TAG>`, choose **Upload**, select that archive, and
-build it. This transfers only source and lock files; the Docker endpoint
-downloads and builds the dependency layers itself.
+On the remote host, require `sha256sum` to match the local `shasum`, extract
+into a new versioned directory, and build the exact context. Use the same
+`IMAGE_TAG` value that named the archive:
 
-Alternatively, build locally and import the finished image:
+```bash
+ssh -t user@gpu-server
+
+IMAGE_TAG=20260818-c34218d0
+IMAGE="mycelia-diarization:${IMAGE_TAG}"
+SOURCE_ARCHIVE="$HOME/mycelia-diarization-source-${IMAGE_TAG}.tar.gz"
+BUILD_CONTEXT="$HOME/deploy/mycelia-diarization-${IMAGE_TAG}"
+
+sha256sum "${SOURCE_ARCHIVE}"
+mkdir -p "${BUILD_CONTEXT}"
+tar -xzf "${SOURCE_ARCHIVE}" -C "${BUILD_CONTEXT}"
+cd "${BUILD_CONTEXT}"
+sudo docker buildx build \
+  --platform linux/amd64 \
+  --build-arg PYTORCH_CUDA_VERSION=cu126 \
+  --file Dockerfile \
+  --tag "${IMAGE}" \
+  --load \
+  .
+sudo docker image inspect "${IMAGE}" \
+  --format 'id={{.Id}} os={{.Os}} arch={{.Architecture}}'
+exit
+```
+
+If operators intentionally have no Docker CLI access, use the same archive in
+**Portainer → Images → Build a new image → Upload**. Set the name to
+`mycelia-diarization:<IMAGE_TAG>`; the uploaded archive has `Dockerfile` at its
+root. This still builds on the remote Docker endpoint and transfers only
+source, not the finished image.
+
+### Local build and image import (fallback)
+
+Use this path when the remote endpoint cannot build or lacks the required
+outbound access:
 
 ```bash
 IMAGE_TAG="$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
@@ -222,3 +262,43 @@ Verify these states separately:
 
 Do not treat a green Portainer icon or `/health` alone as proof that the new
 source is running correctly.
+
+## Preserve the current stack for A/B and rollback
+
+Do not update the only working stack in place for the first comparison. Keep
+its existing Portainer name (including an older name such as
+`sky-diarization`), editor contents, environment variables, immutable image,
+and named model volume. Record its `DIARIZATION_IMAGE` and running image IDs.
+Do not select **Remove stack**, remove the model volume, overwrite its image
+tag, or run `docker image prune` during the comparison.
+
+Add a separate `gpu-diarization-candidate` stack from
+`compose.portainer.yml`. Set the new immutable `DIARIZATION_IMAGE`, leave
+`COMPOSE_PROFILES` unset for one process, set a verified-free host port such as
+`DIARIZATION_PORT_1=8185`, and reuse the same
+`DIARIZATION_MODELS_VOLUME=mycelia_diarization_models`. Keep its Mycelia route
+disabled until the runtime checks below pass.
+
+A stopped Portainer stack remains available for rollback. Prefer sequential
+A/B windows on a 24 GiB GPU; do not assume the current pool plus a candidate
+pool can run concurrently merely because their resident model memory appears
+to fit:
+
+1. Run the fixed control window on the current stack and save its route and
+   throughput metrics.
+2. Pause only diarization and wait for `active=0`. Preserve waiting/delayed
+   jobs and do not restart MongoDB or Redis.
+3. Disable the current Mycelia routes and stop, but do not delete, the current
+   stack.
+4. Start the one-process candidate. Require its exact image ID, `/ready=200`,
+   CUDA device, expected `8/8/4` batching, concurrency `1`, and a real
+   `/diarize` result before enabling one route with Slots `1`.
+5. Run the candidate window with the same workload and settings.
+6. To roll back, pause/drain, disable and stop the candidate, start the current
+   stack, verify its recorded image ID and real inference, then restore its
+   routes.
+
+The new backend probes `/ready` rather than `/health`. A legacy control image
+without `/ready` can be measured directly before the backend switch, but it is
+not a compatible routed rollback afterward. In that case roll back the
+backend/worker commit and GPU image as one coordinated change.

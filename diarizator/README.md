@@ -158,9 +158,67 @@ creates the persistent `mycelia_diarization_models` volume automatically. One
 stack publishes one through six private endpoints selected through the
 Compose-native `COMPOSE_PROFILES` variable.
 
-#### Build on a Mac and transfer over SSH
+#### Build on the remote NVIDIA host (recommended)
 
-Run from the Mycelia repository root. Use an immutable tag for every new build;
+The build itself does not need access to the GPU. When the remote Docker host
+has Buildx, enough free disk space, and outbound access to the base-image and
+Python package registries, send the small, commit-exact source archive and
+build there. This is normally much faster than transferring a multi-gigabyte
+finished image over Tailscale.
+
+Create the archive from committed files at the Mycelia repository root. It
+contains only the tracked `diarizator/` tree; it does not include local `.env`
+files, model caches, or Docker volumes.
+
+```bash
+IMAGE_TAG="$(date +%Y%m%d)-$(git rev-parse --short=8 HEAD)"
+SOURCE_ARCHIVE="/tmp/mycelia-diarization-source-${IMAGE_TAG}.tar.gz"
+
+git archive \
+  --format=tar.gz \
+  --output="${SOURCE_ARCHIVE}" \
+  HEAD:diarizator
+shasum -a 256 "${SOURCE_ARCHIVE}"
+scp "${SOURCE_ARCHIVE}" user@gpu-server:~/
+```
+
+Build the exact archive on the remote host and require its `sha256sum` to match
+the local `shasum` value. `ssh -t` lets `sudo` prompt in the remote terminal;
+do not put a server password in a command, `.env`, or Git.
+
+```bash
+ssh -t user@gpu-server
+
+IMAGE_TAG=20260818-c34218d0
+IMAGE="mycelia-diarization:${IMAGE_TAG}"
+SOURCE_ARCHIVE="$HOME/mycelia-diarization-source-${IMAGE_TAG}.tar.gz"
+BUILD_CONTEXT="$HOME/deploy/mycelia-diarization-${IMAGE_TAG}"
+
+sha256sum "${SOURCE_ARCHIVE}"
+mkdir -p "${BUILD_CONTEXT}"
+tar -xzf "${SOURCE_ARCHIVE}" -C "${BUILD_CONTEXT}"
+cd "${BUILD_CONTEXT}"
+sudo docker buildx build \
+  --platform linux/amd64 \
+  --build-arg PYTORCH_CUDA_VERSION=cu126 \
+  --file Dockerfile \
+  --tag "${IMAGE}" \
+  --load \
+  .
+sudo docker image inspect "${IMAGE}" \
+  --format 'id={{.Id}} os={{.Os}} arch={{.Architecture}}'
+exit
+```
+
+Use the same value for `IMAGE_TAG` on both hosts. The expected architecture is
+`amd64`. If shell access to Docker is intentionally unavailable, upload the
+same source archive through **Portainer → Images → Build a new image** and set
+the image name to `mycelia-diarization:<IMAGE_TAG>`.
+
+#### Build locally and transfer the image (fallback)
+
+Use this path when the remote endpoint cannot build or has no required outbound
+network access. Run from the Mycelia repository root. Keep the immutable tag;
 do not overwrite an existing tag because Portainer could keep running the old
 image ID.
 
@@ -185,10 +243,6 @@ gzip -f "/tmp/mycelia-diarization-${IMAGE_TAG}.tar"
 scp "/tmp/mycelia-diarization-${IMAGE_TAG}.tar.gz" "${GPU_SERVER}:/tmp/"
 ```
 
-If Portainer has access to the NVIDIA Docker endpoint, the preferred path is
-to upload a minimal build context and build there; this avoids transferring a
-multi-gigabyte finished image. See [PORTAINER.md](PORTAINER.md#build-and-update-the-image).
-
 Import it on the NVIDIA server. `ssh -t` allocates a terminal so `sudo` can ask
 for the server password without putting it in shell history:
 
@@ -203,8 +257,9 @@ sudo docker run --rm --gpus all \
 exit
 ```
 
-The expected image architecture is `amd64`. Set the Portainer stack variable
-`DIARIZATION_IMAGE` to the imported immutable tag before deploying.
+Set the Portainer stack variable `DIARIZATION_IMAGE` to the built or imported
+immutable tag before deploying. See
+[PORTAINER.md](PORTAINER.md#build-and-update-the-image) for both paths.
 
 #### Create or update the Portainer stack
 
@@ -223,6 +278,43 @@ The expected image architecture is `amd64`. Set the Portainer stack variable
 6. Deploy the stack. For an update, replace the editor contents, preserve all
    environment variables, enable **Prune services**, and select
    **Update the stack**.
+
+#### Keep the previous stack for comparison and rollback
+
+Do not overwrite, delete, or rename the current Portainer stack. Record its
+stack name, `DIARIZATION_IMAGE` value, and the image ID of every running
+container. Keep that immutable image on the Docker endpoint; do not run an
+image prune during the comparison.
+
+Create a separate `gpu-diarization-candidate` stack from the same
+`compose.portainer.yml` with:
+
+- the new immutable `DIARIZATION_IMAGE`;
+- `COMPOSE_PROFILES` unset, so the candidate starts with one process;
+- a verified-free port such as `DIARIZATION_PORT_1=8185`;
+- the same `DIARIZATION_MODELS_VOLUME`, so model files are not downloaded
+  again;
+- no enabled Mycelia route until `/ready`, `/health`, and a real `/diarize`
+  have passed.
+
+Do not run the old two-process pool and a second full pool simultaneously on a
+24 GiB card. CUDA workspace peaks are not determined by resident model memory
+alone. Compare sequentially instead:
+
+1. Measure a fixed control window on the current stack.
+2. Pause only diarization and wait for `active=0`; do not clear waiting or
+   delayed jobs.
+3. Disable the current routes and stop the current stack without deleting it.
+4. Start and verify the one-process candidate, enable its one-slot route, and
+   measure the same workload window.
+5. To roll back, pause and drain again, disable and stop the candidate, start
+   the unchanged current stack, verify its recorded image ID and a real
+   inference, then re-enable its routes.
+
+Stopping a stack preserves its Portainer definition, immutable image, and the
+named model volume. A legacy control image without `/ready` is not compatible
+with a backend that requires the new readiness contract; benchmark it directly
+before the backend switch, or roll back the backend and GPU image together.
 
 The Hugging Face account owning the token must have accepted both gated model
 agreements listed in the prerequisites. The first start can take several
