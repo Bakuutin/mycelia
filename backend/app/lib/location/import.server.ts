@@ -262,6 +262,34 @@ function comparableMetadata(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function comparableColor(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const hasHash = value.startsWith("#");
+  const hex = value.replace(/^#/, "").toLowerCase();
+  if (/^[0-9a-f]{6}$/.test(hex)) return hex;
+  if (!/^[0-9a-f]{8}$/.test(hex)) return value.toLowerCase();
+  if (hasHash) return hex.slice(2);
+  return `${hex.slice(6, 8)}${hex.slice(4, 6)}${hex.slice(2, 4)}`;
+}
+
+function stylesConflict(existing: unknown, incoming: unknown): boolean {
+  if (!existing || typeof existing !== "object") return false;
+  if (!incoming || typeof incoming !== "object") return false;
+  const left = existing as Record<string, unknown>;
+  const right = incoming as Record<string, unknown>;
+  for (const field of ["color", "width", "icon", "styleUrl"]) {
+    if (left[field] === undefined || right[field] === undefined) continue;
+    const leftValue = field === "color"
+      ? comparableColor(left[field])
+      : comparableMetadata(left[field]);
+    const rightValue = field === "color"
+      ? comparableColor(right[field])
+      : comparableMetadata(right[field]);
+    if (leftValue !== rightValue) return true;
+  }
+  return false;
+}
+
 function metadataFieldDifferences(
   existing: Record<string, any> | undefined,
   incoming: Record<string, any>,
@@ -273,6 +301,7 @@ function metadataFieldDifferences(
     if (
       existingValue === undefined || existingValue === null ||
       incomingValue === undefined || incomingValue === null ||
+      (field === "style" && !stylesConflict(existingValue, incomingValue)) ||
       comparableMetadata(existingValue) === comparableMetadata(incomingValue)
     ) return [];
     return [{ field, existingValue, incomingValue }];
@@ -852,6 +881,17 @@ async function recordEntityMetadataConflicts(
   incoming: Record<string, any>,
   existingPriority: number,
 ): Promise<void> {
+  await mongo({
+    action: "deleteMany",
+    collection: METADATA_CONFLICTS,
+    query: {
+      incomingImportId: importId,
+      entityType,
+      entityId,
+      status: "pending",
+      resolution: { $exists: false },
+    },
+  });
   const differences = metadataFieldDifferences(existing, incoming);
   if (differences.length === 0) return;
   await mongo({

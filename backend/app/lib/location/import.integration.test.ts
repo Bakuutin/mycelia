@@ -190,9 +190,9 @@ Deno.test(
     await upgradeLocationImports(db);
     await addFullLocationGeometry(db);
     const gpxFile =
-      `<?xml version="1.0"?><gpx version="1.1"><rte><name>Portable name</name><rtept lat="41.7" lon="44.8"/><rtept lat="41.8" lon="44.9"/></rte></gpx>`;
+      `<?xml version="1.0"?><gpx version="1.1"><rte><name>Portable name</name><extensions><color>#FF804633</color></extensions><rtept lat="41.7" lon="44.8"/><rtept lat="41.8" lon="44.9"/></rte></gpx>`;
     const kmlFile =
-      `<?xml version="1.0"?><kml><Document><Placemark><name>Rich name</name><description>KMZ semantics</description><LineString><coordinates>44.8,41.7 44.9,41.8</coordinates></LineString></Placemark></Document></kml>`;
+      `<?xml version="1.0"?><kml><Document><Placemark><name>Rich name</name><description>KMZ semantics</description><Style><LineStyle><color>FF334680</color><width>5</width></LineStyle></Style><LineString><coordinates>44.8,41.7 44.9,41.8</coordinates></LineString></Placemark></Document></kml>`;
 
     const gpxPreview = await analyzeLocationFile(
       auth,
@@ -216,6 +216,12 @@ Deno.test(
     expect(track?.metadata?.description).toBe("KMZ semantics");
     expect(track?.sourceRefs).toHaveLength(2);
     expect(track?.metadataPriority).toBe(20);
+    expect(
+      await db.collection("location_metadata_conflicts").countDocuments({}),
+    ).toBe(1);
+    expect(
+      await db.collection("location_metadata_conflicts").findOne({}),
+    ).toMatchObject({ field: "name" });
 
     await new LocationResource().use({
       action: "delete-import",
