@@ -177,7 +177,9 @@ type ExternalServiceHealth = {
 };
 
 type PipelineBacklog = {
-  ready: number;
+  ready: number | null;
+  readyStatus?: "exact" | "timeout";
+  readyWarning?: string;
   retryableErrors?: number;
   processing?: number;
   missingTotal?: number;
@@ -188,9 +190,10 @@ type PipelineBacklog = {
 type PipelineHealth = {
   checkedAt: string;
   snapshot?: {
-    status: "fresh" | "cached" | "stale-timeout";
+    status: "fresh" | "cached" | "partial-timeout" | "stale-timeout";
     asOf: string;
     retryAfter?: string;
+    warning?: string;
   };
   services: ExternalServiceHealth[];
   backlogs: Partial<
@@ -4733,13 +4736,17 @@ export default function JobsPage() {
             : (
               <>
                 <div className="mb-2 text-[10px] text-muted-foreground">
-                  Exact snapshot as of {new Date(
+                  {pipelineHealth.snapshot?.status === "partial-timeout"
+                    ? "Partial snapshot"
+                    : "Exact snapshot"} as of {new Date(
                     pipelineHealth.snapshot?.asOf ?? pipelineHealth.checkedAt,
                   ).toLocaleString()}
                   {pipelineHealth.snapshot?.status === "cached"
                     ? " · cached"
                     : pipelineHealth.snapshot?.status === "stale-timeout"
                     ? " · last successful snapshot; refresh timed out"
+                    : pipelineHealth.snapshot?.status === "partial-timeout"
+                    ? " · timed-out counts are marked below"
                     : ""}
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
@@ -4767,9 +4774,10 @@ export default function JobsPage() {
                       0;
                     const workerPaused =
                       workerStatus?.workers[workerType]?.paused ?? false;
+                    const countUnavailable = backlog.readyStatus === "timeout";
                     const runnable = service?.status === "healthy" &&
-                      !workerPaused && !busy;
-                    const availableWork = backlog.ready +
+                      !workerPaused && !busy && !countUnavailable;
+                    const availableWork = (backlog.ready ?? 0) +
                       (backlog.retryableErrors ?? 0);
                     const blockedReason = workerPaused
                       ? "Worker is paused"
@@ -4779,6 +4787,8 @@ export default function JobsPage() {
                       }; enable a healthy route`
                       : busy
                       ? "A job is already active or waiting"
+                      : countUnavailable
+                      ? "Exact source count timed out; retry the snapshot later"
                       : availableWork === 0
                       ? "No new or retryable source work"
                       : null;
@@ -4792,7 +4802,7 @@ export default function JobsPage() {
                             {label}
                           </div>
                           <div className="text-xl font-semibold leading-none">
-                            {backlog.ready}
+                            {backlog.ready == null ? "—" : backlog.ready}
                           </div>
                         </div>
                         <div className="space-y-0.5 text-[10px] leading-tight text-muted-foreground">
@@ -4819,6 +4829,11 @@ export default function JobsPage() {
                           <div>
                             Unretried failed jobs: {backlog.failedJobsUnretried}
                           </div>
+                          {backlog.readyWarning && (
+                            <div className="text-amber-500">
+                              {backlog.readyWarning}
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           <Button

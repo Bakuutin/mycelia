@@ -174,7 +174,10 @@ Keep live service availability separate from corpus-wide statistics:
   deadline-limited aggregation instead of two full collection scans.
 - A successful exact pipeline snapshot is cached for five minutes and concurrent
   callers share one calculation. A Mongo deadline starts a two-minute retry
-  backoff; the last successful snapshot is retained when available.
+  backoff; the last successful snapshot is retained when available. If an
+  individual corpus-wide object count reaches its deadline, the other exact
+  counts remain visible and that card is marked unavailable instead of failing
+  the whole request.
 - Voice identity status reads profile/campaign metadata only. The global active
   diarization classification `$group` runs only through **Calculate exact**.
 - Completed summarization claims are released in indexed batches of at most 100

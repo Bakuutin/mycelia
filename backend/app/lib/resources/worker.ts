@@ -32,6 +32,7 @@ import {
   timelineCampaignStatus,
 } from "@/lib/jobs/timeline-recovery.ts";
 import { resolveLiveJobState } from "@/lib/jobs/job-live-state.ts";
+import { isMongoDeadlineError, runExactCount } from "@/lib/jobs/exact-count.ts";
 
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
 const PIPELINE_HEALTH_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -44,11 +45,6 @@ let pipelineHealthInFlight: Promise<Record<string, any>> | null = null;
 let pipelineHealthRetryAfter = 0;
 let pipelineHealthLastError: string | null = null;
 
-function isMongoDeadlineError(error: unknown): boolean {
-  const candidate = error as { code?: unknown; codeName?: unknown } | null;
-  return candidate?.code === 50 || candidate?.codeName === "MaxTimeMSExpired" ||
-    /MaxTimeMSExpired|operation exceeded time limit/i.test(String(error));
-}
 const WORKER_SPECIFIC_IDLE_TYPES = [
   "vad",
   "conversation_chunk_creator",
@@ -1710,14 +1706,28 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     pipelineHealthInFlight = this.computePipelineHealth(input, auth)
       .then((value) => {
         const computedAt = Date.now();
+        const hasPartialTimeout = Object.values(value.backlogs).some(
+          (backlog: any) => backlog?.readyStatus === "timeout",
+        );
         pipelineHealthCache = { value, computedAt };
-        pipelineHealthRetryAfter = 0;
-        pipelineHealthLastError = null;
+        pipelineHealthRetryAfter = hasPartialTimeout
+          ? computedAt + PIPELINE_HEALTH_TIMEOUT_BACKOFF_MS
+          : 0;
+        pipelineHealthLastError = hasPartialTimeout
+          ? "One or more exact backlog counts exceeded their MongoDB deadline"
+          : null;
         return {
           ...value,
           snapshot: {
-            status: "fresh",
+            status: hasPartialTimeout ? "partial-timeout" : "fresh",
             asOf: new Date(computedAt).toISOString(),
+            ...(hasPartialTimeout
+              ? {
+                retryAfter: new Date(pipelineHealthRetryAfter).toISOString(),
+                warning:
+                  "Some exact counts timed out; the available counts are shown and timed-out cards are marked explicitly.",
+              }
+              : {}),
           },
         };
       })
@@ -1758,9 +1768,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       extractionReady,
       extractionRetryable,
       extractionProcessing,
-      summariesMissing,
-      untaggedConversations,
-      untypedObjects,
       failedByWorker,
       activeTranscriptionJobs,
       recentTranscriptionBatches,
@@ -1796,38 +1803,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         action: "count",
         collection: "conversation_chunks",
         query: { state: "processing" },
-      }),
-      mongo({
-        action: "count",
-        collection: "objects",
-        query: {
-          isConversation: true,
-          // Subfield predicate matches the conversation_missing_summary index.
-          "summaries.0.date": { $exists: false },
-        },
-        options: {
-          hint: "conversation_missing_summary",
-          maxTimeMS: 5_000,
-        },
-      }),
-      // Conversations no tagging pass has touched yet (extraction-time
-      // tagging and the tagger both record aiProvenance.taggingRuns).
-      mongo({
-        action: "count",
-        collection: "objects",
-        query: buildTaggerConversationQuery(),
-        options: {
-          hint: "conversation_missing_tagging_marker_v1",
-          maxTimeMS: 5_000,
-        },
-      }),
-      // Objects with no type flag and no entity_typing attempt marker —
-      // exactly what one entity_typing run would pick up.
-      mongo({
-        action: "count",
-        collection: "objects",
-        query: buildUntypedScanFilters(false),
-        options: { maxTimeMS: 5_000 },
       }),
       mongo({
         action: "aggregate",
@@ -1890,6 +1865,56 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       ),
     ]);
 
+    // These are the three corpus-wide object counts behind the explicit
+    // "Calculate exact backlog" action. Run them sequentially so one manual
+    // click cannot create a three-query CPU burst. A deadline marks only that
+    // card unavailable instead of failing the whole snapshot.
+    const summariesMissing = await runExactCount(
+      () =>
+        mongo({
+          action: "count",
+          collection: "objects",
+          query: {
+            isConversation: true,
+            // Subfield predicate matches the conversation_missing_summary index.
+            "summaries.0.date": { $exists: false },
+          },
+          options: {
+            hint: "conversation_missing_summary",
+            maxTimeMS: 5_000,
+          },
+        }),
+      5,
+    );
+    const untaggedConversations = await runExactCount(
+      () =>
+        mongo({
+          action: "count",
+          collection: "objects",
+          query: buildTaggerConversationQuery(),
+          options: {
+            hint: "conversation_missing_tagging_marker_v1",
+            maxTimeMS: 5_000,
+          },
+        }),
+      5,
+    );
+    const untypedObjects = await runExactCount(
+      () =>
+        mongo({
+          action: "count",
+          collection: "objects",
+          query: buildUntypedScanFilters(false),
+          options: {
+            // Without a hint MongoDB spends seconds evaluating and then picks
+            // the unrelated conversation time-range index on the live corpus.
+            hint: "_id_",
+            maxTimeMS: 15_000,
+          },
+        }),
+      15,
+    );
+
     const failedCounts = Object.fromEntries(
       (failedByWorker as any[]).map((entry) => [entry._id, entry.count]),
     );
@@ -1935,16 +1960,27 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           // Conversation extraction already derives these objects from
           // transcript-backed chunks. Avoid a dashboard-wide range join here:
           // on a large library it can take minutes and block every health card.
-          ready: Number(summariesMissing),
-          missingTotal: Number(summariesMissing),
+          ready: summariesMissing.value,
+          readyStatus: summariesMissing.status,
+          ...(summariesMissing.status === "timeout"
+            ? { readyWarning: summariesMissing.warning }
+            : { missingTotal: summariesMissing.value }),
           failedJobsUnretried: Number(failedCounts.summarization ?? 0),
         },
         tagger: {
-          ready: Number(untaggedConversations),
+          ready: untaggedConversations.value,
+          readyStatus: untaggedConversations.status,
+          ...(untaggedConversations.status === "timeout"
+            ? { readyWarning: untaggedConversations.warning }
+            : {}),
           failedJobsUnretried: Number(failedCounts.tagger ?? 0),
         },
         entity_typing: {
-          ready: Number(untypedObjects),
+          ready: untypedObjects.value,
+          readyStatus: untypedObjects.status,
+          ...(untypedObjects.status === "timeout"
+            ? { readyWarning: untypedObjects.warning }
+            : {}),
           failedJobsUnretried: Number(failedCounts.entity_typing ?? 0),
         },
       },
