@@ -160,7 +160,7 @@ export function ImportsList({
                     <p>
                       {number.format(imp.receipt.timedCoordinates ?? 0)} timed ·
                       {" "}
-                      {number.format(imp.receipt.untimedCoordinates ?? 0)}
+                      {number.format(imp.receipt.untimedCoordinates ?? 0)}{" "}
                       untimed coordinates
                     </p>
                     <p>
