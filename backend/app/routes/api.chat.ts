@@ -18,6 +18,7 @@ import {
   selectLlmProviders,
 } from "@/lib/llm/provider-routing.ts";
 import { normalizeOpenAIBaseUrl } from "@/lib/llm/model-routing.ts";
+import { createChatProviderFetch } from "@/lib/llm/chat-provider-fetch.ts";
 import { ObjectId } from "bson";
 import {
   activeToolsForPolicy,
@@ -755,7 +756,15 @@ export async function apiChatHandler(req: Request, res: Response) {
       model: createOpenAI({
         baseURL: normalizeOpenAIBaseUrl(chatProvider.baseUrl),
         apiKey: chatProvider.apiKey,
+        fetch: createChatProviderFetch({
+          requestId,
+          providerName: chatProvider.name,
+          model: actualModel,
+        }),
       }).chat(actualModel),
+      // Provider retries are handled by createChatProviderFetch so local-model
+      // cold starts and empty SSE streams share one bounded retry budget.
+      maxRetries: 0,
       tools,
       activeTools: activeTools as any,
       abortSignal: abortController.signal,

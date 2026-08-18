@@ -503,6 +503,7 @@ Targeted checks for this feature:
 cd backend
 deno test -A app/lib/chat/tools.server.test.ts \
   app/lib/chat/resource.server.test.ts app/lib/chat/runs.server.test.ts \
+  app/routes/api.chat.test.ts \
   app/services/updates.websocket.server.test.ts
 
 cd ../frontend
@@ -512,6 +513,31 @@ deno run -A npm:vitest run src/lib/chat.test.ts \
 ```
 
 ## Troubleshooting
+
+### Empty or loading-model chat responses
+
+Memory Chat records `X-Mycelia-Request-Id` with every assistant response. When
+the provider returns `Loading model`, the backend waits with bounded backoff for
+the same provider/model instead of silently routing an exact model ID elsewhere.
+It also retries a nominally successful SSE response that closes without text or
+tool calls, including a reasoning-only response truncated before visible text,
+and a network reset while that pre-output prefix is being read. If the retry
+budget is exhausted, the request is reported as a provider failure rather than a
+completed empty assistant message. Historical empty assistant messages remain
+visible as diagnostics but are omitted from later model context, so they cannot
+make every retry fail UI-message validation.
+
+Use the request ID shown in the chat error to correlate the attempt:
+
+```bash
+docker compose logs --tail=500 backend \
+  | rg '\[apiChatHandler\]|<request-id>'
+```
+
+The provider still has to be reachable. A successful `/v1/models` response is
+only catalogue evidence; verify readiness with a small authenticated
+`/v1/chat/completions` request before retrying a private chat. Do not move an
+exact self-hosted model ID to an unrelated cloud provider as a recovery step.
 
 ### Queue recovery and process restarts
 
