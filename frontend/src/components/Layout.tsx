@@ -23,6 +23,7 @@ import { useJobsListener } from "@/hooks/useJobsListener";
 import { Badge } from "@/components/ui/badge";
 import { NotificationCenter } from "@/components/NotificationCenter";
 import { GlobalAudioPlayerPopover } from "@/components/GlobalAudioPlayerPopover";
+import { ChatNotificationCoordinator } from "@/components/chat/ChatNotificationCoordinator";
 
 const Layout = () => {
   useTheme();
@@ -41,8 +42,8 @@ const Layout = () => {
   return (
     <TooltipProvider>
       <div className="min-h-screen bg-background">
-        <nav className="border-b">
-          <div className="mx-auto px-4 md:container">
+        <nav className="max-w-full overflow-x-auto border-b">
+          <div className="w-max min-w-full px-4 md:container md:mx-auto md:w-auto">
             <div className="flex h-16 items-center justify-between">
               <div className="flex items-center gap-6">
                 <Link to="/" className="text-xl font-bold">
@@ -74,7 +75,8 @@ const Layout = () => {
                   <Link
                     to="/chat"
                     className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
-                      location.pathname === "/chat"
+                      location.pathname === "/chat" ||
+                        location.pathname.startsWith("/chat/")
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                     }`}
@@ -160,6 +162,7 @@ const Layout = () => {
         </main>
       </div>
       <AudioPlayer />
+      <ChatNotificationCoordinator />
     </TooltipProvider>
   );
 };

@@ -1,6 +1,14 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, Check, CheckCheck, Trash2, X, AlertCircle, CheckCircle2 } from "lucide-react";
+import {
+  AlertCircle,
+  Bell,
+  Check,
+  CheckCheck,
+  CheckCircle2,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -12,10 +20,10 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  useNotificationStore,
-  selectUnreadCount,
-  type Notification,
+  type Notification as StoredNotification,
   type NotificationType,
+  selectUnreadCount,
+  useNotificationStore,
 } from "@/stores/notificationStore";
 import { cn } from "@/lib/utils";
 
@@ -43,8 +51,8 @@ function NotificationItem({
   onRemove,
   onMarkRead,
 }: {
-  notification: Notification;
-  onAction: (path: string) => void;
+  notification: StoredNotification;
+  onAction: (path: string, id: string) => void;
   onRemove: (id: string) => void;
   onMarkRead: (id: string) => void;
 }) {
@@ -60,7 +68,7 @@ function NotificationItem({
       className={cn(
         "p-3 border-l-4 rounded-r-md bg-muted/50 hover:bg-muted transition-colors",
         typeStyles[notification.type],
-        !notification.read && "bg-accent/50"
+        !notification.read && "bg-accent/50",
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -86,7 +94,9 @@ function NotificationItem({
               <>
                 <span className="text-muted-foreground">•</span>
                 <button
-                  onClick={() => onAction(notification.action!.path)}
+                  type="button"
+                  onClick={() =>
+                    onAction(notification.action!.path, notification.id)}
                   className="text-xs text-primary hover:underline"
                 >
                   {notification.action.label}
@@ -102,6 +112,7 @@ function NotificationItem({
               size="icon"
               className="h-6 w-6"
               onClick={() => onMarkRead(notification.id)}
+              aria-label="Mark notification as read"
             >
               <Check className="h-3 w-3" />
             </Button>
@@ -111,6 +122,7 @@ function NotificationItem({
             size="icon"
             className="h-6 w-6 text-muted-foreground hover:text-destructive"
             onClick={() => onRemove(notification.id)}
+            aria-label="Remove notification"
           >
             <X className="h-3 w-3" />
           </Button>
@@ -127,17 +139,19 @@ export function NotificationCenter() {
   const {
     notifications,
     showPopups,
+    browserNotificationsEnabled,
     markAsRead,
     markAllAsRead,
     removeNotification,
     clearAll,
     setShowPopups,
+    setBrowserNotificationsEnabled,
   } = useNotificationStore();
   const unreadCount = useNotificationStore(selectUnreadCount);
 
   const errorCount = useMemo(
     () => notifications.filter((n) => n.type === "error").length,
-    [notifications]
+    [notifications],
   );
 
   const filteredNotifications = useMemo(() => {
@@ -145,15 +159,37 @@ export function NotificationCenter() {
     return notifications.filter((n) => n.type === filter);
   }, [notifications, filter]);
 
-  const handleAction = (path: string) => {
+  const handleAction = (path: string, notificationId: string) => {
+    markAsRead(notificationId);
     navigate(path);
     setOpen(false);
+  };
+
+  const browserNotificationsSupported = typeof window !== "undefined" &&
+    "Notification" in window;
+  const handleBrowserNotifications = async (enabled: boolean) => {
+    if (!enabled) {
+      setBrowserNotificationsEnabled(false);
+      return;
+    }
+    if (!browserNotificationsSupported) return;
+    const permission = Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
+    setBrowserNotificationsEnabled(permission === "granted");
   };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative"
+          aria-label={`Notifications${
+            unreadCount ? `, ${unreadCount} unread` : ""
+          }`}
+        >
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
             <Badge
@@ -197,35 +233,38 @@ export function NotificationCenter() {
         {/* Filter tabs */}
         <div className="flex border-b">
           <button
+            type="button"
             onClick={() => setFilter("all")}
             className={cn(
               "flex-1 px-3 py-2 text-xs font-medium transition-colors",
               filter === "all"
                 ? "border-b-2 border-primary text-primary"
-                : "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             All ({notifications.length})
           </button>
           <button
+            type="button"
             onClick={() => setFilter("error")}
             className={cn(
               "flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1",
               filter === "error"
                 ? "border-b-2 border-red-500 text-red-500"
-                : "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <AlertCircle className="h-3 w-3" />
             Errors ({errorCount})
           </button>
           <button
+            type="button"
             onClick={() => setFilter("success")}
             className={cn(
               "flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1",
               filter === "success"
                 ? "border-b-2 border-green-500 text-green-500"
-                : "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <CheckCircle2 className="h-3 w-3" />
@@ -234,50 +273,84 @@ export function NotificationCenter() {
         </div>
 
         <div className="h-[400px] overflow-y-auto">
-          {filteredNotifications.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              {filter === "error" ? (
-                <>
-                  <CheckCircle2 className="h-8 w-8 mx-auto mb-2 opacity-50 text-green-500" />
-                  <p className="text-sm">No failed jobs</p>
-                </>
-              ) : filter === "success" ? (
-                <>
-                  <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No completed jobs</p>
-                </>
-              ) : (
-                <>
-                  <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No notifications</p>
-                </>
-              )}
-            </div>
-          ) : (
-            <div className="p-2 space-y-2">
-              {filteredNotifications.map((notification) => (
-                <NotificationItem
-                  key={notification.id}
-                  notification={notification}
-                  onAction={handleAction}
-                  onRemove={removeNotification}
-                  onMarkRead={markAsRead}
-                />
-              ))}
-            </div>
-          )}
+          {filteredNotifications.length === 0
+            ? (
+              <div className="p-8 text-center text-muted-foreground">
+                {filter === "error"
+                  ? (
+                    <>
+                      <CheckCircle2 className="h-8 w-8 mx-auto mb-2 opacity-50 text-green-500" />
+                      <p className="text-sm">No failed jobs</p>
+                    </>
+                  )
+                  : filter === "success"
+                  ? (
+                    <>
+                      <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No completed jobs</p>
+                    </>
+                  )
+                  : (
+                    <>
+                      <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No notifications</p>
+                    </>
+                  )}
+              </div>
+            )
+            : (
+              <div className="p-2 space-y-2">
+                {filteredNotifications.map((notification) => (
+                  <NotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    onAction={handleAction}
+                    onRemove={removeNotification}
+                    onMarkRead={markAsRead}
+                  />
+                ))}
+              </div>
+            )}
         </div>
 
         <Separator />
-        <div className="p-3 flex items-center justify-between">
-          <Label htmlFor="show-popups" className="text-sm text-muted-foreground cursor-pointer">
-            Show popup toasts
-          </Label>
-          <Switch
-            id="show-popups"
-            checked={showPopups}
-            onCheckedChange={setShowPopups}
-          />
+        <div className="space-y-3 p-3">
+          <div className="flex items-center justify-between">
+            <Label
+              htmlFor="show-popups"
+              className="cursor-pointer text-sm text-muted-foreground"
+            >
+              Show popup toasts
+            </Label>
+            <Switch
+              id="show-popups"
+              checked={showPopups}
+              onCheckedChange={setShowPopups}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label
+                htmlFor="browser-notifications"
+                className="cursor-pointer text-sm text-muted-foreground"
+              >
+                Background-tab notifications
+              </Label>
+              {!browserNotificationsSupported && (
+                <p className="text-[10px] text-muted-foreground">
+                  Not supported in this browser; title badge is used.
+                </p>
+              )}
+            </div>
+            <Switch
+              id="browser-notifications"
+              checked={browserNotificationsEnabled &&
+                browserNotificationsSupported}
+              disabled={!browserNotificationsSupported}
+              onCheckedChange={(enabled) =>
+                void handleBrowserNotifications(enabled)}
+            />
+          </div>
         </div>
       </PopoverContent>
     </Popover>

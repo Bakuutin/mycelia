@@ -10,6 +10,7 @@ export interface Notification {
   description?: string;
   timestamp: number;
   read: boolean;
+  dedupeKey?: string;
   action?: {
     label: string;
     path: string;
@@ -20,15 +21,19 @@ interface NotificationState {
   notifications: Notification[];
   showPopups: boolean;
   maxNotifications: number;
+  browserNotificationsEnabled: boolean;
 }
 
 interface NotificationActions {
-  addNotification: (notification: Omit<Notification, "id" | "timestamp" | "read">) => void;
+  addNotification: (
+    notification: Omit<Notification, "id" | "timestamp" | "read">,
+  ) => void;
   markAsRead: (id: string) => void;
   markAllAsRead: () => void;
   removeNotification: (id: string) => void;
   clearAll: () => void;
   setShowPopups: (show: boolean) => void;
+  setBrowserNotificationsEnabled: (enabled: boolean) => void;
 }
 
 type NotificationStore = NotificationState & NotificationActions;
@@ -37,6 +42,7 @@ const initialState: NotificationState = {
   notifications: [],
   showPopups: true,
   maxNotifications: 100,
+  browserNotificationsEnabled: false,
 };
 
 export const useNotificationStore = create<NotificationStore>()(
@@ -46,6 +52,14 @@ export const useNotificationStore = create<NotificationStore>()(
 
       addNotification: (notification) => {
         const { notifications, maxNotifications } = get();
+        if (
+          notification.dedupeKey &&
+          notifications.some((item) =>
+            item.dedupeKey === notification.dedupeKey
+          )
+        ) {
+          return;
+        }
         const newNotification: Notification = {
           ...notification,
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -54,7 +68,10 @@ export const useNotificationStore = create<NotificationStore>()(
         };
 
         // Keep only the most recent notifications
-        const updated = [newNotification, ...notifications].slice(0, maxNotifications);
+        const updated = [newNotification, ...notifications].slice(
+          0,
+          maxNotifications,
+        );
         set({ notifications: updated });
       },
 
@@ -85,15 +102,19 @@ export const useNotificationStore = create<NotificationStore>()(
       setShowPopups: (show) => {
         set({ showPopups: show });
       },
+      setBrowserNotificationsEnabled: (enabled) => {
+        set({ browserNotificationsEnabled: enabled });
+      },
     }),
     {
       name: "mycelia-notifications",
       partialize: (state) => ({
         notifications: state.notifications.slice(0, 50), // Persist only last 50
         showPopups: state.showPopups,
+        browserNotificationsEnabled: state.browserNotificationsEnabled,
       }),
-    }
-  )
+    },
+  ),
 );
 
 // Selector for unread count

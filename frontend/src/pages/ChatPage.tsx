@@ -1,17 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithApprovalResponses,
-  type UIMessage,
 } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   PromptInput,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuItem,
-  PromptInputActionMenuTrigger,
   PromptInputFooter,
   PromptInputSpeechButton,
   PromptInputSubmit,
@@ -20,8 +15,6 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Loader } from "@/components/ai-elements/loader";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -30,49 +23,43 @@ import {
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowDown,
   Check,
+  Copy,
   MessageSquare,
-  Paperclip,
-  Pencil,
-  Plus,
+  Pin,
   RefreshCw,
+  Square,
   X,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
 import { dbMessageToUIMessage } from "@/lib/chatMessages";
 import { formatToolName } from "@/lib/toolPresentation";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
-import type { Message as MessengerMessage } from "@myceliasdk/messengers";
-import type { Chat } from "@myceliasdk/messengers.ts";
+import type { Message as MessengerMessage } from "@myceliasdk/messengers.ts";
+import type {
+  ChatToolCatalogEntry,
+  ChatToolPolicy,
+} from "@myceliasdk/messengers.ts";
 import { cn } from "@/lib/utils";
-import { useFormattedTime } from "@/lib/formatTime";
-import { ModelSelector } from "@/components/ModelSelector";
-
-interface ChatMessageMetadata {
-  requestedModel?: string;
-  model?: string;
-  providerProfileId?: string;
-  requestId?: string;
-  finishReason?: string;
-  error?: {
-    type?: string;
-    message?: string;
-  };
-}
-
-type MemoryChatMessage = UIMessage<ChatMessageMetadata> & {
-  content?: unknown;
-  createdAt?: Date;
-};
-
-type MemoryChat = Chat & {
-  title?: string;
-  model?: string;
-  // Provider the chat's model is pinned to; absent means automatic routing.
-  providerProfileId?: string;
-};
+import { useChatSummaries } from "@/hooks/useChatSummaries";
+import { ChatSidebar } from "@/components/chat/ChatSidebar";
+import { ChatThreadHeader } from "@/components/chat/ChatThreadHeader";
+import { ChatActivity } from "@/components/chat/ChatActivity";
+import {
+  type ChatMessageMetadata,
+  chatStatusLabel,
+  DEFAULT_CHAT_TOOL_POLICY,
+  hasRenderableAssistantOutput,
+  isNearBottom,
+  type MemoryChatMessage,
+  type MemoryChatSummary,
+  messageNeedsApproval,
+  messageText,
+} from "@/lib/chat";
+import { useStableChatSessionId } from "@/hooks/useStableChatSessionId";
 
 interface ChatErrorState {
   message: string;
@@ -80,190 +67,44 @@ interface ChatErrorState {
   requestId?: string;
 }
 
-function hasRenderableAssistantOutput(message: MemoryChatMessage): boolean {
-  if (typeof message.content === "string" && message.content.trim()) {
-    return true;
-  }
-  return message.parts?.some((part: any) => {
-    if (part?.type === "text") return Boolean(part.text?.trim());
-    return part?.type?.startsWith("tool-") || part?.type === "dynamic-tool";
-  }) ?? false;
-}
-
-async function fetchMessages(chatId: string) {
-  const messages = await callResource("mongo", {
-    action: "find",
-    collection: "messages",
-    query: {
-      chatId: new ObjectId(chatId),
-    },
-    options: {
-      sort: { createdAt: 1 },
-    },
-  });
-
-  // Convert every stored message (legacy or new format) into a valid
-  // UIMessage — useChat resubmits this history to the backend, which
-  // validates it with validateUIMessages.
-  return messages.map(dbMessageToUIMessage);
+interface PendingChatMessage {
+  id: string;
+  text: string;
 }
 
 function isValidObjectId(id: string): boolean {
   return /^[a-fA-F0-9]{24}$/.test(id);
 }
 
-function toMessengerMessage(message: any): MessengerMessage {
-  const parts = Array.isArray(message.parts) ? message.parts : [];
-  const textContent = parts
-    .filter((p: any) => p?.type === "text" && p?.text)
-    .map((p: any) => p.text)
-    .join("\n\n");
-
-  const messageId = isValidObjectId(message.id)
+function toMessengerMessage(
+  message: MemoryChatMessage,
+  chatId: string,
+): MessengerMessage {
+  const id = isValidObjectId(message.id)
     ? new ObjectId(message.id)
     : new ObjectId();
-
+  const timestamp = message.createdAt || new Date();
   return {
-    _id: messageId,
-    chatId: new ObjectId(),
+    _id: id,
+    chatId: isValidObjectId(chatId) ? new ObjectId(chatId) : new ObjectId(),
     senderId: new ObjectId(),
     platform: "mycelia",
     externalId: message.id,
-    timestamp: message.createdAt || new Date(),
-    createdAt: message.createdAt || new Date(),
-    updatedAt: message.createdAt || new Date(),
+    timestamp,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    pinnedAt: message.metadata?.pinnedAt
+      ? new Date(message.metadata.pinnedAt)
+      : undefined,
     raw: {
       role: message.role,
-      content: textContent,
-      // The full UIMessage: the renderer reads text AND tool parts from it,
-      // so tool calls are visible live during streaming.
-      uiMessage: { id: message.id, role: message.role, parts },
-      requestedModel: message.metadata?.requestedModel,
-      model: message.metadata?.model,
-      requestId: message.metadata?.requestId,
-      finishReason: message.metadata?.finishReason,
-      error: message.metadata?.error,
+      content: messageText(message),
+      uiMessage: { id: message.id, role: message.role, parts: message.parts },
+      ...message.metadata,
     },
   };
 }
 
-// Update chat name in database
-async function updateChatName(chatId: string, name: string) {
-  await callResource("mongo", {
-    action: "updateOne",
-    collection: "chats",
-    query: { _id: new ObjectId(chatId) },
-    update: { $set: { name, title: name } },
-  });
-}
-
-// Chat list item component with inline rename
-function ChatListItemComponent({
-  chat,
-  isSelected,
-  onClick,
-  onRename,
-}: {
-  chat: MemoryChat;
-  isSelected: boolean;
-  onClick: () => void;
-  onRename: (chatId: string, newName: string) => void;
-}) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const lastMessageDate = chat.lastMessageDate
-    ? new Date(chat.lastMessageDate)
-    : new Date(chat.createdAt);
-  const formattedTime = useFormattedTime(lastMessageDate);
-
-  const chatName = chat.name || chat.title || "New Chat";
-
-  const handleStartEdit = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditName(chatName);
-    setIsEditing(true);
-  };
-
-  useEffect(() => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [isEditing]);
-
-  const handleSave = async () => {
-    const trimmedName = editName.trim();
-    if (trimmedName && trimmedName !== chatName) {
-      await updateChatName(chat._id.toString(), trimmedName);
-      onRename(chat._id.toString(), trimmedName);
-    }
-    setIsEditing(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleSave();
-    } else if (e.key === "Escape") {
-      setIsEditing(false);
-    }
-  };
-
-  return (
-    <div
-      onClick={onClick}
-      className={cn(
-        "w-full text-left p-3 border-b hover:bg-muted/50 transition-colors cursor-pointer group",
-        isSelected && "bg-muted",
-      )}
-    >
-      <div className="flex items-start gap-3">
-        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
-          <MessageSquare className="w-4 h-4 text-muted-foreground" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-2">
-            {isEditing
-              ? (
-                <Input
-                  ref={inputRef}
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  onBlur={handleSave}
-                  onKeyDown={handleKeyDown}
-                  onClick={(e) => e.stopPropagation()}
-                  className="h-6 text-sm py-0 px-1"
-                />
-              )
-              : (
-                <>
-                  <span className="font-medium text-sm truncate flex-1">
-                    {chatName}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleStartEdit}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded transition-opacity"
-                    title="Rename"
-                  >
-                    <Pencil className="w-3 h-3 text-muted-foreground" />
-                  </button>
-                </>
-              )}
-            {!isEditing && (
-              <span className="text-xs text-muted-foreground shrink-0">
-                {formattedTime}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Component for tool approval requests
 function ToolApprovalRequest({
   part,
   onApprove,
@@ -273,38 +114,33 @@ function ToolApprovalRequest({
   onApprove: () => void;
   onDeny: () => void;
 }) {
-  // UIMessage tool parts encode the tool name in the part type ("tool-<name>")
   const toolName = part.toolName ||
     (typeof part.type === "string" && part.type.startsWith("tool-")
       ? part.type.slice(5)
       : "Unknown Tool");
-  const input = part.input || {};
-
   return (
     <div className="flex w-full py-2">
-      <div className="flex gap-3 w-full">
-        <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-amber-500/20">
-          <AlertTriangle className="w-4 h-4 text-amber-500" />
+      <div className="flex w-full gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/20">
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
         </div>
-        <div className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-          <div className="font-medium text-amber-700 dark:text-amber-400 mb-2">
-            Confirmation Required: {formatToolName(toolName)}
+        <div className="flex-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+          <div className="mb-2 font-medium text-amber-700 dark:text-amber-400">
+            Confirmation required: {formatToolName(toolName)}
           </div>
-          <div className="text-sm text-muted-foreground mb-3">
-            The assistant wants to perform this action:
-          </div>
-          <pre className="text-xs bg-background/50 rounded p-2 mb-4 overflow-auto max-h-40">
-            {JSON.stringify(input, null, 2)}
+          <p className="mb-3 text-sm text-muted-foreground">
+            Review the exact operation before allowing it to change data.
+          </p>
+          <pre className="mb-4 max-h-40 overflow-auto rounded bg-background/50 p-2 text-xs">
+            {JSON.stringify(part.input || {}, null, 2)}
           </pre>
           <div className="flex gap-2">
             <Button
               size="sm"
-              variant="default"
               onClick={onApprove}
               className="bg-green-600 hover:bg-green-700"
             >
-              <Check className="w-4 h-4 mr-1" />
-              Approve
+              <Check className="mr-1 h-4 w-4" /> Approve
             </Button>
             <Button
               size="sm"
@@ -312,8 +148,7 @@ function ToolApprovalRequest({
               onClick={onDeny}
               className="border-red-500/50 text-red-500 hover:bg-red-500/10"
             >
-              <X className="w-4 h-4 mr-1" />
-              Deny
+              <X className="mr-1 h-4 w-4" /> Deny
             </Button>
           </div>
         </div>
@@ -322,28 +157,27 @@ function ToolApprovalRequest({
   );
 }
 
-function ChatMessage({
+function ChatMessageContent({
   message,
+  chatId,
   addToolApprovalResponse,
 }: {
-  message: any;
+  message: MemoryChatMessage;
+  chatId: string;
   addToolApprovalResponse?: (
     response: { id: string; approved: boolean },
   ) => void;
 }) {
-  const messengerMessage = useMemo(() => toMessengerMessage(message), [
-    message,
-  ]);
+  const messengerMessage = useMemo(
+    () => toMessengerMessage(message, chatId),
+    [chatId, message],
+  );
   const MessageComponent = myceliaPlatform.MessageComponent;
+  const approvalRequests =
+    message.parts?.filter((part: any) =>
+      part?.state === "approval-requested" && part?.approval?.id
+    ) ?? [];
 
-  // Pending tool approval requests (rendered after the message content)
-  const approvalRequests = message.parts?.filter(
-    (p: any) => p?.state === "approval-requested" && p?.approval?.id,
-  ) || [];
-
-  // Assistant message with nothing renderable yet (streaming just started):
-  // show a loader instead of an empty bubble. Persisted empty responses carry
-  // metadata.error and render the error fallback instead.
   if (
     message.role === "assistant" &&
     !hasRenderableAssistantOutput(message) &&
@@ -352,195 +186,152 @@ function ChatMessage({
     return (
       <div className="flex w-full py-2">
         <div className="flex gap-3">
-          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
-            <span className="text-base" role="img" aria-label="Mycelia">
-              🍄
-            </span>
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
+            <span role="img" aria-label="Mycelia">🍄</span>
           </div>
-          <div className="flex items-center">
-            <Loader />
-          </div>
+          <Loader />
         </div>
       </div>
     );
   }
 
-  // Render the message itself (text + live tool calls), then any approval
-  // prompts — streamed text before the approval request stays visible.
   return (
     <>
       <MessageComponent message={messengerMessage} />
-      {addToolApprovalResponse && approvalRequests.map((part: any) => (
-        <ToolApprovalRequest
-          key={part.toolCallId || part.approval.id}
-          part={part}
-          onApprove={() =>
-            addToolApprovalResponse({ id: part.approval.id, approved: true })}
-          onDeny={() =>
-            addToolApprovalResponse({
-              id: part.approval.id,
-              approved: false,
-            })}
-        />
-      ))}
+      {addToolApprovalResponse &&
+        approvalRequests.map((part: any) => (
+          <ToolApprovalRequest
+            key={part.toolCallId || part.approval.id}
+            part={part}
+            onApprove={() =>
+              addToolApprovalResponse({ id: part.approval.id, approved: true })}
+            onDeny={() =>
+              addToolApprovalResponse({
+                id: part.approval.id,
+                approved: false,
+              })}
+          />
+        ))}
     </>
   );
+}
+
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(() =>
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-width: 767px)").matches
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setMobile(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return mobile;
 }
 
 export default function ChatPage() {
   const [searchParams] = useSearchParams();
   const params = useParams();
   const navigate = useNavigate();
-  const chatId = params.chatId ?? searchParams.get("id") ?? undefined;
+  const routeChatId = params.chatId ?? searchParams.get("id") ?? undefined;
+  const { chatSessionId: effectiveChatId, resetDraft } = useStableChatSessionId(
+    routeChatId,
+  );
+  const isMobile = useIsMobile();
+
+  const [query, setQuery] = useState("");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const chatList = useChatSummaries(query, favoritesOnly);
+  const [historyChat, setHistoryChat] = useState<MemoryChatSummary>();
+  const selectedChat =
+    chatList.items.find((chat) => chat._id.toString() === routeChatId) ??
+      historyChat;
+
   const [input, setInput] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const newChatIdRef = useRef<string | null>(null);
-  const latestRequestRef = useRef<{
-    model?: string;
-    requestId?: string;
-  }>({});
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [chats, setChats] = useState<MemoryChat[]>([]);
-  const [loadingChats, setLoadingChats] = useState(true);
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [pendingMessage, setPendingMessage] = useState<
+    PendingChatMessage | null
+  >(
+    null,
+  );
+  const [mobileDraftOpen, setMobileDraftOpen] = useState(false);
+  const [creatingDraft, setCreatingDraft] = useState(false);
+  const [historyState, setHistoryState] = useState<
+    "idle" | "loading" | "ready" | "not-found" | "error"
+  >("idle");
+  const [historyError, setHistoryError] = useState<string>();
+  const [chatError, setChatError] = useState<ChatErrorState | null>(null);
   const [defaultChatModel, setDefaultChatModel] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
-  const [selectedProviderId, setSelectedProviderId] = useState<
-    string | undefined
-  >(undefined);
+  const [selectedProviderId, setSelectedProviderId] = useState<string>();
+  const [toolPolicy, setToolPolicy] = useState<ChatToolPolicy>(
+    DEFAULT_CHAT_TOOL_POLICY,
+  );
+  const [toolCatalog, setToolCatalog] = useState<ChatToolCatalogEntry[]>([]);
   const [resolvedAliases, setResolvedAliases] = useState<
     Record<string, string>
   >({});
+  const [atBottom, setAtBottom] = useState(true);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const historyVersionRef = useRef(0);
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const localDraftNavigationRef = useRef<string | undefined>(undefined);
   const selectedModelRef = useRef("");
+  const latestRequestRef = useRef<ChatMessageMetadata>({});
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
 
-  // Fetch chats list
   useEffect(() => {
-    const fetchChats = async () => {
-      try {
-        setLoadingChats(true);
-        const result = await callResource("mongo", {
-          action: "find",
-          collection: "chats",
-          query: { platform: "mycelia" },
-          options: {
-            sort: { lastMessageDate: -1 },
-          },
-        });
-        setChats(result as MemoryChat[]);
-      } catch (err) {
-        console.error("Failed to fetch chats", err);
-      } finally {
-        setLoadingChats(false);
-      }
-    };
-
-    fetchChats();
-  }, []);
-
-  useEffect(() => {
-    callResource("llm", { action: "list" }).then((response: any) => {
-      const configuredModel = typeof response?.chatDefaultModel === "string"
-        ? response.chatDefaultModel.trim()
+    void Promise.all([
+      callResource("llm", { action: "list" }),
+      callResource("chat", { action: "listTools" }),
+    ]).then(([llm, tools]) => {
+      const configured = typeof llm?.chatDefaultModel === "string"
+        ? llm.chatDefaultModel.trim()
         : "";
-      if (configuredModel) setDefaultChatModel(configuredModel);
-      if (
-        response?.resolvedAliases &&
-        typeof response.resolvedAliases === "object"
-      ) {
-        setResolvedAliases(response.resolvedAliases);
+      if (configured) setDefaultChatModel(configured);
+      if (llm?.resolvedAliases && typeof llm.resolvedAliases === "object") {
+        setResolvedAliases(llm.resolvedAliases);
       }
+      setToolCatalog(tools?.tools ?? []);
     }).catch((error) => {
-      console.warn("[ChatPage] Could not load the default chat model", error);
+      console.warn("[ChatPage] Could not load chat configuration", error);
     });
   }, []);
 
   useEffect(() => {
-    if (!chatId) {
+    if (!routeChatId) {
       setSelectedModel(defaultChatModel);
       setSelectedProviderId(undefined);
+      setToolPolicy(DEFAULT_CHAT_TOOL_POLICY);
+      setHistoryChat(undefined);
       return;
     }
+    if (!selectedChat) return;
+    setSelectedModel(selectedChat.model || defaultChatModel);
+    setSelectedProviderId(selectedChat.providerProfileId || undefined);
+    setToolPolicy({
+      mode: selectedChat.toolMode ?? "auto",
+      enabledTools: selectedChat.enabledTools ?? [],
+    });
+  }, [defaultChatModel, routeChatId, selectedChat]);
 
-    const selectedChat = chats.find((item) => item._id.toString() === chatId);
-    if (selectedChat) {
-      setSelectedModel(selectedChat.model || defaultChatModel);
-      setSelectedProviderId(selectedChat.providerProfileId || undefined);
-    }
-  }, [chatId, chats, defaultChatModel]);
-
-  const [chatError, setChatError] = useState<ChatErrorState | null>(null);
-  const resolvedSelectedModel = resolvedAliases[selectedModel] ||
-    selectedModel || "Configured chat default";
-
-  const chat = useChat<MemoryChatMessage>({
-    id: chatId,
-    // Auto-submit after tool approval responses
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
-    onError: (error) => {
-      console.error("[ChatPage] Chat error:", error);
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
-      setChatError({
-        message: errorMessage || "Failed to send message. Please try again.",
-        model: latestRequestRef.current.model || selectedModelRef.current,
-        requestId: latestRequestRef.current.requestId,
-      });
-      setPendingMessage(null);
-    },
-    onFinish: ({ message, isError }) => {
-      const metadata = message.metadata || latestRequestRef.current;
-      if (
-        !isError && message.role === "assistant" &&
-        !hasRenderableAssistantOutput(message)
-      ) {
-        const model = metadata.model || selectedModelRef.current;
-        setChatError({
-          message:
-            `Model "${model}" completed the request but returned no text or tool result. ` +
-            "Try another model; if it repeats, inspect the backend log entry for this request.",
-          model,
-          requestId: metadata.requestId,
-        });
-      }
-
-      if (!chatId && newChatIdRef.current) {
-        const newId = newChatIdRef.current;
-        newChatIdRef.current = null;
-        navigate(`/chat/${newId}`, { replace: true });
-        // Refresh chats list after creating new chat
-        callResource("mongo", {
-          action: "find",
-          collection: "chats",
-          query: { platform: "mycelia" },
-          options: { sort: { lastMessageDate: -1 } },
-        }).then((result) => setChats(result as MemoryChat[]));
-      }
-    },
-    transport: new DefaultChatTransport<any>({
+  const transport = useMemo(() =>
+    new DefaultChatTransport<any>({
       api: "/api/chat",
-      body: { chatId },
-      fetch: async (input, init) => {
-        const path = input.toString();
-
-        // fetchRaw does not throw on HTTP errors, so the error-payload
-        // parsing below actually runs and surfaces the server's message.
-        const response = await apiClient.fetchRaw(path, init);
-
-        const serverChatId = response.headers.get("X-Mycelia-Chat-Id");
+      body: { chatId: effectiveChatId },
+      fetch: async (request, init) => {
+        const response = await apiClient.fetchRaw(request.toString(), init);
         const responseModel = response.headers.get("X-Mycelia-Model") ||
           selectedModelRef.current;
         const requestId = response.headers.get("X-Mycelia-Request-Id") ||
           undefined;
-        latestRequestRef.current = { model: responseModel, requestId };
-        if (serverChatId) {
-          newChatIdRef.current = serverChatId;
-        }
-
+        const runId = response.headers.get("X-Mycelia-Run-Id") || undefined;
+        latestRequestRef.current = { model: responseModel, requestId, runId };
         if (!response.ok) {
           let message = `Chat request failed with HTTP ${response.status}`;
           try {
@@ -551,6 +342,7 @@ export default function ChatPage() {
             latestRequestRef.current = {
               model: payload?.model || responseModel,
               requestId: payload?.requestId || requestId,
+              runId: payload?.runId || runId,
             };
           } catch {
             const body = await response.clone().text();
@@ -560,366 +352,705 @@ export default function ChatPage() {
         }
         return response;
       },
-    }),
+    }), [effectiveChatId]);
+
+  const chat = useChat<MemoryChatMessage>({
+    id: effectiveChatId,
+    transport,
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setChatError({
+        message: message || "Failed to send message.",
+        model: latestRequestRef.current.model || selectedModelRef.current,
+        requestId: latestRequestRef.current.requestId,
+      });
+      setPendingMessage(null);
+      void chatList.refresh(false);
+    },
+    onFinish: ({ message, isError }) => {
+      const metadata = message.metadata || latestRequestRef.current;
+      if (
+        !isError && message.role === "assistant" &&
+        !hasRenderableAssistantOutput(message)
+      ) {
+        setChatError({
+          message: `Model "${
+            metadata.model || selectedModelRef.current
+          }" returned no text or tool result.`,
+          model: metadata.model || selectedModelRef.current,
+          requestId: metadata.requestId,
+        });
+      }
+      setPendingMessage(null);
+      void chatList.refresh(false);
+      if (document.visibilityState === "visible") {
+        void callResource("chat", {
+          action: "markRead",
+          chatId: effectiveChatId,
+        });
+      }
+    },
   });
 
-  useEffect(() => {
-    console.log("chatId changed", chatId);
-    setPendingMessage(null);
-    setChatError(null); // Clear error when switching chats
-    if (chatId) {
-      fetchMessages(chatId).then((msgs) => chat.setMessages(msgs));
-    } else {
+  const loadHistory = useCallback(async () => {
+    historyAbortRef.current?.abort();
+    const version = ++historyVersionRef.current;
+    if (!routeChatId) {
       chat.setMessages([]);
+      setHistoryState("idle");
+      return;
     }
-  }, [chatId]);
-
-  // Auto-scroll to bottom when messages change, status changes, or pending message appears
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat.messages, chat.status, pendingMessage]);
-
-  const handleInputSubmit = (
-    value: { text?: string; files?: any[] },
-    _event: React.FormEvent<HTMLFormElement>,
-  ) => {
-    if (value.text) {
-      setChatError(null); // Clear any previous error
-      setPendingMessage(value.text);
-      void chat.sendMessage(
-        { text: value.text },
-        {
-          body: {
-            chatId,
-            ...(selectedModel ? { model: selectedModel } : {}),
-            // Pin the request to the provider the model was picked from;
-            // absent means routing chooses by priority/availability.
-            providerProfileId: selectedProviderId ?? null,
-          },
-        },
-      );
-      setInput("");
+    if (localDraftNavigationRef.current === routeChatId) {
+      localDraftNavigationRef.current = undefined;
+      setHistoryState("ready");
+      return;
     }
-  };
-
-  const handleRetry = () => {
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+    setHistoryState("loading");
+    setHistoryError(undefined);
     setChatError(null);
-  };
+    try {
+      const result = await callResource(
+        "chat",
+        { action: "getMessages", chatId: routeChatId },
+        { signal: controller.signal },
+      );
+      if (
+        version !== historyVersionRef.current || controller.signal.aborted
+      ) return;
+      if (!result.found) {
+        chat.setMessages([]);
+        setHistoryChat(undefined);
+        setHistoryState("not-found");
+        return;
+      }
+      chat.setMessages((result.messages ?? []).map(dbMessageToUIMessage));
+      setHistoryChat(result.chat);
+      setHistoryState("ready");
+      requestAnimationFrame(() =>
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto" })
+      );
+    } catch (error) {
+      if (
+        controller.signal.aborted || version !== historyVersionRef.current
+      ) return;
+      setHistoryError(
+        error instanceof Error ? error.message : "Could not load chat history",
+      );
+      setHistoryState("error");
+    }
+  }, [routeChatId]);
 
-  // Clear pending message when chat messages update with a user message
   useEffect(() => {
-    if (pendingMessage && chat.messages.some((m) => m.role === "user")) {
+    void loadHistory();
+    return () => {
+      historyVersionRef.current++;
+      historyAbortRef.current?.abort();
+    };
+  }, [loadHistory]);
+
+  useEffect(() => {
+    if (routeChatId) setMobileDraftOpen(false);
+  }, [routeChatId]);
+
+  useEffect(() => {
+    if (
+      pendingMessage &&
+      chat.messages.some((message) =>
+        message.role === "user" && message.id === pendingMessage.id
+      )
+    ) {
       setPendingMessage(null);
     }
   }, [chat.messages, pendingMessage]);
 
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+  useEffect(() => {
+    if (!atBottom) return;
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    messagesEndRef.current?.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+  }, [atBottom, chat.messages, chat.status, pendingMessage]);
+
+  useEffect(() => {
+    if (
+      routeChatId && selectedChat?.unread &&
+      document.visibilityState === "visible"
+    ) {
+      void callResource("chat", { action: "markRead", chatId: routeChatId });
+      chatList.update(routeChatId, { unread: false, lastReadAt: new Date() });
+    }
+  }, [routeChatId, selectedChat?.unread]);
+
+  const handleSubmit = async (
+    value: { text?: string },
+    _event: React.FormEvent<HTMLFormElement>,
+  ) => {
+    const text = value.text?.trim();
+    if (
+      !text || chat.status === "submitted" || chat.status === "streaming"
+    ) return;
+    const messageId = new ObjectId().toString();
+    setInput("");
+    setPendingMessage({ id: messageId, text });
+    setChatError(null);
+    const runId = crypto.randomUUID();
+    try {
+      if (!routeChatId) {
+        setCreatingDraft(true);
+        const result = await callResource("chat", {
+          action: "createDraft",
+          chatId: effectiveChatId,
+          initialText: text,
+          preferences: {
+            ...(selectedModel ? { model: selectedModel } : {}),
+            providerProfileId: selectedProviderId ?? null,
+            toolPolicy,
+          },
+        });
+        if (result?.chat) {
+          chatList.setItems((current) => [
+            result.chat,
+            ...current.filter((item) =>
+              item._id.toString() !== effectiveChatId
+            ),
+          ]);
+        }
+        localDraftNavigationRef.current = effectiveChatId;
+        navigate(`/chat/${effectiveChatId}`, { replace: true });
+      }
+      await chat.sendMessage(
+        { text, messageId },
+        {
+          body: {
+            chatId: effectiveChatId,
+            runId,
+            ...(selectedModel ? { model: selectedModel } : {}),
+            providerProfileId: selectedProviderId ?? null,
+            toolPolicy,
+          },
+        },
+      );
+    } catch (error) {
+      setChatError({
+        message: error instanceof Error
+          ? error.message
+          : "Could not send message",
+        model: selectedModel,
+      });
+      setPendingMessage(null);
+    } finally {
+      setCreatingDraft(false);
+    }
   };
 
   const handleNewChat = () => {
+    resetDraft();
     navigate("/chat");
-    chat.setMessages([]);
+    setMobileDraftOpen(true);
+    setHistoryChat(undefined);
     setSelectedModel(defaultChatModel);
+    setSelectedProviderId(undefined);
+    setToolPolicy(DEFAULT_CHAT_TOOL_POLICY);
     setPendingMessage(null);
     setChatError(null);
+  };
+
+  const handleRename = async (chatId: string, title: string) => {
+    const previous = chatList.items.find((chat) =>
+      chat._id.toString() === chatId
+    );
+    chatList.update(chatId, { title, name: title, titleSource: "user" });
+    if (historyChat?._id.toString() === chatId) {
+      setHistoryChat({
+        ...historyChat,
+        title,
+        name: title,
+        titleSource: "user",
+      });
+    }
+    try {
+      await callResource("chat", { action: "rename", chatId, title });
+    } catch (error) {
+      if (previous) chatList.update(chatId, previous);
+      toast.error("Could not rename chat", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const handleFavorite = async (chatId: string, favorite: boolean) => {
+    const previous = chatList.items.find((chat) =>
+      chat._id.toString() === chatId
+    );
+    const favoritedAt = favorite ? new Date() : undefined;
+    chatList.update(chatId, { favoritedAt });
+    if (historyChat?._id.toString() === chatId) {
+      setHistoryChat({ ...historyChat, favoritedAt });
+    }
+    try {
+      await callResource("chat", {
+        action: "setFavorite",
+        chatId,
+        favorite,
+      });
+      if (favoritesOnly && !favorite) await chatList.refresh(false);
+    } catch (error) {
+      if (previous) chatList.update(chatId, previous);
+      toast.error("Could not update favorite", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
 
   const handleModelChange = async (
     model: string,
     providerProfileId?: string,
   ) => {
-    const nextModel = model.trim();
-    if (!nextModel) return;
-    if (
-      nextModel === selectedModel && providerProfileId === selectedProviderId
-    ) return;
-
-    const previousModel = selectedModel;
-    const previousProviderId = selectedProviderId;
-    setSelectedModel(nextModel);
+    const next = model.trim();
+    if (!next) return;
+    const previous = {
+      model: selectedModel,
+      providerProfileId: selectedProviderId,
+    };
+    setSelectedModel(next);
     setSelectedProviderId(providerProfileId);
-    setChatError(null);
-
-    if (!chatId) return;
-
+    if (!routeChatId) return;
+    chatList.update(routeChatId, { model: next, providerProfileId });
     try {
-      await callResource("mongo", {
-        action: "updateOne",
-        collection: "chats",
-        query: { _id: new ObjectId(chatId) },
-        update: providerProfileId
-          ? { $set: { model: nextModel, providerProfileId } }
-          : {
-            $set: { model: nextModel },
-            $unset: { providerProfileId: "" },
-          },
+      await callResource("chat", {
+        action: "setPreferences",
+        chatId: routeChatId,
+        preferences: {
+          model: next,
+          providerProfileId: providerProfileId ?? null,
+        },
       });
-      setChats((current) =>
-        current.map((item) =>
-          item._id.toString() === chatId
-            ? { ...item, model: nextModel, providerProfileId }
-            : item
-        )
-      );
     } catch (error) {
-      setSelectedModel(previousModel);
-      setSelectedProviderId(previousProviderId);
-      setChatError({
-        message: error instanceof Error
-          ? `Could not save the selected model: ${error.message}`
-          : "Could not save the selected model.",
-        model: previousModel,
+      setSelectedModel(previous.model);
+      setSelectedProviderId(previous.providerProfileId);
+      chatList.update(routeChatId, previous);
+      toast.error("Could not save model selection", {
+        description: error instanceof Error ? error.message : String(error),
       });
     }
   };
 
-  const handleRenameChat = (chatId: string, newName: string) => {
-    setChats((prev) =>
-      prev.map((c) =>
-        c._id.toString() === chatId
-          ? { ...c, name: newName, title: newName }
-          : c
-      )
-    );
+  const handleToolPolicyChange = async (policy: ChatToolPolicy) => {
+    const previous = toolPolicy;
+    setToolPolicy(policy);
+    if (!routeChatId) return;
+    chatList.update(routeChatId, {
+      toolMode: policy.mode,
+      enabledTools: policy.enabledTools,
+    });
+    try {
+      await callResource("chat", {
+        action: "setPreferences",
+        chatId: routeChatId,
+        preferences: { toolPolicy: policy },
+      });
+    } catch (error) {
+      setToolPolicy(previous);
+      chatList.update(routeChatId, {
+        toolMode: previous.mode,
+        enabledTools: previous.enabledTools,
+      });
+      toast.error("Could not save tool selection", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
 
-  return (
-    <div className="h-[calc(100vh-6rem)] w-full overflow-hidden border rounded-lg shadow-sm bg-background">
-      <ResizablePanelGroup direction="horizontal">
-        {/* Chat List Sidebar */}
-        <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
-          <div className="h-full flex flex-col">
-            <div className="p-3 border-b bg-muted/40 flex items-center justify-between">
-              <h2 className="font-semibold text-sm">Conversations</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleNewChat}
-                className="h-8 w-8 p-0"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+  const toggleMessagePin = async (message: MemoryChatMessage) => {
+    if (!routeChatId || !isValidObjectId(message.id)) return;
+    const wasPinned = Boolean(message.metadata?.pinnedAt);
+    const pinnedAt = wasPinned ? undefined : new Date();
+    chat.setMessages((current) =>
+      current.map((item) =>
+        item.id === message.id
+          ? { ...item, metadata: { ...item.metadata, pinnedAt } }
+          : item
+      )
+    );
+    try {
+      await callResource("chat", {
+        action: "setMessagePinned",
+        chatId: routeChatId,
+        messageId: message.id,
+        pinned: !wasPinned,
+      });
+    } catch (error) {
+      chat.setMessages((current) =>
+        current.map((item) =>
+          item.id === message.id
+            ? {
+              ...item,
+              metadata: {
+                ...item.metadata,
+                pinnedAt: message.metadata?.pinnedAt,
+              },
+            }
+            : item
+        )
+      );
+      toast.error("Could not update pin", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const copyMessage = async (message: MemoryChatMessage) => {
+    const text = messageText(message);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Message copied");
+    } catch (error) {
+      toast.error("Could not copy message", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const retry = () => {
+    chat.clearError();
+    setChatError(null);
+    void chat.regenerate({
+      body: { chatId: effectiveChatId, runId: crypto.randomUUID() },
+    });
+  };
+
+  const latestAssistant = [...chat.messages].reverse().find((message) =>
+    message.role === "assistant"
+  );
+  const needsApproval = messageNeedsApproval(latestAssistant);
+  const status = chatStatusLabel(
+    chat.status,
+    selectedChat?.lastRun,
+    needsApproval,
+  );
+  const pinnedMessages = chat.messages.filter((message) =>
+    message.metadata?.pinnedAt
+  );
+  const controlsDisabled = creatingDraft || chat.status === "submitted" ||
+    chat.status === "streaming" || needsApproval;
+  const resolvedModel = resolvedAliases[selectedModel] || selectedModel ||
+    "Configured chat default";
+  const title = selectedChat?.title || selectedChat?.name || "New chat";
+
+  const sidebar = (
+    <ChatSidebar
+      chats={chatList.items}
+      selectedChatId={routeChatId}
+      loading={chatList.loading}
+      loadingMore={chatList.loadingMore}
+      hasMore={chatList.hasMore}
+      error={chatList.error}
+      query={query}
+      favoritesOnly={favoritesOnly}
+      onQueryChange={setQuery}
+      onFavoritesOnlyChange={setFavoritesOnly}
+      onNewChat={handleNewChat}
+      onRetry={() => void chatList.refresh(true)}
+      onLoadMore={() => void chatList.loadMore()}
+      onRename={handleRename}
+      onFavorite={handleFavorite}
+    />
+  );
+
+  const thread = (
+    <div className="flex h-full min-w-0 flex-col">
+      <ChatThreadHeader
+        chat={selectedChat}
+        title={title}
+        status={status}
+        selectedModel={selectedModel}
+        selectedProviderId={selectedProviderId}
+        resolvedModel={resolvedModel}
+        toolPolicy={toolPolicy}
+        toolCatalog={toolCatalog}
+        pinnedMessages={pinnedMessages}
+        controlsDisabled={controlsDisabled}
+        onBack={() => {
+          setMobileDraftOpen(false);
+          navigate("/chat");
+        }}
+        onRename={(nextTitle) =>
+          routeChatId
+            ? handleRename(routeChatId, nextTitle)
+            : Promise.resolve()}
+        onFavorite={(favorite) =>
+          routeChatId
+            ? handleFavorite(routeChatId, favorite)
+            : Promise.resolve()}
+        onModelChange={handleModelChange}
+        onToolPolicyChange={handleToolPolicyChange}
+        onJumpToMessage={(messageId) => {
+          const reducedMotion = window.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+          ).matches;
+          document.getElementById(`chat-message-${messageId}`)?.scrollIntoView({
+            behavior: reducedMotion ? "auto" : "smooth",
+            block: "center",
+          });
+        }}
+      />
+      <div
+        role="log"
+        aria-live="polite"
+        aria-busy={chat.status === "submitted" || chat.status === "streaming"}
+        onScroll={(event) => setAtBottom(isNearBottom(event.currentTarget))}
+        className="relative flex-1 overflow-y-auto p-3 sm:p-4"
+      >
+        <ChatActivity
+          messages={chat.messages}
+          sdkStatus={chat.status}
+          runState={selectedChat?.lastRun?.state}
+          error={chatError?.message}
+        />
+        {historyState === "loading"
+          ? (
+            <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader /> Loading conversation…
             </div>
-            <ScrollArea className="flex-1">
-              {loadingChats
-                ? (
-                  <div className="p-3 space-y-3">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-12 w-full" />
-                    ))}
-                  </div>
-                )
-                : (
-                  <div className="flex flex-col">
-                    {chats.map((c) => (
-                      <ChatListItemComponent
-                        key={c._id.toString()}
-                        chat={c}
-                        isSelected={chatId === c._id.toString()}
-                        onClick={() => navigate(`/chat/${c._id.toString()}`)}
-                        onRename={handleRenameChat}
+          )
+          : historyState === "not-found"
+          ? (
+            <div className="flex h-full items-center justify-center text-center">
+              <div>
+                <AlertCircle className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+                <h2 className="font-medium">Chat not found</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  It may have been removed or belongs to another account.
+                </p>
+                <Button
+                  className="mt-4"
+                  variant="outline"
+                  onClick={() => navigate("/chat")}
+                >
+                  Back to chats
+                </Button>
+              </div>
+            </div>
+          )
+          : historyState === "error"
+          ? (
+            <div className="flex h-full items-center justify-center text-center">
+              <div>
+                <AlertCircle className="mx-auto mb-3 h-8 w-8 text-destructive" />
+                <h2 className="font-medium">Could not load chat</h2>
+                <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                  {historyError}
+                </p>
+                <Button
+                  className="mt-4"
+                  variant="outline"
+                  onClick={() => void loadHistory()}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" /> Retry
+                </Button>
+              </div>
+            </div>
+          )
+          : chat.messages.length === 0 && !pendingMessage &&
+              chat.status === "ready"
+          ? (
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <div className="text-center">
+                <MessageSquare className="mx-auto mb-4 h-12 w-12 opacity-50" />
+                <p>Start a new conversation</p>
+                <p className="mt-1 text-xs">
+                  Choose a model and tools, then send a message.
+                </p>
+              </div>
+            </div>
+          )
+          : (
+            <>
+              {chat.messages.map((message) => (
+                <div
+                  key={message.id}
+                  id={`chat-message-${message.id}`}
+                  className="group/message relative scroll-mt-28"
+                >
+                  <div className="absolute right-1 top-1 z-10 flex rounded-md border bg-background/90 opacity-0 shadow-sm transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => void toggleMessagePin(message)}
+                      disabled={!routeChatId || !isValidObjectId(message.id)}
+                      aria-label={message.metadata?.pinnedAt
+                        ? "Unpin message"
+                        : "Pin message"}
+                      aria-pressed={Boolean(message.metadata?.pinnedAt)}
+                    >
+                      <Pin
+                        className={cn(
+                          "h-3.5 w-3.5",
+                          message.metadata?.pinnedAt &&
+                            "fill-primary/20 text-primary",
+                        )}
                       />
-                    ))}
-                    {chats.length === 0 && (
-                      <div className="p-6 text-center text-muted-foreground text-sm">
-                        No conversations yet
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => void copyMessage(message)}
+                      disabled={!messageText(message)}
+                      aria-label="Copy message"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <ChatMessageContent
+                    message={message}
+                    chatId={effectiveChatId}
+                    addToolApprovalResponse={chat.addToolApprovalResponse}
+                  />
+                </div>
+              ))}
+              {pendingMessage && !chat.messages.some((message) =>
+                message.role === "user" &&
+                message.id === pendingMessage.id
+              ) && (
+                <div className="flex w-full justify-end py-2">
+                  <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2 text-primary-foreground sm:max-w-[75%]">
+                    <p className="whitespace-pre-wrap text-sm">
+                      {pendingMessage.text}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {chatError && (
+                <div className="my-3 flex gap-3 rounded-lg border border-red-500/30 bg-red-500/10 p-4">
+                  <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-red-700 dark:text-red-400">
+                      Message failed
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {chatError.message}
+                    </p>
+                    {(chatError.model || chatError.requestId) && (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        {chatError.model && (
+                          <div>
+                            Model: <code>{chatError.model}</code>
+                          </div>
+                        )}
+                        {chatError.requestId && (
+                          <div>
+                            Request:{"  "}
+                            <code className="break-all">
+                              {chatError.requestId}
+                            </code>
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
-                )}
-            </ScrollArea>
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle />
-
-        {/* Chat Area */}
-        <ResizablePanel defaultSize={75}>
-          <div className="flex flex-col h-full">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Model for this chat</div>
-                <div className="text-xs text-muted-foreground">
-                  The selection is used for the next answer. Each answer shows
-                  the model that actually ran.
-                </div>
-              </div>
-              <div className="w-full sm:w-[320px]">
-                <ModelSelector
-                  value={selectedModel}
-                  onChange={() => {}}
-                  providerValue={selectedProviderId}
-                  onSelectWithProvider={(model, providerProfileId) =>
-                    void handleModelChange(model, providerProfileId)}
-                  disabled={chat.status === "streaming" ||
-                    chat.status === "submitted"}
-                  placeholder="Use configured chat default"
-                  prefetch
-                />
-                <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                  {resolvedSelectedModel === selectedModel
-                    ? selectedModel
-                    : `${selectedModel} → ${resolvedSelectedModel}`}
-                </div>
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {chat.messages.length === 0 && !pendingMessage &&
-                  chat.status === "ready"
-                ? (
-                  <div className="h-full flex items-center justify-center text-muted-foreground">
-                    <div className="text-center">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p>Start a new conversation</p>
+                    <div className="mt-3 flex gap-2">
+                      <Button size="sm" variant="outline" onClick={retry}>
+                        <RefreshCw className="mr-1 h-4 w-4" /> Retry
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          chat.clearError();
+                          setChatError(null);
+                        }}
+                      >
+                        Dismiss
+                      </Button>
                     </div>
                   </div>
-                )
-                : (
-                  <>
-                    {chat.messages.map((message) => (
-                      <ChatMessage
-                        key={message.id}
-                        message={message}
-                        addToolApprovalResponse={chat.addToolApprovalResponse}
-                      />
-                    ))}
-                    {/* Show pending message immediately (optimistic UI) */}
-                    {pendingMessage && !chat.messages.some((m) =>
-                      m.role === "user" &&
-                      m.parts?.some((p: any) =>
-                        p?.type === "text" && p?.text === pendingMessage
-                      )
-                    ) && (
-                      <div className="flex w-full py-2 justify-end">
-                        <div className="flex gap-3 max-w-[80%]">
-                          <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2">
-                            <p className="text-sm whitespace-pre-wrap">
-                              {pendingMessage}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {/* Loading indicator while waiting for response */}
-                    {(chat.status === "submitted" ||
-                      chat.status === "streaming") && (
-                      <div className="flex w-full py-2">
-                        <div className="flex gap-3">
-                          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
-                            <span
-                              className="text-base"
-                              role="img"
-                              aria-label="Mycelia"
-                            >
-                              🍄
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Loader />
-                            <span className="text-sm text-muted-foreground">
-                              Thinking...
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {/* Error message */}
-                    {chatError && (
-                      <div className="flex w-full py-2">
-                        <div className="flex gap-3 w-full">
-                          <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-red-500/20">
-                            <AlertCircle className="w-4 h-4 text-red-500" />
-                          </div>
-                          <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-                            <div className="font-medium text-red-700 dark:text-red-400 mb-1">
-                              Message failed to send
-                            </div>
-                            <div className="text-sm text-muted-foreground mb-3">
-                              {chatError.message}
-                            </div>
-                            <div className="mb-3 space-y-1 rounded bg-background/60 p-2 text-xs text-muted-foreground">
-                              {chatError.model && (
-                                <div>
-                                  Model:{" "}
-                                  <code className="text-foreground">
-                                    {chatError.model}
-                                  </code>
-                                </div>
-                              )}
-                              {chatError.requestId && (
-                                <div>
-                                  Request ID:{" "}
-                                  <code className="break-all text-foreground">
-                                    {chatError.requestId}
-                                  </code>
-                                </div>
-                              )}
-                              <div>
-                                Logs:{" "}
-                                <code className="text-foreground">
-                                  docker compose logs --tail=200 backend
-                                </code>
-                                {chatError.requestId
-                                  ? " — search for the request ID above."
-                                  : ""}
-                              </div>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={handleRetry}
-                              className="border-red-500/50 text-red-600 hover:bg-red-500/10"
-                            >
-                              <RefreshCw className="w-4 h-4 mr-1" />
-                              Dismiss
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <div ref={messagesEndRef} />
-                  </>
-                )}
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </>
+          )}
+        {!atBottom && chat.messages.length > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="sticky bottom-2 left-1/2 z-20 -translate-x-1/2 rounded-full shadow"
+            onClick={() => {
+              const reducedMotion = window.matchMedia(
+                "(prefers-reduced-motion: reduce)",
+              ).matches;
+              messagesEndRef.current?.scrollIntoView({
+                behavior: reducedMotion ? "auto" : "smooth",
+              });
+              setAtBottom(true);
+            }}
+          >
+            <ArrowDown className="mr-1 h-4 w-4" /> Latest
+          </Button>
+        )}
+      </div>
+      <div className="border-t p-3 sm:p-4">
+        <PromptInput
+          onSubmit={handleSubmit}
+          className="rounded-lg border bg-background shadow-sm"
+        >
+          <PromptInputTextarea
+            ref={textareaRef}
+            placeholder={needsApproval
+              ? "Approve or deny the pending tool first"
+              : "Type a message…"}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            disabled={controlsDisabled}
+          />
+          <PromptInputFooter>
+            <PromptInputTools>
+              <PromptInputSpeechButton textareaRef={textareaRef} />
+            </PromptInputTools>
+            <div className="flex items-center gap-2">
+              {(chat.status === "submitted" ||
+                chat.status === "streaming") && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void chat.stop()}
+                >
+                  <Square className="mr-1 h-3.5 w-3.5 fill-current" /> Stop
+                </Button>
+              )}
+              <PromptInputSubmit
+                disabled={!input.trim() || controlsDisabled}
+              />
             </div>
+          </PromptInputFooter>
+        </PromptInput>
+      </div>
+    </div>
+  );
 
-            <div className="p-4 border-t">
-              <PromptInput
-                onSubmit={handleInputSubmit}
-                className="border rounded-lg bg-background shadow-sm"
-              >
-                <PromptInputTextarea
-                  ref={textareaRef}
-                  placeholder="Type a message..."
-                  value={input}
-                  onChange={handleTextareaChange}
-                  disabled={chat.status === "streaming" ||
-                    chat.status === "submitted"}
-                />
-                <PromptInputFooter>
-                  <PromptInputTools>
-                    <PromptInputActionMenu>
-                      <PromptInputActionMenuTrigger>
-                        <Paperclip className="size-4" />
-                      </PromptInputActionMenuTrigger>
-                      <PromptInputActionMenuContent>
-                        <PromptInputActionMenuItem>
-                          Upload File
-                        </PromptInputActionMenuItem>
-                      </PromptInputActionMenuContent>
-                    </PromptInputActionMenu>
-                    <PromptInputSpeechButton textareaRef={textareaRef} />
-                  </PromptInputTools>
-                  <PromptInputSubmit
-                    disabled={!input?.trim() || chat.status === "streaming" ||
-                      chat.status === "submitted"}
-                  />
-                </PromptInputFooter>
-              </PromptInput>
-            </div>
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+  return (
+    <div className="h-[calc(100vh-7.5rem)] min-h-[520px] w-full overflow-hidden rounded-lg border bg-background shadow-sm">
+      {isMobile
+        ? (routeChatId || mobileDraftOpen ? thread : sidebar)
+        : (
+          <ResizablePanelGroup
+            direction="horizontal"
+            autoSaveId="mycelia-ai-chat-layout"
+          >
+            <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
+              {sidebar}
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel defaultSize={70}>{thread}</ResizablePanel>
+          </ResizablePanelGroup>
+        )}
     </div>
   );
 }

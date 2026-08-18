@@ -48,10 +48,12 @@ your own words.
 
 ### AI Chat
 
-- Chat with your memory — tool-calling agent with access to all backend
-  resources.
-- Streaming responses, file uploads, and speech input.
-- Chat history with rename and management.
+- Chat with your memory using a curated tool catalogue, with Auto, No tools, and
+  per-chat Custom policies; data-changing actions require explicit approval.
+- Streaming responses with durable run status, observable tool activity and
+  usage metadata, retry/stop controls, and in-app completion notifications.
+- Searchable chat history with favorites, message counts, actual-model labels,
+  unread states, resizable navigation, rename, and multi-message pinning.
 
 ### Object Management
 

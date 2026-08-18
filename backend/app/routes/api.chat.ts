@@ -9,8 +9,6 @@ import {
 import { createOpenAI } from "@ai-sdk/openai";
 import { type Auth, authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
-import { createAiSdkToolsFromResources } from "@/lib/mcp/ai-sdk-adapter.ts";
-import { defaultResourceManager } from "@/lib/auth/resources.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
@@ -21,8 +19,22 @@ import {
 } from "@/lib/llm/provider-routing.ts";
 import { normalizeOpenAIBaseUrl } from "@/lib/llm/model-routing.ts";
 import { ObjectId } from "bson";
+import {
+  activeToolsForPolicy,
+  chatToolFilter,
+  createChatTools,
+  listChatTools,
+  normalizeChatToolPolicy,
+} from "@/lib/chat/tools.server.ts";
+import {
+  chatToolPolicyFromDocument,
+  provisionalChatTitle,
+} from "@/lib/chat/resource.server.ts";
+import { startChatRun, updateChatRunState } from "@/lib/chat/runs.server.ts";
+import { publishChatUpdated } from "@/lib/chat/events.server.ts";
+import type { ChatRunState, ChatToolPolicy } from "@myceliasdk/messengers.ts";
 
-const RESOURCES_FOR_AI = ["search", "objects", "docs", "mongo"];
+export { chatToolFilter } from "@/lib/chat/tools.server.ts";
 
 const MAX_CHAT_MODEL_LENGTH = 200;
 
@@ -88,53 +100,30 @@ async function generateChatTitle(
 
     const title = completion.choices[0]?.message?.content?.trim();
     if (title && title.length > 0 && title.length < 100) {
-      await mongo({
+      const update = await mongo({
         action: "updateOne",
         collection: "chats",
-        query: { _id: new ObjectId(chatId) },
-        update: { $set: { name: title, title: title } },
+        query: {
+          _id: new ObjectId(chatId),
+          userId: auth.principal,
+          platform: "mycelia",
+          titleSource: "provisional",
+        },
+        update: {
+          $set: { name: title, title, titleSource: "generated" },
+        },
       });
-      console.log(
-        `[generateChatTitle] Generated title for chat ${chatId}: "${title}"`,
-      );
+      if (update?.modifiedCount) {
+        await publishChatUpdated(auth.principal, chatId, "title");
+        console.log(
+          `[generateChatTitle] Generated title for chat ${chatId}: "${title}"`,
+        );
+      }
     }
   } catch (error) {
     console.error("[generateChatTitle] Failed to generate chat title:", error);
   }
 }
-
-// Tools that require user confirmation before execution
-// These can modify or delete user data
-const TOOLS_REQUIRING_APPROVAL = [
-  "objects_create", // Can create arbitrary objects
-  "objects_update", // Can modify existing data
-  "objects_delete", // Can permanently delete data
-  "objects_merge", // Deletes the losing duplicates and re-points edges
-  "objects_split", // Moves relationships/aliases into a new object
-];
-
-// The chat assistant only gets read access to raw mongo — all writes must go
-// through the approval-gated objects_* tools. (The MCP server keeps full
-// access; this filter applies to /api/chat only.)
-const MONGO_READONLY_TOOLS = new Set([
-  "mongo_find",
-  "mongo_findOne",
-  "mongo_aggregate",
-  "mongo_count",
-  "mongo_listIndexes",
-  "mongo_getFirstBatch",
-  "mongo_getMore",
-]);
-
-// Internal job-coordination actions that must not be exposed to the chat LLM
-const CHAT_EXCLUDED_TOOLS = new Set([
-  "objects_claimSummarization",
-  "objects_releaseSummarization",
-]);
-
-export const chatToolFilter = (name: string): boolean =>
-  !CHAT_EXCLUDED_TOOLS.has(name) &&
-  (!name.startsWith("mongo_") || MONGO_READONLY_TOOLS.has(name));
 
 /**
  * The UI message stream serializes absent optional part fields as explicit
@@ -143,11 +132,16 @@ export const chatToolFilter = (name: string): boolean =>
  * null-valued field from parts so round-tripped client state validates.
  */
 export function sanitizeUIMessages(messages: unknown[]): unknown[] {
-  return messages.map((message) => {
+  return messages.flatMap((message) => {
     if (!message || typeof message !== "object") return message;
     const msg = message as Record<string, unknown>;
     if (!Array.isArray(msg.parts)) return message;
-    return {
+    // A persisted provider failure can have an assistant UIMessage with no
+    // parts. Keep it visible in storage/UI, but omit it from model context:
+    // validateUIMessages rejects zero-part messages and would otherwise make
+    // every future retry of the chat fail before inference starts.
+    if (msg.role === "assistant" && msg.parts.length === 0) return [];
+    return [{
       ...msg,
       parts: msg.parts.map((part) => {
         if (!part || typeof part !== "object") return part;
@@ -157,7 +151,7 @@ export function sanitizeUIMessages(messages: unknown[]): unknown[] {
         }
         return cleaned;
       }),
-    };
+    }];
   });
 }
 
@@ -169,7 +163,19 @@ export async function apiChatHandler(req: Request, res: Response) {
   // 2. Load or Create Chat Session (Persistence)
   const mongo = await getMongoResource(auth);
 
-  let { messages, chatId } = req.body;
+  const { messages } = req.body;
+  const rawChatId = req.body?.chatId;
+  if (rawChatId !== undefined && !ObjectId.isValid(String(rawChatId))) {
+    res.status(400).json({ error: "Invalid chat ID", requestId });
+    return;
+  }
+  if (rawChatId !== undefined) {
+    res.setHeader("X-Mycelia-Chat-Id", String(rawChatId));
+  }
+  const requestedRunId = typeof req.body?.runId === "string" &&
+      req.body.runId.trim()
+    ? req.body.runId.trim().slice(0, 160)
+    : undefined;
   let selectedChatModel: string | undefined;
   // Explicit provider pin from the model picker. null clears an earlier pin;
   // undefined leaves the stored per-chat pin untouched.
@@ -201,13 +207,7 @@ export async function apiChatHandler(req: Request, res: Response) {
   // Setup tools with approval requirements for destructive operations.
   // Built before message conversion because convertToModelMessages needs the
   // tool set to map tool parts (incl. approval responses) correctly.
-  const resources = defaultResourceManager.listResources().filter((resource) =>
-    RESOURCES_FOR_AI.includes(resource.code)
-  );
-  const tools = createAiSdkToolsFromResources(resources, auth, {
-    toolsRequiringApproval: TOOLS_REQUIRING_APPROVAL,
-    toolFilter: chatToolFilter,
-  });
+  const tools = createChatTools(auth);
 
   // Validate and convert UIMessages (useChat wire format) into ModelMessages.
   // This preserves tool-approval requests/responses so streamText can execute
@@ -242,66 +242,100 @@ export async function apiChatHandler(req: Request, res: Response) {
     modelRoles: modelMessages.map((m) => m.role),
   });
 
-  let activeChatId: string | undefined = chatId;
+  let activeChatId: string | undefined = rawChatId
+    ? String(rawChatId)
+    : undefined;
   let chatModel = selectedChatModel;
-  let chatProviderProfileId: string | undefined =
-    selectedProviderProfileId ?? undefined;
+  let chatProviderProfileId: string | undefined = selectedProviderProfileId ??
+    undefined;
   let isNewChat = false;
+  let chatDocument: any;
+  const lastUiMessage = uiMessages[uiMessages.length - 1];
+  const latestUserText = lastUiMessage.role === "user"
+    ? lastUiMessage.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n")
+    : "";
 
   if (!activeChatId) {
     isNewChat = true;
     const newChatId = new ObjectId();
+    const now = new Date();
+    const catalog = listChatTools(auth);
+    const requestedPolicy = normalizeChatToolPolicy(
+      req.body?.toolPolicy,
+      catalog.map((tool) => tool.name),
+    );
+    chatDocument = {
+      _id: newChatId,
+      userId: auth.principal,
+      title: provisionalChatTitle(latestUserText),
+      name: provisionalChatTitle(latestUserText),
+      titleSource: "provisional",
+      ...(chatModel ? { model: chatModel } : {}),
+      ...(selectedProviderProfileId
+        ? { providerProfileId: selectedProviderProfileId }
+        : {}),
+      toolMode: requestedPolicy.mode,
+      enabledTools: requestedPolicy.enabledTools,
+      messageCount: 0,
+      platform: "mycelia",
+      externalId: newChatId.toString(),
+      type: "private",
+      createdAt: now,
+      updatedAt: now,
+      lastMessageDate: now,
+    };
     const chatResult = await mongo({
       action: "insertOne",
       collection: "chats",
-      doc: {
-        _id: newChatId,
-        userId: auth.principal, // Auth object uses principal as user identifier
-        title: "New Chat", // This might be renamed later by AI or user
-        name: "New Chat", // Align with new schema 'name'
-        ...(chatModel ? { model: chatModel } : {}),
-        ...(selectedProviderProfileId
-          ? { providerProfileId: selectedProviderProfileId }
-          : {}),
-        platform: "mycelia",
-        externalId: newChatId.toString(),
-        type: "private",
-        createdAt: new Date(),
-        lastMessageDate: new Date(),
-      },
+      doc: chatDocument,
     });
     activeChatId = chatResult.insertedId.toString();
   } else {
     // Get Chat Model Config & Verify Ownership
-    const chat = await mongo({
+    chatDocument = await mongo({
       action: "findOne",
       collection: "chats",
       query: {
         _id: new ObjectId(activeChatId.toString()),
         userId: auth.principal,
+        platform: "mycelia",
       },
     });
 
-    if (!chat) {
-      res.status(404).json({ error: "Chat not found or access denied" });
+    if (!chatDocument) {
+      res.status(404).json({
+        error: "Chat not found or access denied",
+        chatId: activeChatId,
+        requestId,
+      });
       return;
     }
-    chatModel = selectedChatModel || chat.model;
+    chatModel = selectedChatModel || chatDocument.model;
     chatProviderProfileId = selectedProviderProfileId === undefined
-      ? (typeof chat.providerProfileId === "string"
-        ? chat.providerProfileId
+      ? (typeof chatDocument.providerProfileId === "string"
+        ? chatDocument.providerProfileId
         : undefined)
       : selectedProviderProfileId ?? undefined;
     const pinChanged = selectedProviderProfileId !== undefined &&
       (selectedProviderProfileId ?? undefined) !==
-        (typeof chat.providerProfileId === "string"
-          ? chat.providerProfileId
+        (typeof chatDocument.providerProfileId === "string"
+          ? chatDocument.providerProfileId
           : undefined);
-    if ((selectedChatModel && selectedChatModel !== chat.model) || pinChanged) {
+    if (
+      (selectedChatModel && selectedChatModel !== chatDocument.model) ||
+      pinChanged
+    ) {
       await mongo({
         action: "updateOne",
         collection: "chats",
-        query: { _id: new ObjectId(activeChatId.toString()) },
+        query: {
+          _id: new ObjectId(activeChatId.toString()),
+          userId: auth.principal,
+          platform: "mycelia",
+        },
         update: {
           $set: {
             ...(selectedChatModel ? { model: selectedChatModel } : {}),
@@ -314,15 +348,36 @@ export async function apiChatHandler(req: Request, res: Response) {
             : {}),
         },
       });
+      chatDocument = {
+        ...chatDocument,
+        ...(selectedChatModel ? { model: selectedChatModel } : {}),
+        providerProfileId: selectedProviderProfileId === null
+          ? undefined
+          : selectedProviderProfileId ?? chatDocument.providerProfileId,
+      };
     }
   }
+
+  res.setHeader("X-Mycelia-Chat-Id", activeChatId!);
+
+  const assistantWithRun = [...uiMessages].reverse().find((message) =>
+    message.role === "assistant" &&
+    typeof (message.metadata as any)?.runId === "string"
+  );
+  const runId = requestedRunId ||
+    (assistantWithRun?.metadata as any)?.runId || crypto.randomUUID();
+  res.setHeader("X-Mycelia-Run-Id", runId);
+  const requestedToolPolicy: ChatToolPolicy = chatToolPolicyFromDocument(
+    chatDocument,
+  );
 
   // Save user message. Approval auto-resubmits end with an assistant message
   // (the user only approved/denied a tool call) — skip persistence then, so
   // the previous user message is not duplicated.
-  const lastUiMessage = uiMessages[uiMessages.length - 1];
   if (lastUiMessage.role === "user") {
-    const userMessageId = new ObjectId();
+    const userMessageId = ObjectId.isValid(lastUiMessage.id)
+      ? new ObjectId(lastUiMessage.id)
+      : new ObjectId();
 
     // Get or create Person for the user
     // Use auth.principal as the external ID for mycelia platform
@@ -334,34 +389,103 @@ export async function apiChatHandler(req: Request, res: Response) {
     });
     const userPersonId = userPersonResult._id;
 
-    const userText = lastUiMessage.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
-
-    await mongo({
-      action: "insertOne",
+    const now = new Date();
+    const userInsert = await mongo({
+      action: "updateOne",
       collection: "messages",
-      doc: {
-        _id: userMessageId,
-        chatId: new ObjectId(activeChatId),
-        senderId: userPersonId,
-        text: userText,
+      query: { _id: userMessageId, chatId: new ObjectId(activeChatId) },
+      update: {
+        $setOnInsert: {
+          chatId: new ObjectId(activeChatId),
+          senderId: userPersonId,
+          text: latestUserText,
+          platform: "mycelia",
+          externalId: userMessageId.toString(),
+          timestamp: now,
+          createdAt: now,
+          raw: {
+            role: "user",
+            content: latestUserText,
+            uiMessage: lastUiMessage,
+          },
+        },
+      },
+      options: { upsert: true },
+    });
+    await mongo({
+      action: "updateOne",
+      collection: "chats",
+      query: {
+        _id: new ObjectId(activeChatId),
+        userId: auth.principal,
         platform: "mycelia",
-        externalId: userMessageId.toString(),
-        timestamp: new Date(),
-        createdAt: new Date(),
-        raw: { role: "user", content: userText, uiMessage: lastUiMessage },
+      },
+      update: {
+        $set: { lastMessageDate: now },
+        ...(userInsert?.upsertedCount ? { $inc: { messageCount: 1 } } : {}),
       },
     });
+    await publishChatUpdated(auth.principal, activeChatId!, "message");
   }
+
+  const runStart = await startChatRun(mongo, {
+    principal: auth.principal,
+    chatId: activeChatId!,
+    runId,
+    requestId,
+    requestedModel: chatModel,
+    toolPolicy: requestedToolPolicy,
+    continuation: lastUiMessage.role === "assistant",
+  });
+  if (!runStart.started) {
+    res.status(409).json({
+      error: `Chat run ${runId} is already ${runStart.state}`,
+      chatId: activeChatId,
+      runId,
+      requestId,
+    });
+    return;
+  }
+  const activeTools = activeToolsForPolicy(runStart.toolPolicy, tools);
+  const failRun = async (
+    status: number,
+    error: string,
+    model = chatModel,
+  ) => {
+    await updateChatRunState(mongo, {
+      principal: auth.principal,
+      chatId: activeChatId!,
+      runId,
+      state: "failed",
+      error,
+      requestedModel: model,
+    });
+    if (!res.headersSent) {
+      res.status(status).json({
+        error,
+        model,
+        chatId: activeChatId,
+        runId,
+        requestId,
+      });
+    }
+  };
 
   // Fetch System Prompt
   let systemPrompt =
     "You are Mycelia, an intelligent AI assistant with access to the user's personal knowledge base. Use your tools to search, create, and edit data when asked. " +
     "Always reference objects you find or change as markdown links with relative paths, e.g. [Name](/objects/<id>), using ids from tool results.";
 
-  const config = await getServerConfig();
+  let config;
+  try {
+    config = await getServerConfig();
+  } catch (error) {
+    await failRun(
+      500,
+      `Could not load chat configuration: ${getErrorMessage(error)}`,
+    );
+    return;
+  }
   try {
     if (config.prompts?.chat_system) {
       const promptDoc = await mongo({
@@ -381,7 +505,16 @@ export async function apiChatHandler(req: Request, res: Response) {
   // can actually serve the requested model — an explicitly pinned provider
   // wins, then providers advertising the model, then priority order.
   const llmResource = new LLMResource();
-  const allProviders = await llmResource.getInferenceProviders();
+  let allProviders;
+  try {
+    allProviders = await llmResource.getInferenceProviders();
+  } catch (error) {
+    await failRun(
+      500,
+      `Could not load inference providers: ${getErrorMessage(error)}`,
+    );
+    return;
+  }
   const enabledProviders = getEnabledLlmProviders(allProviders);
   if (enabledProviders.length === 0) {
     console.error("[apiChatHandler] Inference provider is not configured", {
@@ -389,12 +522,10 @@ export async function apiChatHandler(req: Request, res: Response) {
       chatId: activeChatId,
       requestedModel: chatModel,
     });
-    res.status(500).json({
-      error:
-        "Inference provider not configured. Please configure it in server settings.",
-      model: chatModel,
-      requestId,
-    });
+    await failRun(
+      500,
+      "Inference provider not configured. Please configure it in server settings.",
+    );
     return;
   }
 
@@ -411,42 +542,38 @@ export async function apiChatHandler(req: Request, res: Response) {
       provider.id === chatProviderProfileId
     );
     if (!pinnedProvider) {
-      res.status(400).json({
-        error:
-          `The provider pinned to this chat no longer exists. Pick a model again in the model selector.`,
-        model: requestedModel,
-        requestId,
-      });
+      await failRun(
+        400,
+        "The provider pinned to this chat no longer exists. Pick a model again in the model selector.",
+        requestedModel,
+      );
       return;
     }
     if (!pinnedProvider.enabled) {
-      res.status(400).json({
-        error:
-          `Provider "${pinnedProvider.name}" is disabled. Enable it in Settings → Inference or pick a model from another provider.`,
-        model: requestedModel,
-        requestId,
-      });
+      await failRun(
+        400,
+        `Provider "${pinnedProvider.name}" is disabled. Enable it in Settings → Inference or pick a model from another provider.`,
+        requestedModel,
+      );
       return;
     }
     chatProvider = pinnedProvider;
   }
   if (!chatProvider) {
-    res.status(400).json({
-      error:
-        `No enabled LLM provider can serve model "${requestedModel}". Check alias mappings in Settings → Inference or pick another model.`,
-      model: requestedModel,
-      requestId,
-    });
+    await failRun(
+      400,
+      `No enabled LLM provider can serve model "${requestedModel}". Check alias mappings in Settings → Inference or pick another model.`,
+      requestedModel,
+    );
     return;
   }
   const resolvedChatModel = resolveProviderModel(requestedModel, chatProvider);
   if (!resolvedChatModel) {
-    res.status(400).json({
-      error:
-        `Provider "${chatProvider.name}" has no model mapped for "${requestedModel}". Map the alias in Settings → Inference or pick a concrete model.`,
-      model: requestedModel,
-      requestId,
-    });
+    await failRun(
+      400,
+      `Provider "${chatProvider.name}" has no model mapped for "${requestedModel}". Map the alias in Settings → Inference or pick a concrete model.`,
+      requestedModel,
+    );
     return;
   }
   const actualModel = resolvedChatModel;
@@ -455,13 +582,27 @@ export async function apiChatHandler(req: Request, res: Response) {
     await mongo({
       action: "updateOne",
       collection: "chats",
-      query: { _id: new ObjectId(activeChatId) },
+      query: {
+        _id: new ObjectId(activeChatId),
+        userId: auth.principal,
+        platform: "mycelia",
+      },
       update: { $set: { model: requestedModel } },
     });
     chatModel = requestedModel;
   }
   res.setHeader("X-Mycelia-Model", actualModel);
   res.setHeader("X-Mycelia-Provider", chatProvider.name);
+  await updateChatRunState(mongo, {
+    principal: auth.principal,
+    chatId: activeChatId!,
+    runId,
+    state: "streaming",
+    requestedModel,
+    actualModel,
+    providerProfileId: chatProvider.id,
+    providerProfileName: chatProvider.name,
+  });
 
   console.info("[apiChatHandler] Starting chat request", {
     requestId,
@@ -552,10 +693,10 @@ export async function apiChatHandler(req: Request, res: Response) {
       .join("\n");
     const now = new Date();
 
-    await mongo({
+    const persisted = await mongo({
       action: "updateOne",
       collection: "messages",
-      query: { _id: messageId },
+      query: { _id: messageId, chatId: new ObjectId(activeChatId) },
       update: {
         $set: {
           chatId: new ObjectId(activeChatId),
@@ -576,6 +717,7 @@ export async function apiChatHandler(req: Request, res: Response) {
             providerProfileId: chatProvider.id,
             providerProfileName: chatProvider.name,
             requestId,
+            runId,
             ...extraRaw,
           },
         },
@@ -587,10 +729,26 @@ export async function apiChatHandler(req: Request, res: Response) {
     await mongo({
       action: "updateOne",
       collection: "chats",
-      query: { _id: new ObjectId(activeChatId) },
-      update: { $set: { lastMessageDate: now } },
+      query: {
+        _id: new ObjectId(activeChatId),
+        userId: auth.principal,
+        platform: "mycelia",
+      },
+      update: {
+        $set: { lastMessageDate: now },
+        ...(persisted?.upsertedCount ? { $inc: { messageCount: 1 } } : {}),
+      },
     });
+    await publishChatUpdated(auth.principal, activeChatId!, "message");
   };
+
+  const abortController = new AbortController();
+  let streamAborted = false;
+  let streamFailed = false;
+  const requestStartedAt = Date.now();
+  res.once("close", () => {
+    if (!res.writableEnded) abortController.abort();
+  });
 
   try {
     const stream = streamText({
@@ -599,6 +757,8 @@ export async function apiChatHandler(req: Request, res: Response) {
         apiKey: chatProvider.apiKey,
       }).chat(actualModel),
       tools,
+      activeTools: activeTools as any,
+      abortSignal: abortController.signal,
       stopWhen: stepCountIs(5),
       messages: [
         {
@@ -611,6 +771,7 @@ export async function apiChatHandler(req: Request, res: Response) {
         ...modelMessages,
       ],
       onError: (errorEvent: any) => {
+        streamFailed = true;
         const error = errorEvent?.error;
         console.error("[apiChatHandler] Chat stream failed", {
           requestId,
@@ -619,25 +780,61 @@ export async function apiChatHandler(req: Request, res: Response) {
           actualModel,
           error: getErrorMessage(error),
         });
+        void updateChatRunState(mongo, {
+          principal: auth.principal,
+          chatId: activeChatId!,
+          runId,
+          state: "failed",
+          error: getErrorMessage(error),
+          requestedModel,
+          actualModel,
+          providerProfileId: chatProvider.id,
+          providerProfileName: chatProvider.name,
+        });
+      },
+      onAbort: () => {
+        streamAborted = true;
+        void updateChatRunState(mongo, {
+          principal: auth.principal,
+          chatId: activeChatId!,
+          runId,
+          state: "cancelled",
+          requestedModel,
+          actualModel,
+          providerProfileId: chatProvider.id,
+          providerProfileName: chatProvider.name,
+        });
       },
       onFinish(result) {
         totalUsage = result.totalUsage;
       },
     });
 
-    // Pipe the stream to the Express response with Chat ID header
-    res.setHeader("X-Mycelia-Chat-Id", activeChatId!);
     stream.pipeUIMessageStreamToResponse(res, {
       originalMessages: uiMessages,
       generateMessageId: () => new ObjectId().toString(),
-      messageMetadata: () => ({
+      messageMetadata: ({ part }: any) => ({
         requestedModel,
         model: actualModel,
+        providerProfileId: chatProvider.id,
+        providerProfileName: chatProvider.name,
         requestId,
+        runId,
+        startedAt: new Date(requestStartedAt).toISOString(),
+        ...(part?.type === "finish"
+          ? {
+            usage: totalUsage,
+            finishReason: part.finishReason,
+            durationMs: Date.now() - requestStartedAt,
+          }
+          : {}),
       }),
       onError: (error) => getClientChatError(error, actualModel, requestId),
       async onFinish({ responseMessage, isContinuation, finishReason }) {
         const isEmpty = !hasRenderableParts(responseMessage);
+        const needsApproval = responseMessage.parts.some((part: any) =>
+          part?.state === "approval-requested"
+        );
         if (isEmpty) {
           console.error("[apiChatHandler] Empty model response", {
             requestId,
@@ -651,6 +848,8 @@ export async function apiChatHandler(req: Request, res: Response) {
         await persistAssistantUIMessage(responseMessage, {
           finishReason,
           isContinuation,
+          startedAt: new Date(requestStartedAt).toISOString(),
+          durationMs: Date.now() - requestStartedAt,
           ...(isEmpty
             ? {
               error: {
@@ -662,8 +861,37 @@ export async function apiChatHandler(req: Request, res: Response) {
             : {}),
         });
 
+        const terminalState: ChatRunState = streamAborted
+          ? "cancelled"
+          : streamFailed || isEmpty
+          ? "failed"
+          : needsApproval
+          ? "needs_approval"
+          : "completed";
+        const terminalError = isEmpty
+          ? `Model "${actualModel}" completed without text or a tool result`
+          : streamFailed
+          ? `Model "${actualModel}" failed while streaming`
+          : undefined;
+        await updateChatRunState(mongo, {
+          principal: auth.principal,
+          chatId: activeChatId!,
+          runId,
+          state: terminalState,
+          error: terminalError,
+          requestedModel,
+          actualModel,
+          providerProfileId: chatProvider.id,
+          providerProfileName: chatProvider.name,
+          usage: totalUsage,
+          finishReason,
+        });
+
         // Generate title for new chats after the first assistant response
-        if (isNewChat && !isEmpty) {
+        if (
+          (isNewChat || chatDocument?.titleSource === "provisional") &&
+          !isEmpty && !needsApproval
+        ) {
           isNewChat = false; // Only generate once
           const firstUserMessage = uiMessages.find((m) => m.role === "user");
           const userContent = firstUserMessage?.parts
@@ -686,11 +914,25 @@ export async function apiChatHandler(req: Request, res: Response) {
       actualModel,
       error: getErrorMessage(error),
     });
+    await updateChatRunState(mongo, {
+      principal: auth.principal,
+      chatId: activeChatId!,
+      runId,
+      state: streamAborted ? "cancelled" : "failed",
+      error: getErrorMessage(error),
+      requestedModel,
+      actualModel,
+      providerProfileId: chatProvider.id,
+      providerProfileName: chatProvider.name,
+      usage: totalUsage,
+    });
     // If headers sent, we can't send json
     if (!res.headersSent) {
       res.status(500).json({
         error: getClientChatError(error, actualModel, requestId),
         model: actualModel,
+        chatId: activeChatId,
+        runId,
         requestId,
       });
     }

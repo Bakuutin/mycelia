@@ -70,6 +70,7 @@ describe("dbMessageToUIMessage", () => {
     const msg = {
       _id: { toString: () => "aaaaaaaaaaaaaaaaaaaaaaaa" },
       createdAt: "2026-08-01T00:00:00Z",
+      pinnedAt: "2026-08-02T00:00:00Z",
       raw: {
         role: "assistant",
         model: "gpt-x",
@@ -85,6 +86,7 @@ describe("dbMessageToUIMessage", () => {
     expect(ui.id).toBe("aaaaaaaaaaaaaaaaaaaaaaaa");
     expect(ui.parts).toEqual([{ type: "text", text: "done" }]);
     expect((ui.metadata as any).model).toBe("gpt-x");
+    expect((ui.metadata as any).pinnedAt).toBe("2026-08-02T00:00:00Z");
   });
 
   it("converts legacy documents into UIMessages", () => {

@@ -18,8 +18,15 @@ export function dbMessageToUIMessage(msg: any): UIMessage & {
   const metadata = {
     requestedModel: raw.requestedModel,
     model: raw.model,
+    providerProfileId: raw.providerProfileId,
+    providerProfileName: raw.providerProfileName,
     requestId: raw.requestId,
+    runId: raw.runId,
     finishReason: raw.finishReason,
+    startedAt: raw.startedAt,
+    durationMs: raw.durationMs,
+    usage: raw.usage,
+    pinnedAt: msg.pinnedAt,
     error: raw.error,
   };
 

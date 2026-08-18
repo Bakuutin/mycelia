@@ -480,6 +480,37 @@ docker compose exec backend deno run -A server.ts migrate-down
 
 See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for details.
 
+### AI chat state and resource boundary
+
+The `/chat` UI uses the authenticated `ChatResource` for chat history,
+preferences, favorites, pins, and read state. This resource is deliberately not
+registered as a model-callable tool. All actions scope records to the current
+user and the Mycelia chat platform. The model sees only the curated tool set;
+raw Mongo writes and internal maintenance actions are excluded.
+
+Each generation has a durable `chat_runs` record. `activeRunId` protects the
+chat summary from stale completions, and an approval continuation keeps the same
+run and assistant message. The `chat:self` WebSocket subscription is mapped to a
+hashed user-scoped backend channel and carries only summary/run events.
+
+Migration `0057_chat_experience.ts` adds the chat list, pin, and run indexes and
+backfills counts, title sources, tool defaults, and last actual model/provider.
+Apply pending migrations before testing the updated UI.
+
+Targeted checks for this feature:
+
+```bash
+cd backend
+deno test -A app/lib/chat/tools.server.test.ts \
+  app/lib/chat/resource.server.test.ts app/lib/chat/runs.server.test.ts \
+  app/services/updates.websocket.server.test.ts
+
+cd ../frontend
+deno run -A npm:vitest run src/lib/chat.test.ts \
+  src/hooks/useStableChatSessionId.test.tsx src/lib/chatMessages.test.ts \
+  src/stores/notificationStore.test.ts
+```
+
 ## Troubleshooting
 
 ### Queue recovery and process restarts

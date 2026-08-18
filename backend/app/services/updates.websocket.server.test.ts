@@ -161,3 +161,43 @@ Deno.test("updates session cleanup is idempotent under concurrent close paths", 
   assertEquals(hub.listenerCount("jobs:*"), 0);
   hub.stop();
 });
+
+Deno.test("chat:self maps to a user-scoped Redis channel", async () => {
+  const redis = new DeferredRedisSubscriber();
+  const hub = new UpdatesPubSubHub(redis, quietLogger);
+  const socket = new FakeWebSocket();
+  const session = new UpdatesWebSocketSession(
+    socket as unknown as WebSocket,
+    hub,
+    "chat:user:abc123",
+  );
+
+  const initialization = session.initialize();
+  redis.becomeReady();
+  await initialization;
+  await session.enqueueMessage(JSON.stringify({
+    type: "subscribe",
+    channel: "chat:self",
+  }));
+
+  assertEquals(redis.subscribeCalls, [["mycelia:chat:user:abc123"]]);
+  redis.emit(
+    "message",
+    "mycelia:chat:user:abc123",
+    JSON.stringify({ event: "chat.updated", data: { chatId: "one" } }),
+  );
+  const delivered = socket.sent.find((message) => message.type === "event");
+  assertEquals(delivered?.channel, "chat:self");
+
+  await session.enqueueMessage(JSON.stringify({
+    type: "subscribe",
+    channel: "chat:user:someone-else",
+  }));
+  expect(socket.sent.at(-1)).toMatchObject({
+    type: "error",
+    message: "Chat channel is scoped",
+  });
+
+  await session.cleanup();
+  hub.stop();
+});

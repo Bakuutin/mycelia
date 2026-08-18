@@ -14,6 +14,7 @@ import {
   UpdatesPubSubHub,
   updatesPubSubHub,
 } from "@/services/updates-pubsub.server.ts";
+import { chatUserChannel } from "@/lib/chat/events.server.ts";
 
 export async function createRequestFromUpgrade(
   upgrade: IncomingMessage,
@@ -71,6 +72,7 @@ type SessionState = "new" | "open" | "closing" | "closed";
 
 export class UpdatesWebSocketSession {
   private readonly subscriptions = new Set<string>();
+  private readonly subscriptionAliases = new Map<string, string>();
   private state: SessionState = "new";
   private initialization: Promise<void> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
@@ -84,9 +86,12 @@ export class UpdatesWebSocketSession {
 
     try {
       const payload = JSON.parse(event.message);
+      const clientChannel = [...this.subscriptionAliases.entries()].find(
+        ([, serverChannel]) => serverChannel === event.channel,
+      )?.[0] ?? event.channel;
       this.sendMessage({
         type: "event",
-        channel: event.channel,
+        channel: clientChannel,
         event: payload.event,
         data: payload.data,
       });
@@ -101,6 +106,7 @@ export class UpdatesWebSocketSession {
   constructor(
     private readonly ws: WebSocket,
     private readonly hub: UpdatesPubSubHub = updatesPubSubHub,
+    private readonly scopedChatChannel?: string,
   ) {
     this.closed = new Promise((resolve) => {
       this.resolveClosed = resolve;
@@ -162,6 +168,23 @@ export class UpdatesWebSocketSession {
           this.sendMessage({ type: "error", message: "Invalid channel name" });
           return;
         }
+        if (
+          message.channel.startsWith("chat:") &&
+          message.channel !== "chat:self"
+        ) {
+          this.sendMessage({
+            type: "error",
+            message: "Chat channel is scoped",
+          });
+          return;
+        }
+        if (message.channel === "chat:self" && !this.scopedChatChannel) {
+          this.sendMessage({
+            type: "error",
+            message: "Chat channel is unavailable",
+          });
+          return;
+        }
         await this.subscribe(message.channel);
         return;
 
@@ -194,8 +217,12 @@ export class UpdatesWebSocketSession {
       return;
     }
 
-    await this.hub.subscribe(channel, this.handlePubSubEvent);
+    const serverChannel = channel === "chat:self"
+      ? this.scopedChatChannel!
+      : channel;
+    await this.hub.subscribe(serverChannel, this.handlePubSubEvent);
     this.subscriptions.add(channel);
+    this.subscriptionAliases.set(channel, serverChannel);
     this.sendMessage({ type: "subscribed", channel });
     console.log(`[WS] Subscribed to channel: ${channel}`);
 
@@ -207,8 +234,10 @@ export class UpdatesWebSocketSession {
   private async unsubscribe(channel: string): Promise<void> {
     if (!this.subscriptions.has(channel)) return;
 
-    await this.hub.unsubscribe(channel, this.handlePubSubEvent);
+    const serverChannel = this.subscriptionAliases.get(channel) ?? channel;
+    await this.hub.unsubscribe(serverChannel, this.handlePubSubEvent);
     this.subscriptions.delete(channel);
+    this.subscriptionAliases.delete(channel);
     this.sendMessage({ type: "unsubscribed", channel });
     console.log(`[WS] Unsubscribed from channel: ${channel}`);
   }
@@ -279,9 +308,13 @@ export class UpdatesWebSocketSession {
       this.subscriptions.clear();
       const results = await Promise.allSettled(
         subscriptions.map((channel) =>
-          this.hub.unsubscribe(channel, this.handlePubSubEvent)
+          this.hub.unsubscribe(
+            this.subscriptionAliases.get(channel) ?? channel,
+            this.handlePubSubEvent,
+          )
         ),
       );
+      this.subscriptionAliases.clear();
       for (const result of results) {
         if (result.status === "rejected") {
           console.error(
@@ -316,7 +349,11 @@ export async function handleUpdatesWebSocket(
   }
   if (ws.readyState !== 1) return;
 
-  const session = new UpdatesWebSocketSession(ws);
+  const session = new UpdatesWebSocketSession(
+    ws,
+    updatesPubSubHub,
+    await chatUserChannel(auth.principal),
+  );
 
   const removeListeners = () => {
     ws.off("message", onMessage);
