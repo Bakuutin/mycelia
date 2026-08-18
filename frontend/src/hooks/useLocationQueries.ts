@@ -5,9 +5,11 @@ import type {
   ConversationMapGroup,
   GeonamesCity,
   LocationImport,
+  LocationMetadataConflict,
   LocationPointConflict,
   LocationSegment,
   LocationStatus,
+  LocationTrackGeometryChunk,
   RecordedLocationTrack,
   SavedPlace,
 } from "@/types/location";
@@ -24,8 +26,12 @@ export const locationKeys = {
   imports: () => [...locationKeys.all, "imports"] as const,
   savedPlaces: () => [...locationKeys.all, "savedPlaces"] as const,
   recordedTracks: () => [...locationKeys.all, "recordedTracks"] as const,
+  trackGeometry: (id: string) =>
+    [...locationKeys.all, "trackGeometry", id] as const,
   conflicts: (status?: string) =>
     [...locationKeys.all, "conflicts", status ?? "all"] as const,
+  metadataConflicts: (status?: string) =>
+    [...locationKeys.all, "metadataConflicts", status ?? "all"] as const,
   geotags: (filters: Record<string, unknown>) =>
     [...locationKeys.all, "geotags", filters] as const,
   conversationsOnMap: (start?: number, end?: number) =>
@@ -155,6 +161,42 @@ export function useRecordedLocationTracks(enabled = true) {
   });
 }
 
+export function useRecordedTrackGeometry(
+  id: string | undefined,
+  enabled = true,
+) {
+  return useQuery<{
+    chunks: LocationTrackGeometryChunk[];
+    nextCursor: number | null;
+    complete: boolean;
+  }>({
+    queryKey: locationKeys.trackGeometry(id ?? ""),
+    queryFn: async () => {
+      const chunks: LocationTrackGeometryChunk[] = [];
+      let cursor = 0;
+      while (true) {
+        const page = await callResource("location", {
+          action: "get-recorded-track-geometry",
+          id,
+          cursor,
+          limit: 100,
+        }) as {
+          chunks: LocationTrackGeometryChunk[];
+          nextCursor: number | null;
+          complete: boolean;
+        };
+        chunks.push(...page.chunks);
+        if (page.nextCursor === null) {
+          return { chunks, nextCursor: null, complete: true };
+        }
+        cursor = page.nextCursor;
+      }
+    },
+    enabled: enabled && !!id,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useLocationConflicts(
   status: "pending" | "resolved" | undefined = "pending",
   enabled = true,
@@ -181,6 +223,41 @@ export function useResolveLocationConflict() {
       resolution: "keep_existing" | "use_incoming" | "defer";
       candidateImportId?: string;
     }) => callResource("location", { action: "resolve-conflict", ...input }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: locationKeys.all });
+    },
+  });
+}
+
+export function useLocationMetadataConflicts(
+  status: "pending" | "resolved" | undefined = "pending",
+  enabled = true,
+) {
+  return useQuery<{ conflicts: LocationMetadataConflict[]; total: number }>({
+    queryKey: locationKeys.metadataConflicts(status),
+    queryFn: () =>
+      callResource("location", {
+        action: "list-metadata-conflicts",
+        ...(status ? { status } : {}),
+        limit: 100,
+        skip: 0,
+      }),
+    enabled,
+    staleTime: 15 * 1000,
+  });
+}
+
+export function useResolveLocationMetadataConflict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      id: string;
+      resolution: "keep_existing" | "use_incoming" | "defer";
+    }) =>
+      callResource("location", {
+        action: "resolve-metadata-conflict",
+        ...input,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: locationKeys.all });
     },

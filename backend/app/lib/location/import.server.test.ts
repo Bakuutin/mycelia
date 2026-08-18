@@ -42,6 +42,11 @@ Deno.test("analysis handles more than 1000 matches and within-file duplicates", 
     datasetMetadata: {},
     skipped: 0,
     untimedCoordinates: 0,
+    invalidCoordinates: 0,
+    invalidTimestamps: 0,
+    unpairedCoordinates: 0,
+    unpairedTimestamps: 0,
+    unsupportedGeometries: 0,
   };
   const stored = new Map(points.map((point) => [pointHash(point), {
     hash: pointHash(point),

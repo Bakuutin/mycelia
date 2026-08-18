@@ -26,6 +26,7 @@ import {
   useConversationsOnMap,
   useLocationConflicts,
   useLocationLiveUpdates,
+  useLocationMetadataConflicts,
   useLocationSegments,
   useLocationStatus,
   useRecordedLocationTracks,
@@ -48,6 +49,7 @@ import type {
   ConversationMapGroup,
   LocationPlace,
   LocationSegment,
+  RecordedLocationTrack,
   SavedPlace,
 } from "@/types/location";
 import { placeColor } from "@/types/location";
@@ -122,6 +124,9 @@ const MapPage = () => {
   const [selectedSavedPlace, setSelectedSavedPlace] = useState<
     SavedPlace | null
   >(null);
+  const [selectedRecordedTrack, setSelectedRecordedTrack] = useState<
+    RecordedLocationTrack | null
+  >(null);
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
   const [downloadingGeonames, setDownloadingGeonames] = useState(false);
 
@@ -139,6 +144,10 @@ const MapPage = () => {
     showRecordedTracks,
   );
   const { data: conflictsData } = useLocationConflicts("pending", true);
+  const { data: metadataConflictsData } = useLocationMetadataConflicts(
+    "pending",
+    true,
+  );
 
   const segments = segmentsData?.segments ?? [];
   const hasData = status?.hasData ?? true;
@@ -288,6 +297,7 @@ const MapPage = () => {
     }
     setSelectedGroup(null);
     setSelectedSavedPlace(null);
+    setSelectedRecordedTrack(null);
     setSelectedSegment(segment);
   };
 
@@ -387,14 +397,16 @@ const MapPage = () => {
             <MapPin className="mr-2 h-4 w-4" />
             Geotags
           </Button>
-          {(conflictsData?.total ?? 0) > 0 && (
+          {((conflictsData?.total ?? 0) +
+                (metadataConflictsData?.total ?? 0)) > 0 && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => setConflictsOpen(true)}
             >
               <AlertTriangle className="mr-2 h-4 w-4 text-amber-600" />
-              Review conflicts ({conflictsData!.total})
+              Review conflicts ({(conflictsData?.total ?? 0) +
+                (metadataConflictsData?.total ?? 0)})
             </Button>
           )}
           <Button size="sm" onClick={() => setImportOpen(true)}>
@@ -466,6 +478,7 @@ const MapPage = () => {
                       onSelectGroup={(group) => {
                         setSelectedSegment(null);
                         setSelectedSavedPlace(null);
+                        setSelectedRecordedTrack(null);
                         setSelectedGroup(group);
                       }}
                     />
@@ -473,6 +486,14 @@ const MapPage = () => {
                   {showRecordedTracks && (
                     <RecordedTracksLayer
                       tracks={recordedTracksData?.tracks ?? []}
+                      onSelect={(track) => {
+                        setSelectedGroup(null);
+                        setSelectedSegment(null);
+                        setSelectedSavedPlace(null);
+                        setSelectedRecordedTrack(track);
+                        const first = (track.renderPath ?? track.path)?.[0];
+                        if (first) setFlyTarget([first[1], first[0]]);
+                      }}
                     />
                   )}
                   {showSavedPlaces && (
@@ -481,6 +502,7 @@ const MapPage = () => {
                       onSelect={(place) => {
                         setSelectedGroup(null);
                         setSelectedSegment(null);
+                        setSelectedRecordedTrack(null);
                         setSelectedSavedPlace(place);
                         setFlyTarget([
                           place.loc.coordinates[1],
@@ -513,10 +535,12 @@ const MapPage = () => {
                     if (chip.group) {
                       setSelectedSegment(null);
                       setSelectedSavedPlace(null);
+                      setSelectedRecordedTrack(null);
                       setSelectedGroup(chip.group);
                     } else if (chip.longestStay) {
                       setSelectedGroup(null);
                       setSelectedSavedPlace(null);
+                      setSelectedRecordedTrack(null);
                       setSelectedSegment(chip.longestStay);
                     }
                   }}
@@ -546,7 +570,8 @@ const MapPage = () => {
           )}
         </div>
 
-        {(selectedGroup || selectedSegment || selectedSavedPlace) && (
+        {(selectedGroup || selectedSegment || selectedSavedPlace ||
+          selectedRecordedTrack) && (
           <Card className="flex w-80 shrink-0 flex-col overflow-hidden">
             <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
               <CardTitle className="text-base">
@@ -554,6 +579,8 @@ const MapPage = () => {
                   ? formatPlace(selectedGroup.place)
                   : selectedSavedPlace
                   ? selectedSavedPlace.displayName || "Saved place"
+                  : selectedRecordedTrack
+                  ? selectedRecordedTrack.displayName || "Recorded track"
                   : formatPlace(selectedSegment!.place)}
               </CardTitle>
               <Button
@@ -564,6 +591,7 @@ const MapPage = () => {
                   setSelectedGroup(null);
                   setSelectedSegment(null);
                   setSelectedSavedPlace(null);
+                  setSelectedRecordedTrack(null);
                 }}
               >
                 <X className="h-4 w-4" />
@@ -635,6 +663,61 @@ const MapPage = () => {
                       {JSON.stringify({
                         canonical: selectedSavedPlace.metadata ?? {},
                         sources: selectedSavedPlace.sourceRefs ?? [],
+                      }, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              )}
+
+              {selectedRecordedTrack && (
+                <div className="space-y-3 text-sm">
+                  <div className="flex flex-wrap gap-1">
+                    <Badge variant="secondary">
+                      {selectedRecordedTrack.kind}
+                    </Badge>
+                    <Badge variant="outline">
+                      {selectedRecordedTrack.geometryCompleteness ?? "legacy"}
+                      {" geometry"}
+                    </Badge>
+                  </div>
+                  <p>
+                    {new Intl.NumberFormat().format(
+                      selectedRecordedTrack.geometryPointCount ??
+                        selectedRecordedTrack.pointCount,
+                    )} source coordinates
+                    {(selectedRecordedTrack.timedPointCount ?? 0) > 0 &&
+                      ` · ${
+                        new Intl.NumberFormat().format(
+                          selectedRecordedTrack.timedPointCount!,
+                        )
+                      } timed`}
+                    {(selectedRecordedTrack.untimedPointCount ?? 0) > 0 &&
+                      ` · ${
+                        new Intl.NumberFormat().format(
+                          selectedRecordedTrack.untimedPointCount!,
+                        )
+                      } untimed`}
+                  </p>
+                  {selectedRecordedTrack.geometryCompleteness ===
+                      "render-only" && (
+                    <p className="text-xs text-amber-600">
+                      Only the historical map preview is available until the
+                      original source is backfilled.
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Sources: {(selectedRecordedTrack.sourceRefs ?? []).map(
+                      (source) => source.format.toUpperCase(),
+                    ).join(", ") || "unknown"}
+                  </p>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      Original metadata
+                    </summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">
+                      {JSON.stringify({
+                        canonical: selectedRecordedTrack.metadata ?? {},
+                        sources: selectedRecordedTrack.sourceRefs ?? [],
                       }, null, 2)}
                     </pre>
                   </details>
@@ -716,6 +799,8 @@ const MapPage = () => {
           }
           if (segment.type === "stay" || segment.type === "manual") {
             setSelectedGroup(null);
+            setSelectedSavedPlace(null);
+            setSelectedRecordedTrack(null);
             setSelectedSegment(segment);
           }
         }}

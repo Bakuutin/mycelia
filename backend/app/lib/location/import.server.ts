@@ -17,15 +17,19 @@ const PREVIEWS = "location_import_previews";
 const IMPORTS = "location_imports";
 const POINTS = "location_points";
 const TRACKS = "location_tracks";
+const TRACK_GEOMETRY = "location_track_geometry";
 const BOOKMARKS = "location_bookmarks";
 const CONFLICTS = "location_point_conflicts";
+const METADATA_CONFLICTS = "location_metadata_conflicts";
 const META = "location_meta";
 const FILE_BUCKET = "location_files";
 const LOOKUP_BATCH = 4000;
 const WRITE_BATCH = 1000;
+const GEOMETRY_CHUNK_SIZE = 2000;
 const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
-export const LOCATION_PARSER_VERSION = 2;
+export const LOCATION_PARSER_VERSION = 3;
 export const LOCATION_POINT_HASH_VERSION = 1;
+export const LOCATION_CONTENT_PROFILE_VERSION = 2;
 
 type MongoCall = (input: any) => Promise<any>;
 
@@ -35,10 +39,23 @@ export interface LocationImportCounts {
   newPoints: number;
   matchedPoints: number;
   withinFileDuplicates: number;
+  withinFileTrackDuplicates: number;
+  withinFileBookmarkDuplicates: number;
   conflictPoints: number;
   conflictGroups: number;
   skipped: number;
+  timedCoordinates: number;
   untimedCoordinates: number;
+  trackCoordinates: number;
+  timedTracks: number;
+  untimedTracks: number;
+  mixedTracks: number;
+  invalidCoordinates: number;
+  invalidTimestamps: number;
+  unpairedCoordinates: number;
+  unpairedTimestamps: number;
+  unsupportedGeometries: number;
+  styleDefinitions: number;
   tracks: number;
   tracksNew: number;
   tracksMatched: number;
@@ -53,6 +70,10 @@ export interface LocationImportPreview {
   filename: string;
   format: TrackFormat;
   contentHash: string;
+  fileSize: number;
+  parserVersion: number;
+  contentProfileVersion: number;
+  sourceEntryName?: string;
   exactFileMatch?: {
     importId: string;
     filename: string;
@@ -76,11 +97,16 @@ export interface LocationImportPreview {
     }>;
   }>;
   metadataDifferences: Array<{
-    kind: "elevation" | "ambiguous_bookmark";
+    kind: "elevation" | "ambiguous_bookmark" | "entity_metadata";
     hash?: string;
     coordinateHash?: string;
+    entityType?: "track" | "bookmark";
+    entityId?: string;
+    field?: string;
     existing?: number;
     incoming?: number;
+    existingValue?: unknown;
+    incomingValue?: unknown;
   }>;
   datasetMetadata: ParsedMetadata;
   expiresAt: Date;
@@ -156,6 +182,9 @@ function metadataForStorage(metadata: ParsedMetadata) {
       ? { additionalStyle: metadata.additionalStyle }
       : {}),
     ...(metadata.accessRules ? { accessRules: metadata.accessRules } : {}),
+    ...(metadata.annotation ? { annotation: metadata.annotation } : {}),
+    ...(metadata.folderPath ? { folderPath: metadata.folderPath } : {}),
+    ...(metadata.rawMetadata ? { rawMetadata: metadata.rawMetadata } : {}),
     ...(metadata.style ? { style: metadata.style } : {}),
     ...(metadata.styleDefinitions
       ? { styleDefinitions: metadata.styleDefinitions }
@@ -169,7 +198,85 @@ function displayName(metadata: ParsedMetadata): string | undefined {
 }
 
 function metadataPriority(format: TrackFormat): number {
-  return format === "gpx" ? 10 : 20;
+  return format === "kmz" || format === "kml" ? 20 : 10;
+}
+
+function bookmarkIdentity(bookmark: ParsedBookmark): string {
+  if (bookmark.localId) {
+    return `local:${bookmark.localId}:coord:${coordinateHash(bookmark)}`;
+  }
+  const name = displayName(bookmark)?.trim().toLocaleLowerCase();
+  return name
+    ? `coord:${coordinateHash(bookmark)}:name:${name}`
+    : `coord:${coordinateHash(bookmark)}`;
+}
+
+function existingBookmarkIdentity(bookmark: any): string | undefined {
+  if (bookmark.identityKey) return String(bookmark.identityKey);
+  const localId = bookmark.metadata?.localId;
+  if (localId) return `local:${localId}:coord:${bookmark.coordinateHash}`;
+  const name = String(bookmark.displayName ?? "").trim().toLocaleLowerCase();
+  return name ? `coord:${bookmark.coordinateHash}:name:${name}` : undefined;
+}
+
+function chooseBookmarkCandidate(
+  bookmark: ParsedBookmark,
+  candidates: any[],
+): any | undefined {
+  const identity = bookmarkIdentity(bookmark);
+  const exact = candidates.filter((candidate) =>
+    existingBookmarkIdentity(candidate) === identity
+  );
+  if (exact.length === 1) return exact[0];
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+const REVIEWABLE_METADATA_FIELDS = [
+  "name",
+  "customNames",
+  "localizedNames",
+  "localizedDescriptions",
+  "description",
+  "featureTypes",
+  "icon",
+  "scale",
+  "visibility",
+  "sourceTimestamp",
+  "localId",
+  "additionalStyle",
+  "accessRules",
+  "annotation",
+  "style",
+] as const;
+
+function comparableMetadata(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (value && typeof value === "object") {
+    return JSON.stringify(
+      Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).sort(),
+      ),
+    );
+  }
+  return JSON.stringify(value);
+}
+
+function metadataFieldDifferences(
+  existing: Record<string, any> | undefined,
+  incoming: Record<string, any>,
+): Array<{ field: string; existingValue: unknown; incomingValue: unknown }> {
+  if (!existing) return [];
+  return REVIEWABLE_METADATA_FIELDS.flatMap((field) => {
+    const existingValue = existing[field];
+    const incomingValue = incoming[field];
+    if (
+      existingValue === undefined || existingValue === null ||
+      incomingValue === undefined || incomingValue === null ||
+      comparableMetadata(existingValue) === comparableMetadata(incomingValue)
+    ) return [];
+    return [{ field, existingValue, incomingValue }];
+  });
 }
 
 function decimateCoordinates(
@@ -186,6 +293,53 @@ function decimateCoordinates(
     result.push([point.lng, point.lat]);
   }
   return result;
+}
+
+function contentProfile(
+  dataset: ParseResult,
+  file: {
+    sizeBytes: number;
+    contentHash: string;
+    format: TrackFormat;
+    sourceEntryName?: string;
+  },
+) {
+  return {
+    version: LOCATION_CONTENT_PROFILE_VERSION,
+    file: {
+      ...file,
+      parserVersion: LOCATION_PARSER_VERSION,
+    },
+    datasetMetadata: metadataForStorage(dataset.datasetMetadata),
+    counts: {
+      timedCoordinates: dataset.points.length,
+      untimedCoordinates: dataset.untimedCoordinates,
+      trackCoordinates: dataset.tracks.reduce(
+        (total, track) => total + track.coordinates.length,
+        0,
+      ),
+      timedTracks:
+        dataset.tracks.filter((track) => track.kind === "timed-track").length,
+      untimedTracks:
+        dataset.tracks.filter((track) => track.kind === "untimed-path").length,
+      mixedTracks:
+        dataset.tracks.filter((track) => track.kind === "mixed-track").length,
+      tracks: dataset.tracks.length,
+      withinFileTrackDuplicates: dataset.tracks.length -
+        new Set(dataset.tracks.map(trackFingerprint)).size,
+      bookmarks: dataset.bookmarks.length,
+      withinFileBookmarkDuplicates: dataset.bookmarks.length -
+        new Set(dataset.bookmarks.map(bookmarkIdentity)).size,
+      invalidCoordinates: dataset.invalidCoordinates,
+      invalidTimestamps: dataset.invalidTimestamps,
+      unpairedCoordinates: dataset.unpairedCoordinates,
+      unpairedTimestamps: dataset.unpairedTimestamps,
+      unsupportedGeometries: dataset.unsupportedGeometries,
+      styleDefinitions: Object.keys(
+        dataset.datasetMetadata.styleDefinitions ?? {},
+      ).length,
+    },
+  };
 }
 
 async function getRevision(mongo: MongoCall): Promise<number> {
@@ -300,6 +454,7 @@ export async function analyzeLocationDataset(
   format: TrackFormat,
   contentHash: string,
   dataset: ParseResult,
+  fileFacts: { sizeBytes?: number; sourceEntryName?: string } = {},
 ): Promise<AnalysisInternal> {
   const exact = await mongo({
     action: "findOne",
@@ -410,12 +565,13 @@ export async function analyzeLocationDataset(
     })).sort((a, b) => b.matchedPoints - a.matchedPoints);
 
   const trackFingerprints = dataset.tracks.map(trackFingerprint);
+  const uniqueTrackFingerprints = [...new Set(trackFingerprints)];
   const existingTracks = await findByValues(
     mongo,
     TRACKS,
     "fingerprint",
-    trackFingerprints,
-    { fingerprint: 1 },
+    uniqueTrackFingerprints,
+    { fingerprint: 1, metadata: 1, _id: 1 },
   );
   const matchedTrackFingerprints = new Set(
     existingTracks.map((track) => track.fingerprint),
@@ -427,23 +583,36 @@ export async function analyzeLocationDataset(
     BOOKMARKS,
     "coordinateHash",
     bookmarkCoordinateHashes,
-    { coordinateHash: 1 },
+    {
+      coordinateHash: 1,
+      identityKey: 1,
+      metadata: 1,
+      displayName: 1,
+      _id: 1,
+    },
   );
-  const bookmarksByCoordinate = new Map<string, number>();
+  const bookmarksByCoordinate = new Map<string, any[]>();
   for (const bookmark of existingBookmarks) {
-    bookmarksByCoordinate.set(
-      bookmark.coordinateHash,
-      (bookmarksByCoordinate.get(bookmark.coordinateHash) ?? 0) + 1,
-    );
+    const candidates = bookmarksByCoordinate.get(bookmark.coordinateHash) ?? [];
+    candidates.push(bookmark);
+    bookmarksByCoordinate.set(bookmark.coordinateHash, candidates);
   }
-  const bookmarksMatched =
-    dataset.bookmarks.filter((bookmark) =>
-      bookmarksByCoordinate.get(coordinateHash(bookmark)) === 1
-    ).length;
-  const metadataReview =
-    dataset.bookmarks.filter((bookmark) =>
-      (bookmarksByCoordinate.get(coordinateHash(bookmark)) ?? 0) > 1
-    ).length;
+  const uniqueBookmarks = [...new Map(dataset.bookmarks.map((bookmark) => [
+    bookmarkIdentity(bookmark),
+    bookmark,
+  ])).values()];
+  const bookmarkMatches = uniqueBookmarks.map((bookmark) => ({
+    bookmark,
+    candidates: bookmarksByCoordinate.get(coordinateHash(bookmark)) ?? [],
+  })).map((entry) => ({
+    ...entry,
+    match: chooseBookmarkCandidate(entry.bookmark, entry.candidates),
+  }));
+  const bookmarksMatched = bookmarkMatches.filter((entry) => entry.match)
+    .length;
+  const ambiguousBookmarks = bookmarkMatches.filter((entry) =>
+    !entry.match && entry.candidates.length > 0
+  );
   const metadataDifferences: LocationImportPreview["metadataDifferences"] = [];
   for (const [hash, existingPoint] of existingByHash) {
     const incomingElevation = uniquePoints.get(hash)?.ele;
@@ -459,12 +628,45 @@ export async function analyzeLocationDataset(
       });
     }
   }
-  for (const bookmark of dataset.bookmarks) {
-    const hash = coordinateHash(bookmark);
-    if ((bookmarksByCoordinate.get(hash) ?? 0) > 1) {
+  for (const entry of ambiguousBookmarks) {
+    const hash = coordinateHash(entry.bookmark);
+    metadataDifferences.push({
+      kind: "ambiguous_bookmark",
+      coordinateHash: hash,
+    });
+  }
+  for (const track of dataset.tracks) {
+    const fingerprint = trackFingerprint(track);
+    const existing = existingTracks.find((item) =>
+      item.fingerprint === fingerprint
+    );
+    if (!existing) continue;
+    const incoming = metadataForStorage(track);
+    for (
+      const difference of metadataFieldDifferences(existing.metadata, incoming)
+    ) {
       metadataDifferences.push({
-        kind: "ambiguous_bookmark",
-        coordinateHash: hash,
+        kind: "entity_metadata",
+        entityType: "track",
+        entityId: String(existing._id),
+        ...difference,
+      });
+    }
+  }
+  for (const entry of bookmarkMatches) {
+    if (!entry.match) continue;
+    const incoming = metadataForStorage(entry.bookmark);
+    for (
+      const difference of metadataFieldDifferences(
+        entry.match.metadata,
+        incoming,
+      )
+    ) {
+      metadataDifferences.push({
+        kind: "entity_metadata",
+        entityType: "bookmark",
+        entityId: String(entry.match._id),
+        ...difference,
       });
     }
   }
@@ -478,26 +680,47 @@ export async function analyzeLocationDataset(
     newPoints: newHashes.size,
     matchedPoints: existingByHash.size,
     withinFileDuplicates,
+    withinFileTrackDuplicates: dataset.tracks.length -
+      uniqueTrackFingerprints.length,
+    withinFileBookmarkDuplicates: dataset.bookmarks.length -
+      uniqueBookmarks.length,
     conflictPoints: conflictHashes.size,
     conflictGroups: groupedConflictTimestamps.size,
     skipped: dataset.skipped,
+    timedCoordinates: dataset.points.length,
     untimedCoordinates: dataset.untimedCoordinates,
+    trackCoordinates: dataset.tracks.reduce(
+      (total, track) => total + track.coordinates.length,
+      0,
+    ),
+    timedTracks:
+      dataset.tracks.filter((track) => track.kind === "timed-track").length,
+    untimedTracks:
+      dataset.tracks.filter((track) => track.kind === "untimed-path").length,
+    mixedTracks:
+      dataset.tracks.filter((track) => track.kind === "mixed-track").length,
+    invalidCoordinates: dataset.invalidCoordinates,
+    invalidTimestamps: dataset.invalidTimestamps,
+    unpairedCoordinates: dataset.unpairedCoordinates,
+    unpairedTimestamps: dataset.unpairedTimestamps,
+    unsupportedGeometries: dataset.unsupportedGeometries,
+    styleDefinitions: Object.keys(
+      dataset.datasetMetadata.styleDefinitions ?? {},
+    ).length,
     tracks: dataset.tracks.length,
     tracksNew:
-      trackFingerprints.filter((fingerprint) =>
+      uniqueTrackFingerprints.filter((fingerprint) =>
         !matchedTrackFingerprints.has(fingerprint)
       ).length,
     tracksMatched:
-      trackFingerprints.filter((fingerprint) =>
+      uniqueTrackFingerprints.filter((fingerprint) =>
         matchedTrackFingerprints.has(fingerprint)
       ).length,
     bookmarks: dataset.bookmarks.length,
-    bookmarksNew: dataset.bookmarks.length - bookmarksMatched - metadataReview,
+    bookmarksNew: uniqueBookmarks.length - bookmarksMatched -
+      ambiguousBookmarks.length,
     bookmarksMatched,
-    metadataReview: metadataReview +
-      metadataDifferences.filter((difference) =>
-        difference.kind === "elevation"
-      ).length,
+    metadataReview: metadataDifferences.length,
   };
   const revision = await getRevision(mongo);
   const fingerprint = sha256(JSON.stringify({ contentHash, revision, counts }));
@@ -508,6 +731,12 @@ export async function analyzeLocationDataset(
       filename,
       format,
       contentHash,
+      fileSize: fileFacts.sizeBytes ?? 0,
+      parserVersion: LOCATION_PARSER_VERSION,
+      contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
+      ...(fileFacts.sourceEntryName
+        ? { sourceEntryName: fileFacts.sourceEntryName }
+        : {}),
       ...(exact
         ? {
           exactFileMatch: {
@@ -577,6 +806,7 @@ export async function analyzeLocationFile(
     format,
     contentHash,
     dataset,
+    { sizeBytes: bytes.byteLength, sourceEntryName: dataset.sourceEntryName },
   );
   const previewId = new ObjectId();
   const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
@@ -612,13 +842,166 @@ export async function analyzeLocationFile(
   return { previewId: String(previewId), expiresAt, ...analysis.public };
 }
 
+async function recordEntityMetadataConflicts(
+  mongo: MongoCall,
+  importId: ObjectId,
+  format: TrackFormat,
+  entityType: "track" | "bookmark",
+  entityId: ObjectId,
+  existing: Record<string, any> | undefined,
+  incoming: Record<string, any>,
+  existingPriority: number,
+): Promise<void> {
+  const differences = metadataFieldDifferences(existing, incoming);
+  if (differences.length === 0) return;
+  await mongo({
+    action: "bulkWrite",
+    collection: METADATA_CONFLICTS,
+    operations: differences.map((difference) => {
+      const conflictKey =
+        `${entityType}:${entityId}:${difference.field}:${importId}`;
+      const incomingPriority = metadataPriority(format);
+      return {
+        updateOne: {
+          filter: { conflictKey },
+          update: {
+            $setOnInsert: {
+              _id: new ObjectId(),
+              conflictKey,
+              entityType,
+              entityId,
+              field: difference.field,
+              existingValue: difference.existingValue,
+              incomingValue: difference.incomingValue,
+              incomingImportId: importId,
+              incomingFormat: format,
+              defaultSelection: incomingPriority >= existingPriority
+                ? "incoming"
+                : "existing",
+              status: "pending",
+              createdAt: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      };
+    }),
+    options: { ordered: false },
+  });
+}
+
+async function recordPointMetadataConflicts(
+  mongo: MongoCall,
+  importId: ObjectId,
+  format: TrackFormat,
+  analysis: AnalysisInternal,
+): Promise<void> {
+  const operations = [...analysis.existingByHash.entries()].flatMap(
+    ([hash, existing]) => {
+      const incoming = analysis.uniquePoints.get(hash);
+      if (
+        existing.ele === undefined || incoming?.ele === undefined ||
+        Number(existing.ele) === incoming.ele
+      ) return [];
+      const conflictKey = `point:${existing._id}:ele:${importId}`;
+      return [{
+        updateOne: {
+          filter: { conflictKey },
+          update: {
+            $setOnInsert: {
+              _id: new ObjectId(),
+              conflictKey,
+              entityType: "point",
+              entityId: existing._id,
+              field: "ele",
+              existingValue: Number(existing.ele),
+              incomingValue: incoming.ele,
+              incomingImportId: importId,
+              incomingFormat: format,
+              defaultSelection: "existing",
+              status: "pending",
+              createdAt: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      }];
+    },
+  );
+  for (const batch of chunk(operations, WRITE_BATCH)) {
+    await mongo({
+      action: "bulkWrite",
+      collection: METADATA_CONFLICTS,
+      operations: batch,
+      options: { ordered: false },
+    });
+  }
+}
+
+async function replaceTrackGeometry(
+  mongo: MongoCall,
+  trackId: ObjectId,
+  coordinates: ParsedTrack["coordinates"],
+): Promise<number> {
+  const chunks = chunk(coordinates, GEOMETRY_CHUNK_SIZE);
+  for (
+    const batch of chunk(
+      chunks.map((points, chunkIndex) => ({
+        chunkIndex,
+        points,
+      })),
+      100,
+    )
+  ) {
+    await mongo({
+      action: "bulkWrite",
+      collection: TRACK_GEOMETRY,
+      operations: batch.map(({ chunkIndex, points }) => ({
+        updateOne: {
+          filter: { trackId, chunkIndex },
+          update: {
+            $set: {
+              startIndex: chunkIndex * GEOMETRY_CHUNK_SIZE,
+              points: points.map((point, offset) => ({
+                index: chunkIndex * GEOMETRY_CHUNK_SIZE + offset,
+                coordinates: [point.lng, point.lat],
+                ...(point.ele !== undefined ? { ele: point.ele } : {}),
+                ...(point.ts ? { ts: point.ts } : {}),
+                quality: point.ts ? "timed" : "untimed",
+              })),
+              updatedAt: new Date(),
+            },
+            $setOnInsert: { _id: new ObjectId(), trackId, chunkIndex },
+          },
+          upsert: true,
+        },
+      })),
+      options: { ordered: false },
+    });
+  }
+  await mongo({
+    action: "deleteMany",
+    collection: TRACK_GEOMETRY,
+    query: { trackId, chunkIndex: { $gte: chunks.length } },
+  });
+  return chunks.length;
+}
+
 async function upsertTracks(
   mongo: MongoCall,
   importId: ObjectId,
   format: TrackFormat,
   tracks: ParsedTrack[],
 ): Promise<void> {
-  const fingerprints = tracks.map(trackFingerprint);
+  const groupedTracks = new Map<string, ParsedTrack[]>();
+  for (const track of tracks) {
+    const fingerprint = trackFingerprint(track);
+    groupedTracks.set(fingerprint, [
+      ...(groupedTracks.get(fingerprint) ?? []),
+      track,
+    ]);
+  }
+  const fingerprints = [...groupedTracks.keys()];
   const existingTracks = await findByValues(
     mongo,
     TRACKS,
@@ -628,50 +1011,71 @@ async function upsertTracks(
   const existingByFingerprint = new Map(
     existingTracks.map((track) => [track.fingerprint, track]),
   );
-  for (const batch of chunk(tracks, WRITE_BATCH)) {
-    const operations = batch.map((track) => {
-      const fingerprint = trackFingerprint(track);
-      const metadata = metadataForStorage(track);
-      const path = decimateCoordinates(track.coordinates);
+  const descriptors = [...groupedTracks.entries()].map(
+    ([fingerprint, sourceTracks]) => {
+      const track = sourceTracks[0];
       const existing = existingByFingerprint.get(fingerprint);
-      const applyCanonical = !existing?.manualOverrides &&
-        Number(existing?.metadataPriority ?? 0) <= metadataPriority(format);
       return {
-        updateOne: {
-          filter: { fingerprint },
-          update: {
-            $setOnInsert: {
-              _id: new ObjectId(),
-              fingerprint,
-              kind: track.kind,
-              path,
-              pointCount: track.coordinates.length,
-              createdAt: new Date(),
-            },
-            ...(applyCanonical
-              ? {
-                $set: {
-                  metadata,
-                  displayName: displayName(track) ?? null,
-                  style: track.style ?? null,
-                  visibility: track.visibility ?? true,
-                  metadataPriority: metadataPriority(format),
+        track,
+        sourceTracks,
+        fingerprint,
+        existing,
+        trackId: existing?._id ?? new ObjectId(),
+        applyGeometry: !existing || existing.geometryCompleteness !== "full" ||
+          Number(existing.geometryPriority ?? 0) <= metadataPriority(format),
+      };
+    },
+  );
+  for (const batch of chunk(descriptors, WRITE_BATCH)) {
+    const operations = batch.map(
+      ({
+        track,
+        sourceTracks,
+        fingerprint,
+        existing,
+        trackId,
+      }) => {
+        const metadata = metadataForStorage(track);
+        const applyCanonical = !existing?.manualOverrides &&
+          Number(existing?.metadataPriority ?? 0) <= metadataPriority(format);
+        return {
+          updateOne: {
+            filter: { fingerprint },
+            update: {
+              $setOnInsert: {
+                _id: trackId,
+                fingerprint,
+                visible: false,
+                visibilityOwner: importId,
+                createdAt: new Date(),
+              },
+              ...(applyCanonical
+                ? {
+                  $set: {
+                    metadata,
+                    displayName: displayName(track) ?? null,
+                    style: track.style ?? null,
+                    visibility: track.visibility ?? true,
+                    metadataPriority: metadataPriority(format),
+                  },
+                }
+                : {}),
+              $addToSet: {
+                sourceRefs: {
+                  $each: sourceTracks.map((sourceTrack) => ({
+                    importId,
+                    format,
+                    sourceIndex: sourceTrack.sourceIndex,
+                    metadata: metadataForStorage(sourceTrack),
+                  })),
                 },
-              }
-              : {}),
-            $addToSet: {
-              sourceRefs: {
-                importId,
-                format,
-                sourceIndex: track.sourceIndex,
-                metadata,
               },
             },
+            upsert: true,
           },
-          upsert: true,
-        },
-      };
-    });
+        };
+      },
+    );
     if (operations.length > 0) {
       await mongo({
         action: "bulkWrite",
@@ -679,6 +1083,52 @@ async function upsertTracks(
         operations,
         options: { ordered: false },
       });
+    }
+  }
+  for (const descriptor of descriptors) {
+    if (descriptor.applyGeometry) {
+      const geometryChunkCount = await replaceTrackGeometry(
+        mongo,
+        descriptor.trackId,
+        descriptor.track.coordinates,
+      );
+      const renderPath = decimateCoordinates(descriptor.track.coordinates);
+      await mongo({
+        action: "updateOne",
+        collection: TRACKS,
+        query: { _id: descriptor.trackId },
+        update: {
+          $set: {
+            kind: descriptor.track.kind,
+            path: renderPath,
+            renderPath,
+            pointCount: descriptor.track.coordinates.length,
+            geometryPointCount: descriptor.track.coordinates.length,
+            geometryChunkCount,
+            geometryCompleteness: "full",
+            geometryPriority: metadataPriority(format),
+            contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
+            timedPointCount: descriptor.track.coordinates.filter((point) =>
+              point.ts
+            ).length,
+            untimedPointCount: descriptor.track.coordinates.filter((point) =>
+              !point.ts
+            ).length,
+          },
+        },
+      });
+    }
+    if (descriptor.existing) {
+      await recordEntityMetadataConflicts(
+        mongo,
+        importId,
+        format,
+        "track",
+        descriptor.trackId,
+        descriptor.existing.metadata,
+        metadataForStorage(descriptor.track),
+        Number(descriptor.existing.metadataPriority ?? 0),
+      );
     }
   }
 }
@@ -689,7 +1139,18 @@ async function upsertBookmarks(
   format: TrackFormat,
   bookmarks: ParsedBookmark[],
 ): Promise<void> {
-  const coordinateHashes = bookmarks.map(coordinateHash);
+  const groupedBookmarks = new Map<string, ParsedBookmark[]>();
+  for (const bookmark of bookmarks) {
+    const identity = bookmarkIdentity(bookmark);
+    groupedBookmarks.set(identity, [
+      ...(groupedBookmarks.get(identity) ?? []),
+      bookmark,
+    ]);
+  }
+  const bookmarkGroups = [...groupedBookmarks.values()];
+  const coordinateHashes = bookmarkGroups.map((group) =>
+    coordinateHash(group[0])
+  );
   const existing = await findByValues(
     mongo,
     BOOKMARKS,
@@ -703,11 +1164,14 @@ async function upsertBookmarks(
     byCoordinate.set(bookmark.coordinateHash, values);
   }
   const operations: any[] = [];
-  for (const bookmark of bookmarks) {
+  for (const sourceBookmarks of bookmarkGroups) {
+    const bookmark = sourceBookmarks[0];
     const coordHash = coordinateHash(bookmark);
     const candidates = byCoordinate.get(coordHash) ?? [];
+    const candidate = chooseBookmarkCandidate(bookmark, candidates);
     const metadata = metadataForStorage(bookmark);
     const canonical = {
+      identityKey: bookmarkIdentity(bookmark),
       metadata,
       displayName: displayName(bookmark) ?? null,
       description: bookmark.description ?? null,
@@ -719,24 +1183,34 @@ async function upsertBookmarks(
       sourceTimestamp: bookmark.sourceTimestamp ?? null,
       metadataPriority: metadataPriority(format),
     };
-    const sourceRef = {
+    const sourceRefs = sourceBookmarks.map((sourceBookmark) => ({
       importId,
       format,
-      sourceIndex: bookmark.sourceIndex,
-      metadata,
-    };
-    if (candidates.length === 1) {
-      const applyCanonical = !candidates[0].manualOverrides &&
-        Number(candidates[0].metadataPriority ?? 0) <= metadataPriority(format);
+      sourceIndex: sourceBookmark.sourceIndex,
+      metadata: metadataForStorage(sourceBookmark),
+    }));
+    if (candidate) {
+      const applyCanonical = !candidate.manualOverrides &&
+        Number(candidate.metadataPriority ?? 0) <= metadataPriority(format);
       operations.push({
         updateOne: {
-          filter: { _id: candidates[0]._id },
+          filter: { _id: candidate._id },
           update: {
             ...(applyCanonical ? { $set: canonical } : {}),
-            $addToSet: { sourceRefs: sourceRef },
+            $addToSet: { sourceRefs: { $each: sourceRefs } },
           },
         },
       });
+      await recordEntityMetadataConflicts(
+        mongo,
+        importId,
+        format,
+        "bookmark",
+        candidate._id,
+        candidate.metadata,
+        metadata,
+        Number(candidate.metadataPriority ?? 0),
+      );
     } else {
       operations.push({
         insertOne: {
@@ -749,8 +1223,10 @@ async function upsertBookmarks(
             },
             ...(bookmark.ele !== undefined ? { ele: bookmark.ele } : {}),
             ...canonical,
-            sourceRefs: [sourceRef],
-            ...(candidates.length > 1 ? { reviewStatus: "pending" } : {}),
+            sourceRefs,
+            visible: false,
+            visibilityOwner: importId,
+            ...(candidates.length > 0 ? { reviewStatus: "pending" } : {}),
             createdAt: new Date(),
           },
         },
@@ -826,6 +1302,113 @@ async function recordConflicts(
   }
 }
 
+function canonicalEntityFields(
+  entityType: "track" | "bookmark",
+  entity: Record<string, any>,
+  metadata: Record<string, any>,
+  priority: number,
+): Record<string, unknown> {
+  const common = {
+    metadata,
+    displayName: displayName(metadata) ?? null,
+    style: metadata.style ?? null,
+    visibility: metadata.visibility ?? true,
+    metadataPriority: priority,
+  };
+  if (entityType === "track") {
+    return { ...common, geometryPriority: priority };
+  }
+  const name = displayName(metadata)?.trim().toLocaleLowerCase();
+  const identityKey = metadata.localId
+    ? `local:${metadata.localId}:coord:${entity.coordinateHash}`
+    : name
+    ? `coord:${entity.coordinateHash}:name:${name}`
+    : `coord:${entity.coordinateHash}`;
+  return {
+    ...common,
+    identityKey,
+    description: metadata.description ?? null,
+    featureTypes: metadata.featureTypes ?? [],
+    icon: metadata.icon ?? metadata.style?.icon ?? null,
+    scale: metadata.scale ?? null,
+    sourceTimestamp: metadata.sourceTimestamp ?? null,
+  };
+}
+
+/** Remove one import's typed provenance without leaving occurrence duplicates. */
+export async function removeLocationEntitySourceRefs(
+  mongo: MongoCall,
+  importId: ObjectId,
+): Promise<void> {
+  for (
+    const [collection, entityType] of [
+      [TRACKS, "track"],
+      [BOOKMARKS, "bookmark"],
+    ] as const
+  ) {
+    const entities = await mongo({
+      action: "find",
+      collection,
+      query: { "sourceRefs.importId": importId },
+      options: { limit: 100000 },
+    });
+    for (const entity of entities) {
+      const remaining = (entity.sourceRefs ?? []).filter((source: any) =>
+        String(source.importId) !== String(importId)
+      );
+      if (remaining.length === 0) {
+        if (entityType === "track") {
+          await mongo({
+            action: "deleteMany",
+            collection: TRACK_GEOMETRY,
+            query: { trackId: entity._id },
+          });
+        }
+        await mongo({
+          action: "deleteOne",
+          collection,
+          query: { _id: entity._id },
+        });
+        continue;
+      }
+      const selected = remaining.reduce((best: any, source: any) =>
+        metadataPriority(source.format) >= metadataPriority(best.format)
+          ? source
+          : best
+      );
+      const canonical = entity.manualOverrides ? {} : canonicalEntityFields(
+        entityType,
+        entity,
+        selected.metadata ?? {},
+        metadataPriority(selected.format),
+      );
+      await mongo({
+        action: "updateOne",
+        collection,
+        query: { _id: entity._id },
+        update: { $set: { sourceRefs: remaining, ...canonical } },
+      });
+    }
+  }
+}
+
+async function publishImportedEntities(
+  mongo: MongoCall,
+  importId: ObjectId,
+): Promise<void> {
+  for (const collection of [TRACKS, BOOKMARKS]) {
+    await mongo({
+      action: "updateMany",
+      collection,
+      query: { visibilityOwner: importId },
+      update: {
+        $set: { visible: true },
+        $unset: { visibilityOwner: "" },
+      },
+    });
+  }
+}
+
 async function compensateFailedCommit(
   mongo: MongoCall,
   importId: ObjectId,
@@ -846,22 +1429,12 @@ async function compensateFailedCommit(
       },
     },
   });
-  for (const collection of [TRACKS, BOOKMARKS]) {
-    await mongo({
-      action: "deleteMany",
-      collection,
-      query: {
-        "sourceRefs.importId": importId,
-        sourceRefs: { $size: 1 },
-      },
-    });
-    await mongo({
-      action: "updateMany",
-      collection,
-      query: { "sourceRefs.importId": importId },
-      update: { $pull: { sourceRefs: { importId } } },
-    });
-  }
+  await removeLocationEntitySourceRefs(mongo, importId);
+  await mongo({
+    action: "deleteMany",
+    collection: METADATA_CONFLICTS,
+    query: { incomingImportId: importId },
+  });
 }
 
 export class StaleLocationPreviewError extends Error {
@@ -921,6 +1494,10 @@ export async function confirmLocationPreview(
     preview.format,
     preview.contentHash,
     dataset,
+    {
+      sizeBytes: bytes.byteLength,
+      sourceEntryName: dataset.sourceEntryName,
+    },
   );
   if (
     analysis.revision !== preview.revision ||
@@ -1002,7 +1579,12 @@ export async function confirmLocationPreview(
           fileId: preview.stagedFileId,
           previewId,
           parserVersion: LOCATION_PARSER_VERSION,
+          contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
           pointHashVersion: LOCATION_POINT_HASH_VERSION,
+          fileSize: bytes.byteLength,
+          ...(dataset.sourceEntryName
+            ? { sourceEntryName: dataset.sourceEntryName }
+            : {}),
           datasetMetadata: metadataForStorage(dataset.datasetMetadata),
           status: "committing",
           createdAt: new Date(),
@@ -1099,6 +1681,13 @@ export async function confirmLocationPreview(
       });
     }
     await recordConflicts(mongo, importId, preview.format, analysis);
+    await recordPointMetadataConflicts(
+      mongo,
+      importId,
+      preview.format,
+      analysis,
+    );
+    await publishImportedEntities(mongo, importId);
 
     // One multi-document update publishes every newly-owned point before the
     // import becomes eligible for processing. No worker is triggered earlier.
@@ -1113,8 +1702,17 @@ export async function confirmLocationPreview(
     });
 
     const counts = analysis.public.counts;
+    const profile = contentProfile(dataset, {
+      sizeBytes: bytes.byteLength,
+      contentHash: preview.contentHash,
+      format: preview.format,
+      sourceEntryName: dataset.sourceEntryName,
+    });
     const receipt = {
       ...counts,
+      schemaVersion: LOCATION_CONTENT_PROFILE_VERSION,
+      file: profile.file,
+      contentProfile: profile,
       pointsImported: counts.newPoints,
       pointsDeduplicated: counts.matchedPoints + counts.withinFileDuplicates,
       pointsSkipped: counts.skipped,
@@ -1128,6 +1726,13 @@ export async function confirmLocationPreview(
           status: "parsed",
           committedAt: new Date(),
           receipt,
+          contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
+          contentProfile: profile,
+          geometryCompleteness: "full",
+          fileSize: bytes.byteLength,
+          ...(dataset.sourceEntryName
+            ? { sourceEntryName: dataset.sourceEntryName }
+            : {}),
           metadataDifferences: analysis.public.metadataDifferences,
           pointCount: counts.newPoints,
           dedupedCount: counts.matchedPoints + counts.withinFileDuplicates,
@@ -1188,4 +1793,102 @@ export async function confirmLocationPreview(
     });
     throw error;
   }
+}
+
+export async function backfillLocationImport(
+  auth: Auth,
+  importIdString: string,
+): Promise<any> {
+  if (!ObjectId.isValid(importIdString)) throw new Error("IMPORT_NOT_FOUND");
+  const importId = new ObjectId(importIdString);
+  const mongo = await getMongoResource(auth);
+  const importDoc = await mongo({
+    action: "findOne",
+    collection: IMPORTS,
+    query: { _id: importId, committedAt: { $exists: true } },
+  });
+  if (!importDoc) throw new Error("IMPORT_NOT_FOUND");
+  if (!importDoc.fileId) throw new Error("IMPORT_SOURCE_MISSING");
+
+  const fs = await getFsResource(auth);
+  const bytes: Uint8Array = await fs({
+    action: "download",
+    bucket: FILE_BUCKET,
+    id: String(importDoc.fileId),
+  });
+  if (importDoc.contentHash && sha256(bytes) !== importDoc.contentHash) {
+    throw new Error("IMPORT_SOURCE_HASH_MISMATCH");
+  }
+  const dataset = parseTrackFile(importDoc.format, bytes);
+  await upsertTracks(mongo, importId, importDoc.format, dataset.tracks);
+  await upsertBookmarks(mongo, importId, importDoc.format, dataset.bookmarks);
+  await publishImportedEntities(mongo, importId);
+  const profile = contentProfile(dataset, {
+    sizeBytes: bytes.byteLength,
+    contentHash: importDoc.contentHash ?? sha256(bytes),
+    format: importDoc.format,
+    sourceEntryName: dataset.sourceEntryName,
+  });
+  await mongo({
+    action: "updateOne",
+    collection: IMPORTS,
+    query: { _id: importId },
+    update: {
+      $set: {
+        parserVersion: LOCATION_PARSER_VERSION,
+        contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
+        contentProfile: profile,
+        datasetMetadata: metadataForStorage(dataset.datasetMetadata),
+        fileSize: bytes.byteLength,
+        ...(dataset.sourceEntryName
+          ? { sourceEntryName: dataset.sourceEntryName }
+          : {}),
+        geometryBackfilledAt: new Date(),
+        geometryCompleteness: "full",
+        lastBackfillError: null,
+      },
+    },
+  });
+  return {
+    importId: String(importId),
+    filename: importDoc.filename,
+    contentProfile: profile,
+  };
+}
+
+export async function backfillLocationImports(
+  auth: Auth,
+  limit = 100,
+): Promise<
+  { completed: any[]; failed: Array<{ importId: string; error: string }> }
+> {
+  const mongo = await getMongoResource(auth);
+  const imports = await mongo({
+    action: "find",
+    collection: IMPORTS,
+    query: {
+      committedAt: { $exists: true },
+      contentProfileVersion: { $lt: LOCATION_CONTENT_PROFILE_VERSION },
+    },
+    options: { sort: { createdAt: 1 }, limit: Math.min(500, limit) },
+  });
+  const completed: any[] = [];
+  const failed: Array<{ importId: string; error: string }> = [];
+  for (const importDoc of imports) {
+    try {
+      completed.push(await backfillLocationImport(auth, String(importDoc._id)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failed.push({ importId: String(importDoc._id), error: message });
+      await mongo({
+        action: "updateOne",
+        collection: IMPORTS,
+        query: { _id: importDoc._id },
+        update: {
+          $set: { lastBackfillError: message, backfillFailedAt: new Date() },
+        },
+      });
+    }
+  }
+  return { completed, failed };
 }

@@ -40,12 +40,16 @@ export interface ParsedMetadata {
   localId?: string;
   additionalStyle?: string;
   accessRules?: string;
+  annotation?: string;
+  folderPath?: string[];
+  /** Complete non-geometry metadata as parsed from the source feature. */
+  rawMetadata?: Record<string, unknown>;
   style?: ParsedStyle;
   styleDefinitions?: Record<string, ParsedStyle>;
 }
 
 export interface ParsedTrack extends ParsedMetadata {
-  kind: "timed-track" | "untimed-path";
+  kind: "timed-track" | "untimed-path" | "mixed-track";
   sourceIndex: number;
   coordinates: Array<ParsedCoordinate & { ts?: Date }>;
 }
@@ -64,6 +68,13 @@ export interface ParseResult {
   skipped: number;
   /** Retained map geometry that has no timeline timestamp. */
   untimedCoordinates: number;
+  invalidCoordinates: number;
+  invalidTimestamps: number;
+  unpairedCoordinates: number;
+  unpairedTimestamps: number;
+  unsupportedGeometries: number;
+  /** Original KML member selected from a KMZ archive. */
+  sourceEntryName?: string;
 }
 
 const parser = new XMLParser({
@@ -118,6 +129,55 @@ function parseLocalized(node: any): Record<string, string> | undefined {
   return Object.keys(values).length > 0 ? values : undefined;
 }
 
+const GEOMETRY_PAYLOAD_KEYS = new Set([
+  "coordinates",
+  "gx:coord",
+  "coord",
+  "trkpt",
+  "rtept",
+  "wpt",
+]);
+const TIMED_GEOMETRY_KEYS = new Set([
+  "gx:Track",
+  "Track",
+  "gx:MultiTrack",
+  "MultiTrack",
+]);
+
+function nonGeometryMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const values = value.map(nonGeometryMetadata).filter((child) =>
+      child !== undefined
+    );
+    return values.length > 0 ? values : undefined;
+  }
+  if (!value || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (GEOMETRY_PAYLOAD_KEYS.has(key) || TIMED_GEOMETRY_KEYS.has(key)) {
+      continue;
+    }
+    const parsed = nonGeometryMetadata(child);
+    if (parsed === undefined) continue;
+    if (
+      parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+      Object.keys(parsed as Record<string, unknown>).length === 0
+    ) continue;
+    result[key] = parsed;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function rawMetadata(node: unknown): Record<string, unknown> | undefined {
+  const value = nonGeometryMetadata(node);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return Object.keys(value).length > 0
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 function parseExtendedData(node: any): ParsedMetadata {
   if (!node || typeof node !== "object") return {};
   const localizedNames = parseLocalized(node["mwm:name"] ?? node.name);
@@ -144,6 +204,9 @@ function parseExtendedData(node: any): ParsedMetadata {
   const accessRules = nonEmptyString(
     node["mwm:accessRules"] ?? node.accessRules,
   );
+  const annotation = nonEmptyString(
+    node["mwm:annotation"] ?? node.annotation,
+  );
   return {
     ...(localizedNames ? { localizedNames } : {}),
     ...(customNames ? { customNames } : {}),
@@ -156,6 +219,7 @@ function parseExtendedData(node: any): ParsedMetadata {
     ...(localId ? { localId } : {}),
     ...(additionalStyle ? { additionalStyle } : {}),
     ...(accessRules ? { accessRules } : {}),
+    ...(annotation ? { annotation } : {}),
   };
 }
 
@@ -199,7 +263,7 @@ function parseKmlStyleDefinitions(document: any) {
   return Object.keys(definitions).length > 0 ? definitions : undefined;
 }
 
-function metadataFromKml(node: any): ParsedMetadata {
+function metadataFromKml(node: any, folderPath?: string[]): ParsedMetadata {
   const extended = parseExtendedData(node?.ExtendedData);
   const name = nonEmptyString(node?.name);
   const description = nonEmptyString(node?.description) ??
@@ -215,6 +279,8 @@ function metadataFromKml(node: any): ParsedMetadata {
     ...(sourceTimestamp ? { sourceTimestamp } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
     ...(style ? { style } : {}),
+    ...(folderPath && folderPath.length > 0 ? { folderPath } : {}),
+    ...(rawMetadata(node) ? { rawMetadata: rawMetadata(node) } : {}),
   };
 }
 
@@ -244,6 +310,7 @@ function metadataFromGpx(node: any): ParsedMetadata {
     ...(name ? { name } : {}),
     ...(description ? { description } : {}),
     ...(color ? { style: { color, raw: { color } } } : {}),
+    ...(rawMetadata(node) ? { rawMetadata: rawMetadata(node) } : {}),
   };
 }
 
@@ -267,6 +334,11 @@ export function parseGpx(text: string): ParseResult {
     datasetMetadata: metadataFromGpx(gpx.metadata ?? gpx),
     skipped: 0,
     untimedCoordinates: 0,
+    invalidCoordinates: 0,
+    invalidTimestamps: 0,
+    unpairedCoordinates: 0,
+    unpairedTimestamps: 0,
+    unsupportedGeometries: 0,
   };
 
   const addTrack = (node: any, rawPoints: any[]) => {
@@ -277,9 +349,11 @@ export function parseGpx(text: string): ParseResult {
       const coordinate = coordinateFromGpx(raw);
       if (!coordinate) {
         result.skipped++;
+        result.invalidCoordinates++;
         continue;
       }
       const ts = parseTimestamp(raw?.time) ?? undefined;
+      if (raw?.time && !ts) result.invalidTimestamps++;
       const pointIndex = coordinates.length;
       coordinates.push({ ...coordinate, ...(ts ? { ts } : {}) });
       if (ts) {
@@ -297,7 +371,11 @@ export function parseGpx(text: string): ParseResult {
     if (coordinates.length > 0) {
       result.tracks.push({
         ...metadataFromGpx(node),
-        kind: timed > 0 ? "timed-track" : "untimed-path",
+        kind: timed === coordinates.length
+          ? "timed-track"
+          : timed === 0
+          ? "untimed-path"
+          : "mixed-track",
         sourceIndex: trackIndex,
         coordinates,
       });
@@ -317,6 +395,7 @@ export function parseGpx(text: string): ParseResult {
     const coordinate = coordinateFromGpx(waypoint);
     if (!coordinate) {
       result.skipped++;
+      result.invalidCoordinates++;
       continue;
     }
     result.bookmarks.push({
@@ -331,12 +410,26 @@ export function parseGpx(text: string): ParseResult {
   return finalize(result);
 }
 
-/** Recursively collect every Placemark from Document/Folder nesting. */
-function collectPlacemarks(node: any, out: any[]): void {
+interface PlacemarkSource {
+  node: any;
+  folderPath: string[];
+}
+
+/** Recursively collect every Placemark and its source folder hierarchy. */
+function collectPlacemarks(
+  node: any,
+  out: PlacemarkSource[],
+  folderPath: string[] = [],
+): void {
   if (!node || typeof node !== "object") return;
-  for (const pm of asArray(node.Placemark)) out.push(pm);
-  for (const child of asArray(node.Document)) collectPlacemarks(child, out);
-  for (const child of asArray(node.Folder)) collectPlacemarks(child, out);
+  for (const pm of asArray(node.Placemark)) out.push({ node: pm, folderPath });
+  for (const child of asArray(node.Document)) {
+    collectPlacemarks(child, out, folderPath);
+  }
+  for (const child of asArray(node.Folder)) {
+    const name = nonEmptyString(child?.name);
+    collectPlacemarks(child, out, name ? [...folderPath, name] : folderPath);
+  }
 }
 
 function parseCoordinateTuple(value: unknown, commaSeparated = false) {
@@ -352,12 +445,20 @@ function parseCoordinateTuple(value: unknown, commaSeparated = false) {
   } satisfies ParsedCoordinate;
 }
 
-function lineStringCoordinates(geometry: any): ParsedCoordinate[] {
+function lineStringCoordinates(
+  geometry: any,
+): { coordinates: ParsedCoordinate[]; invalid: number } {
   const raw = geometry?.coordinates;
-  if (typeof raw !== "string") return [];
-  return raw.split(/\s+/).filter(Boolean).map((chunk: string) =>
+  if (typeof raw !== "string") return { coordinates: [], invalid: 1 };
+  const values = raw.split(/\s+/).filter(Boolean).map((chunk: string) =>
     parseCoordinateTuple(chunk, true)
-  ).filter((value): value is ParsedCoordinate => value !== null);
+  );
+  return {
+    coordinates: values.filter((value): value is ParsedCoordinate =>
+      value !== null
+    ),
+    invalid: values.filter((value) => value === null).length,
+  };
 }
 
 export function parseKml(text: string): ParseResult {
@@ -377,12 +478,18 @@ export function parseKml(text: string): ParseResult {
     },
     skipped: 0,
     untimedCoordinates: 0,
+    invalidCoordinates: 0,
+    invalidTimestamps: 0,
+    unpairedCoordinates: 0,
+    unpairedTimestamps: 0,
+    unsupportedGeometries: 0,
   };
-  const placemarks: any[] = [];
+  const placemarks: PlacemarkSource[] = [];
   collectPlacemarks(kml, placemarks);
 
-  for (const pm of placemarks) {
-    const metadata = metadataFromKml(pm);
+  for (const source of placemarks) {
+    const pm = source.node;
+    const metadata = metadataFromKml(pm, source.folderPath);
     const tracks = [...asArray(pm?.["gx:Track"]), ...asArray(pm?.Track)];
     for (const track of tracks) {
       const trackIndex = result.tracks.length;
@@ -391,29 +498,45 @@ export function parseKml(text: string): ParseResult {
         ...asArray(track?.["gx:coord"]),
         ...asArray(track?.coord),
       ];
-      const n = Math.min(whens.length, coords.length);
-      result.skipped += Math.max(whens.length, coords.length) - n;
       const coordinates: Array<ParsedCoordinate & { ts?: Date }> = [];
-      for (let i = 0; i < n; i++) {
-        const ts = parseTimestamp(whens[i]);
-        const coordinate = parseCoordinateTuple(coords[i]);
-        if (!ts || !coordinate) {
+      let timed = 0;
+      for (let i = 0; i < Math.max(whens.length, coords.length); i++) {
+        if (i >= coords.length) {
+          result.unpairedTimestamps++;
           result.skipped++;
           continue;
         }
+        const coordinate = parseCoordinateTuple(coords[i]);
+        if (!coordinate) {
+          result.invalidCoordinates++;
+          result.skipped++;
+          continue;
+        }
+        const ts = parseTimestamp(whens[i]) ?? undefined;
+        if (i >= whens.length) result.unpairedCoordinates++;
+        else if (!ts) result.invalidTimestamps++;
         const pointIndex = coordinates.length;
-        coordinates.push({ ...coordinate, ts });
-        result.points.push({
-          ...coordinate,
-          ts,
-          trackIndex,
-          pointIndex,
-        });
+        coordinates.push({ ...coordinate, ...(ts ? { ts } : {}) });
+        if (ts) {
+          timed++;
+          result.points.push({
+            ...coordinate,
+            ts,
+            trackIndex,
+            pointIndex,
+          });
+        } else {
+          result.untimedCoordinates++;
+        }
       }
       if (coordinates.length > 0) {
         result.tracks.push({
           ...metadata,
-          kind: "timed-track",
+          kind: timed === coordinates.length
+            ? "timed-track"
+            : timed === 0
+            ? "untimed-path"
+            : "mixed-track",
           sourceIndex: trackIndex,
           coordinates,
         });
@@ -427,7 +550,10 @@ export function parseKml(text: string): ParseResult {
       ),
     ];
     for (const line of lineStrings) {
-      const coordinates = lineStringCoordinates(line);
+      const parsed = lineStringCoordinates(line);
+      const coordinates = parsed.coordinates;
+      result.invalidCoordinates += parsed.invalid;
+      result.skipped += parsed.invalid;
       result.untimedCoordinates += coordinates.length;
       if (coordinates.length > 0) {
         result.tracks.push({
@@ -443,6 +569,7 @@ export function parseKml(text: string): ParseResult {
       const coordinate = parseCoordinateTuple(point?.coordinates, true);
       if (!coordinate) {
         result.skipped++;
+        result.invalidCoordinates++;
         continue;
       }
       result.bookmarks.push({
@@ -453,6 +580,16 @@ export function parseKml(text: string): ParseResult {
       // A KML bookmark TimeStamp records when it was saved. It is retained as
       // metadata and never becomes a whereabouts point.
     }
+    const multiGeometries = asArray(pm?.MultiGeometry);
+    result.unsupportedGeometries += asArray(pm?.Polygon).length +
+      asArray(pm?.Model).length + asArray(pm?.["gx:MultiTrack"]).length +
+      asArray(pm?.MultiTrack).length +
+      multiGeometries.reduce(
+        (count, geometry: any) =>
+          count + asArray(geometry?.Polygon).length +
+          asArray(geometry?.Model).length,
+        0,
+      );
   }
 
   return finalize(result);
@@ -471,7 +608,9 @@ export function parseKmz(bytes: Uint8Array): ParseResult {
   const kmlName = names.find((name) => name.toLowerCase() === "doc.kml") ??
     names.find((name) => name.toLowerCase().endsWith(".kml"));
   if (!kmlName) throw new Error("KMZ archive contains no .kml document");
-  return parseKml(new TextDecoder().decode(entries[kmlName]));
+  const result = parseKml(new TextDecoder().decode(entries[kmlName]));
+  result.sourceEntryName = kmlName;
+  return result;
 }
 
 export function detectFormat(filename: string): TrackFormat | null {

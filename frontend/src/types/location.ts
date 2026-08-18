@@ -89,11 +89,50 @@ export interface LocationImport {
   createdAt: Date | string;
   committedAt?: Date | string;
   receipt?: LocationImportCounts & {
+    schemaVersion?: number;
+    file?: LocationImportFileFacts;
+    contentProfile?: LocationContentProfile;
     pointsImported?: number;
     pointsDeduplicated?: number;
     pointsSkipped?: number;
   };
   datasetMetadata?: LocationMetadata;
+  contentProfileVersion?: number;
+  contentProfile?: LocationContentProfile;
+  fileSize?: number;
+  sourceEntryName?: string;
+  geometryCompleteness?: "full" | "render-only";
+}
+
+export interface LocationImportFileFacts {
+  sizeBytes: number;
+  contentHash: string;
+  format: "gpx" | "kml" | "kmz";
+  parserVersion: number;
+  sourceEntryName?: string;
+}
+
+export interface LocationContentProfile {
+  version: number;
+  file: LocationImportFileFacts;
+  datasetMetadata?: LocationMetadata;
+  counts: Pick<
+    LocationImportCounts,
+    | "timedCoordinates"
+    | "untimedCoordinates"
+    | "trackCoordinates"
+    | "timedTracks"
+    | "untimedTracks"
+    | "mixedTracks"
+    | "tracks"
+    | "bookmarks"
+    | "invalidCoordinates"
+    | "invalidTimestamps"
+    | "unpairedCoordinates"
+    | "unpairedTimestamps"
+    | "unsupportedGeometries"
+    | "styleDefinitions"
+  >;
 }
 
 export interface LocationMetadata {
@@ -110,6 +149,9 @@ export interface LocationMetadata {
   localId?: string;
   additionalStyle?: string;
   accessRules?: string;
+  annotation?: string;
+  folderPath?: string[];
+  rawMetadata?: Record<string, unknown>;
   style?: {
     color?: string;
     width?: number;
@@ -130,10 +172,23 @@ export interface LocationImportCounts {
   newPoints: number;
   matchedPoints: number;
   withinFileDuplicates: number;
+  withinFileTrackDuplicates: number;
+  withinFileBookmarkDuplicates: number;
   conflictPoints: number;
   conflictGroups: number;
   skipped: number;
+  timedCoordinates: number;
   untimedCoordinates: number;
+  trackCoordinates: number;
+  timedTracks: number;
+  untimedTracks: number;
+  mixedTracks: number;
+  invalidCoordinates: number;
+  invalidTimestamps: number;
+  unpairedCoordinates: number;
+  unpairedTimestamps: number;
+  unsupportedGeometries: number;
+  styleDefinitions: number;
   tracks: number;
   tracksNew: number;
   tracksMatched: number;
@@ -148,6 +203,10 @@ export interface LocationImportPreview {
   filename: string;
   format: "gpx" | "kml" | "kmz";
   contentHash: string;
+  fileSize: number;
+  parserVersion: number;
+  contentProfileVersion: number;
+  sourceEntryName?: string;
   exactFileMatch?: {
     importId: string;
     filename: string;
@@ -166,11 +225,16 @@ export interface LocationImportPreview {
     existing: LocationConflictPoint[];
   }>;
   metadataDifferences: Array<{
-    kind: "elevation" | "ambiguous_bookmark";
+    kind: "elevation" | "ambiguous_bookmark" | "entity_metadata";
     hash?: string;
     coordinateHash?: string;
+    entityType?: "track" | "bookmark";
+    entityId?: string;
+    field?: string;
     existing?: number;
     incoming?: number;
+    existingValue?: unknown;
+    incomingValue?: unknown;
   }>;
   datasetMetadata: LocationMetadata;
   expiresAt: Date | string;
@@ -210,13 +274,56 @@ export interface SavedPlace {
 export interface RecordedLocationTrack {
   _id: ObjectId | string;
   fingerprint: string;
-  kind: "timed-track" | "untimed-path";
+  kind: "timed-track" | "untimed-path" | "mixed-track";
   displayName?: string | null;
   pointCount: number;
   path: [number, number][];
+  renderPath?: [number, number][];
+  geometryCompleteness?: "full" | "render-only";
+  geometryPointCount?: number;
+  geometryChunkCount?: number;
+  timedPointCount?: number;
+  untimedPointCount?: number;
   style?: LocationMetadata["style"] | null;
   visibility?: boolean;
   metadata?: LocationMetadata;
+  sourceRefs?: Array<{
+    importId: ObjectId | string;
+    format: "gpx" | "kml" | "kmz";
+    sourceIndex: number;
+    metadata?: LocationMetadata;
+  }>;
+}
+
+export interface LocationTrackGeometryPoint {
+  index: number;
+  coordinates: [number, number];
+  ele?: number;
+  ts?: Date | string;
+  quality: "timed" | "untimed";
+}
+
+export interface LocationTrackGeometryChunk {
+  _id: ObjectId | string;
+  trackId: ObjectId | string;
+  chunkIndex: number;
+  startIndex: number;
+  points: LocationTrackGeometryPoint[];
+}
+
+export interface LocationMetadataConflict {
+  _id: ObjectId | string;
+  entityType: "track" | "bookmark" | "point";
+  entityId: ObjectId | string;
+  field: string;
+  existingValue: unknown;
+  incomingValue: unknown;
+  incomingImportId: ObjectId | string;
+  incomingFormat: "gpx" | "kml" | "kmz";
+  defaultSelection: "existing" | "incoming";
+  status: "pending" | "resolved";
+  resolution?: "keep_existing" | "use_incoming" | "defer";
+  createdAt: Date | string;
 }
 
 export interface LocationPointConflict {

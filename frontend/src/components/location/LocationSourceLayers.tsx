@@ -56,30 +56,48 @@ export function SavedPlacesLayer({
 
 export function RecordedTracksLayer({
   tracks,
+  onSelect,
 }: {
   tracks: RecordedLocationTrack[];
+  onSelect?: (track: RecordedLocationTrack) => void;
 }) {
   return (
     <>
-      {tracks.filter((track) =>
-        track.visibility !== false && track.path?.length > 1
-      ).map((track) => (
-        <Polyline
-          key={String(track._id)}
-          positions={track.path.map(([lng, lat]) => [lat, lng])}
-          pathOptions={{
-            color: sourceColor(track.style?.color, "#7c3aed"),
-            weight: Math.min(8, Math.max(2, track.style?.width ?? 3)),
-            opacity: 0.75,
-            dashArray: track.kind === "untimed-path" ? "6 5" : undefined,
-          }}
-        >
-          <Tooltip sticky>
-            {track.displayName || "Recorded track"} · {track.pointCount} points
-            {track.kind === "untimed-path" ? " · no timeline timestamps" : ""}
-          </Tooltip>
-        </Polyline>
-      ))}
+      {tracks.filter((track) => {
+        const path = track.renderPath ?? track.path;
+        return track.visibility !== false && path?.length > 1;
+      }).map((track) => {
+        const path = track.renderPath ?? track.path;
+        return (
+          <Polyline
+            key={String(track._id)}
+            positions={path.map(([lng, lat]) => [lat, lng])}
+            pathOptions={{
+              color: sourceColor(track.style?.color, "#7c3aed"),
+              weight: Math.min(8, Math.max(2, track.style?.width ?? 3)),
+              opacity: 0.75,
+              dashArray: track.kind === "untimed-path"
+                ? "6 5"
+                : track.kind === "mixed-track"
+                ? "10 4 2 4"
+                : undefined,
+            }}
+            eventHandlers={onSelect
+              ? { click: () => onSelect(track) }
+              : undefined}
+          >
+            <Tooltip sticky>
+              {track.displayName || "Recorded track"} · {track.pointCount}{" "}
+              points
+              {track.kind === "untimed-path" ? " · no timeline timestamps" : ""}
+              {track.kind === "mixed-track" ? " · includes untimed points" : ""}
+              {track.geometryCompleteness === "render-only"
+                ? " · source geometry needs backfill"
+                : ""}
+            </Tooltip>
+          </Polyline>
+        );
+      })}
     </>
   );
 }

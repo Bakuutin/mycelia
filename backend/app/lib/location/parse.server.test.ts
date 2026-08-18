@@ -42,12 +42,26 @@ const KML_GX_TRACK = `<?xml version="1.0" encoding="UTF-8"?>
   </Document>
 </kml>`;
 
+const KML_MIXED_TRACK = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+  <Document><Placemark><gx:Track>
+    <when>2026-08-02T10:00:00Z</when>
+    <when>not-a-date</when>
+    <when>2026-08-02T10:10:00Z</when>
+    <when>2026-08-02T10:15:00Z</when>
+    <gx:coord>44.8271 41.7151 450</gx:coord>
+    <gx:coord>44.8300 41.7200 455</gx:coord>
+    <gx:coord>44.8350 41.7250 460</gx:coord>
+  </gx:Track></Placemark></Document>
+</kml>`;
+
 const KML_LINESTRING = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <Folder>
       <Placemark>
         <LineString>
+          <tessellate>1</tessellate>
           <coordinates>44.8271,41.7151,450 44.8300,41.7200,455 44.8350,41.7250,460</coordinates>
         </LineString>
       </Placemark>
@@ -63,7 +77,7 @@ const KML_BOOKMARK = `<?xml version="1.0" encoding="UTF-8"?>
       <mwm:lastModified>2026-08-17T11:59:39Z</mwm:lastModified>
       <mwm:accessRules>Local</mwm:accessRules>
     </ExtendedData>
-    <Placemark>
+    <Folder><name>Personal</name><Placemark>
       <name>Torgvas Abano</name>
       <description>Hot spring</description>
       <TimeStamp><when>2026-08-01T08:00:00Z</when></TimeStamp>
@@ -79,8 +93,9 @@ const KML_BOOKMARK = `<?xml version="1.0" encoding="UTF-8"?>
         <mwm:icon>Sights</mwm:icon>
         <mwm:scale>15</mwm:scale>
         <mwm:visibility>1</mwm:visibility>
+        <mwm:annotation>private note</mwm:annotation>
       </ExtendedData>
-    </Placemark>
+    </Placemark></Folder>
   </Document>
 </kml>`;
 
@@ -112,7 +127,7 @@ Deno.test("parseKml reads gx:Track when/coord pairs", () => {
   expect(points[1].ts.toISOString()).toBe("2026-08-02T10:05:00.000Z");
 });
 
-Deno.test("parseKml counts LineString coords as skipped (no timestamps)", () => {
+Deno.test("parseKml retains every valid LineString coordinate", () => {
   const { points, tracks, skipped, untimedCoordinates } = parseKml(
     KML_LINESTRING,
   );
@@ -121,6 +136,18 @@ Deno.test("parseKml counts LineString coords as skipped (no timestamps)", () => 
   expect(tracks[0].coordinates.length).toBe(3);
   expect(skipped).toBe(0);
   expect(untimedCoordinates).toBe(3);
+  expect(tracks[0].rawMetadata?.LineString).toEqual({ tessellate: "1" });
+});
+
+Deno.test("parseKml retains unpaired gx coordinates as mixed geometry", () => {
+  const result = parseKml(KML_MIXED_TRACK);
+  expect(result.points.length).toBe(2);
+  expect(result.tracks[0].kind).toBe("mixed-track");
+  expect(result.tracks[0].coordinates.length).toBe(3);
+  expect(result.untimedCoordinates).toBe(1);
+  expect(result.invalidTimestamps).toBe(1);
+  expect(result.unpairedTimestamps).toBe(1);
+  expect(result.skipped).toBe(1);
 });
 
 Deno.test("parseKml keeps bookmarks and typed metadata out of GPS points", () => {
@@ -138,14 +165,22 @@ Deno.test("parseKml keeps bookmarks and typed metadata out of GPS points", () =>
   expect(result.bookmarks[0].localizedNames?.en).toBe("Torgvas Abano");
   expect(result.bookmarks[0].featureTypes).toEqual(["natural-hot_spring"]);
   expect(result.bookmarks[0].style?.icon).toBe("cyan");
+  expect(result.bookmarks[0].annotation).toBe("private note");
+  expect(result.bookmarks[0].folderPath).toEqual(["Personal"]);
+  expect(result.bookmarks[0].rawMetadata?.ExtendedData).toBeTruthy();
+  expect(result.bookmarks[0].rawMetadata?.TimeStamp).toEqual({
+    when: "2026-08-01T08:00:00Z",
+  });
+  expect(result.bookmarks[0].rawMetadata?.Point).toBeUndefined();
 });
 
 Deno.test("parseKmz unwraps doc.kml", () => {
   const bytes = zipSync({
     "doc.kml": new TextEncoder().encode(KML_GX_TRACK),
   });
-  const { points } = parseKmz(bytes);
+  const { points, sourceEntryName } = parseKmz(bytes);
   expect(points.length).toBe(2);
+  expect(sourceEntryName).toBe("doc.kml");
 });
 
 Deno.test("parseKmz rejects archives without kml", () => {

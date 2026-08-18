@@ -175,6 +175,22 @@ failed legacy upload:
 5. delete only the verified superseded GridFS object. Never infer an orphan or
    delete points by filename/date range alone.
 
+Migration `0054_location_full_geometry_metadata.ts` adds normalized full-route
+chunks and durable metadata review. Existing `location_tracks.path` values are
+copied to `renderPath` and receive `geometryCompleteness` of `render-only`; the
+migration never claims that a previously decimated path is complete. Reparse
+committed originals with the
+authenticated location resource action `backfill-import` (one id) or
+`backfill-imports` (bounded batch). Backfill verifies the GridFS source hash,
+fills full geometry/raw metadata and updates the content passport without
+creating timeline observations.
+
+Run backfill only while MongoDB and the backend readiness endpoint are healthy.
+After each batch, verify the import's `contentProfileVersion`, exact geometry
+point/chunk totals, saved-place/track provenance and pending metadata conflicts.
+A missing source or hash mismatch is a failed backfill to investigate, never a
+reason to reconstruct geometry from `renderPath` or delete canonical points.
+
 Ports can be customized via environment variables (in `.env` or inline):
 
 | Service           | Variable             | Default |

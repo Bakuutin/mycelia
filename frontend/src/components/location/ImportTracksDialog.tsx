@@ -249,6 +249,12 @@ export function ImportTracksDialog({
                     {preview.format}
                   </Badge>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {(preview.fileSize / 1024 / 1024).toFixed(1)} MB · parser v
+                  {preview.parserVersion}
+                  {preview.sourceEntryName &&
+                    ` · KML entry ${preview.sourceEntryName}`}
+                </p>
 
                 {receipt
                   ? (
@@ -299,8 +305,45 @@ export function ImportTracksDialog({
                           <br />saved places
                         </div>
                       </div>
+                      <details className="rounded bg-muted/50 p-2 text-xs">
+                        <summary className="cursor-pointer font-medium">
+                          Complete file profile
+                        </summary>
+                        <div className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                          <p>
+                            Coordinates: {count(c.trackCoordinates)} route ·
+                            {" "}
+                            {count(c.timedCoordinates)} timed · {count(
+                              c.untimedCoordinates,
+                            )} untimed
+                          </p>
+                          <p>
+                            Tracks: {count(c.timedTracks)} timed · {count(
+                              c.untimedTracks,
+                            )} untimed · {count(c.mixedTracks)} mixed
+                          </p>
+                          <p>
+                            Quality: {count(c.invalidCoordinates)}{" "}
+                            invalid coordinates · {count(c.invalidTimestamps)}
+                            {" "}
+                            invalid times
+                          </p>
+                          <p>
+                            Pairing: {count(c.unpairedCoordinates)}{" "}
+                            without time · {count(c.unpairedTimestamps)}{" "}
+                            times without coordinates
+                          </p>
+                          <p>
+                            Styles: {count(c.styleDefinitions)}{" "}
+                            · unsupported geometry:{" "}
+                            {count(c.unsupportedGeometries)}
+                          </p>
+                        </div>
+                      </details>
                       {(c.untimedCoordinates > 0 ||
-                        c.withinFileDuplicates > 0) && (
+                        c.withinFileDuplicates > 0 ||
+                        c.withinFileTrackDuplicates > 0 ||
+                        c.withinFileBookmarkDuplicates > 0) && (
                         <p className="text-xs text-muted-foreground">
                           {c.untimedCoordinates > 0 &&
                             `${
@@ -312,6 +355,13 @@ export function ImportTracksDialog({
                             `${
                               count(c.withinFileDuplicates)
                             } repeated points inside the file will be linked once.`}
+                          {(c.withinFileTrackDuplicates > 0 ||
+                            c.withinFileBookmarkDuplicates > 0) &&
+                            ` ${
+                              count(c.withinFileTrackDuplicates)
+                            } repeated tracks and ${
+                              count(c.withinFileBookmarkDuplicates)
+                            } repeated saved places will be stored once with all source references.`}
                         </p>
                       )}
                       {preview.duplicateSources.length > 0 && (
@@ -353,7 +403,13 @@ export function ImportTracksDialog({
                               >
                                 {difference.kind === "elevation"
                                   ? `Elevation: existing ${difference.existing} m, incoming ${difference.incoming} m (${difference.hash})`
-                                  : `Multiple saved places share ${difference.coordinateHash}; the incoming item stays separate.`}
+                                  : difference.kind === "ambiguous_bookmark"
+                                  ? `Multiple saved places share ${difference.coordinateHash}; the incoming item stays separate.`
+                                  : `${difference.entityType} ${difference.field}: existing ${
+                                    JSON.stringify(difference.existingValue)
+                                  }, incoming ${
+                                    JSON.stringify(difference.incomingValue)
+                                  }`}
                               </p>
                             ))}
                           </div>

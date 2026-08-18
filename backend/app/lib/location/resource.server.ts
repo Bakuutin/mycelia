@@ -6,7 +6,12 @@ import { type Resource } from "@/lib/auth/resources.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getJobsResource } from "@/lib/resources/worker.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
-import { bumpLocationImportRevision } from "@/lib/location/import.server.ts";
+import {
+  backfillLocationImport,
+  backfillLocationImports,
+  bumpLocationImportRevision,
+  removeLocationEntitySourceRefs,
+} from "@/lib/location/import.server.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 
 const SEGMENTS = "location_segments";
@@ -15,8 +20,10 @@ const IMPORTS = "location_imports";
 const GEONAMES = "geonames_cities";
 const TZ_PERIODS = "timeline_timezone_periods";
 const TRACKS = "location_tracks";
+const TRACK_GEOMETRY = "location_track_geometry";
 const BOOKMARKS = "location_bookmarks";
 const CONFLICTS = "location_point_conflicts";
+const METADATA_CONFLICTS = "location_metadata_conflicts";
 
 /** Window padding used when re-running processing around an edit. */
 const REPROCESS_PAD_MS = 6 * 60 * 60 * 1000;
@@ -128,6 +135,23 @@ const listRecordedTracksSchema = z.object({
   skip: z.number().int().min(0).default(0),
 });
 
+const getRecordedTrackGeometrySchema = z.object({
+  action: z.literal("get-recorded-track-geometry"),
+  id: z.string().refine(ObjectId.isValid, "Invalid track id"),
+  cursor: z.number().int().min(0).default(0),
+  limit: z.number().int().min(1).max(100).default(20),
+});
+
+const backfillLocationImportSchema = z.object({
+  action: z.literal("backfill-import"),
+  id: z.string().refine(ObjectId.isValid, "Invalid import id"),
+});
+
+const backfillLocationImportsSchema = z.object({
+  action: z.literal("backfill-imports"),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
 const listLocationConflictsSchema = z.object({
   action: z.literal("list-conflicts"),
   status: z.enum(["pending", "resolved"]).optional(),
@@ -140,6 +164,19 @@ const resolveLocationConflictSchema = z.object({
   id: z.string().refine(ObjectId.isValid, "Invalid conflict id"),
   resolution: z.enum(["keep_existing", "use_incoming", "defer"]),
   candidateImportId: z.string().refine(ObjectId.isValid).optional(),
+});
+
+const listMetadataConflictsSchema = z.object({
+  action: z.literal("list-metadata-conflicts"),
+  status: z.enum(["pending", "resolved"]).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+  skip: z.number().int().min(0).default(0),
+});
+
+const resolveMetadataConflictSchema = z.object({
+  action: z.literal("resolve-metadata-conflict"),
+  id: z.string().refine(ObjectId.isValid, "Invalid conflict id"),
+  resolution: z.enum(["keep_existing", "use_incoming", "defer"]),
 });
 
 export const locationRequestSchema = z.discriminatedUnion("action", [
@@ -157,8 +194,13 @@ export const locationRequestSchema = z.discriminatedUnion("action", [
   deleteImportSchema,
   listSavedPlacesSchema,
   listRecordedTracksSchema,
+  getRecordedTrackGeometrySchema,
+  backfillLocationImportSchema,
+  backfillLocationImportsSchema,
   listLocationConflictsSchema,
   resolveLocationConflictSchema,
+  listMetadataConflictsSchema,
+  resolveMetadataConflictSchema,
 ]);
 
 export type LocationRequest = z.input<typeof locationRequestSchema>;
@@ -902,8 +944,16 @@ export class LocationResource
             query: { visible: true, selection: "accepted" },
           }),
           mongo({ action: "count", collection: SEGMENTS, query: {} }),
-          mongo({ action: "count", collection: BOOKMARKS, query: {} }),
-          mongo({ action: "count", collection: TRACKS, query: {} }),
+          mongo({
+            action: "count",
+            collection: BOOKMARKS,
+            query: { visible: { $ne: false } },
+          }),
+          mongo({
+            action: "count",
+            collection: TRACKS,
+            query: { visible: { $ne: false } },
+          }),
           mongo({ action: "count", collection: GEONAMES, query: {} }),
           mongo({
             action: "find",
@@ -942,7 +992,10 @@ export class LocationResource
       }
 
       case "list-saved-places": {
-        const query = { reviewStatus: { $ne: "rejected" } };
+        const query = {
+          reviewStatus: { $ne: "rejected" },
+          visible: { $ne: false },
+        };
         const [places, total] = await Promise.all([
           mongo({
             action: "find",
@@ -960,21 +1013,62 @@ export class LocationResource
       }
 
       case "list-recorded-tracks": {
+        const query = { visible: { $ne: false } };
         const [tracks, total] = await Promise.all([
           mongo({
             action: "find",
             collection: TRACKS,
-            query: {},
+            query,
             options: {
               sort: { "metadata.sourceTimestamp": -1, displayName: 1 },
               limit: input.limit,
               skip: input.skip,
             },
           }),
-          mongo({ action: "count", collection: TRACKS, query: {} }),
+          mongo({ action: "count", collection: TRACKS, query }),
         ]);
         return { tracks, total };
       }
+
+      case "get-recorded-track-geometry": {
+        const trackId = new ObjectId(input.id);
+        const track = await mongo({
+          action: "findOne",
+          collection: TRACKS,
+          query: { _id: trackId, visible: { $ne: false } },
+          options: {
+            projection: {
+              fingerprint: 1,
+              pointCount: 1,
+              geometryPointCount: 1,
+              geometryChunkCount: 1,
+              geometryCompleteness: 1,
+            },
+          },
+        });
+        if (!track) return { success: false, error: "Track not found" };
+        const chunks = await mongo({
+          action: "find",
+          collection: TRACK_GEOMETRY,
+          query: { trackId, chunkIndex: { $gte: input.cursor } },
+          options: { sort: { chunkIndex: 1 }, limit: input.limit },
+        });
+        const nextCursor = chunks.length === input.limit
+          ? Number(chunks[chunks.length - 1].chunkIndex) + 1
+          : null;
+        return {
+          track,
+          chunks,
+          nextCursor,
+          complete: nextCursor === null,
+        };
+      }
+
+      case "backfill-import":
+        return await backfillLocationImport(auth, input.id);
+
+      case "backfill-imports":
+        return await backfillLocationImports(auth, input.limit);
 
       case "list-conflicts": {
         const query = input.status ? { status: input.status } : {};
@@ -992,6 +1086,139 @@ export class LocationResource
           mongo({ action: "count", collection: CONFLICTS, query }),
         ]);
         return { conflicts, total };
+      }
+
+      case "list-metadata-conflicts": {
+        const query = input.status ? { status: input.status } : {};
+        const [conflicts, total] = await Promise.all([
+          mongo({
+            action: "find",
+            collection: METADATA_CONFLICTS,
+            query,
+            options: {
+              sort: { createdAt: -1 },
+              limit: input.limit,
+              skip: input.skip,
+            },
+          }),
+          mongo({ action: "count", collection: METADATA_CONFLICTS, query }),
+        ]);
+        return { conflicts, total };
+      }
+
+      case "resolve-metadata-conflict": {
+        const conflictId = new ObjectId(input.id);
+        const conflict = await mongo({
+          action: "findOne",
+          collection: METADATA_CONFLICTS,
+          query: { _id: conflictId },
+        });
+        if (!conflict) return { success: false, error: "Conflict not found" };
+        if (input.resolution === "defer") {
+          await mongo({
+            action: "updateOne",
+            collection: METADATA_CONFLICTS,
+            query: { _id: conflictId },
+            update: {
+              $set: {
+                status: "pending",
+                resolution: "defer",
+                decidedAt: new Date(),
+                decidedBy: auth.principal || "web",
+              },
+            },
+          });
+          return { success: true, status: "pending" };
+        }
+        if (
+          input.resolution === "use_incoming" ||
+          input.resolution === "keep_existing"
+        ) {
+          const collection = conflict.entityType === "track"
+            ? TRACKS
+            : conflict.entityType === "bookmark"
+            ? BOOKMARKS
+            : POINTS;
+          const entity = await mongo({
+            action: "findOne",
+            collection,
+            query: { _id: conflict.entityId },
+          });
+          if (!entity) return { success: false, error: "Entity not found" };
+          const selectedValue = input.resolution === "use_incoming"
+            ? conflict.incomingValue
+            : conflict.existingValue;
+          if (conflict.entityType === "point") {
+            await mongo({
+              action: "updateOne",
+              collection: POINTS,
+              query: { _id: conflict.entityId },
+              update: {
+                $set: {
+                  [conflict.field]: selectedValue,
+                  [`metadataOverrides.${conflict.field}`]: {
+                    value: selectedValue,
+                    decidedAt: new Date(),
+                    decidedBy: auth.principal || "web",
+                  },
+                },
+              },
+            });
+          } else {
+            const metadata = {
+              ...(entity.metadata ?? {}),
+              [conflict.field]: selectedValue,
+            };
+            const displayName = metadata.customNames?.default ??
+              metadata.localizedNames?.default ?? metadata.name ?? null;
+            await mongo({
+              action: "updateOne",
+              collection,
+              query: { _id: conflict.entityId },
+              update: {
+                $set: {
+                  metadata,
+                  displayName,
+                  manualOverrides: true,
+                  metadataPriority: 100,
+                  ...(conflict.field === "description"
+                    ? { description: selectedValue }
+                    : {}),
+                  ...(conflict.field === "featureTypes"
+                    ? { featureTypes: selectedValue }
+                    : {}),
+                  ...(conflict.field === "icon" ? { icon: selectedValue } : {}),
+                  ...(conflict.field === "scale"
+                    ? { scale: selectedValue }
+                    : {}),
+                  ...(conflict.field === "visibility"
+                    ? { visibility: selectedValue }
+                    : {}),
+                  ...(conflict.field === "sourceTimestamp"
+                    ? { sourceTimestamp: selectedValue }
+                    : {}),
+                  ...(conflict.field === "style"
+                    ? { style: selectedValue }
+                    : {}),
+                },
+              },
+            });
+          }
+        }
+        await mongo({
+          action: "updateOne",
+          collection: METADATA_CONFLICTS,
+          query: { _id: conflictId },
+          update: {
+            $set: {
+              status: "resolved",
+              resolution: input.resolution,
+              decidedAt: new Date(),
+              decidedBy: auth.principal || "web",
+            },
+          },
+        });
+        return { success: true, status: "resolved" };
       }
 
       case "resolve-conflict": {
@@ -1138,24 +1365,7 @@ export class LocationResource
             $pull: { importIds: importId, sourceRefs: { importId } },
           },
         });
-        for (const collection of [TRACKS, BOOKMARKS]) {
-          await mongo({
-            action: "deleteMany",
-            collection,
-            query: {
-              $and: [
-                { "sourceRefs.importId": importId },
-                { sourceRefs: { $size: 1 } },
-              ],
-            },
-          });
-          await mongo({
-            action: "updateMany",
-            collection,
-            query: { "sourceRefs.importId": importId },
-            update: { $pull: { sourceRefs: { importId } } },
-          });
-        }
+        await removeLocationEntitySourceRefs(mongo, importId);
         await mongo({
           action: "updateMany",
           collection: CONFLICTS,
@@ -1166,6 +1376,11 @@ export class LocationResource
               candidates: { importId },
             },
           },
+        });
+        await mongo({
+          action: "deleteMany",
+          collection: METADATA_CONFLICTS,
+          query: { incomingImportId: importId },
         });
         await mongo({
           action: "deleteOne",

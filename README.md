@@ -33,8 +33,10 @@ your own words.
 ### Location Tracks & Map
 
 - Preview and safely import overlapping GPS tracks (GPX, KML/KMZ), keeping
-  provenance, named source routes and rich KMZ saved-place metadata without
-  turning bookmark timestamps into false whereabouts.
+  provenance, every source coordinate, named routes and full non-geometry KMZ
+  metadata without turning bookmark timestamps into false whereabouts. Each
+  import keeps a detailed file passport and separates coordinate/metadata
+  differences for review.
 - Opt-in Locations row on the timeline: stays with city labels, movements, and
   grey "assumed" gaps; click a band to see where it was on a mini-map.
 - Dedicated Map page: movements over any period with automatic simplification,

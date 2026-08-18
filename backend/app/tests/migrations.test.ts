@@ -7,6 +7,7 @@ import { up as configureExplicitLlmRouting } from "../../migrations/0019_explici
 import { up as separateSummaryPromptModel } from "../../migrations/0023_separate_summary_prompt_model.ts";
 import { up as configureLlmProviderRouting } from "../../migrations/0024_llm_provider_routing.ts";
 import { up as upgradeLocationImports } from "../../migrations/0050_location_import_review.ts";
+import { up as addFullLocationGeometry } from "../../migrations/0054_location_full_geometry_metadata.ts";
 
 Deno.test(
   "location import migration backfills provenance and quarantines orphan points",
@@ -55,6 +56,33 @@ Deno.test(
     expect(
       await db.collection("location_points").indexExists(
         "location_point_canonical_cursor_v1",
+      ),
+    ).toBe(true);
+  }),
+);
+
+Deno.test(
+  "full location geometry migration preserves legacy render paths",
+  withFixtures(["Mongo"], async ({ db }) => {
+    const trackId = new ObjectId();
+    await db.collection("location_tracks").insertOne({
+      _id: trackId,
+      fingerprint: "legacy-track",
+      path: [[44.8, 41.7], [44.9, 41.8]],
+      pointCount: 10000,
+    });
+    await addFullLocationGeometry(db);
+    await addFullLocationGeometry(db);
+
+    const track = await db.collection("location_tracks").findOne({
+      _id: trackId,
+    });
+    expect(track?.renderPath).toEqual([[44.8, 41.7], [44.9, 41.8]]);
+    expect(track?.geometryCompleteness).toBe("render-only");
+    expect(track?.geometryPointCount).toBe(10000);
+    expect(
+      await db.collection("location_track_geometry").indexExists(
+        "location_track_geometry_chunk_v1",
       ),
     ).toBe(true);
   }),
