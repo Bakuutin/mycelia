@@ -9,6 +9,7 @@ import {
 } from "@/lib/audioPipelineStats";
 import {
   getDiarizationCampaignProgressView,
+  getDiarizationSkipMetricsView,
   isOpenDiarizationCampaignStatus,
 } from "@/lib/diarizationProgress";
 import { format, formatDistanceToNow } from "date-fns";
@@ -171,6 +172,20 @@ interface DiarizationCampaignStats {
   segmentsCreated: number;
   errorCount: number;
   chunksPerSecond: number | null;
+  usefulAudioRealtimeMultiple: number | null;
+  rateWindowSeconds: number | null;
+  successfulSequences: number;
+  skippedSequences: number;
+  recordingLeaseBusyOriginals?: number;
+  recordingLeaseSkippedSequences?: number;
+  chunkClaimSkips?: number;
+  skipRatio?: number | null;
+  leaseSkipRatio?: number | null;
+  claimSkipRatio: number | null;
+  stageTimingsMs?: Record<
+    string,
+    { count: number; total: number; avg: number; max: number }
+  >;
   etaSeconds: number | null;
   batchNumber: number | null;
   estimatedBatches: number | null;
@@ -516,6 +531,15 @@ export default function AudioPipelinePage() {
   const diarizationCampaignView = diarizationCampaign
     ? getDiarizationCampaignProgressView(diarizationCampaign)
     : null;
+  const diarizationSkipMetricsView = diarizationCampaign
+    ? getDiarizationSkipMetricsView(diarizationCampaign)
+    : null;
+  const diarizationAggregateSkipRatio = diarizationCampaign
+    ? diarizationCampaign.skipRatio ??
+      (diarizationCampaign.chunkClaimSkips == null
+        ? diarizationCampaign.claimSkipRatio
+        : null)
+    : null;
   const diarizationCampaignOpen = diarizationCampaign
     ? isOpenDiarizationCampaignStatus(diarizationCampaign.status)
     : false;
@@ -846,7 +870,8 @@ export default function AudioPipelinePage() {
               </CardTitle>
               <CardDescription className="mt-1">
                 Campaign-wide progress for the current global historical
-                backfill. Individual worker speed remains on each active job.
+                backfill. Rate combines all recently completed GPU lanes;
+                individual worker speed remains on each active job.
               </CardDescription>
             </div>
             {diarizationCampaign && (
@@ -903,7 +928,7 @@ export default function AudioPipelinePage() {
                   </p>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                   {[
                     [
                       "Sequences",
@@ -942,6 +967,40 @@ export default function AudioPipelinePage() {
                       diarizationCampaign.errorCount,
                       diarizationCampaign.errorCount > 0
                         ? "text-red-500"
+                        : "text-foreground",
+                    ],
+                    [
+                      "Useful realtime",
+                      diarizationCampaign.usefulAudioRealtimeMultiple != null
+                        ? `${
+                          diarizationCampaign.usefulAudioRealtimeMultiple
+                            .toFixed(1)
+                        }×`
+                        : "—",
+                      "text-foreground",
+                    ],
+                    [
+                      "Skip ratio",
+                      diarizationSkipMetricsView?.totalLabel ?? "—",
+                      diarizationAggregateSkipRatio != null &&
+                        diarizationAggregateSkipRatio >= 0.15
+                        ? "text-amber-600"
+                        : "text-foreground",
+                    ],
+                    [
+                      "Lease skips",
+                      diarizationSkipMetricsView?.leaseLabel ?? "—",
+                      diarizationCampaign.leaseSkipRatio != null &&
+                        diarizationCampaign.leaseSkipRatio >= 0.15
+                        ? "text-amber-600"
+                        : "text-foreground",
+                    ],
+                    [
+                      "Claim skips",
+                      diarizationSkipMetricsView?.claimLabel ?? "—",
+                      diarizationCampaign.claimSkipRatio != null &&
+                        diarizationCampaign.claimSkipRatio >= 0.15
+                        ? "text-amber-600"
                         : "text-foreground",
                     ],
                   ].map(([label, value, className]) => (

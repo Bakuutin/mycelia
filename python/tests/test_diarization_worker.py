@@ -4,24 +4,29 @@ from pathlib import Path
 from sys import path
 from types import SimpleNamespace
 from unittest import TestCase, main
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import numpy as np
 from bson import ObjectId
 from pytz import UTC
 
 path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import diarization_worker as diarization_worker_module  # noqa: E402
 from diarization_worker import (  # noqa: E402
     DiarizationSequence,
+    PreparedDiarizationSequence,
     SPEAKER_SIMILARITY_THRESHOLD,
     _build_diarization_request_fields,
     _clip_continuation_segment,
+    _get_speaker_profiles,
     _reconcile_speaker_labels,
     _classify_diarization_error,
     _segment_identity_key,
     _failure_retry_state,
     _get_overlap_segments,
     claim_sequence,
+    combine_chunks_to_wav,
     diarize_sequence,
     get_diarization_sequences,
     hydrate_claimed_sequence,
@@ -54,13 +59,17 @@ def _sequence(*, partial: bool = False) -> DiarizationSequence:
     )
 
 
-def _diarize_response(segments: int = 3) -> SimpleNamespace:
+def _diarize_response(
+    segments: int = 3,
+    timings: dict | None = None,
+) -> SimpleNamespace:
     """Minimal stand-in for the diarizator /diarize response."""
     return SimpleNamespace(
         status_code=200,
         raise_for_status=lambda: None,
         json=lambda: {
             "embeddingSpaceId": "space-1",
+            "timings": timings or {},
             "segments": [
                 {
                     "start": float(index * 2),
@@ -75,6 +84,114 @@ def _diarize_response(segments: int = 3) -> SimpleNamespace:
 
 
 class DiarizationWorkerTest(TestCase):
+    def test_speaker_profile_resource_accepts_direct_and_legacy_arrays(self):
+        profile = {
+            "_id": ObjectId(),
+            "name": "Sky",
+            "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-1",
+        }
+
+        for response in ([profile], {"data": [profile]}):
+            with (
+                self.subTest(response_type=type(response).__name__),
+                patch.object(
+                    diarization_worker_module,
+                    "_speaker_profiles_cache",
+                    None,
+                ),
+                patch.object(
+                    diarization_worker_module,
+                    "_speaker_profiles_last_success_monotonic",
+                    None,
+                ),
+                patch.object(
+                    diarization_worker_module,
+                    "_speaker_profiles_next_refresh_monotonic",
+                    0.0,
+                ),
+                patch(
+                    "diarization_worker.call_resource",
+                    return_value=response,
+                ) as resource,
+                patch("diarization_worker.time.monotonic", return_value=100.0),
+            ):
+                self.assertEqual(_get_speaker_profiles(), [profile])
+
+            options = resource.call_args.args[1]["options"]
+            self.assertEqual(
+                set(options["projection"]),
+                {"_id", "name", "embedding", "embeddingSpaceId"},
+            )
+
+    def test_empty_speaker_profile_result_is_cached(self):
+        with (
+            patch.object(
+                diarization_worker_module,
+                "_speaker_profiles_cache",
+                None,
+            ),
+            patch.object(
+                diarization_worker_module,
+                "_speaker_profiles_last_success_monotonic",
+                None,
+            ),
+            patch.object(
+                diarization_worker_module,
+                "_speaker_profiles_next_refresh_monotonic",
+                0.0,
+            ),
+            patch(
+                "diarization_worker.call_resource",
+                return_value=[],
+            ) as resource,
+            patch(
+                "diarization_worker.time.monotonic",
+                side_effect=[100.0, 100.0, 101.0],
+            ),
+        ):
+            self.assertEqual(_get_speaker_profiles(), [])
+            self.assertEqual(_get_speaker_profiles(), [])
+
+        resource.assert_called_once()
+
+    def test_speaker_profile_stale_age_is_not_reset_by_refresh_failures(self):
+        profile = {
+            "_id": ObjectId(),
+            "name": "Sky",
+            "embedding": [1.0, 0.0],
+        }
+        with (
+            patch.object(
+                diarization_worker_module,
+                "_speaker_profiles_cache",
+                [profile],
+            ),
+            patch.object(
+                diarization_worker_module,
+                "_speaker_profiles_last_success_monotonic",
+                0.0,
+            ),
+            patch.object(
+                diarization_worker_module,
+                "_speaker_profiles_next_refresh_monotonic",
+                300.0,
+            ),
+            patch(
+                "diarization_worker.call_resource",
+                side_effect=RuntimeError("mongo unavailable"),
+            ) as resource,
+            patch(
+                "diarization_worker.time.monotonic",
+                side_effect=[301.0, 301.0, 332.0, 332.0, 1_801.0, 1_801.0],
+            ),
+        ):
+            self.assertEqual(_get_speaker_profiles(), [profile])
+            self.assertEqual(_get_speaker_profiles(), [profile])
+            self.assertEqual(_get_speaker_profiles(), [])
+
+        self.assertEqual(resource.call_count, 3)
+
     def test_sequence_cursor_reads_metadata_only_with_deadline_and_hint(self):
         original_id = ObjectId()
         start = datetime(2024, 1, 1, tzinfo=UTC)
@@ -287,6 +404,19 @@ class DiarizationWorkerTest(TestCase):
 
         self.assertEqual(detail["category"], "provider_http")
 
+    def test_rate_limit_is_retryable_provider_busy(self):
+        detail = _classify_diarization_error(
+            _sequence(),
+            "https://diar.example",
+            RuntimeError("Too many requests"),
+            attempt=3,
+            http_status=429,
+        )
+
+        self.assertEqual(detail["category"], "provider_busy")
+        self.assertTrue(detail["retryable"])
+        self.assertEqual(detail["status"], "will_retry")
+
     def test_generation_segment_identity_is_stable(self):
         sequence = _sequence()
 
@@ -325,6 +455,113 @@ class DiarizationWorkerTest(TestCase):
 
         self.assertEqual(result["status"], "error")
         record_failure.assert_not_called()
+
+    def test_partial_sequence_reports_only_newly_committed_audio(self):
+        sequence = _sequence(partial=True)
+        wav_file = BytesIO(b"wav")
+        wav_file.mycelia_chunk_sample_counts = [16_000, 8_000]
+        prepared = PreparedDiarizationSequence(
+            sequence=sequence,
+            wav_file=wav_file,
+            # Includes 0.5 seconds of silence between decoded chunks.
+            total_samples=32_000,
+            stage_timings_seconds={"hydrate": 0.01, "decode": 0.02},
+        )
+        events = []
+        provider = Mock()
+
+        def claim(*_args, **_kwargs):
+            events.append("claim")
+            return True, None
+
+        def post(*_args, **_kwargs):
+            events.append("post")
+            return _diarize_response(
+                segments=0,
+                timings={
+                    "queue_ms": 12.5,
+                    "decode_ms": 20,
+                    "diarization_ms": 300.25,
+                    "segment_embedding_ms": 40,
+                    "cluster_matching_ms": 5,
+                    "total_ms": 380,
+                    "ignored": 999,
+                },
+            )
+
+        provider.post.side_effect = post
+        with (
+            patch("diarization_worker.claim_sequence", side_effect=claim),
+            patch(
+                "diarization_worker._is_speaker_identification_enabled",
+                return_value=False,
+            ) as feature_flag,
+            patch("diarization_worker._get_overlap_segments", return_value=[]),
+            patch(
+                "diarization_worker._get_existing_speaker_labels",
+                return_value=set(),
+            ),
+            patch("diarization_worker.mark_as_diarized", return_value=1),
+        ):
+            result = diarize_sequence(
+                sequence,
+                "worker-1",
+                prepared=prepared,
+                provider_session=provider,
+                speaker_profiles_snapshot=[],
+            )
+
+        feature_flag.assert_not_called()
+        self.assertEqual(events, ["claim", "post"])
+        self.assertEqual(provider.post.call_args.kwargs["timeout"], (10, 306))
+        self.assertEqual(result["payload_audio_seconds"], 2.0)
+        self.assertEqual(result["useful_audio_seconds"], 1.5)
+        self.assertEqual(result["audio_seconds"], 1.5)
+        self.assertTrue(
+            {"hydrate", "decode", "claim", "provider", "continuity", "release", "total"}
+            <= set(result["stage_timings_ms"])
+        )
+        self.assertEqual(result["stage_timings_ms"]["server_queue"], 12.5)
+        self.assertEqual(result["stage_timings_ms"]["server_decode"], 20.0)
+        self.assertEqual(
+            result["stage_timings_ms"]["server_diarization"],
+            300.25,
+        )
+        self.assertEqual(
+            result["stage_timings_ms"]["server_segment_embedding"],
+            40.0,
+        )
+        self.assertEqual(
+            result["stage_timings_ms"]["server_cluster_matching"],
+            5.0,
+        )
+        self.assertEqual(result["stage_timings_ms"]["server_total"], 380.0)
+        self.assertNotIn("server_ignored", result["stage_timings_ms"])
+        self.assertTrue(wav_file.closed)
+
+    def test_wav_assembly_tracks_each_decoded_chunk_duration(self):
+        sequence = _sequence()
+
+        with (
+            patch(
+                "diarization_worker.read_codec",
+                side_effect=[
+                    np.zeros(16_000, dtype=np.float32),
+                    np.zeros(8_000, dtype=np.float32),
+                ],
+            ),
+            patch(
+                "diarization_worker.array_to_wav",
+                return_value=BytesIO(b"wav"),
+            ),
+        ):
+            wav_file, samples = combine_chunks_to_wav(sequence)
+
+        self.assertEqual(samples, 24_000)
+        self.assertEqual(
+            wav_file.mycelia_chunk_sample_counts,
+            [16_000, 8_000],
+        )
 
     def test_generation_writes_one_identity_key_per_segment(self):
         sequence = _sequence()

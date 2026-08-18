@@ -294,11 +294,17 @@ Verify model readiness and a real audio request, not only container state:
 
 ```bash
 curl -fsS http://127.0.0.1:8085/health | jq .
+curl -fsS http://127.0.0.1:8085/ready | jq .
 curl -fsS \
   -F 'file=@test.wav;type=audio/wav' \
   'http://127.0.0.1:8085/diarize?min_speakers=1&max_speakers=2' \
   | jq '{segments: (.segments | length), speakers: [.segments[].speaker] | unique}'
 ```
+
+`/health` is liveness and reports effective batching plus inference
+concurrency. `/ready` becomes HTTP 200 only after the requested compute device
+and both models are ready. Each diarizator process runs one inference at a time;
+Mycelia provider `Slots` must therefore remain `1` per process.
 
 In **Settings → Diarization**, enable the environment route, set it to the
 highest preference (for example priority `1`), and confirm that it reports
@@ -314,6 +320,11 @@ When historical diarization work exists, the automatic trigger treats the
 pending check as a boolean and immediately fills every free healthy provider
 slot. A six-route pool therefore starts up to six independent jobs without a
 five-minute one-at-a-time ramp.
+
+Historical workers take an expiring recording-level lease before hydrating
+audio. Set `DIARIZATION_PREFETCH_SEQUENCES=1` only after the lease metrics show
+low contention; it keeps exactly one decoded lookahead WAV and never overlaps
+provider POST requests within a job.
 
 #### Debugging conversation re-extraction
 

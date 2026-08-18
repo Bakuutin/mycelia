@@ -11,6 +11,15 @@ job_token_var: ContextVar[Optional[str]] = ContextVar("job_token", default=None)
 job_session_var: ContextVar[Optional[requests.Session]] = ContextVar("job_session", default=None)
 
 
+def create_session(token: Optional[str] = None) -> requests.Session:
+    """Create a Mycelia API session for one execution context."""
+    session = requests.Session()
+    session.verify = not ALLOW_INSECURE_TRANSPORT
+    if token:
+        session.headers.update({"Authorization": f"Bearer {token}"})
+    return session
+
+
 def exchange_api_key_for_jwt() -> str:
     """Exchange the API key for a JWT access token using OAuth client_credentials flow."""
     if not client_id or not client_secret:
@@ -34,11 +43,7 @@ def get_session() -> requests.Session:
     """Get or create a requests Session for the current job context."""
     session = job_session_var.get()
     if session is None:
-        session = requests.Session()
-        session.verify = not ALLOW_INSECURE_TRANSPORT
-        token = job_token_var.get()
-        if token:
-            session.headers.update({"Authorization": f"Bearer {token}"})
+        session = create_session(job_token_var.get())
         job_session_var.set(session)
     return session
 

@@ -2,6 +2,20 @@ import { z } from "zod";
 import { NetworkJobCapability } from "./python.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
+import {
+  DEFAULT_DIARIZATION_MAX_SEQUENCE_CHUNKS,
+  MAX_DIARIZATION_BATCH_SIZE,
+  MAX_DIARIZATION_SEQUENCE_CHUNKS,
+} from "@/lib/jobs/job-timeouts.ts";
+
+export function getDefaultDiarizationMaxSequenceChunks(
+  value = Deno.env.get("DIARIZATION_MAX_SEQUENCE_CHUNKS"),
+): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1
+    ? Math.min(parsed, MAX_DIARIZATION_SEQUENCE_CHUNKS)
+    : DEFAULT_DIARIZATION_MAX_SEQUENCE_CHUNKS;
+}
 
 /** Schema for diarization job data */
 export const schema = z.object({
@@ -9,9 +23,16 @@ export const schema = z.object({
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
   limit: z.number().int().positive().max(100).default(4),
-  batchSize: z.number().int().positive().max(100).default(4).describe(
-    "Speech sequences processed per job; continuations drain the campaign",
-  ),
+  batchSize: z.number().int().positive().max(MAX_DIARIZATION_BATCH_SIZE)
+    .default(4).describe(
+      "Speech sequences processed per job; continuations drain the campaign",
+    ),
+  maxSequenceChunks: z.number().int().positive()
+    .max(MAX_DIARIZATION_SEQUENCE_CHUNKS)
+    .default(getDefaultDiarizationMaxSequenceChunks())
+    .describe(
+      "Maximum chunks per speech sequence, snapshotted for worker timeout calculation",
+    ),
   mode: z.enum(["missing", "build_generation"]).default("missing"),
   runId: z.string().min(1).optional(),
   cursor: zDateOrString().optional(),
@@ -122,6 +143,16 @@ export default new NetworkJobCapability({
     { resource: "db/diarizations", action: "update", effect: "allow" },
     { resource: "db/diarization_runs", action: "*", effect: "allow" },
     { resource: "db/diarization_campaigns", action: "*", effect: "allow" },
+    {
+      resource: "db/diarization_recording_leases",
+      action: "*",
+      effect: "allow",
+    },
+    {
+      resource: "db/diarization_campaign_rate_samples",
+      action: "*",
+      effect: "allow",
+    },
     { resource: "db/speaker_profiles", action: "read", effect: "allow" },
   ],
   maxConcurrency: 1,

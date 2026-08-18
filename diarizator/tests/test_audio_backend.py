@@ -1,3 +1,4 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,6 +28,26 @@ class AudioBackendTest(unittest.TestCase):
             )
 
             self.assertEqual(wave.shape, (1, 1, 8000))
+
+    def test_in_memory_wav_decode_matches_file_decode(self):
+        samples = np.linspace(-0.5, 0.5, 16000, dtype=np.float32)
+        buffer = io.BytesIO()
+        sf.write(buffer, samples, 16000, format="WAV", subtype="FLOAT")
+        audio_data = buffer.getvalue()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audio.wav"
+            path.write_bytes(audio_data)
+            from_file = self.backend.load_wave(path, start=0.2, end=0.8)
+
+        from_memory = self.backend.load_wave_bytes(
+            audio_data,
+            start=0.2,
+            end=0.8,
+        )
+
+        self.assertEqual(from_memory.shape, (1, 1, 9600))
+        torch.testing.assert_close(from_memory, from_file)
 
     def test_community_one_is_default_without_legacy_pipeline_tuning(self):
         pipeline = Mock()

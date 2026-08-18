@@ -140,6 +140,198 @@ Deno.test(
 );
 
 Deno.test(
+  "audio pipeline handler: aggregates concurrent diarization rate samples",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    const finishedAt = new Date(Date.now() - 60_000);
+    const startedAt = new Date(finishedAt.getTime() - 120_000);
+    await db.collection("diarization_campaigns").insertOne({
+      campaignId: "aggregate-running",
+      mode: "missing",
+      status: "running",
+      updatedAt: finishedAt,
+      processedChunks: 40,
+      totalChunks: 100,
+      pendingChunks: 60,
+      chunksPerSecond: 0.25,
+      etaSeconds: 240,
+    });
+    await db.collection("diarization_campaign_rate_samples").insertMany([
+      {
+        _id: "job-a",
+        campaignId: "aggregate-running",
+        startedAt,
+        finishedAt,
+        chunksProcessed: 60,
+        audioSecondsProcessed: 600,
+        successfulSequences: 8,
+        skippedSequences: 1,
+        recordingLeaseBusyOriginals: 2,
+        recordingLeaseSkippedSequences: 1,
+        chunkClaimSkips: 0,
+        stageTimingsMs: {
+          provider: { count: 1, total: 100, avg: 100, max: 100 },
+        },
+      },
+      {
+        _id: "job-b",
+        campaignId: "aggregate-running",
+        startedAt,
+        finishedAt,
+        chunksProcessed: 60,
+        audioSecondsProcessed: 600,
+        successfulSequences: 8,
+        recordingLeaseBusyOriginals: 1,
+        recordingLeaseSkippedSequences: 2,
+        chunkClaimSkips: 1,
+        stageTimingsMs: {
+          provider: { count: 2, total: 300, avg: 150, max: 200 },
+          server_queue: { count: 2, total: 40, avg: 20, max: 25 },
+        },
+      },
+    ]);
+
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.stats.diarizationCampaign).toMatchObject({
+      campaignId: "aggregate-running",
+      chunksPerSecond: 1,
+      usefulAudioRealtimeMultiple: 10,
+      rateWindowSeconds: 120,
+      successfulSequences: 16,
+      skippedSequences: 4,
+      recordingLeaseBusyOriginals: 3,
+      recordingLeaseSkippedSequences: 3,
+      chunkClaimSkips: 1,
+      skipRatio: 0.25,
+      leaseSkipRatio: 0.1875,
+      claimSkipRatio: 0.0625,
+      stageTimingsMs: {
+        provider: {
+          count: 3,
+          total: 400,
+          avg: 400 / 3,
+          max: 200,
+        },
+        server_queue: { count: 2, total: 40, avg: 20, max: 25 },
+      },
+      etaSeconds: 60,
+    });
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: limits rate aggregation to the newest samples",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    const now = Date.now();
+    const oldFinishedAt = new Date(now - 14 * 60_000);
+    const oldStartedAt = new Date(oldFinishedAt.getTime() - 1_000);
+    await db.collection("diarization_campaigns").insertOne({
+      campaignId: "newest-rate-window",
+      mode: "missing",
+      status: "running",
+      updatedAt: new Date(now),
+      processedChunks: 1,
+      totalChunks: 10_000,
+      pendingChunks: 9_999,
+    });
+    await db.collection("diarization_campaign_rate_samples").insertMany([
+      ...Array.from({ length: 500 }, (_, index) => ({
+        _id: `old-job-${index}`,
+        campaignId: "newest-rate-window",
+        startedAt: oldStartedAt,
+        finishedAt: oldFinishedAt,
+        chunksProcessed: 1,
+        audioSecondsProcessed: 1,
+        successfulSequences: 1,
+        skippedSequences: 0,
+      })),
+      {
+        _id: "newest-job",
+        campaignId: "newest-rate-window",
+        startedAt: new Date(now - 61_000),
+        finishedAt: new Date(now - 60_000),
+        chunksProcessed: 1_000,
+        audioSecondsProcessed: 1_000,
+        successfulSequences: 1_000,
+        skippedSequences: 0,
+      },
+    ]);
+
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    // 500 newest = the newest job plus 499 identical old jobs.
+    expect(data.stats.diarizationCampaign.successfulSequences).toBe(1_499);
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: reports complete contention when every sequence skips",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    const finishedAt = new Date(Date.now() - 60_000);
+    await db.collection("diarization_campaigns").insertOne({
+      campaignId: "all-skipped",
+      mode: "missing",
+      status: "running",
+      updatedAt: finishedAt,
+      processedChunks: 0,
+      totalChunks: 10,
+      pendingChunks: 10,
+    });
+    await db.collection("diarization_campaign_rate_samples").insertOne({
+      _id: "all-skipped-job",
+      campaignId: "all-skipped",
+      startedAt: new Date(finishedAt.getTime() - 30_000),
+      finishedAt,
+      chunksProcessed: 0,
+      audioSecondsProcessed: 0,
+      successfulSequences: 0,
+      skippedSequences: 3,
+    });
+
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline",
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.stats.diarizationCampaign).toMatchObject({
+      successfulSequences: 0,
+      skippedSequences: 3,
+      recordingLeaseBusyOriginals: 0,
+      recordingLeaseSkippedSequences: 0,
+      chunkClaimSkips: 0,
+      skipRatio: 1,
+      leaseSkipRatio: null,
+      claimSkipRatio: null,
+      stageTimingsMs: {},
+    });
+  }),
+);
+
+Deno.test(
   "audio pipeline handler: respects limit parameter",
   withFixtures(["AdminAuthHeaders", "Mongo"], async (headers: HeadersInit) => {
     const response = await callExpressHandler(

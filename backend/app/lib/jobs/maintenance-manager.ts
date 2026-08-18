@@ -3,7 +3,7 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { jobRegistry } from "./job-registry.ts";
-import { getQueue } from "./queue.ts";
+import { getQueue, requeuePersistedJob } from "./queue.ts";
 import { DEFAULT_JOB_TIMEOUT_MS, getJobTimeoutMs } from "./job-timeouts.ts";
 import { getRedisConnectedForMs } from "@/lib/redis.ts";
 import { isJobRunningLocally } from "./processor.ts";
@@ -314,7 +314,11 @@ export class MaintenanceManager {
       }
 
       try {
-        await queue.add(jobType, job.data, { jobId });
+        await requeuePersistedJob({
+          jobId,
+          jobType,
+          jobData: job.data,
+        }, auth);
       } catch (err) {
         console.warn(
           `[MaintenanceManager] Failed to re-enqueue job ${jobId} in ${jobType}: ${

@@ -64,12 +64,19 @@ async function connectWithRetry(): Promise<void> {
         return;
       } catch (err) {
         lastError = err as Error;
-        const delay = Math.min(INITIAL_DELAY_MS * Math.pow(2, attempt - 1), MAX_DELAY_MS);
-        console.log(`[MongoDB] Connection attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`);
+        const delay = Math.min(
+          INITIAL_DELAY_MS * Math.pow(2, attempt - 1),
+          MAX_DELAY_MS,
+        );
+        console.log(
+          `[MongoDB] Connection attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+        );
         if (attempt < MAX_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
           // Reset client for fresh connection attempt
-          try { await client.close(); } catch { /* ignore */ }
+          try {
+            await client.close();
+          } catch { /* ignore */ }
           client = new MongoClient(env.MONGO_URL);
         }
       }
@@ -264,6 +271,33 @@ const mongoRequestSchema = z.discriminatedUnion("action", [
 
 export type MongoRequest = z.infer<typeof mongoRequestSchema>;
 export type MongoResponse = any;
+
+export const DIARIZATION_RECORDING_LEASE_BUSY_CODE =
+  "diarization_recording_lease_busy";
+
+export function isDiarizationRecordingLeaseCollision(
+  input: MongoRequest,
+  error: unknown,
+): boolean {
+  if (
+    input.action !== "findOneAndUpdate" ||
+    input.collection !== "diarization_recording_leases" ||
+    input.options?.upsert !== true ||
+    !Object.prototype.hasOwnProperty.call(input.query, "_id") ||
+    typeof error !== "object" ||
+    error === null ||
+    (error as { code?: unknown }).code !== 11000
+  ) {
+    return false;
+  }
+
+  const keyPattern = (error as { keyPattern?: Record<string, unknown> })
+    .keyPattern;
+  const keyValue = (error as { keyValue?: Record<string, unknown> }).keyValue;
+  return keyPattern?._id === 1 ||
+    (keyValue !== undefined &&
+      Object.prototype.hasOwnProperty.call(keyValue, "_id"));
+}
 
 export function normalizeInsertedDocument(
   collection: string,
@@ -468,7 +502,8 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
       switch (input.action) {
         case "find": {
           const limit = input.options?.limit ?? 1000;
-          return collection.find(input.query, input.options).batchSize(limit).limit(limit).toArray();
+          return collection.find(input.query, input.options).batchSize(limit)
+            .limit(limit).toArray();
         }
         case "findOne":
           return collection.findOne(input.query, input.options);
@@ -656,6 +691,13 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
           throw new Error("Unknown action");
       }
     } catch (error) {
+      if (isDiarizationRecordingLeaseCollision(input, error)) {
+        return Response.json({
+          success: false,
+          code: DIARIZATION_RECORDING_LEASE_BUSY_CODE,
+          error: "Recording lease is already held",
+        }, { status: 409 });
+      }
       console.error(
         `MongoDB operation failed on collection ${input.collection}:`,
         error,
@@ -696,7 +738,8 @@ export class MongoResource implements Resource<MongoRequest, MongoResponse> {
     } else {
       actions = [...actionMap[input.action]];
       if (
-        (input.action === "updateOne" || input.action === "updateMany" || input.action === "findOneAndUpdate") &&
+        (input.action === "updateOne" || input.action === "updateMany" ||
+          input.action === "findOneAndUpdate") &&
         (input as any).options?.upsert
       ) {
         actions.push("write");

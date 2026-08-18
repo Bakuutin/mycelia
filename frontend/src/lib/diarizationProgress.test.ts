@@ -4,6 +4,7 @@ import {
   getCompletedDiarizationWorkerRate,
   getDiarizationCampaignProgressView,
   getDiarizationProgressView,
+  getDiarizationSkipMetricsView,
   isOpenDiarizationCampaignStatus,
 } from "./diarizationProgress";
 
@@ -85,6 +86,11 @@ describe("getDiarizationCampaignProgressView", () => {
       totalChunks: 100,
       pendingChunks: 60,
       chunksPerSecond: 0.75,
+      usefulAudioRealtimeMultiple: 7.5,
+      rateWindowSeconds: 120,
+      successfulSequences: 8,
+      skippedSequences: 1,
+      claimSkipRatio: 0.125,
       etaSeconds: 80,
     })).toMatchObject({
       percent: 40,
@@ -101,6 +107,11 @@ describe("getDiarizationCampaignProgressView", () => {
       totalChunks: null,
       pendingChunks: null,
       chunksPerSecond: null,
+      usefulAudioRealtimeMultiple: null,
+      rateWindowSeconds: null,
+      successfulSequences: 0,
+      skippedSequences: 0,
+      claimSkipRatio: null,
       etaSeconds: null,
     })).toMatchObject({
       percent: 0,
@@ -117,6 +128,46 @@ describe("getDiarizationCampaignProgressView", () => {
     expect(isOpenDiarizationCampaignStatus("completed_with_errors")).toBe(
       false,
     );
+  });
+});
+
+describe("getDiarizationSkipMetricsView", () => {
+  it("formats aggregate, lease, and claim metrics separately", () => {
+    expect(getDiarizationSkipMetricsView({
+      processedChunks: 40,
+      totalChunks: 100,
+      pendingChunks: 60,
+      chunksPerSecond: 0.75,
+      successfulSequences: 16,
+      skippedSequences: 4,
+      recordingLeaseBusyOriginals: 3,
+      recordingLeaseSkippedSequences: 3,
+      chunkClaimSkips: 1,
+      skipRatio: 0.25,
+      leaseSkipRatio: 0.1875,
+      claimSkipRatio: 0.0625,
+      etaSeconds: 80,
+    })).toEqual({
+      totalLabel: "25.0% · 4",
+      leaseLabel: "3 · 18.8% · 3 busy",
+      claimLabel: "1 · 6.3%",
+    });
+  });
+
+  it("keeps legacy campaigns with missing breakdown fields readable", () => {
+    expect(getDiarizationSkipMetricsView({
+      processedChunks: 12,
+      totalChunks: null,
+      pendingChunks: null,
+      chunksPerSecond: null,
+      skippedSequences: 3,
+      claimSkipRatio: 1,
+      etaSeconds: null,
+    })).toEqual({
+      totalLabel: "100.0% · 3",
+      leaseLabel: "0 · 0 busy",
+      claimLabel: "0",
+    });
   });
 });
 

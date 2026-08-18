@@ -29,7 +29,27 @@ export type DiarizationCampaignSummary = {
   totalChunks: number | null;
   pendingChunks: number | null;
   chunksPerSecond: number | null;
+  usefulAudioRealtimeMultiple?: number | null;
+  rateWindowSeconds?: number | null;
+  successfulSequences?: number;
+  skippedSequences?: number;
+  recordingLeaseBusyOriginals?: number;
+  recordingLeaseSkippedSequences?: number;
+  chunkClaimSkips?: number;
+  skipRatio?: number | null;
+  leaseSkipRatio?: number | null;
+  claimSkipRatio?: number | null;
+  stageTimingsMs?: Record<
+    string,
+    { count: number; total: number; avg: number; max: number }
+  >;
   etaSeconds: number | null;
+};
+
+export type DiarizationSkipMetricsView = {
+  totalLabel: string;
+  leaseLabel: string;
+  claimLabel: string;
 };
 
 export type CompletedDiarizationResult = {
@@ -122,6 +142,56 @@ export function getDiarizationCampaignProgressView(
     chunks_per_second: campaign.chunksPerSecond,
     eta_seconds: campaign.etaSeconds,
   });
+}
+
+function formatSkipRatio(value: number | null | undefined): string | null {
+  return value != null && Number.isFinite(value) && value >= 0
+    ? `${(value * 100).toFixed(1)}%`
+    : null;
+}
+
+export function getDiarizationSkipMetricsView(
+  campaign: DiarizationCampaignSummary,
+): DiarizationSkipMetricsView {
+  const skippedSequences = Math.max(campaign.skippedSequences ?? 0, 0);
+  const leaseSkips = Math.max(
+    campaign.recordingLeaseSkippedSequences ?? 0,
+    0,
+  );
+  const busyOriginals = Math.max(
+    campaign.recordingLeaseBusyOriginals ?? 0,
+    0,
+  );
+  const claimSkips = Math.max(campaign.chunkClaimSkips ?? 0, 0);
+  // Older API responses used `claimSkipRatio` for the aggregate ratio and did
+  // not include a claim-breakdown count. Preserve that display during a
+  // rolling frontend/backend deployment without mislabelling it as claim-only.
+  const legacyAggregateRatio = campaign.chunkClaimSkips == null
+    ? campaign.claimSkipRatio
+    : null;
+  const totalRatio = formatSkipRatio(
+    campaign.skipRatio ?? legacyAggregateRatio,
+  );
+  const leaseRatio = formatSkipRatio(campaign.leaseSkipRatio);
+  const claimRatio = campaign.chunkClaimSkips == null
+    ? null
+    : formatSkipRatio(campaign.claimSkipRatio);
+
+  return {
+    totalLabel: [
+      totalRatio,
+      skippedSequences.toLocaleString(),
+    ].filter(Boolean).join(" · "),
+    leaseLabel: [
+      leaseSkips.toLocaleString(),
+      leaseRatio,
+      `${busyOriginals.toLocaleString()} busy`,
+    ].filter(Boolean).join(" · "),
+    claimLabel: [
+      claimSkips.toLocaleString(),
+      claimRatio,
+    ].filter(Boolean).join(" · "),
+  };
 }
 
 export function isOpenDiarizationCampaignStatus(status: string): boolean {

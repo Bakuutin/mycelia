@@ -24,6 +24,8 @@ services:
     environment:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
+      - DIARIZATION_REQUEST_CONCURRENCY=${DIARIZATION_REQUEST_CONCURRENCY:-1}
+      - DIARIZATION_MAX_QUEUED_REQUESTS=${DIARIZATION_MAX_QUEUED_REQUESTS:-1}
       - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.15}
       - SPEAKER_SERVICE_HOST=0.0.0.0
       - SPEAKER_SERVICE_PORT=8085
@@ -31,9 +33,7 @@ services:
       - CORS_ORIGINS=http://localhost:3001,http://localhost:8001,https://localhost:3001,https://localhost:8001
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8085/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-

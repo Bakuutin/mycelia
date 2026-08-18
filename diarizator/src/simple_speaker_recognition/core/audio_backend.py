@@ -1,11 +1,12 @@
 """Audio processing backend using PyAnnote and SpeechBrain."""
 
 import asyncio
+import io
 import logging
 import os
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import BinaryIO, Callable, Dict, List, Optional, Sequence, TypeVar, Union
 
 import numpy as np
 import soundfile as sf
@@ -17,6 +18,41 @@ from pyannote.audio.telemetry import set_telemetry_metrics
 set_telemetry_metrics(False, save_choice_as_default=True)
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+async def _run_in_executor_to_completion(func: Callable[[], T]) -> T:
+    """Keep a cancelled coroutine attached until its blocking model call ends.
+
+    Cancelling an asyncio wrapper cannot stop its executor thread. Waiting for
+    the inner future here ensures endpoint cleanup does not release the shared
+    inference gate while CUDA work is still running.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(None, func)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                # Repeated cancellation must not detach the still-running
+                # executor thread from the gate-owning endpoint coroutine.
+                continue
+            except BaseException:
+                break
+
+        # Consume a completed executor exception before cancellation wins.
+        if future.done() and not future.cancelled():
+            try:
+                future.result()
+            except BaseException:
+                logger.debug(
+                    "Blocking audio operation failed while its caller was cancelled",
+                    exc_info=True,
+                )
+        raise
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -169,12 +205,10 @@ class AudioBackend:
         return normalized
 
     async def async_embed(self, wave: torch.Tensor) -> np.ndarray:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.embed, wave)
+        return await _run_in_executor_to_completion(partial(self.embed, wave))
 
     async def async_embed_batch(self, waves: Sequence[torch.Tensor]) -> np.ndarray:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.embed_batch, waves)
+        return await _run_in_executor_to_completion(partial(self.embed_batch, waves))
 
     def diarize(
         self,
@@ -283,9 +317,7 @@ class AudioBackend:
             collar: Gap duration (seconds) to merge between speaker segments
             min_duration_off: Minimum silence duration (seconds) before treating as segment boundary
         """
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None,
+        return await _run_in_executor_to_completion(
             partial(
                 self.diarize,
                 path,
@@ -298,8 +330,25 @@ class AudioBackend:
         )
 
     async def async_load_wave(self, path: Path) -> torch.Tensor:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.load_wave, path)
+        return await _run_in_executor_to_completion(partial(self.load_wave, path))
+
+    async def async_load_wave_bytes(
+        self,
+        audio_data: bytes,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+        min_duration: Optional[float] = None,
+    ) -> torch.Tensor:
+        """Decode uploaded audio in memory without a temporary-file round trip."""
+        return await _run_in_executor_to_completion(
+            partial(
+                self.load_wave_bytes,
+                audio_data,
+                start=start,
+                end=end,
+                min_duration=min_duration,
+            ),
+        )
 
     def crop_waveform(
         self,
@@ -370,12 +419,44 @@ class AudioBackend:
         Returns:
             Tensor of shape (1, 1, T) at 16kHz sample rate
         """
+        return self._load_wave_source(
+            path,
+            start=start,
+            end=end,
+            min_duration=min_duration,
+        )
+
+    def load_wave_bytes(
+        self,
+        audio_data: bytes,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+        min_duration: Optional[float] = None,
+    ) -> torch.Tensor:
+        """Load an uploaded audio payload directly from memory."""
+        if not audio_data:
+            raise ValueError("Audio data is empty")
+        return self._load_wave_source(
+            io.BytesIO(audio_data),
+            start=start,
+            end=end,
+            min_duration=min_duration,
+        )
+
+    def _load_wave_source(
+        self,
+        source: Union[Path, BinaryIO],
+        *,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+        min_duration: Optional[float] = None,
+    ) -> torch.Tensor:
         if AUDIO_BACKEND == "soundfile":
             # Soundfile-based loading (Mac compatible, no FFmpeg needed)
-            waveform, sample_rate = self._load_with_soundfile(path)
+            waveform, sample_rate = self._load_with_soundfile(source)
         else:
             # Torchaudio-based loading (GPU server with FFmpeg)
-            waveform, sample_rate = self._load_with_torchaudio(path)
+            waveform, sample_rate = self._load_with_torchaudio(source)
 
         logger.debug(f"Loaded audio: shape={waveform.shape}, sample_rate={sample_rate}")
 
@@ -396,9 +477,12 @@ class AudioBackend:
             min_duration=min_duration,
         )
 
-    def _load_with_soundfile(self, path: Path) -> tuple:
+    def _load_with_soundfile(self, source: Union[Path, BinaryIO]) -> tuple:
         """Load audio using soundfile (pure Python, Mac compatible)."""
-        audio, sample_rate = sf.read(str(path), dtype="float32")
+        audio, sample_rate = sf.read(
+            str(source) if isinstance(source, Path) else source,
+            dtype="float32",
+        )
 
         # Convert to torch tensor
         waveform = torch.from_numpy(audio)
@@ -411,9 +495,11 @@ class AudioBackend:
 
         return waveform, sample_rate
 
-    def _load_with_torchaudio(self, path: Path) -> tuple:
+    def _load_with_torchaudio(self, source: Union[Path, BinaryIO]) -> tuple:
         """Load audio using torchaudio (requires FFmpeg/torchcodec)."""
-        waveform, sample_rate = torchaudio.load(str(path))
+        waveform, sample_rate = torchaudio.load(
+            str(source) if isinstance(source, Path) else source
+        )
         return waveform, sample_rate
 
     def _resample(

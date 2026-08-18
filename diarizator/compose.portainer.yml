@@ -33,6 +33,10 @@ x-diarization-common: &diarization-common
     DIARIZATION_SEGMENTATION_BATCH_SIZE: "${DIARIZATION_SEGMENTATION_BATCH_SIZE:-8}"
     DIARIZATION_EMBEDDING_BATCH_SIZE: "${DIARIZATION_EMBEDDING_BATCH_SIZE:-8}"
     DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE: "${DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE:-4}"
+    # Each published endpoint owns one model instance. Keep model execution
+    # serialized; one additional request may wait and further requests get 429.
+    DIARIZATION_REQUEST_CONCURRENCY: "${DIARIZATION_REQUEST_CONCURRENCY:-1}"
+    DIARIZATION_MAX_QUEUED_REQUESTS: "${DIARIZATION_MAX_QUEUED_REQUESTS:-1}"
     PYTORCH_CUDA_ALLOC_CONF: "${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
     COMPUTE_MODE: gpu
     SPEAKER_SERVICE_HOST: 0.0.0.0
@@ -41,7 +45,7 @@ x-diarization-common: &diarization-common
   volumes:
     - diarization-models:/models
   healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+    test: ["CMD", "curl", "-f", "http://localhost:8085/ready"]
     interval: 30s
     timeout: 10s
     retries: 5

@@ -34,6 +34,34 @@ Deno.test("summarization timeout scales with batch size", () => {
   );
 });
 
+Deno.test("diarization timeout uses snapshotted batch and sequence bounds", () => {
+  expect(getJobTimeoutMs("diarization", {
+    batchSize: 4,
+    maxSequenceChunks: 6,
+  })).toBe(1_812_000);
+  expect(getJobTimeoutMs("diarization", {
+    batchSize: 8,
+    maxSequenceChunks: 8,
+  })).toBe(3_372_000);
+  // Small jobs keep the 15-minute safety floor.
+  expect(getJobTimeoutMs("diarization", {
+    batchSize: 1,
+    maxSequenceChunks: 1,
+  })).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  // The largest accepted snapshot is capped at four hours.
+  expect(getJobTimeoutMs("diarization", {
+    batchSize: 32,
+    maxSequenceChunks: 32,
+  })).toBe(4 * 60 * 60 * 1000);
+});
+
+Deno.test("legacy diarization jobs retain the flat timeout", () => {
+  expect(getJobTimeoutMs("diarization", { batchSize: 32 })).toBe(
+    DEFAULT_JOB_TIMEOUT_MS,
+  );
+  expect(getJobTimeoutMs("diarization", {})).toBe(DEFAULT_JOB_TIMEOUT_MS);
+});
+
 Deno.test("manual summarization jobs keep the flat timeout", () => {
   expect(getJobTimeoutMs("summarization", { objectId: "abc", batchSize: 25 }))
     .toBe(DEFAULT_JOB_TIMEOUT_MS);

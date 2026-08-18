@@ -1,9 +1,11 @@
 import { Job, Queue, QueueEvents, Worker } from "bullmq";
 import { ObjectId } from "bson";
-import { redis } from "@/lib/redis.ts";
+import { ExecutionError } from "redlock";
+import { redis, redlock } from "@/lib/redis.ts";
 import { Auth, getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
+import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { env } from "#/env.ts";
 import type {
   EnqueueJobOptions,
@@ -59,6 +61,12 @@ const RESERVED_PROVIDER_JOB_STATES = [
   "paused",
   "prioritized",
 ] as const;
+
+export const DIARIZATOR_ROUTE_ENQUEUE_LOCK_RESOURCE =
+  "mycelia:lock:diarizator-route-enqueue:v1";
+export const DIARIZATOR_ROUTE_ENQUEUE_LOCK_TTL_MS = 30_000;
+export const DIARIZATOR_ROUTE_ENQUEUE_LOCK_ERROR =
+  "Diarizator route reservation is temporarily busy";
 
 // Some workers run long, externally-backed operations (for example Whisper
 // batches). BullMQ's default 30s lock is too short for a busy Deno process or
@@ -121,6 +129,360 @@ async function getDiarizatorProviderLoad(): Promise<Record<string, number>> {
     if (profileId) load[profileId] = (load[profileId] ?? 0) + 1;
   }
   return load;
+}
+
+export type DiarizatorRouteReservationDependencies = {
+  getLoad?: () => Promise<Record<string, number>>;
+  lockResource?: string;
+};
+
+type ReservationAbortSignal = AbortSignal & { error?: unknown };
+
+function getReservationAbortError(
+  signal?: ReservationAbortSignal,
+): Error | undefined {
+  if (!signal?.aborted) return undefined;
+  const cause = signal.error ?? signal.reason;
+  return new Error(DIARIZATOR_ROUTE_ENQUEUE_LOCK_ERROR, {
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+/**
+ * Serialize route selection through the BullMQ commit that makes the selected
+ * slot visible. The lock is pool-wide because capacity is shared by three
+ * queues and route choice compares every provider in the pool.
+ */
+export async function reserveDiarizatorRouteAndCommit<T>(input: {
+  routes: ReturnType<typeof resolveDiarizatorRoutes>;
+  healthyIds: Set<string>;
+  requestedProviderId?: string;
+  commit: (
+    selected: ReturnType<typeof resolveDiarizatorRoutes>[number],
+    load: Record<string, number>,
+    signal: ReservationAbortSignal,
+  ) => Promise<T>;
+}, dependencies: DiarizatorRouteReservationDependencies = {}): Promise<T> {
+  const getLoad = dependencies.getLoad ?? getDiarizatorProviderLoad;
+  const lockResource = dependencies.lockResource ??
+    DIARIZATOR_ROUTE_ENQUEUE_LOCK_RESOURCE;
+  let committed: { value: T } | undefined;
+
+  try {
+    return await redlock.using(
+      [lockResource],
+      DIARIZATOR_ROUTE_ENQUEUE_LOCK_TTL_MS,
+      async (signal) => {
+        const initialAbort = getReservationAbortError(signal);
+        if (initialAbort) throw initialAbort;
+
+        const load = await getLoad();
+        const selected = selectDiarizatorRoute(
+          input.routes,
+          input.healthyIds,
+          load,
+          input.requestedProviderId,
+        );
+        if (!selected) {
+          if (input.requestedProviderId) {
+            const requested = input.routes.find((route) =>
+              route.id === input.requestedProviderId
+            );
+            throw new Error(
+              `Diarizator provider ${
+                requested?.name ?? input.requestedProviderId
+              } has no free concurrency slots`,
+            );
+          }
+          throw new Error(
+            "All healthy diarizator provider concurrency slots are reserved",
+          );
+        }
+
+        const preCommitAbort = getReservationAbortError(signal);
+        if (preCommitAbort) throw preCommitAbort;
+        const value = await input.commit(selected, load, signal);
+        committed = { value };
+        return value;
+      },
+    );
+  } catch (error) {
+    // Redlock may report a release failure after the BullMQ add committed. The
+    // lease will expire, and surfacing an enqueue failure here could cause the
+    // caller to create a duplicate job, so preserve the committed result.
+    if (committed) {
+      console.warn(
+        `[queue] ${DIARIZATOR_ROUTE_ENQUEUE_LOCK_ERROR} after the job committed; waiting for the lease to expire`,
+        error,
+      );
+      return committed.value;
+    }
+    if (error instanceof ExecutionError) {
+      throw new Error(DIARIZATOR_ROUTE_ENQUEUE_LOCK_ERROR, { cause: error });
+    }
+    throw error;
+  }
+}
+
+type MongoOperation = (input: any) => Promise<any>;
+export type QueuePersistence = Pick<Queue<JobData>, "add" | "getJob">;
+
+async function markQueueEnqueueFailure(
+  mongo: MongoOperation,
+  publishUpdate: typeof publishJobUpdate,
+  jobId: string,
+  jobType: string,
+  failedReason: string,
+): Promise<void> {
+  const failedAt = new Date();
+  try {
+    await mongo({
+      action: "updateOne",
+      collection: "jobs",
+      query: { _id: new ObjectId(jobId), state: "waiting" },
+      update: {
+        $set: {
+          state: "failed",
+          failedReason,
+          finishedAt: failedAt,
+          updatedAt: failedAt,
+        },
+      },
+    });
+  } catch (error) {
+    console.error(
+      `[queue] Could not mark unqueued job ${jobId} as failed:`,
+      error,
+    );
+    return;
+  }
+
+  try {
+    await publishUpdate(jobId, jobType, "job.failed", {
+      state: "failed",
+      failedReason,
+      finishedOn: failedAt.getTime(),
+    });
+  } catch (error) {
+    // Mongo is canonical for job history; a transient websocket publication
+    // failure must not undo or disguise the compensation.
+    console.warn(
+      `[queue] Could not publish enqueue failure for job ${jobId}:`,
+      error,
+    );
+  }
+}
+
+async function addQueueJobWithReconciliation(input: {
+  queue: QueuePersistence;
+  jobId: string;
+  jobData: JobData;
+  priority?: number;
+  reservationSignal?: ReservationAbortSignal;
+  onDefiniteFailure?: (failedReason: string) => Promise<void>;
+}): Promise<Job<JobData>> {
+  // The Mongo write may be much slower than route selection. Do not issue a
+  // retrying BullMQ command after Redlock has told us that another enqueuer may
+  // own the pool lock. At this point queue absence is definite, so a newly
+  // persisted row can be compensated immediately.
+  const abortError = getReservationAbortError(input.reservationSignal);
+  if (abortError) {
+    await input.onDefiniteFailure?.(
+      `queue_reservation_aborted: ${abortError.message}`,
+    );
+    throw abortError;
+  }
+
+  try {
+    return await input.queue.add(input.jobData.type, input.jobData, {
+      priority: input.priority,
+      jobId: input.jobId,
+    });
+  } catch (addError) {
+    let existing: Job<JobData> | undefined;
+    try {
+      existing = await input.queue.getJob(input.jobId) ?? undefined;
+    } catch (reconcileError) {
+      // Redis could have accepted the atomic BullMQ add before the client saw
+      // an error. Leave the waiting Mongo row for MaintenanceManager rather
+      // than guessing and potentially contradicting a live queue record.
+      console.warn(
+        `[queue] Could not reconcile failed enqueue for job ${input.jobId}:`,
+        reconcileError,
+      );
+      throw addError;
+    }
+
+    if (existing) {
+      const expectedProvider = input.jobData.routingContext?.providerProfileId;
+      const existingProvider = existing.data.routingContext?.providerProfileId;
+      if (
+        existing.data.type === input.jobData.type &&
+        existingProvider === expectedProvider
+      ) {
+        console.warn(
+          `[queue] Reconciled ambiguous enqueue response for existing job ${input.jobId}`,
+        );
+        return existing;
+      }
+
+      const conflictReason =
+        `queue_job_id_conflict: existing ${existing.data.type}/${
+          existingProvider ?? "unrouted"
+        }, expected ${input.jobData.type}/${expectedProvider ?? "unrouted"}`;
+      await input.onDefiniteFailure?.(conflictReason);
+      throw new Error(conflictReason, { cause: addError });
+    }
+
+    const reason = addError instanceof Error
+      ? addError.message
+      : String(addError);
+    await input.onDefiniteFailure?.(
+      `queue_enqueue_failed: ${reason.slice(0, 500)}`,
+    );
+    throw addError;
+  }
+}
+
+/** Persist the canonical job record, then commit its BullMQ reservation. */
+export async function persistAndAddJobRecord(input: {
+  mongo: MongoOperation;
+  queue: QueuePersistence;
+  jobId: string;
+  parsedData: JobData;
+  priority?: number;
+  trigger: Record<string, unknown>;
+  restartedFromJobId?: string;
+  publishUpdate?: typeof publishJobUpdate;
+  reservationSignal?: ReservationAbortSignal;
+}): Promise<Job<JobData>> {
+  const createdAt = new Date();
+  await input.mongo({
+    action: "insertOne",
+    collection: "jobs",
+    doc: {
+      _id: new ObjectId(input.jobId),
+      type: input.parsedData.type,
+      data: input.parsedData,
+      state: "waiting",
+      attempts: 0,
+      trigger: input.trigger,
+      ...(input.restartedFromJobId
+        ? { restartedFromJobId: input.restartedFromJobId }
+        : {}),
+      createdAt,
+      updatedAt: createdAt,
+    },
+  });
+
+  return await addQueueJobWithReconciliation({
+    queue: input.queue,
+    jobId: input.jobId,
+    jobData: input.parsedData,
+    priority: input.priority,
+    reservationSignal: input.reservationSignal,
+    onDefiniteFailure: (failedReason) =>
+      markQueueEnqueueFailure(
+        input.mongo,
+        input.publishUpdate ?? publishJobUpdate,
+        input.jobId,
+        input.parsedData.type,
+        failedReason,
+      ),
+  });
+}
+
+/**
+ * Re-add a persisted routed job without changing its saved provider snapshot.
+ * Maintenance recovery must compete for the same pool lock as new jobs; it
+ * must never silently move an old job to a different diarizator.
+ */
+export async function reserveAndAddPersistedDiarizatorJob(input: {
+  routes: ReturnType<typeof resolveDiarizatorRoutes>;
+  healthyIds: Set<string>;
+  queue: QueuePersistence;
+  jobId: string;
+  jobData: JobData;
+}, dependencies: DiarizatorRouteReservationDependencies = {}): Promise<
+  Job<JobData>
+> {
+  const savedProviderId = input.jobData.routingContext?.providerProfileId;
+  if (!savedProviderId) {
+    throw new Error(
+      `Persisted ${input.jobData.type} job ${input.jobId} has no saved diarizator provider`,
+    );
+  }
+  const savedRoute = input.routes.find((route) =>
+    route.id === savedProviderId && route.enabled
+  );
+  if (!savedRoute) {
+    throw new Error(
+      `Saved diarizator provider ${savedProviderId} is disabled or no longer configured`,
+    );
+  }
+  if (!input.healthyIds.has(savedProviderId)) {
+    throw new Error(
+      `Saved diarizator provider ${savedRoute.name} is not healthy`,
+    );
+  }
+
+  return await reserveDiarizatorRouteAndCommit({
+    routes: input.routes,
+    healthyIds: input.healthyIds,
+    requestedProviderId: savedProviderId,
+    commit: async (_selected, _load, signal) =>
+      await addQueueJobWithReconciliation({
+        queue: input.queue,
+        jobId: input.jobId,
+        jobData: input.jobData,
+        reservationSignal: signal,
+      }),
+  }, dependencies);
+}
+
+/** Requeue the canonical waiting row under any provider reservation it needs. */
+export async function requeuePersistedJob(input: {
+  jobId: string;
+  jobType: string;
+  jobData: JobData;
+}, authOverride?: Auth): Promise<Job<JobData>> {
+  if (input.jobData.type !== input.jobType) {
+    throw new Error(
+      `Persisted job ${input.jobId} type mismatch: row=${input.jobType}, data=${input.jobData.type}`,
+    );
+  }
+
+  const queue = getQueue(input.jobType);
+  if (!DIARIZATION_ROUTED_JOB_TYPES.has(input.jobType)) {
+    return await addQueueJobWithReconciliation({
+      queue,
+      jobId: input.jobId,
+      jobData: input.jobData,
+    });
+  }
+
+  const auth = authOverride ?? await getServerAuth();
+  const configResource = await getConfigResource(auth);
+  const [services, config] = await Promise.all([
+    getExternalServicesHealth(),
+    configResource({ action: "get" }),
+  ]);
+  const diarizator = services.find((service) => service.id === "diarizator");
+  const healthyIds = new Set(
+    diarizator?.routes?.filter((route) => route.status === "healthy")
+      .map((route) => route.providerProfileId)
+      .filter((id): id is string => Boolean(id)) ?? [],
+  );
+
+  return await reserveAndAddPersistedDiarizatorJob({
+    routes: resolveDiarizatorRoutes(config),
+    healthyIds,
+    queue,
+    jobId: input.jobId,
+    // Preserve legacy snapshots exactly. In particular, do not inject a new
+    // maxSequenceChunks value into jobs whose timeout must remain 15 minutes.
+    jobData: input.jobData,
+  });
 }
 
 export async function enqueueJob(
@@ -427,16 +789,19 @@ export async function enqueueJob(
     data.type === "diarization" &&
     typeof mergedData.diarizationServerUrl === "string" &&
     Boolean(mergedData.routingContext?.providerProfileId);
+  let diarizatorRoutes: ReturnType<typeof resolveDiarizatorRoutes> | undefined;
+  let healthyDiarizatorIds: Set<string> | undefined;
+  let requestedDiarizatorProviderId: string | undefined;
   if (DIARIZATION_ROUTED_JOB_TYPES.has(data.type)) {
     const diarizator = (await getExternalServicesHealth()).find((service) =>
       service.id === "diarizator"
     );
-    const healthyIds = new Set(
+    healthyDiarizatorIds = new Set(
       diarizator?.routes?.filter((route) => route.status === "healthy")
         .map((route) => route.providerProfileId)
         .filter((id): id is string => Boolean(id)) ?? [],
     );
-    if (healthyIds.size === 0) {
+    if (healthyDiarizatorIds.size === 0) {
       throw new Error(
         `No healthy diarizator route is available. ${
           diarizator?.message ?? "Configure one in Settings → Diarization."
@@ -445,43 +810,10 @@ export async function enqueueJob(
     }
     const configResource = await getConfigResource(auth);
     const config = await configResource({ action: "get" });
-    const routes = resolveDiarizatorRoutes(config);
-    const load = await getDiarizatorProviderLoad();
-    const requestedProviderId = reuseDiarizatorRoute
+    diarizatorRoutes = resolveDiarizatorRoutes(config);
+    requestedDiarizatorProviderId = reuseDiarizatorRoute
       ? mergedData.routingContext?.providerProfileId
       : undefined;
-    const selected = selectDiarizatorRoute(
-      routes,
-      healthyIds,
-      load,
-      requestedProviderId,
-    );
-    if (!selected) {
-      if (requestedProviderId) {
-        const requested = routes.find((route) =>
-          route.id === requestedProviderId
-        );
-        throw new Error(
-          `Diarizator provider ${
-            requested?.name ?? requestedProviderId
-          } has no free concurrency slots`,
-        );
-      }
-      throw new Error(
-        "All healthy diarizator provider concurrency slots are reserved",
-      );
-    }
-    const snapshot = buildDiarizatorJobSnapshot(
-      {
-        providerProfileId: selected.id,
-        providerProfileName: selected.name,
-        baseUrl: selected.baseUrl,
-      },
-      mergedData.routingContext,
-      new Date().toISOString(),
-    );
-    mergedData.diarizationServerUrl = snapshot.diarizationServerUrl;
-    mergedData.routingContext = snapshot.routingContext;
   }
 
   const parsedData = jobRegistry.validateJobData(mergedData);
@@ -523,28 +855,56 @@ export async function enqueueJob(
     principal: auth.principal,
   };
 
-  await mongo({
-    action: "insertOne",
-    collection: "jobs",
-    doc: {
-      _id: new ObjectId(jobId),
-      type: parsedData.type,
-      data: parsedData,
-      state: "waiting",
-      attempts: 0,
+  const persist = (
+    finalData: JobData,
+    reservationSignal?: ReservationAbortSignal,
+  ) =>
+    persistAndAddJobRecord({
+      mongo,
+      queue,
+      jobId,
+      parsedData: finalData,
+      priority: options?.priority,
       trigger: triggerWithPrincipal,
-      ...(options?.restartedFromJobId
-        ? { restartedFromJobId: options.restartedFromJobId }
-        : {}),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    },
-  });
+      restartedFromJobId: options?.restartedFromJobId,
+      reservationSignal,
+    });
 
-  return queue.add(parsedData.type, parsedData, {
-    priority: options?.priority,
-    jobId,
-  });
+  if (diarizatorRoutes && healthyDiarizatorIds) {
+    return await reserveDiarizatorRouteAndCommit({
+      routes: diarizatorRoutes,
+      healthyIds: healthyDiarizatorIds,
+      requestedProviderId: requestedDiarizatorProviderId,
+      commit: async (selected, load, signal) => {
+        const snapshot = buildDiarizatorJobSnapshot(
+          {
+            providerProfileId: selected.id,
+            providerProfileName: selected.name,
+            baseUrl: selected.baseUrl,
+          },
+          parsedData.routingContext,
+          new Date().toISOString(),
+        );
+        const routedData = jobRegistry.validateJobData({
+          ...parsedData,
+          diarizationServerUrl: snapshot.diarizationServerUrl,
+          routingContext: snapshot.routingContext,
+        });
+        const job = await persist(routedData, signal);
+        console.info(
+          `[queue] Reserved diarizator route ${selected.name} for job ${jobId}`,
+          {
+            providerProfileId: selected.id,
+            loadBefore: load[selected.id] ?? 0,
+            concurrency: selected.concurrency,
+          },
+        );
+        return job;
+      },
+    });
+  }
+
+  return await persist(parsedData);
 }
 
 export async function getJob(

@@ -50,6 +50,8 @@ Set these variables:
 | `DIARIZATION_SEGMENTATION_BATCH_SIZE` | `8` | Pyannote segmentation inference batch |
 | `DIARIZATION_EMBEDDING_BATCH_SIZE` | `8` | Pyannote internal embedding batch |
 | `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `4` | Mycelia per-segment identity embedding batch |
+| `DIARIZATION_REQUEST_CONCURRENCY` | `1` | Shared `/diarize` and `/embed` model executions per process |
+| `DIARIZATION_MAX_QUEUED_REQUESTS` | `1` | Bounded wait slots; valid values are `0` or `1` |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | Reduce CUDA allocator fragmentation |
 
 Ports default to `8085` through `8090`. Override `DIARIZATION_PORT_1` through
@@ -63,6 +65,12 @@ embedding batch of `16` completed through the service's per-segment fallback,
 but produced recoverable CUDA OOM warnings with less than 0.5 GiB free and was
 slower in practice. Pool sizes one and three can benchmark a larger third
 value separately.
+
+Keep `DIARIZATION_REQUEST_CONCURRENCY=1` for a one-slot Mycelia route.
+`DIARIZATION_MAX_QUEUED_REQUESTS` defaults to `1` and is strictly limited to
+`0..1`; a further request receives HTTP 429 with `retryable: true` and
+`Retry-After: 1`. Raising concurrency makes model calls share the same CUDA
+context and must be benchmarked independently from pool size.
 
 ## Select any pool size from one through six
 
@@ -99,8 +107,9 @@ To change capacity without sending new work to containers that are stopping:
 5. Confirm that only the expected ports are listening, then wait for every
    expected container to become healthy. A six-process first
    start should be allowed to load sequentially if GPU memory is tight.
-6. Check every active `/health` response for `ready: true` and `device: cuda`,
-   then send one permitted test file to `/diarize`.
+6. Require HTTP 200 from every active `/ready`, then check `/health` for
+   `ready: true`, `device: cuda`, `concurrency: 1`, and the expected batching.
+   Send one permitted test file to `/diarize`.
 7. Enable exactly the matching Mycelia routes and verify **Jobs → Workers →
    diarization** reports the intended effective concurrency.
 
@@ -207,7 +216,7 @@ Verify these states separately:
 2. built local image ID and `linux/amd64` architecture;
 3. imported remote image ID;
 4. image tag and ID on every running container;
-5. container health and CUDA device;
+5. container `/ready`, `/health`, CUDA device, batching, and concurrency;
 6. successful `/diarize` response with nonzero segments;
 7. representative Mycelia jobs on every enabled route.
 

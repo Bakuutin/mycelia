@@ -132,19 +132,22 @@ density rebuild never writes the shared Timeline histogram collections.
 #### Historical diarization cursor guardrails
 
 Historical diarization scans `audio_chunks` through a metadata-only cursor
-(`_id`, source, sequence position, timestamps, and retry state). Each candidate
-sequence is claimed before a separate bounded lookup hydrates its audio bytes;
-losing a concurrent claim advances to the next candidate without loading audio
-or consuming the job's successful-sequence budget. The cursor uses the
-diarization work index, a 5-second Mongo deadline, and an explicit
-`mongo.closeCursor` call whenever a batch stops early.
+(`_id`, source, sequence position, timestamps, and retry state). An expiring,
+token-scoped recording lease prevents two jobs from preparing the same source.
+With prefetch disabled, each sequence is synchronously hydrated and decoded
+under its lease before it is claimed immediately ahead of the provider POST.
+With `DIARIZATION_PREFETCH_SEQUENCES=1`, the same preparation may overlap one
+provider call as a single bounded lookahead; promotion still requires a claim.
+The cursor uses the diarization work index, a 5-second Mongo deadline, and an
+explicit `mongo.closeCursor` call whenever a batch stops early.
 
 Deploy changes to this path by pausing only the diarization worker, draining its
 active jobs, recreating `backend` and `python-worker`, and then resuming the
 same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or
 Redis. After rollout, verify metadata cursor requests omit `data`, hydration is
-limited to one claimed sequence, and stopped batches leave no application cursor
-registered in the backend.
+limited to the current sequence plus at most one leased lookahead, stopped
+batches leave no application cursor registered in the backend, and expired
+`diarization_recording_leases` can be acquired by a new worker.
 
 The Audio Pipeline page does not run an exact diarization `audio_chunks` count
 on its 30-second refresh. It probes at most one indexed ready chunk: zero is
@@ -152,6 +155,9 @@ exact, while existing work is shown either as the persisted campaign estimate
 (`≈N`, with its update time) or as `Work remains` when no estimate is available.
 Treat campaign `pendingChunks` as an operational estimate, not as an exact
 scheduler input; claiming and completion continue to use canonical chunk state.
+Campaign totals are atomically accounted once per job. Rate and ETA come from
+recent `diarization_campaign_rate_samples` across every provider lane; compare
+`usefulAudioRealtimeMultiple` rather than adding per-worker rates manually.
 
 #### Location import recovery
 

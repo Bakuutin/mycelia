@@ -108,6 +108,9 @@ services:
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000
       DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://diarizator:8085}
+      # Snapshot the same request window into newly enqueued jobs so their
+      # outer timeout matches the Python worker's actual sequence size.
+      DIARIZATION_MAX_SEQUENCE_CHUNKS: ${DIARIZATION_MAX_SEQUENCE_CHUNKS:-2}
     volumes:
       - ./backend:/app
       - ./myceliasdk:/myceliasdk
@@ -147,6 +150,11 @@ services:
       # Keep local CPU inference inside Docker Desktop's memory envelope.
       # GPU/large-memory deployments can explicitly raise this back to 6.
       DIARIZATION_MAX_SEQUENCE_CHUNKS: ${DIARIZATION_MAX_SEQUENCE_CHUNKS:-2}
+      # A recording lease prevents concurrent jobs from decoding and claiming
+      # the same source. Prefetch is bounded to one prepared sequence and can be
+      # disabled independently for a conservative rollout.
+      DIARIZATION_RECORDING_LEASE_SECONDS: ${DIARIZATION_RECORDING_LEASE_SECONDS:-600}
+      DIARIZATION_PREFETCH_SEQUENCES: ${DIARIZATION_PREFETCH_SEQUENCES:-0}
       SPEAKER_SIMILARITY_THRESHOLD: ${SPEAKER_SIMILARITY_THRESHOLD:-0.35}
       DIARIZATION_CONTINUITY_THRESHOLD: ${DIARIZATION_CONTINUITY_THRESHOLD:-0.75}
       # Chunks further apart than this start a new sequence instead of being
@@ -196,7 +204,7 @@ services:
       AUDIO_BACKEND: ${AUDIO_BACKEND:-soundfile}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:$${SPEAKER_SERVICE_PORT:-8085}/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:$${SPEAKER_SERVICE_PORT:-8085}/ready"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,8 +11,13 @@ from typing import Dict, List, Optional
 import numpy as np
 import torch
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse
 
+from simple_speaker_recognition.api.inference_gate import (
+    InferenceGate,
+    InferenceGateFull,
+)
 from simple_speaker_recognition.core.audio_backend import AudioBackend
 from simple_speaker_recognition.provenance import build_runtime_fingerprint
 
@@ -79,6 +83,79 @@ else:
 audio_backend: Optional[AudioBackend] = None
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Invalid %s=%r; using %d", name, raw, default)
+        return default
+    if value < 1:
+        log.warning("%s must be positive; using %d", name, default)
+        return default
+    return value
+
+
+def _bounded_int_env(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """Read an integer env setting whose safe range is intentionally narrow."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} must be an integer between {minimum} and {maximum}"
+        ) from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}; got {value}")
+    return value
+
+
+inference_gate = InferenceGate(
+    concurrency=_positive_int_env("DIARIZATION_REQUEST_CONCURRENCY", 1),
+    max_queued=_bounded_int_env(
+        "DIARIZATION_MAX_QUEUED_REQUESTS",
+        1,
+        minimum=0,
+        maximum=1,
+    ),
+)
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 2)
+
+
+def _finish_timings(
+    timings: Dict[str, float],
+    request_started: float,
+    expected_stages: tuple[str, ...],
+) -> Dict[str, float]:
+    for stage in expected_stages:
+        timings.setdefault(stage, 0.0)
+    timings["total_ms"] = _elapsed_ms(request_started)
+    return dict(timings)
+
+
+def _runtime_fingerprint(backend: AudioBackend) -> Dict:
+    return build_runtime_fingerprint(
+        diarization_model=backend.diarization_model,
+        embedding_model=backend.embedding_model,
+        sample_rate=16000,
+        embedding_dimension=int(backend.embedder.dimension),
+        preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan event handler for startup and shutdown."""
@@ -106,24 +183,46 @@ app = FastAPI(title="PyAnnote Diarization Service", version="1.0.0", lifespan=li
 # The legacy SQLite/FAISS routers are not mounted. Only /diarize and /embed are exposed.
 
 
-@app.get("/health")
-async def health():
-    """Health check endpoint."""
-    fingerprint = None
-    if audio_backend is not None:
-        fingerprint = build_runtime_fingerprint(
-            diarization_model=audio_backend.diarization_model,
-            embedding_model=audio_backend.embedding_model,
-            sample_rate=16000,
-            embedding_dimension=int(audio_backend.embedder.dimension),
-            preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
-        )
+@app.exception_handler(InferenceGateFull)
+async def inference_capacity_exhausted(
+    _request: Request,
+    _error: InferenceGateFull,
+):
+    snapshot = await inference_gate.snapshot()
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": "1"},
+        content={
+            "error": "inference_capacity_exhausted",
+            "message": "All inference slots and the bounded wait slot are occupied",
+            "retryable": True,
+            "retryAfterSeconds": 1,
+            "concurrency": snapshot.concurrency,
+            "inflight": snapshot.inflight,
+            "queued": snapshot.queued,
+        },
+    )
+
+
+async def _health_payload() -> Dict:
+    snapshot = await inference_gate.snapshot()
+    runtime_ready = audio_backend is not None and not (
+        compute_mode == "gpu" and device.type != "cuda"
+    )
+    fingerprint = (
+        _runtime_fingerprint(audio_backend) if audio_backend is not None else {}
+    )
     return {
         "status": "ok",
         "version": "1.0.0",
         "device": str(device),
+        "computeMode": compute_mode,
         "service": "pyannote-diarization",
-        "ready": audio_backend is not None,
+        "ready": runtime_ready,
+        "concurrency": snapshot.concurrency,
+        "inflight": snapshot.inflight,
+        "queued": snapshot.queued,
+        "maxQueued": snapshot.max_queued,
         "batching": (
             {
                 "segmentation": audio_backend.segmentation_batch_size,
@@ -133,8 +232,23 @@ async def health():
             if audio_backend is not None
             else None
         ),
-        **(fingerprint or {}),
+        **fingerprint,
     }
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return await _health_payload()
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness endpoint that fails until the inference models are loaded."""
+    payload = await _health_payload()
+    if not payload["ready"]:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @app.post("/embed")
@@ -163,28 +277,34 @@ async def embed(
         dimension: Embedding dimension (256)
         duration: Duration of audio processed in seconds
     """
+    request_started = time.perf_counter()
+    timings: Dict[str, float] = {}
     log.debug(f"Received embedding request: filename={file.filename}")
 
     if audio_backend is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
-    # Read audio file
-    audio_data = await file.read()
-
-    if len(audio_data) == 0:
-        raise HTTPException(status_code=400, detail="Audio file is empty")
-
-    # Create temporary file for processing
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-        tmp_file.write(audio_data)
-        tmp_file.flush()
-        os.fsync(tmp_file.fileno())
-        tmp_path = Path(tmp_file.name)
-
+    lease = None
+    audio_data = b""
     try:
-        # Load audio (optionally with time range)
-        log.debug(f"Loading audio from {tmp_path}, start={start}, end={end}")
-        wav = audio_backend.load_wave(tmp_path, start=start, end=end)
+        lease = await inference_gate.acquire()
+        timings["queue_ms"] = round(lease.queue_seconds * 1000, 2)
+
+        # Do not copy the upload into process memory until capacity is reserved.
+        upload_started = time.perf_counter()
+        audio_data = await file.read()
+        timings["upload_read_ms"] = _elapsed_ms(upload_started)
+        if len(audio_data) == 0:
+            raise HTTPException(status_code=400, detail="Audio file is empty")
+
+        # Decode the upload once in memory and preserve the existing crop behavior.
+        decode_started = time.perf_counter()
+        wav = await audio_backend.async_load_wave_bytes(
+            audio_data,
+            start=start,
+            end=end,
+        )
+        timings["decode_ms"] = _elapsed_ms(decode_started)
 
         # Calculate duration
         duration = wav.shape[-1] / 16000.0  # 16kHz sample rate
@@ -199,7 +319,9 @@ async def embed(
 
         # Extract embedding
         log.debug("Extracting embedding...")
+        embedding_started = time.perf_counter()
         emb = await audio_backend.async_embed(wav)
+        timings["embedding_ms"] = _elapsed_ms(embedding_started)
         emb_flat = emb.flatten()
 
         # Validate embedding
@@ -213,31 +335,46 @@ async def embed(
         if abs(emb_norm - 1.0) > 0.01:
             emb_flat = emb_flat / emb_norm
 
-        log.info(f"Embedding extracted: dim={len(emb_flat)}, duration={duration:.2f}s")
+        timings["total_ms"] = _elapsed_ms(request_started)
+        log.info(
+            "Embedding complete: dim=%d, duration=%.2fs, "
+            "queue=%.2fms, decode=%.2fms, embedding=%.2fms, total=%.2fms",
+            len(emb_flat),
+            duration,
+            timings.get("queue_ms", 0.0),
+            timings.get("decode_ms", 0.0),
+            timings.get("embedding_ms", 0.0),
+            timings["total_ms"],
+        )
 
         return {
             "embedding": emb_flat.tolist(),
             "dimension": len(emb_flat),
             "duration": round(duration, 3),
-            **build_runtime_fingerprint(
-                diarization_model=audio_backend.diarization_model,
-                embedding_model=audio_backend.embedding_model,
-                sample_rate=16000,
-                embedding_dimension=len(emb_flat),
-                preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
-            ),
+            "timings": timings,
+            **_runtime_fingerprint(audio_backend),
         }
 
+    except InferenceGateFull:
+        log.warning(
+            "Embedding rejected: inference capacity exhausted, bytes=%d, total=%.2fms",
+            len(audio_data),
+            _elapsed_ms(request_started),
+        )
+        raise
     except ValueError as e:
         log.error(f"Error extracting embedding: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log.error(f"Unexpected error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Embedding extraction failed: {str(e)}"
         )
     finally:
-        tmp_path.unlink(missing_ok=True)
+        if lease is not None:
+            await inference_gate.release()
 
 
 @app.post("/diarize")
@@ -267,6 +404,8 @@ async def diarize(
 
     Returns segments with embeddings. If clusters are provided, segments are matched against them.
     """
+    request_started = time.perf_counter()
+    timings: Dict[str, float] = {}
     log.debug(
         f"Received diarization request: filename={file.filename}, size={file.size if hasattr(file, 'size') else 'unknown'}"
     )
@@ -311,79 +450,50 @@ async def diarize(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    # Read audio file
-    log.debug("Reading audio file data")
-    audio_data = await file.read()
-    log.debug(f"Audio data size: {len(audio_data)} bytes")
-
-    # Validate audio file is not empty
-    if len(audio_data) == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Audio file is empty (0 bytes). Please ensure the file was uploaded correctly.",
-        )
-
-    # Validate minimum file size (at least 1KB for a valid audio file)
-    if len(audio_data) < 1024:
-        log.warning(
-            f"Audio file is very small ({len(audio_data)} bytes), may be invalid"
-        )
-
-    # Create temporary file for processing
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-        tmp_file.write(audio_data)
-        tmp_file.flush()  # Ensure data is written to disk
-        os.fsync(tmp_file.fileno())  # Force write to disk
-        tmp_path = Path(tmp_file.name)
-
-    # Verify file was written correctly
-    if not tmp_path.exists():
-        raise HTTPException(
-            status_code=500, detail="Failed to create temporary audio file"
-        )
-
-    file_size = tmp_path.stat().st_size
-    log.debug(f"Created temporary file: {tmp_path} ({file_size} bytes)")
-
-    if file_size == 0:
-        tmp_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=400,
-            detail="Temporary audio file is empty. File upload may have failed.",
-        )
-
-    if file_size != len(audio_data):
-        log.warning(
-            f"File size mismatch: written {file_size} bytes, expected {len(audio_data)} bytes"
-        )
-
-    # Basic validation: check if file starts with common audio file signatures
+    lease = None
+    audio_data = b""
     try:
-        with open(tmp_path, "rb") as f:
-            header = f.read(12)
-            log.debug(f"File header (first 12 bytes): {header.hex()}")
-            # WAV files typically start with "RIFF" (0x52494646)
-            # But we'll let pyannote handle format detection
-    except Exception as e:
-        log.warning(f"Could not read file header for validation: {e}")
+        lease = await inference_gate.acquire()
+        timings["queue_ms"] = round(lease.queue_seconds * 1000, 2)
 
-    try:
+        # Do not copy the upload into process memory until capacity is reserved.
+        log.debug("Reading audio file data")
+        upload_started = time.perf_counter()
+        audio_data = await file.read()
+        timings["upload_read_ms"] = _elapsed_ms(upload_started)
+        log.debug(f"Audio data size: {len(audio_data)} bytes")
+
+        if len(audio_data) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Audio file is empty (0 bytes). Please ensure the file was uploaded correctly.",
+            )
+        if len(audio_data) < 1024:
+            log.warning(
+                f"Audio file is very small ({len(audio_data)} bytes), may be invalid"
+            )
+
         # Perform diarization
         log.info(f"Performing diarization on {file.filename}")
         log.debug(
             f"Diarization params: min_speakers={min_speakers}, max_speakers={max_speakers}, collar={collar}, min_duration_off={min_duration_off}"
         )
-        diarize_start = time.time()
-        full_waveform = await audio_backend.async_load_wave(tmp_path)
+        decode_started = time.perf_counter()
+        full_waveform = await audio_backend.async_load_wave_bytes(audio_data)
+        timings["decode_ms"] = _elapsed_ms(decode_started)
+        payload_duration = full_waveform.shape[-1] / 16000.0
+
+        diarize_started = time.perf_counter()
         segments = await audio_backend.async_diarize(
-            tmp_path,
+            Path(file.filename or "upload.wav"),
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             collar=collar,
             min_duration_off=min_duration_off,
             waveform=full_waveform,
         )
-        diarize_time = time.time() - diarize_start
+        timings["diarization_ms"] = _elapsed_ms(diarize_started)
+        diarize_time = timings["diarization_ms"] / 1000
         log.info(
             f"Diarization produced {len(segments)} segments in {diarize_time:.2f}s"
         )
@@ -391,7 +501,20 @@ async def diarize(
         # Handle case where diarization produced no segments
         if len(segments) == 0:
             log.warning("Diarization produced no segments")
-            total_time = time.time() - diarize_start
+            response_timings = _finish_timings(
+                timings,
+                request_started,
+                ("segment_embedding_ms", "cluster_matching_ms"),
+            )
+            log.info(
+                "Diarization complete: segments=0 audio=%.2fs queue=%.2fms "
+                "decode=%.2fms diarization=%.2fms total=%.2fms",
+                payload_duration,
+                response_timings.get("queue_ms", 0.0),
+                response_timings.get("decode_ms", 0.0),
+                response_timings.get("diarization_ms", 0.0),
+                response_timings["total_ms"],
+            )
             return {
                 "segments": [],
                 "summary": {
@@ -401,6 +524,8 @@ async def diarize(
                     "speakers": [],
                     "reason": "No segments detected in audio",
                 },
+                "timings": response_timings,
+                **_runtime_fingerprint(audio_backend),
             }
 
         log.debug(
@@ -412,7 +537,7 @@ async def diarize(
         segment_embeddings = []
         segment_info = []
         valid_segments = []  # Keep track of which segments were successfully processed
-        embed_start = time.time()
+        embed_start = time.perf_counter()
         embedding_candidates = []
 
         for i, segment in enumerate(segments):
@@ -489,7 +614,8 @@ async def diarize(
                             segment_error,
                         )
 
-        embed_time = time.time() - embed_start
+        timings["segment_embedding_ms"] = _elapsed_ms(embed_start)
+        embed_time = timings["segment_embedding_ms"] / 1000
         num_processed = len(segment_embeddings)
         num_skipped = len(segments) - num_processed
 
@@ -504,7 +630,11 @@ async def diarize(
                 f"No valid segments found. All {len(segments)} segments were too short or invalid."
             )
             # Return empty result instead of raising error
-            total_time = time.time() - diarize_start
+            response_timings = _finish_timings(
+                timings,
+                request_started,
+                ("cluster_matching_ms",),
+            )
             return {
                 "segments": [],
                 "summary": {
@@ -515,6 +645,8 @@ async def diarize(
                     "skipped_segments": len(segments),
                     "reason": "All segments were too short or invalid",
                 },
+                "timings": response_timings,
+                **_runtime_fingerprint(audio_backend),
             }
 
         log.debug(
@@ -549,7 +681,11 @@ async def diarize(
             # Handle case where all segments had NaN after filtering
             if len(embeddings_array) == 0:
                 log.warning("All segments produced NaN embeddings after filtering.")
-                total_time = time.time() - diarize_start
+                response_timings = _finish_timings(
+                    timings,
+                    request_started,
+                    ("cluster_matching_ms",),
+                )
                 return {
                     "segments": [],
                     "summary": {
@@ -560,13 +696,14 @@ async def diarize(
                         "skipped_segments": len(segments),
                         "reason": "All segments produced NaN embeddings",
                     },
+                    "timings": response_timings,
+                    **_runtime_fingerprint(audio_backend),
                 }
 
         # Preserve Pyannote's speaker labels. Known-speaker matching must annotate
         # those clusters, not replace the diarization with a second clustering pass.
         cluster_id_to_name = {}
         clustering_stats = None
-        cluster_time = 0.0
         speaker_labels = [seg["speaker"] for seg in valid_segments]
         confidence_scores = [None] * len(valid_segments)
 
@@ -578,7 +715,7 @@ async def diarize(
                 cluster_id = cluster["id"]
                 cluster_id_to_name[cluster_id] = cluster.get("name")
 
-            cluster_start = time.time()
+            cluster_start = time.perf_counter()
             speaker_matches = {}
             for speaker in set(speaker_labels):
                 indices = [
@@ -605,9 +742,10 @@ async def diarize(
                 "num_matched_speakers": len(speaker_matches),
                 "similarity_threshold": similarity_threshold,
             }
-            cluster_time = time.time() - cluster_start
+            timings["cluster_matching_ms"] = _elapsed_ms(cluster_start)
         else:
             speaker_matches = {}
+            timings["cluster_matching_ms"] = 0.0
 
         # Build result segments
         log.debug("Building result segments")
@@ -677,16 +815,20 @@ async def diarize(
             if clustering_stats:
                 summary["clustering_stats"] = clustering_stats
 
-        total_time = time.time() - diarize_start
+        response_timings = _finish_timings(timings, request_started, ())
         log.info(
-            "Diarization complete: %d segments, %d speakers; "
-            "diarization=%.2fs, embeddings=%.2fs, clustering=%.2fs, total=%.2fs",
+            "Diarization complete: %d segments, %d speakers, audio=%.2fs; "
+            "queue=%.2fms, decode=%.2fms, diarization=%.2fms, "
+            "embeddings=%.2fms, clustering=%.2fms, total=%.2fms",
             len(result_segments),
             len(unique_speakers),
-            diarize_time,
-            embed_time,
-            cluster_time,
-            total_time,
+            payload_duration,
+            response_timings.get("queue_ms", 0.0),
+            response_timings.get("decode_ms", 0.0),
+            response_timings.get("diarization_ms", 0.0),
+            response_timings.get("segment_embedding_ms", 0.0),
+            response_timings.get("cluster_matching_ms", 0.0),
+            response_timings["total_ms"],
         )
         if cluster_list:
             log.info(
@@ -697,21 +839,25 @@ async def diarize(
         return {
             "segments": result_segments,
             "summary": summary,
-            **build_runtime_fingerprint(
-                diarization_model=audio_backend.diarization_model,
-                embedding_model=audio_backend.embedding_model,
-                sample_rate=16000,
-                embedding_dimension=int(audio_backend.embedder.dimension),
-                preprocessing=f"{os.getenv('AUDIO_BACKEND', 'soundfile')}-mono-16khz-v1",
-            ),
+            "timings": response_timings,
+            **_runtime_fingerprint(audio_backend),
         }
 
+    except InferenceGateFull:
+        log.warning(
+            "Diarization rejected: inference capacity exhausted, bytes=%d, total=%.2fms",
+            len(audio_data),
+            _elapsed_ms(request_started),
+        )
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         log.error(f"Error during diarization: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Diarization failed: {str(e)}")
     finally:
-        # Clean up temporary file
-        tmp_path.unlink(missing_ok=True)
+        if lease is not None:
+            await inference_gate.release()
 
 
 def main():

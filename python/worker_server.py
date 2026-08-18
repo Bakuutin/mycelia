@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Type
 
 from lib.resources import call_resource
 from lib.api import job_token_var
+from lib.diarization_runtime import job_cancel_event_var
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,11 +83,37 @@ def update_progress(job_id: str, progress: Dict[str, Any]):
     })
 
 
-async def run_in_thread_with_context(func: Callable, *args) -> Any:
+async def run_in_thread_with_context(
+    func: Callable,
+    *args,
+    request: Optional[Request] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> Any:
     """Run a sync function in a thread pool while preserving context variables"""
     ctx = copy_context()
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: ctx.run(func, *args))
+    future = loop.run_in_executor(None, lambda: ctx.run(func, *args))
+    if request is None or cancel_event is None:
+        return await future
+
+    try:
+        while not future.done():
+            done, _ = await asyncio.wait({future}, timeout=0.5)
+            if done:
+                break
+            if await request.is_disconnected():
+                cancel_event.set()
+        return await future
+    except asyncio.CancelledError:
+        # Python cannot safely terminate a blocking requests call in another
+        # thread. Signal cooperative cleanup and consume the eventual result.
+        cancel_event.set()
+        future.add_done_callback(
+            lambda completed: completed.exception()
+            if not completed.cancelled()
+            else None
+        )
+        raise
 
 
 @app.get("/health")
@@ -128,6 +155,8 @@ async def process_job(
 
     # Set token in current context before copying to thread
     token_ref = job_token_var.set(token) if token else None
+    cancel_event = threading.Event()
+    cancel_ref = job_cancel_event_var.set(cancel_event)
 
     def run_processor():
         try:
@@ -151,13 +180,18 @@ async def process_job(
             raise e
 
     try:
-        result = await run_in_thread_with_context(run_processor)
+        result = await run_in_thread_with_context(
+            run_processor,
+            request=request,
+            cancel_event=cancel_event,
+        )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if token_ref:
             job_token_var.reset(token_ref)
+        job_cancel_event_var.reset(cancel_ref)
 
 
 if __name__ == "__main__":

@@ -75,3 +75,26 @@ def call_resource(resource_name: str, body: dict) -> Any:
     )
     response.raise_for_status()
     return json.loads(response.text, cls=EJsonDecoder)
+
+
+def call_resource_once(
+    resource_name: str,
+    body: dict,
+    *,
+    timeout: tuple[float, float] = (3.0, 10.0),
+) -> Any:
+    """Call a worker resource once with a bounded network deadline.
+
+    Lookahead cleanup must not inherit the normal five-attempt/600-second
+    resource retry envelope. Mongo operations still carry their own maxTimeMS.
+    """
+    ensure_authorized()
+    session = get_session()
+    response = session.post(
+        get_url("api", "resource", resource_name),
+        data=json.dumps(body, cls=EJsonEncoder),
+        headers={"Content-Type": "application/json"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return json.loads(response.text, cls=EJsonDecoder)

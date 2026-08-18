@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import {
   classifyServiceResponse,
+  getDiarizatorReadyUrl,
   getJobServiceDependencies,
   getModelsUrl,
   getProviderHealthUrl,
@@ -28,6 +29,12 @@ Deno.test("falls back to STT health when a provider has no models route", () => 
   expect(shouldFallbackToSttHealth("stt", 405)).toBe(true);
   expect(shouldFallbackToSttHealth("stt", 500)).toBe(false);
   expect(shouldFallbackToSttHealth("llm", 404)).toBe(false);
+});
+
+Deno.test("probes diarizator readiness without a liveness fallback", () => {
+  expect(getDiarizatorReadyUrl("http://host:8085/")).toBe(
+    "http://host:8085/ready",
+  );
 });
 
 Deno.test("normalizes Google model resource names for routing", () => {

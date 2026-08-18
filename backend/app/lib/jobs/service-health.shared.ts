@@ -67,6 +67,10 @@ export function getProviderHealthUrl(baseUrl: string): string {
   return `${baseUrl.trim().replace(/\/+$/, "")}/health`;
 }
 
+export function getDiarizatorReadyUrl(baseUrl: string): string {
+  return `${baseUrl.trim().replace(/\/+$/, "")}/ready`;
+}
+
 export function shouldFallbackToSttHealth(
   serviceId: ExternalServiceId,
   modelsStatus: number,

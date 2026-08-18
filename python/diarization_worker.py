@@ -5,12 +5,15 @@ import argparse
 import math
 import re
 import hashlib
+import threading
 import requests
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from tqdm import tqdm
 from lib.resources import call_resource
 from lib.worker import setup_worker_logging, get_worker_id, mongo_cursor, claim_chunks, release_chunks
+from lib.diarization_runtime import StageTimings
 
 logger = setup_worker_logging('diarization_worker')
 
@@ -24,7 +27,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from bson import ObjectId
 from datetime import timedelta
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 from pytz import UTC
 
 import signal
@@ -50,10 +53,15 @@ DIARIZATION_METADATA_PROJECTION = {
     'diarizationFailure': 1,
 }
 
-# Cache for speaker profiles (refreshed periodically)
-_speaker_profiles_cache: list = []
-_speaker_profiles_cache_time: float = 0
+# Cache for speaker profiles (refreshed periodically). None means cold; an
+# empty list is a valid cached result and must not trigger a query per sequence.
+_speaker_profiles_cache: Optional[list] = None
+_speaker_profiles_last_success_monotonic: Optional[float] = None
+_speaker_profiles_next_refresh_monotonic: float = 0.0
 _PROFILE_CACHE_TTL_SECONDS = 300  # 5 minutes
+_PROFILE_CACHE_ERROR_RETRY_SECONDS = 30
+_PROFILE_CACHE_MAX_STALE_SECONDS = 1_800
+_speaker_profiles_cache_lock = threading.Lock()
 
 import json
 import numpy as np
@@ -76,28 +84,105 @@ def _get_speaker_profiles() -> list:
     Get speaker profiles from cache or reload from MongoDB.
     Returns list of profiles with id, name, and embedding.
     """
-    global _speaker_profiles_cache, _speaker_profiles_cache_time
+    global _speaker_profiles_cache
+    global _speaker_profiles_last_success_monotonic
+    global _speaker_profiles_next_refresh_monotonic
     
-    now = time.time()
-    if _speaker_profiles_cache and (now - _speaker_profiles_cache_time) < _PROFILE_CACHE_TTL_SECONDS:
+    now = time.monotonic()
+    if (
+        _speaker_profiles_cache is not None
+        and now < _speaker_profiles_next_refresh_monotonic
+    ):
         return _speaker_profiles_cache
-    
-    try:
-        result = call_resource('mongo', {
-            "action": "find",
-            "collection": "speaker_profiles",
-            "query": {},
-            "options": {"sort": {"created_at": 1}},
-        })
-        profiles = result.get("data", [])
-        _speaker_profiles_cache = profiles
-        _speaker_profiles_cache_time = now
-        if profiles:
-            logger.info(f"Loaded {len(profiles)} speaker profiles for identification")
-        return profiles
-    except Exception as e:
-        logger.warning(f"Could not load speaker profiles: {e}")
+
+    with _speaker_profiles_cache_lock:
+        now = time.monotonic()
+        if (
+            _speaker_profiles_cache is not None
+            and now < _speaker_profiles_next_refresh_monotonic
+        ):
+            return _speaker_profiles_cache
+
+        try:
+            result = call_resource('mongo', {
+                "action": "find",
+                "collection": "speaker_profiles",
+                "query": {},
+                "options": {
+                    "projection": {
+                        "_id": 1,
+                        "name": 1,
+                        "embedding": 1,
+                        "embeddingSpaceId": 1,
+                    },
+                    "sort": {"created_at": 1},
+                },
+            })
+            if isinstance(result, list):
+                rows = result
+            elif isinstance(result, dict) and isinstance(result.get("data"), list):
+                rows = result["data"]
+            else:
+                raise TypeError(
+                    f"Unexpected speaker profile response: {type(result).__name__}"
+                )
+
+            profiles = []
+            for profile in rows:
+                if (
+                    isinstance(profile, dict)
+                    and profile.get("_id") is not None
+                    and isinstance(profile.get("embedding"), list)
+                    and profile["embedding"]
+                ):
+                    profiles.append(profile)
+                else:
+                    logger.warning("Skipping invalid speaker profile payload")
+
+            _speaker_profiles_cache = profiles
+            _speaker_profiles_last_success_monotonic = now
+            _speaker_profiles_next_refresh_monotonic = (
+                now + _PROFILE_CACHE_TTL_SECONDS
+            )
+            logger.info(
+                "Loaded %d speaker profiles for identification",
+                len(profiles),
+            )
+            return profiles
+        except Exception as e:
+            cache_age = (
+                now - _speaker_profiles_last_success_monotonic
+                if _speaker_profiles_last_success_monotonic is not None
+                else math.inf
+            )
+            if (
+                _speaker_profiles_cache is not None
+                and cache_age < _PROFILE_CACHE_MAX_STALE_SECONDS
+            ):
+                # Retry soon while keeping identification stable through a
+                # transient config/Mongo outage.
+                _speaker_profiles_next_refresh_monotonic = (
+                    now + _PROFILE_CACHE_ERROR_RETRY_SECONDS
+                )
+                logger.warning(
+                    "Could not refresh speaker profiles; using stale cache: %s",
+                    e,
+                )
+                return _speaker_profiles_cache
+            logger.warning(f"Could not load speaker profiles: {e}")
+            _speaker_profiles_cache = []
+            _speaker_profiles_last_success_monotonic = None
+            _speaker_profiles_next_refresh_monotonic = (
+                now + _PROFILE_CACHE_ERROR_RETRY_SECONDS
+            )
+            return []
+
+
+def get_speaker_profiles_snapshot() -> list:
+    """Resolve the feature flag and immutable profile view once per job."""
+    if not _is_speaker_identification_enabled():
         return []
+    return list(_get_speaker_profiles())
 
 
 def _build_clusters_param(profiles: list) -> str:
@@ -282,6 +367,8 @@ def _classify_diarization_error(
         category = "timeout"
     elif isinstance(error, requests.exceptions.ConnectionError):
         category = "provider_network"
+    elif status == 429:
+        category = "provider_busy"
     elif status == 413:
         category = "payload_too_large"
     elif "embedding space" in lowered:
@@ -299,9 +386,16 @@ def _classify_diarization_error(
     else:
         category = "unknown"
 
-    retryable = category in {
-        "timeout", "provider_network", "provider_http", "invalid_audio", "unknown"
-    } and attempt < 3
+    retryable = category == "provider_busy" or (
+        category in {
+            "timeout",
+            "provider_network",
+            "provider_http",
+            "invalid_audio",
+            "unknown",
+        }
+        and attempt < 3
+    )
     return {
         "originalId": str(sequence.original_id),
         "start": sequence.start,
@@ -330,7 +424,11 @@ def _record_sequence_failure(
     sequence: 'DiarizationSequence',
     detail: dict[str, Any],
 ) -> None:
-    retry = _failure_retry_state(int(detail.get("attempt", 1)))
+    retry = (
+        {"status": "will_retry", "delaySeconds": 60}
+        if detail.get("category") == "provider_busy"
+        else _failure_retry_state(int(detail.get("attempt", 1)))
+    )
     retry_at = (
         datetime.now(tz=UTC) + timedelta(seconds=retry["delaySeconds"])
         if retry["delaySeconds"] is not None
@@ -373,6 +471,17 @@ class DiarizationSequence(BaseModel):
     def __repr__(self):
         indices = [chunk['index'] for chunk in self.chunks]
         return f'{self.original_id}: {repr(indices)}'
+
+
+@dataclass
+class PreparedDiarizationSequence:
+    sequence: DiarizationSequence
+    wav_file: io.BytesIO
+    total_samples: int
+    stage_timings_seconds: dict[str, float] = field(default_factory=dict)
+
+    def close(self) -> None:
+        self.wav_file.close()
 
 
 
@@ -527,11 +636,13 @@ def combine_chunks_to_wav(sequence: DiarizationSequence) -> tuple[io.BytesIO, in
     Returns tuple of WAV BytesIO and number of audio samples.
     """
     audio_arrays = []
+    chunk_sample_counts: list[int] = []
     current_time = sequence.start
 
     for chunk in sequence.chunks:
         # Decode opus chunk to numpy array
         audio = read_codec(chunk['data'], codec="opus", sample_rate=sample_rate)
+        chunk_sample_counts.append(len(audio))
         chunk_duration = timedelta(seconds=len(audio) / sample_rate)
 
         # Calculate gap between expected time and actual chunk start
@@ -554,7 +665,11 @@ def combine_chunks_to_wav(sequence: DiarizationSequence) -> tuple[io.BytesIO, in
     combined_audio = np.concatenate(audio_arrays, axis=0)
 
     # Convert to WAV
-    return array_to_wav(combined_audio, sample_rate=sample_rate), len(combined_audio)
+    wav_file = array_to_wav(combined_audio, sample_rate=sample_rate)
+    # BytesIO supports task-local metadata without changing this established
+    # function's public two-tuple contract.
+    wav_file.mycelia_chunk_sample_counts = chunk_sample_counts
+    return wav_file, len(combined_audio)
 
 
 def _get_claim_owner(chunk_id: ObjectId) -> Optional[str]:
@@ -638,6 +753,93 @@ def hydrate_claimed_sequence(
     )
 
 
+def hydrate_leased_sequence(
+    seq: DiarizationSequence,
+    worker_id: str,
+    *,
+    include_diarized: bool = False,
+    resource_call: Optional[Callable[[str, dict], Any]] = None,
+) -> DiarizationSequence:
+    """Boundedly load immutable audio under an original-wide lease.
+
+    The next continuation deliberately overlaps the current sequence's last
+    chunk. During lookahead that chunk may still be claimed by this same job,
+    so hydration accepts either an unclaimed chunk or this job's ownership.
+    The full pending-state contract is rechecked by claim_sequence immediately
+    before the external provider request.
+    """
+    if all('data' in chunk for chunk in seq.chunks):
+        return seq
+
+    chunk_ids = [chunk['_id'] for chunk in seq.chunks]
+    pending = _build_pending_chunk_filters(include_diarized=include_diarized)
+    pending['processing_by'] = {'$in': [None, worker_id]}
+    invoke_resource = resource_call or call_resource
+    result = invoke_resource('mongo', {
+        "action": "find",
+        "collection": "audio_chunks",
+        "query": {
+            **pending,
+            '_id': {'$in': chunk_ids},
+            'original_id': seq.original_id,
+        },
+        "options": {
+            "projection": {
+                '_id': 1,
+                'original_id': 1,
+                'index': 1,
+                'start': 1,
+                'data': 1,
+                'diarizationFailure': 1,
+            },
+            "limit": len(chunk_ids),
+            "hint": "_id_",
+            "maxTimeMS": DIARIZATION_HYDRATE_MAX_TIME_MS,
+        },
+    })
+    docs = result.get('data', []) if isinstance(result, dict) else result
+    by_id = {doc['_id']: doc for doc in docs or []}
+    missing_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in by_id]
+    if missing_ids:
+        raise RuntimeError(
+            f"Could not hydrate {len(missing_ids)} leased audio chunk(s)"
+        )
+
+    return DiarizationSequence(
+        original_id=seq.original_id,
+        chunks=[by_id[chunk_id] for chunk_id in chunk_ids],
+        is_partial=seq.is_partial,
+        is_continuation=seq.is_continuation,
+    )
+
+
+def prepare_diarization_sequence(
+    sequence: DiarizationSequence,
+    worker_id: str,
+    *,
+    include_diarized: bool = False,
+    resource_call: Optional[Callable[[str, dict], Any]] = None,
+) -> PreparedDiarizationSequence:
+    """Hydrate and decode one lookahead sequence under its recording lease."""
+    timings = StageTimings()
+    with timings.measure("hydrate"):
+        hydrated = hydrate_leased_sequence(
+            sequence,
+            worker_id,
+            include_diarized=include_diarized,
+            resource_call=resource_call,
+        )
+    with timings.measure("decode"):
+        wav_file, total_samples = combine_chunks_to_wav(hydrated)
+        wav_file.seek(0)
+    return PreparedDiarizationSequence(
+        sequence=hydrated,
+        wav_file=wav_file,
+        total_samples=total_samples,
+        stage_timings_seconds=timings.values,
+    )
+
+
 def release_sequence(seq: DiarizationSequence, worker_id: str):
     chunk_ids = [chunk['_id'] for chunk in seq.chunks]
     release_chunks(chunk_ids, worker_id)
@@ -653,11 +855,20 @@ def diarize_sequence(
     mark_chunks: bool = True,
     expected_embedding_space_id: Optional[str] = None,
     server_url: Optional[str] = None,
+    prepared: Optional[PreparedDiarizationSequence] = None,
+    provider_session: Optional[requests.Session] = None,
+    speaker_profiles_snapshot: Optional[list] = None,
 ):
     """
     Combine chunks to WAV, call diarization API, and save results to MongoDB.
     """
     start_time = time.time()
+    started_monotonic = time.monotonic()
+    if prepared is not None:
+        sequence = prepared.sequence
+    timings = StageTimings(
+        prepared.stage_timings_seconds if prepared is not None else None
+    )
     timestamp = sequence.start.strftime("%Y-%m-%d %H:%M:%S")
     chunks_count = len(sequence.chunks)
     chunks_marked = 0
@@ -669,53 +880,102 @@ def diarize_sequence(
 
     payload_bytes = 0
     payload_duration = 0.0
+    useful_audio_duration = 0.0
+    wav_file: Optional[io.BytesIO] = prepared.wav_file if prepared else None
+
+    def finish(result: dict[str, Any]) -> dict[str, Any]:
+        timings.values["total"] = max(
+            time.monotonic() - started_monotonic,
+            0.0,
+        )
+        result["stage_timings_ms"] = timings.milliseconds()
+        result["audio_seconds"] = useful_audio_duration
+        result["useful_audio_seconds"] = useful_audio_duration
+        result["payload_audio_seconds"] = payload_duration
+        return result
 
     try:
-        claimed, claimed_by = claim_sequence(
-            sequence,
-            worker_id,
-            include_diarized=not mark_chunks,
-        )
+        with timings.measure("claim"):
+            claimed, claimed_by = claim_sequence(
+                sequence,
+                worker_id,
+                include_diarized=not mark_chunks,
+            )
         if not claimed:
             claimant_text = f' by {claimed_by}' if claimed_by else ''
             log_info(f'{timestamp}  {chunks_count:3d} chunks  {original_id}  skipped (claimed{claimant_text})')
-            return {"status": "skipped", "chunks": 0, "chunks_diarized": 0, "duration": 0, "segments": 0}
-
-        try:
-            sequence = hydrate_claimed_sequence(sequence, worker_id)
-        except Exception as exc:
-            release_sequence(sequence, worker_id)
-            detail = {
-                "category": "mongo_hydration",
-                "message": str(exc),
-                "retryable": True,
-                "status": "will_retry",
-            }
-            log_info(
-                f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
-                f'ERROR: claimed audio hydration failed: {exc}'
-            )
-            return {
-                "status": "error",
-                "error": str(exc),
-                "errorDetail": detail,
+            return finish({
+                "status": "skipped",
+                "skip_reason": "chunk_claim",
                 "chunks": 0,
                 "chunks_diarized": 0,
-                "duration": time.time() - start_time,
+                "duration": 0,
                 "segments": 0,
-            }
+            })
 
-        # Combine chunks into WAV file
-        wav_file, total_samples = combine_chunks_to_wav(sequence)
-        wav_file.seek(0)
+        if prepared is None:
+            try:
+                with timings.measure("hydrate"):
+                    sequence = hydrate_claimed_sequence(sequence, worker_id)
+            except Exception as exc:
+                release_sequence(sequence, worker_id)
+                detail = {
+                    "category": "mongo_hydration",
+                    "message": str(exc),
+                    "retryable": True,
+                    "status": "will_retry",
+                }
+                log_info(
+                    f'{timestamp}  {chunks_count:3d} chunks  {original_id}  '
+                    f'ERROR: claimed audio hydration failed: {exc}'
+                )
+                return finish({
+                    "status": "error",
+                    "error": str(exc),
+                    "errorDetail": detail,
+                    "chunks": 0,
+                    "chunks_diarized": 0,
+                    "duration": time.time() - start_time,
+                    "segments": 0,
+                })
+
+            with timings.measure("decode"):
+                wav_file, total_samples = combine_chunks_to_wav(sequence)
+                wav_file.seek(0)
+        else:
+            total_samples = prepared.total_samples
+        assert wav_file is not None
         payload_bytes = wav_file.getbuffer().nbytes
         payload_duration = total_samples / sample_rate if total_samples else 0.0
+        chunk_sample_counts = getattr(
+            wav_file,
+            "mycelia_chunk_sample_counts",
+            None,
+        )
+        if chunk_sample_counts:
+            # A partial sequence deliberately retains its last chunk as the
+            # next request's continuity overlap. Count the padded payload once,
+            # but defer that retained chunk's decoded duration until the next
+            # sequence commits it.
+            retained_overlap_samples = (
+                chunk_sample_counts[-1] if sequence.is_partial else 0
+            )
+            useful_audio_duration = (
+                max(total_samples - retained_overlap_samples, 0) / sample_rate
+            )
+        else:
+            # Test doubles and legacy prepared objects do not carry per-chunk
+            # decode metrics; payload duration is the conservative fallback.
+            useful_audio_duration = payload_duration
 
         # Check if speaker identification is enabled and get profiles
         speaker_profiles = []
         clusters_param = None
-        if run_id == "legacy-v0" and _is_speaker_identification_enabled():
-            speaker_profiles = _get_speaker_profiles()
+        with timings.measure("speaker_profiles"):
+            if run_id == "legacy-v0" and speaker_profiles_snapshot is not None:
+                speaker_profiles = speaker_profiles_snapshot
+            elif run_id == "legacy-v0" and _is_speaker_identification_enabled():
+                speaker_profiles = _get_speaker_profiles()
             if speaker_profiles:
                 clusters_param = _build_clusters_param(speaker_profiles)
                 log_info(f'  → Speaker identification enabled with {len(speaker_profiles)} profiles')
@@ -724,16 +984,34 @@ def diarize_sequence(
         request_data, request_params = _build_diarization_request_fields(clusters_param)
         
         effective_server_url = (server_url or DIARIZATION_SERVER_URL).rstrip('/')
-        response = requests.post(
-            f'{effective_server_url}/diarize',
-            files={'file': ('audio.wav', wav_file, 'audio/wav')},
-            data=request_data if request_data else None,
-            params=request_params if request_params else None,
-            timeout=300 + len(sequence.chunks) * 3
-        )
-        response.raise_for_status()
-
-        data = response.json()
+        post = provider_session.post if provider_session is not None else requests.post
+        with timings.measure("provider"):
+            response = post(
+                f'{effective_server_url}/diarize',
+                files={'file': ('audio.wav', wav_file, 'audio/wav')},
+                data=request_data if request_data else None,
+                params=request_params if request_params else None,
+                timeout=(10, 300 + len(sequence.chunks) * 3),
+            )
+            response.raise_for_status()
+            data = response.json()
+        service_timings = data.get("timings")
+        if isinstance(service_timings, dict):
+            for raw_name, raw_milliseconds in service_timings.items():
+                if (
+                    not isinstance(raw_name, str)
+                    or not raw_name.endswith("_ms")
+                    or isinstance(raw_milliseconds, bool)
+                    or not isinstance(raw_milliseconds, (int, float))
+                ):
+                    continue
+                milliseconds = float(raw_milliseconds)
+                if not math.isfinite(milliseconds) or milliseconds < 0:
+                    continue
+                timings.add(
+                    f"server_{raw_name[:-3]}",
+                    milliseconds / 1000.0,
+                )
         segments = data.get('segments', [])
         embedding_space_id = data.get('embeddingSpaceId', 'legacy-unknown')
         if expected_embedding_space_id and embedding_space_id != expected_embedding_space_id:
@@ -741,19 +1019,21 @@ def diarize_sequence(
                 f"Diarizator embedding space changed while building run: {embedding_space_id} != {expected_embedding_space_id}"
             )
 
-        previous_segments = _get_overlap_segments(sequence)
-        reserved_labels = _get_existing_speaker_labels(sequence.original_id)
-        speaker_label_mapping = _reconcile_speaker_labels(
-            segments,
-            previous_segments,
-            reserved_labels=reserved_labels,
-        )
-        for segment in segments:
-            segment['speaker'] = speaker_label_mapping.get(segment['speaker'], segment['speaker'])
+        with timings.measure("continuity"):
+            previous_segments = _get_overlap_segments(sequence)
+            reserved_labels = _get_existing_speaker_labels(sequence.original_id)
+            speaker_label_mapping = _reconcile_speaker_labels(
+                segments,
+                previous_segments,
+                reserved_labels=reserved_labels,
+            )
+            for segment in segments:
+                segment['speaker'] = speaker_label_mapping.get(segment['speaker'], segment['speaker'])
 
         if not segments:
             # No segments found, mark as processed
-            chunks_marked = mark_as_diarized(sequence, worker_id)
+            with timings.measure("release"):
+                chunks_marked = mark_as_diarized(sequence, worker_id)
             end_time = time.time()
             duration = end_time - start_time
             chunk_rate = (chunks_marked / duration) if chunks_marked and duration > 0 else None
@@ -764,13 +1044,13 @@ def diarize_sequence(
                 f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}) @ {chunk_rate_display}  '
                 f'no_segments  payload={payload_bytes / (1024 * 1024):.2f} MiB/{payload_duration:.1f}s'
             )
-            return {
+            return finish({
                 "status": "no_segments",
                 "chunks": chunks_count,
                 "chunks_diarized": chunks_marked,
                 "duration": duration,
-                "segments": 0
-            }
+                "segments": 0,
+            })
 
         # Generate unique inference_id for this diarization run
         inference_id = ObjectId()
@@ -850,18 +1130,20 @@ def diarize_sequence(
         # would leave chunks unmarked and be redone from the start.
         saved_segments = len(segment_operations)
         if segment_operations:
-            call_resource('mongo', {
-                "action": "bulkWrite",
-                "collection": "diarizations",
-                "operations": segment_operations,
-            })
+            with timings.measure("persist"):
+                call_resource('mongo', {
+                    "action": "bulkWrite",
+                    "collection": "diarizations",
+                    "operations": segment_operations,
+                })
 
         # Mark chunks as diarized
-        if mark_chunks:
-            chunks_marked = mark_as_diarized(sequence, worker_id)
-        else:
-            release_sequence(sequence, worker_id)
-            chunks_marked = chunks_count
+        with timings.measure("release"):
+            if mark_chunks:
+                chunks_marked = mark_as_diarized(sequence, worker_id)
+            else:
+                release_sequence(sequence, worker_id)
+                chunks_marked = chunks_count
 
         end_time = time.time()
         duration = end_time - start_time
@@ -874,14 +1156,14 @@ def diarize_sequence(
             f'processed={chunks_marked}/{chunks_count} (seq_left={remaining_in_sequence}) @ {chunk_rate_display}  '
             f'diarized  {saved_segments} segments{matched_info}  payload={payload_bytes / (1024 * 1024):.2f} MiB/{payload_duration:.1f}s'
         )
-        return {
+        return finish({
             "status": "diarized",
             "chunks": chunks_count,
             "chunks_diarized": chunks_marked,
             "duration": duration,
             "segments": saved_segments,
-            "matched_segments": matched_segments
-        }
+            "matched_segments": matched_segments,
+        })
 
     except requests.exceptions.ReadTimeout:
         end_time = time.time()
@@ -896,20 +1178,24 @@ def diarize_sequence(
         )
         if mark_chunks:
             _record_sequence_failure(sequence, detail)
-        return {
+        return finish({
             "status": "error",
             "error": "Diarization request timed out",
             "errorDetail": detail,
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
-            "segments": 0
-        }
+            "segments": 0,
+        })
 
     except requests.exceptions.HTTPError as http_err:
         end_time = time.time()
         release_sequence(sequence, worker_id)
-        status_code = http_err.response.status_code if http_err.response else None
+        status_code = (
+            http_err.response.status_code
+            if http_err.response is not None
+            else None
+        )
         extra_context = ''
         if status_code == 413:
             extra_context = (
@@ -932,15 +1218,15 @@ def diarize_sequence(
         )
         if mark_chunks:
             _record_sequence_failure(sequence, detail)
-        return {
+        return finish({
             "status": "error",
             "error": f"HTTP {status_code}: {http_err}",
             "errorDetail": detail,
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
-            "segments": 0
-        }
+            "segments": 0,
+        })
 
     except Exception as e:
         end_time = time.time()
@@ -954,15 +1240,18 @@ def diarize_sequence(
         )
         if mark_chunks:
             _record_sequence_failure(sequence, detail)
-        return {
+        return finish({
             "status": "error",
             "error": str(e),
             "errorDetail": detail,
             "chunks": 0,
             "chunks_diarized": 0,
             "duration": end_time - start_time,
-            "segments": 0
-        }
+            "segments": 0,
+        })
+    finally:
+        if wav_file is not None:
+            wav_file.close()
 
 
 def mark_as_diarized(seq: DiarizationSequence, worker_id: Optional[str] = None) -> int:

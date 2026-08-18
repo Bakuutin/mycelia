@@ -125,7 +125,10 @@ triggered recoverable CUDA OOM fallback on a shared 24 GiB RTX 4090. Override
 `DIARIZATION_SEGMENTATION_BATCH_SIZE`, `DIARIZATION_EMBEDDING_BATCH_SIZE`, and
 `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` only after a representative
 throughput/VRAM benchmark. `/health` reports the effective values under
-`batching`.
+`batching`. `DIARIZATION_REQUEST_CONCURRENCY` defaults to `1` and is shared by
+`/diarize` and `/embed`. `DIARIZATION_MAX_QUEUED_REQUESTS` defaults to `1` and
+only accepts `0` or `1`; requests beyond that bound get a retryable HTTP 429
+instead of running the same model concurrently.
 
 To stop either deployment:
 
@@ -211,7 +214,9 @@ The expected image architecture is `amd64`. Set the Portainer stack variable
 3. Select **Web editor** and paste the complete contents of
    `diarizator/compose.portainer.yml`.
 4. Under **Environment variables**, add `HF_TOKEN`, the immutable
-   `DIARIZATION_IMAGE` tag, and `DIARIZATION_BIND_ADDRESS=<TAILSCALE_IP>`.
+   `DIARIZATION_IMAGE` tag, `DIARIZATION_BIND_ADDRESS=<TAILSCALE_IP>`,
+   `DIARIZATION_REQUEST_CONCURRENCY=1`, and
+   `DIARIZATION_MAX_QUEUED_REQUESTS=1`.
    Do not place the token in the Compose file or Git.
 5. Set `COMPOSE_PROFILES` to `pool-N`, where `N` is `2` through `6`; delete it
    for one process.
@@ -226,10 +231,12 @@ minutes while the persistent model volume is populated.
 Verify all runtime layers instead of relying on the green container icon alone:
 
 ```bash
+curl -fsS http://SERVER_PRIVATE_IP:8085/ready
 curl -fsS http://SERVER_PRIVATE_IP:8085/health
 ```
 
-The response must contain `"ready":true` and `"device":"cuda"`. Portainer
+`/ready` must return HTTP 200. `/health` must contain `"ready":true`,
+`"device":"cuda"`, `"concurrency":1`, and the expected `batching`. Portainer
 logs must also contain records equivalent to:
 
 ```text
@@ -324,10 +331,14 @@ Pyannote is still downloading/loading models.
 
 ```bash
 docker compose --profile diarization ps diarizator
+curl -fsS http://localhost:8085/ready
 curl -fsS http://localhost:8085/health
 ```
 
-Expected ready response is HTTP 200. In Mycelia, open **Jobs → External
+`/health` is liveness and always reports current `ready`, `computeMode`,
+`device`, `concurrency`, `inflight`, and `queued` state. `/ready` returns HTTP
+503 until the models are loaded; it also remains 503 when `COMPUTE_MODE=gpu`
+was requested but CUDA is unavailable. In Mycelia, open **Jobs → External
 services & routing** or **Settings → Diarization**; the route must show
 `Running`, not only configured.
 
@@ -365,6 +376,19 @@ docker image inspect mycelia-diarizator:cu126 \
 ```
 
 ## API Usage
+
+### GET /health and GET /ready
+
+`/health` is a liveness/status response. It includes model readiness, requested
+compute mode, effective device, batching, runtime fingerprints, and the shared
+inference gate's `concurrency`, `inflight`, `queued`, and `maxQueued` values.
+`/ready` returns the same payload with HTTP 503 until models are loaded or when
+GPU mode fell back to CPU.
+
+`/diarize` and `/embed` share that gate. With the defaults, one request runs and
+one waits. `DIARIZATION_MAX_QUEUED_REQUESTS=0` disables waiting; values above
+`1` are rejected at startup. A request beyond the configured bound receives
+HTTP 429, a `Retry-After: 1` header, and a JSON body with `retryable: true`.
 
 ### POST /diarize
 
@@ -412,9 +436,22 @@ Perform speaker diarization on an audio file.
     "num_segments": 15,
     "num_speakers": 2,
     "speakers": ["SPEAKER_00", "SPEAKER_01"]
+  },
+  "timings": {
+    "upload_read_ms": 0.4,
+    "queue_ms": 0.0,
+    "decode_ms": 2.7,
+    "diarization_ms": 810.5,
+    "segment_embedding_ms": 122.1,
+    "cluster_matching_ms": 0.0,
+    "total_ms": 937.4
   }
 }
 ```
+
+The additive `timings` object is also returned by `/embed` with its applicable
+upload, queue, decode, embedding, and total stages. Audio is decoded once in
+memory and the same waveform is reused for diarization and segment embeddings.
 
 **Response (with clusters - seeded clustering):**
 ```json

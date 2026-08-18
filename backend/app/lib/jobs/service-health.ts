@@ -17,6 +17,7 @@ import {
   classifyServiceResponse,
   type ExternalServiceHealth,
   type ExternalServiceId,
+  getDiarizatorReadyUrl,
   getJobServiceDependencies,
   getModelsUrl,
   getProviderHealthUrl,
@@ -228,8 +229,8 @@ async function probeProvider(input: {
   }
 }
 
-// The diarizator exposes only GET /health — probeProvider's /models + apiKey
-// contract doesn't fit, so it gets a dedicated probe.
+// Diarizator readiness is separate from liveness: /ready stays unavailable
+// until its requested device and models can actually serve inference.
 async function probeDiarizator(
   route: ResolvedDiarizatorRoute,
 ): Promise<ExternalServiceHealth> {
@@ -238,7 +239,7 @@ async function probeDiarizator(
     .map(([workerType]) => workerType);
   const checkedAt = new Date().toISOString();
   const baseUrl = route.baseUrl;
-  const healthUrl = `${baseUrl.trim().replace(/\/+$/, "")}/health`;
+  const healthUrl = getDiarizatorReadyUrl(baseUrl);
   const startedAt = performance.now();
   try {
     const response = await fetch(healthUrl, {

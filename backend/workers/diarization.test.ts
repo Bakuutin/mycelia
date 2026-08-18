@@ -1,5 +1,8 @@
 import { expect } from "@std/expect";
-import diarization, { schema } from "./diarization.ts";
+import diarization, {
+  getDefaultDiarizationMaxSequenceChunks,
+  schema,
+} from "./diarization.ts";
 
 Deno.test("diarization job can read its feature flag and speaker profiles", () => {
   expect(diarization.policies).toEqual([
@@ -11,6 +14,16 @@ Deno.test("diarization job can read its feature flag and speaker profiles", () =
     { resource: "db/diarizations", action: "update", effect: "allow" },
     { resource: "db/diarization_runs", action: "*", effect: "allow" },
     { resource: "db/diarization_campaigns", action: "*", effect: "allow" },
+    {
+      resource: "db/diarization_recording_leases",
+      action: "*",
+      effect: "allow",
+    },
+    {
+      resource: "db/diarization_campaign_rate_samples",
+      action: "*",
+      effect: "allow",
+    },
     { resource: "db/speaker_profiles", action: "read", effect: "allow" },
   ]);
 });
@@ -140,6 +153,7 @@ Deno.test("diarization jobs are bounded and preserve the requested run", () => {
     type: "diarization",
     limit: 4,
     batchSize: 4,
+    maxSequenceChunks: getDefaultDiarizationMaxSequenceChunks(),
     mode: "missing",
   });
   expect(schema.parse({
@@ -149,11 +163,25 @@ Deno.test("diarization jobs are bounded and preserve the requested run", () => {
     runId: "run-1",
     campaignId: "campaign-1",
     originalId: "507f1f77bcf86cd799439011",
+    maxSequenceChunks: 8,
   })).toMatchObject({
     limit: 8,
     mode: "build_generation",
     runId: "run-1",
     campaignId: "campaign-1",
     originalId: "507f1f77bcf86cd799439011",
+    maxSequenceChunks: 8,
   });
+  expect(schema.safeParse({ type: "diarization", batchSize: 33 }).success)
+    .toBe(false);
+  expect(
+    schema.safeParse({ type: "diarization", maxSequenceChunks: 33 }).success,
+  ).toBe(false);
+});
+
+Deno.test("diarization sequence window snapshots a bounded environment value", () => {
+  expect(getDefaultDiarizationMaxSequenceChunks("0")).toBe(6);
+  expect(getDefaultDiarizationMaxSequenceChunks("not-a-number")).toBe(6);
+  expect(getDefaultDiarizationMaxSequenceChunks("8")).toBe(8);
+  expect(getDefaultDiarizationMaxSequenceChunks("99")).toBe(32);
 });

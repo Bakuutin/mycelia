@@ -62,6 +62,15 @@ Deno.test("STT provider health failures receive the short trigger retry", () => 
     "STT provider local has no free concurrency slots",
   )).toBe(true);
   expect(isHealthBlockedEnqueueError(
+    "All healthy diarizator provider concurrency slots are reserved",
+  )).toBe(true);
+  expect(isHealthBlockedEnqueueError(
+    "No healthy diarizator route is available. GPU is still loading",
+  )).toBe(true);
+  expect(isHealthBlockedEnqueueError(
+    "Diarizator route reservation is temporarily busy",
+  )).toBe(true);
+  expect(isHealthBlockedEnqueueError(
     "Transcription job is missing its provider routing snapshot",
   )).toBe(false);
 });

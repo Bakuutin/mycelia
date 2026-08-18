@@ -38,6 +38,11 @@ export function isHealthBlockedEnqueueError(message: string): boolean {
     message.includes(
       "All enabled STT provider concurrency slots are reserved",
     ) ||
+    message.includes(
+      "All healthy diarizator provider concurrency slots are reserved",
+    ) ||
+    message.includes("No healthy diarizator route is available") ||
+    message.includes("Diarizator route reservation is temporarily busy") ||
     message.includes("has no free concurrency slots");
 }
 

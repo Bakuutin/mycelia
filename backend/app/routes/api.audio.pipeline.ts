@@ -257,11 +257,32 @@ interface DiarizationCampaignSummary {
   segmentsCreated: number;
   errorCount: number;
   chunksPerSecond: number | null;
+  usefulAudioRealtimeMultiple: number | null;
+  rateWindowSeconds: number | null;
+  successfulSequences: number;
+  skippedSequences: number;
+  recordingLeaseBusyOriginals: number;
+  recordingLeaseSkippedSequences: number;
+  chunkClaimSkips: number;
+  skipRatio: number | null;
+  leaseSkipRatio: number | null;
+  claimSkipRatio: number | null;
+  stageTimingsMs: Record<string, DiarizationStageTimingSummary>;
   etaSeconds: number | null;
   batchNumber: number | null;
   estimatedBatches: number | null;
   totalEstimated: boolean;
 }
+
+interface DiarizationStageTimingSummary {
+  count: number;
+  total: number;
+  avg: number;
+  max: number;
+}
+
+const DIARIZATION_RATE_WINDOW_MS = 15 * 60 * 1000;
+const DIARIZATION_RATE_SAMPLE_LIMIT = 500;
 
 interface PipelineBacklogSnapshot {
   count: number;
@@ -341,6 +362,154 @@ async function getDiarizationCampaignSummary(
     await findLatest(["completed", "completed_with_errors"]);
   if (!campaign || typeof campaign.campaignId !== "string") return null;
 
+  const rateWindowStart = new Date(Date.now() - DIARIZATION_RATE_WINDOW_MS);
+  const rateSamples = await mongo({
+    action: "find",
+    collection: "diarization_campaign_rate_samples",
+    query: {
+      campaignId: campaign.campaignId,
+      finishedAt: { $gte: rateWindowStart },
+    },
+    options: {
+      // Bound work to the freshest samples. Aggregation does not depend on
+      // result order, but ascending+limit would silently discard current rate.
+      sort: { finishedAt: -1 },
+      limit: DIARIZATION_RATE_SAMPLE_LIMIT,
+      projection: {
+        startedAt: 1,
+        finishedAt: 1,
+        chunksProcessed: 1,
+        audioSecondsProcessed: 1,
+        successfulSequences: 1,
+        skippedSequences: 1,
+        recordingLeaseBusyOriginals: 1,
+        recordingLeaseSkippedSequences: 1,
+        chunkClaimSkips: 1,
+        stageTimingsMs: 1,
+      },
+    },
+  }) as Record<string, unknown>[];
+
+  const timedSamples = (rateSamples ?? []).filter((sample) =>
+    sample.startedAt instanceof Date && sample.finishedAt instanceof Date &&
+    sample.finishedAt.getTime() >= sample.startedAt.getTime()
+  );
+  const sampleWindowSeconds = timedSamples.length > 0
+    ? Math.max(
+      1,
+      (Math.max(
+        ...timedSamples.map((sample) => (sample.finishedAt as Date).getTime()),
+      ) - Math.min(...timedSamples.map((sample) =>
+        (sample.startedAt as Date).getTime()
+      ))) / 1000,
+    )
+    : null;
+  const sampleChunks = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(finiteNumber(sample.chunksProcessed) ?? 0, 0),
+    0,
+  );
+  const sampleAudioSeconds = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(finiteNumber(sample.audioSecondsProcessed) ?? 0, 0),
+    0,
+  );
+  const successfulSequences = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(finiteNumber(sample.successfulSequences) ?? 0, 0),
+    0,
+  );
+  const skippedSequences = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(
+        finiteNumber(sample.skippedSequences) ??
+          (finiteNumber(sample.recordingLeaseSkippedSequences) ?? 0) +
+            (finiteNumber(sample.chunkClaimSkips) ?? 0),
+        0,
+      ),
+    0,
+  );
+  const recordingLeaseBusyOriginals = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(
+        finiteNumber(sample.recordingLeaseBusyOriginals) ?? 0,
+        0,
+      ),
+    0,
+  );
+  const recordingLeaseSkippedSequences = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(
+        finiteNumber(sample.recordingLeaseSkippedSequences) ?? 0,
+        0,
+      ),
+    0,
+  );
+  const chunkClaimSkips = timedSamples.reduce(
+    (total, sample) =>
+      total + Math.max(finiteNumber(sample.chunkClaimSkips) ?? 0, 0),
+    0,
+  );
+  const stageTimingTotals = new Map<
+    string,
+    { count: number; total: number; max: number }
+  >();
+  for (const sample of timedSamples) {
+    const sampleTimings = sample.stageTimingsMs;
+    if (
+      typeof sampleTimings !== "object" || sampleTimings === null ||
+      Array.isArray(sampleTimings)
+    ) {
+      continue;
+    }
+    for (const [stage, timing] of Object.entries(sampleTimings)) {
+      if (
+        typeof timing !== "object" || timing === null || Array.isArray(timing)
+      ) {
+        continue;
+      }
+      const value = timing as Record<string, unknown>;
+      const count = Math.max(finiteNumber(value.count) ?? 0, 0);
+      const total = Math.max(finiteNumber(value.total) ?? 0, 0);
+      const max = Math.max(finiteNumber(value.max) ?? 0, 0);
+      if (count <= 0) continue;
+      const aggregate = stageTimingTotals.get(stage) ?? {
+        count: 0,
+        total: 0,
+        max: 0,
+      };
+      aggregate.count += count;
+      aggregate.total += total;
+      aggregate.max = Math.max(aggregate.max, max);
+      stageTimingTotals.set(stage, aggregate);
+    }
+  }
+  const stageTimingsMs = Object.fromEntries(
+    [...stageTimingTotals.entries()].map(([stage, timing]) => [
+      stage,
+      {
+        count: timing.count,
+        total: timing.total,
+        avg: timing.total / timing.count,
+        max: timing.max,
+      },
+    ]),
+  );
+  const aggregateChunksPerSecond =
+    sampleWindowSeconds != null && sampleChunks > 0
+      ? sampleChunks / sampleWindowSeconds
+      : null;
+  const usefulAudioRealtimeMultiple = sampleWindowSeconds != null &&
+      sampleAudioSeconds > 0
+    ? sampleAudioSeconds / sampleWindowSeconds
+    : null;
+  const ratioToSuccessfulSequences = (skips: number): number | null =>
+    successfulSequences > 0
+      ? skips / successfulSequences
+      : skips > 0
+      ? 1
+      : null;
+
   const processedChunks = Math.max(
     finiteNumber(campaign.processedChunks) ?? 0,
     0,
@@ -355,8 +524,13 @@ async function getDiarizationCampaignSummary(
     : totalChunks != null
     ? Math.max(totalChunks - processedChunks, 0)
     : null;
-  const chunksPerSecondValue = finiteNumber(campaign.chunksPerSecond);
-  const etaSecondsValue = finiteNumber(campaign.etaSeconds);
+  const chunksPerSecondValue = aggregateChunksPerSecond ??
+    finiteNumber(campaign.chunksPerSecond);
+  const etaSecondsValue =
+    chunksPerSecondValue != null && chunksPerSecondValue > 0 &&
+      pendingChunks != null
+      ? pendingChunks / chunksPerSecondValue
+      : finiteNumber(campaign.etaSeconds);
 
   return {
     campaignId: campaign.campaignId,
@@ -379,6 +553,19 @@ async function getDiarizationCampaignSummary(
     chunksPerSecond: chunksPerSecondValue != null && chunksPerSecondValue > 0
       ? chunksPerSecondValue
       : null,
+    usefulAudioRealtimeMultiple,
+    rateWindowSeconds: sampleWindowSeconds,
+    successfulSequences,
+    skippedSequences,
+    recordingLeaseBusyOriginals,
+    recordingLeaseSkippedSequences,
+    chunkClaimSkips,
+    skipRatio: ratioToSuccessfulSequences(skippedSequences),
+    leaseSkipRatio: ratioToSuccessfulSequences(
+      recordingLeaseSkippedSequences,
+    ),
+    claimSkipRatio: ratioToSuccessfulSequences(chunkClaimSkips),
+    stageTimingsMs,
     etaSeconds: etaSecondsValue != null && etaSecondsValue >= 0
       ? etaSecondsValue
       : null,
