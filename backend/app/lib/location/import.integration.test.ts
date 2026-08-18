@@ -86,6 +86,12 @@ Deno.test(
         trackId: track?._id,
       }),
     ).toBe(1);
+    const backfilledImport = await db.collection("location_imports").findOne({
+      _id: new ObjectId(receipt.importId),
+    });
+    expect(backfilledImport?.receipt?.schemaVersion).toBe(2);
+    expect(backfilledImport?.receipt?.timedCoordinates).toBe(2);
+    expect(backfilledImport?.receipt?.file?.parserVersion).toBe(3);
 
     const exact = await analyzeLocationFile(
       auth,

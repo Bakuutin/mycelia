@@ -1829,6 +1829,19 @@ export async function backfillLocationImport(
     format: importDoc.format,
     sourceEntryName: dataset.sourceEntryName,
   });
+  const receipt = {
+    ...(importDoc.receipt ?? {}),
+    ...profile.counts,
+    schemaVersion: LOCATION_CONTENT_PROFILE_VERSION,
+    file: profile.file,
+    contentProfile: profile,
+    pointsImported: importDoc.receipt?.pointsImported ??
+      importDoc.pointCount ?? 0,
+    pointsDeduplicated: importDoc.receipt?.pointsDeduplicated ??
+      importDoc.dedupedCount ?? 0,
+    pointsSkipped: importDoc.receipt?.pointsSkipped ??
+      importDoc.skippedCount ?? 0,
+  };
   await mongo({
     action: "updateOne",
     collection: IMPORTS,
@@ -1838,6 +1851,7 @@ export async function backfillLocationImport(
         parserVersion: LOCATION_PARSER_VERSION,
         contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
         contentProfile: profile,
+        receipt,
         datasetMetadata: metadataForStorage(dataset.datasetMetadata),
         fileSize: bytes.byteLength,
         ...(dataset.sourceEntryName
