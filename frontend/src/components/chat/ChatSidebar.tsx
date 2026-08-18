@@ -2,14 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle,
-  MessageSquare,
+  Archive,
+  ArchiveRestore,
+  MoreHorizontal,
   Pencil,
+  Pin,
   Plus,
   Search,
   Star,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,11 +31,13 @@ function ChatListItem({
   selected,
   onRename,
   onFavorite,
+  onArchive,
 }: {
   chat: MemoryChatSummary;
   selected: boolean;
   onRename: (chatId: string, title: string) => Promise<void>;
   onFavorite: (chatId: string, favorite: boolean) => Promise<void>;
+  onArchive: (chatId: string, archived: boolean) => Promise<void>;
 }) {
   const chatId = chat._id.toString();
   const [editing, setEditing] = useState(false);
@@ -54,75 +65,90 @@ function ChatListItem({
     setEditing(false);
   };
 
+  const runActive = chat.lastRun?.state &&
+    ["submitted", "streaming", "needs_approval"].includes(chat.lastRun.state);
   const content = (
-    <>
-      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 via-orange-500/20 to-red-500/20">
-        <MessageSquare className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <div className="min-w-0 flex-1">
-        {editing
-          ? (
-            <Input
-              ref={inputRef}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              onBlur={() => void save()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void save();
-                }
-                if (event.key === "Escape") {
-                  setTitle(displayTitle);
-                  setEditing(false);
-                }
-              }}
-              aria-label="Chat title"
-              className="h-8"
-            />
-          )
-          : (
-            <div className="line-clamp-2 pr-1 text-sm font-medium leading-5">
+    <div className="min-w-0 flex-1">
+      {editing
+        ? (
+          <Input
+            ref={inputRef}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={() => void save()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void save();
+              }
+              if (event.key === "Escape") {
+                setTitle(displayTitle);
+                setEditing(false);
+              }
+            }}
+            aria-label="Chat title"
+            className="h-8"
+          />
+        )
+        : (
+          <div className="flex min-w-0 items-center gap-1.5">
+            {chat.unread && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                title="Unread"
+              />
+            )}
+            {chat.favoritedAt && (
+              <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" />
+            )}
+            <span className="truncate text-sm font-medium">
               {displayTitle}
-            </div>
-          )}
-        <div className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
-          <span>{chat.messageCount} messages</span>
-          <span aria-hidden="true">·</span>
-          <span className="min-w-0 truncate font-mono" title={model}>
-            {model}
-          </span>
-          <span aria-hidden="true">·</span>
-          <span className="shrink-0" title={date.toLocaleString()}>{time}</span>
-        </div>
-        <div className="mt-1 flex items-center gap-1.5">
-          {chat.lastRun?.state &&
-            !["completed", "cancelled"].includes(chat.lastRun.state) && (
-            <Badge variant="outline" className="h-4 px-1 text-[9px] capitalize">
-              {chat.lastRun.state.replace("_", " ")}
-            </Badge>
-          )}
-          {chat.unread && (
-            <span className="flex items-center gap-1 text-[10px] font-medium text-primary">
-              <span className="h-1.5 w-1.5 rounded-full bg-primary" /> Unread
             </span>
-          )}
-        </div>
+            {chat.archivedAt && (
+              <Archive className="h-3 w-3 shrink-0 text-muted-foreground" />
+            )}
+            {chat.lastRun?.state &&
+              !["completed", "cancelled"].includes(chat.lastRun.state) && (
+              <Badge
+                variant="outline"
+                className="h-4 shrink-0 px-1 text-[9px] capitalize"
+              >
+                {chat.lastRun.state.replace("_", " ")}
+              </Badge>
+            )}
+          </div>
+        )}
+      <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
+        <span className="shrink-0">{chat.messageCount} messages</span>
+        <span aria-hidden="true">·</span>
+        <span
+          className="flex shrink-0 items-center gap-0.5"
+          aria-label={`${chat.pinnedMessageCount} pinned messages`}
+        >
+          <Pin className="h-2.5 w-2.5" /> {chat.pinnedMessageCount}
+        </span>
+        <span aria-hidden="true">·</span>
+        <span className="min-w-0 truncate font-mono" title={model}>
+          {model}
+        </span>
+        <span className="ml-auto shrink-0" title={date.toLocaleString()}>
+          {time}
+        </span>
       </div>
-    </>
+    </div>
   );
 
   return (
     <div
       className={cn(
-        "group relative border-b px-3 py-3 transition-colors hover:bg-muted/50",
+        "group relative border-b px-3 py-2 transition-colors hover:bg-muted/50",
         selected && "bg-muted",
       )}
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-center gap-1">
         {editing
           ? (
-            <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div className="flex min-w-0 flex-1 items-center">
               {content}
             </div>
           )
@@ -130,47 +156,47 @@ function ChatListItem({
             <Link
               to={`/chat/${chatId}`}
               aria-current={selected ? "page" : undefined}
-              className="flex min-w-0 flex-1 items-start gap-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex min-w-0 flex-1 items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               title={displayTitle}
             >
               {content}
             </Link>
           )}
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "h-7 w-7",
-              !chat.favoritedAt &&
-                "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-            )}
-            aria-label={chat.favoritedAt
-              ? "Remove from favorites"
-              : "Add to favorites"}
-            onClick={() => void onFavorite(chatId, !chat.favoritedAt)}
-          >
-            <Star
-              className={cn(
-                "h-3.5 w-3.5",
-                chat.favoritedAt && "fill-amber-400 text-amber-500",
-              )}
-            />
-          </Button>
-          {!editing && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-              aria-label="Rename chat"
-              onClick={() => setEditing(true)}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
+        {!editing && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 opacity-60 group-hover:opacity-100 group-focus-within:opacity-100"
+                aria-label={`Actions for ${displayTitle}`}
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setEditing(true)}>
+                <Pencil className="mr-2 h-3.5 w-3.5" /> Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => void onFavorite(chatId, !chat.favoritedAt)}
+              >
+                <Star className="mr-2 h-3.5 w-3.5" />
+                {chat.favoritedAt ? "Remove favorite" : "Add favorite"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!chat.archivedAt && Boolean(runActive)}
+                onClick={() => void onArchive(chatId, !chat.archivedAt)}
+              >
+                {chat.archivedAt
+                  ? <ArchiveRestore className="mr-2 h-3.5 w-3.5" />
+                  : <Archive className="mr-2 h-3.5 w-3.5" />}
+                {chat.archivedAt ? "Restore chat" : "Archive chat"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   );
@@ -185,13 +211,16 @@ export function ChatSidebar({
   error,
   query,
   favoritesOnly,
+  archivedOnly,
   onQueryChange,
   onFavoritesOnlyChange,
+  onArchivedOnlyChange,
   onNewChat,
   onRetry,
   onLoadMore,
   onRename,
   onFavorite,
+  onArchive,
 }: {
   chats: MemoryChatSummary[];
   selectedChatId?: string;
@@ -201,17 +230,22 @@ export function ChatSidebar({
   error?: string;
   query: string;
   favoritesOnly: boolean;
+  archivedOnly: boolean;
   onQueryChange: (query: string) => void;
   onFavoritesOnlyChange: (value: boolean) => void;
+  onArchivedOnlyChange: (value: boolean) => void;
   onNewChat: () => void;
   onRetry: () => void;
   onLoadMore: () => void;
   onRename: (chatId: string, title: string) => Promise<void>;
   onFavorite: (chatId: string, favorite: boolean) => Promise<void>;
+  onArchive: (chatId: string, archived: boolean) => Promise<void>;
 }) {
   const favorites = chats.filter((chat) => Boolean(chat.favoritedAt));
   const recent = chats.filter((chat) => !chat.favoritedAt);
-  const sections = favoritesOnly
+  const sections = archivedOnly
+    ? [{ label: "Archived", items: chats }]
+    : favoritesOnly
     ? [{ label: "Favorites", items: favorites }]
     : [
       { label: "Favorites", items: favorites },
@@ -265,6 +299,19 @@ export function ChatSidebar({
               )}
             />
           </Button>
+          <Button
+            type="button"
+            variant={archivedOnly ? "secondary" : "outline"}
+            size="icon"
+            onClick={() => onArchivedOnlyChange(!archivedOnly)}
+            aria-label={archivedOnly
+              ? "Show active chats"
+              : "Show archived chats"}
+          >
+            {archivedOnly
+              ? <ArchiveRestore className="h-4 w-4" />
+              : <Archive className="h-4 w-4" />}
+          </Button>
         </div>
       </div>
       <ScrollArea className="flex-1">
@@ -296,7 +343,9 @@ export function ChatSidebar({
           : chats.length === 0
           ? (
             <div className="p-8 text-center text-sm text-muted-foreground">
-              No conversations found
+              {archivedOnly
+                ? "No archived conversations"
+                : "No conversations found"}
             </div>
           )
           : (
@@ -314,6 +363,7 @@ export function ChatSidebar({
                         selected={selectedChatId === chat._id.toString()}
                         onRename={onRename}
                         onFavorite={onFavorite}
+                        onArchive={onArchive}
                       />
                     ))}
                   </section>

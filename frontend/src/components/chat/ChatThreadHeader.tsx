@@ -1,21 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Pin, Star, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Check,
+  Star,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ChatToolSelector } from "@/components/chat/ChatToolSelector";
 import { cn } from "@/lib/utils";
-import {
-  type MemoryChatMessage,
-  type MemoryChatSummary,
-  messageText,
-} from "@/lib/chat";
+import type { MemoryChatSummary } from "@/lib/chat";
 import type {
   ChatToolCatalogEntry,
   ChatToolPolicy,
@@ -30,14 +28,13 @@ export function ChatThreadHeader({
   resolvedModel,
   toolPolicy,
   toolCatalog,
-  pinnedMessages,
   controlsDisabled,
   onBack,
   onRename,
   onFavorite,
+  onArchive,
   onModelChange,
   onToolPolicyChange,
-  onJumpToMessage,
 }: {
   chat?: MemoryChatSummary;
   title: string;
@@ -47,14 +44,13 @@ export function ChatThreadHeader({
   resolvedModel: string;
   toolPolicy: ChatToolPolicy;
   toolCatalog: ChatToolCatalogEntry[];
-  pinnedMessages: MemoryChatMessage[];
   controlsDisabled?: boolean;
   onBack: () => void;
   onRename: (title: string) => Promise<void>;
   onFavorite: (favorite: boolean) => Promise<void>;
+  onArchive: (archived: boolean) => Promise<void>;
   onModelChange: (model: string, providerProfileId?: string) => Promise<void>;
   onToolPolicyChange: (policy: ChatToolPolicy) => Promise<void>;
-  onJumpToMessage: (messageId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [nextTitle, setNextTitle] = useState(title);
@@ -160,59 +156,17 @@ export function ChatThreadHeader({
               : ""}
           </div>
         </div>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="relative"
-              aria-label={`${pinnedMessages.length} pinned messages`}
-            >
-              <Pin
-                className={cn(
-                  "h-4 w-4",
-                  pinnedMessages.length > 0 && "fill-primary/20 text-primary",
-                )}
-              />
-              {pinnedMessages.length > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] text-primary-foreground">
-                  {pinnedMessages.length}
-                </span>
-              )}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            className="w-[min(360px,calc(100vw-2rem))]"
-          >
-            <div className="mb-2 font-medium">Pinned messages</div>
-            {pinnedMessages.length === 0
-              ? (
-                <p className="text-sm text-muted-foreground">
-                  Pin useful messages to find them quickly.
-                </p>
-              )
-              : (
-                <div className="max-h-72 space-y-1 overflow-y-auto">
-                  {pinnedMessages.map((message) => (
-                    <button
-                      key={message.id}
-                      type="button"
-                      onClick={() => onJumpToMessage(message.id)}
-                      className="w-full rounded-md p-2 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <span className="line-clamp-2">
-                        {messageText(message) || "Tool activity"}
-                      </span>
-                      <span className="text-[10px] capitalize text-muted-foreground">
-                        {message.role}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-          </PopoverContent>
-        </Popover>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => void onArchive(!chat?.archivedAt)}
+          aria-label={chat?.archivedAt ? "Restore chat" : "Archive chat"}
+          disabled={!chat || (controlsDisabled && !chat.archivedAt)}
+        >
+          {chat?.archivedAt
+            ? <ArchiveRestore className="h-4 w-4 text-primary" />
+            : <Archive className="h-4 w-4" />}
+        </Button>
         <Button
           variant="ghost"
           size="icon"

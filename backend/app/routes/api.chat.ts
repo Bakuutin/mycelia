@@ -281,6 +281,7 @@ export async function apiChatHandler(req: Request, res: Response) {
       toolMode: requestedPolicy.mode,
       enabledTools: requestedPolicy.enabledTools,
       messageCount: 0,
+      pinnedMessageCount: 0,
       platform: "mycelia",
       externalId: newChatId.toString(),
       type: "private",
@@ -309,6 +310,14 @@ export async function apiChatHandler(req: Request, res: Response) {
     if (!chatDocument) {
       res.status(404).json({
         error: "Chat not found or access denied",
+        chatId: activeChatId,
+        requestId,
+      });
+      return;
+    }
+    if (chatDocument.archivedAt) {
+      res.status(409).json({
+        error: "Restore this chat before sending another message",
         chatId: activeChatId,
         requestId,
       });

@@ -52,8 +52,9 @@ your own words.
   per-chat Custom policies; data-changing actions require explicit approval.
 - Streaming responses with durable run status, observable tool activity and
   usage metadata, retry/stop controls, and in-app completion notifications.
-- Searchable chat history with favorites, message counts, actual-model labels,
-  unread states, resizable navigation, rename, and multi-message pinning.
+- Searchable chat history with favorites and a separate archive, compact
+  message/pin counts, actual-model labels, unread states, resizable navigation,
+  rename, and previous/next navigation across pinned messages.
 
 ### Object Management
 

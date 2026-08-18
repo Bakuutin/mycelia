@@ -6,6 +6,7 @@ import type { MemoryChatSummary } from "@/lib/chat";
 export function useChatSummaries(
   query: string,
   favoritesOnly: boolean,
+  archivedOnly: boolean,
 ) {
   const [items, setItems] = useState<MemoryChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,6 +24,7 @@ export function useChatSummaries(
         limit: 100,
         query: query.trim() || undefined,
         favoritesOnly,
+        archivedOnly,
       });
       if (version !== requestVersion.current) return;
       setItems(result.items ?? []);
@@ -38,7 +40,7 @@ export function useChatSummaries(
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
-  }, [favoritesOnly, query]);
+  }, [archivedOnly, favoritesOnly, query]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -51,6 +53,7 @@ export function useChatSummaries(
         limit: 100,
         query: query.trim() || undefined,
         favoritesOnly,
+        archivedOnly,
       });
       if (version !== requestVersion.current) return;
       setItems((current) => {
@@ -74,7 +77,7 @@ export function useChatSummaries(
     } finally {
       if (version === requestVersion.current) setLoadingMore(false);
     }
-  }, [favoritesOnly, loadingMore, nextCursor, query]);
+  }, [archivedOnly, favoritesOnly, loadingMore, nextCursor, query]);
 
   useEffect(() => {
     const timer = globalThis.setTimeout(() => void refresh(true), 150);

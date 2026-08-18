@@ -495,6 +495,8 @@ hashed user-scoped backend channel and carries only summary/run events.
 
 Migration `0057_chat_experience.ts` adds the chat list, pin, and run indexes and
 backfills counts, title sources, tool defaults, and last actual model/provider.
+Migration `0058_chat_archive_and_pins.ts` adds the active/archive list index and
+backfills the materialized pinned-message count used by compact chat cards.
 Apply pending migrations before testing the updated UI.
 
 Targeted checks for this feature:
@@ -509,7 +511,8 @@ deno test -A app/lib/chat/tools.server.test.ts \
 cd ../frontend
 deno run -A npm:vitest run src/lib/chat.test.ts \
   src/hooks/useStableChatSessionId.test.tsx src/lib/chatMessages.test.ts \
-  src/stores/notificationStore.test.ts
+  src/stores/notificationStore.test.ts \
+  src/components/chat/ChatPinnedNavigation.test.tsx
 ```
 
 ## Troubleshooting

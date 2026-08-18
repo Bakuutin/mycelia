@@ -55,6 +55,7 @@ const chatRequestSchema = z.discriminatedUnion("action", [
     limit: z.number().int().min(1).max(100).default(50),
     query: z.string().trim().max(160).optional(),
     favoritesOnly: z.boolean().default(false),
+    archivedOnly: z.boolean().default(false),
   }),
   z.object({ action: z.literal("getMessages"), chatId: zObjectIdInput }),
   z.object({
@@ -72,6 +73,11 @@ const chatRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("setFavorite"),
     chatId: zObjectIdInput,
     favorite: z.boolean(),
+  }),
+  z.object({
+    action: z.literal("setArchived"),
+    chatId: zObjectIdInput,
+    archived: z.boolean(),
   }),
   z.object({
     action: z.literal("setPreferences"),
@@ -92,6 +98,7 @@ export type ChatResourceRequest = z.infer<typeof chatRequestSchema>;
 
 type MongoCaller = (request: any) => Promise<any>;
 type MongoFactory = (auth: Auth) => MongoCaller;
+type ChatUpdatePublisher = typeof publishChatUpdated;
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -133,6 +140,9 @@ export function chatDocumentToSummary(chat: any): ChatSummary {
   return {
     ...chat,
     messageCount: Number.isFinite(chat.messageCount) ? chat.messageCount : 0,
+    pinnedMessageCount: Number.isFinite(chat.pinnedMessageCount)
+      ? Math.max(0, chat.pinnedMessageCount)
+      : 0,
     toolMode: policy.mode,
     enabledTools: policy.enabledTools,
     unread,
@@ -218,7 +228,10 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
   description = "Authenticated operations for Mycelia AI chats";
   schemas = { request: chatRequestSchema, response: z.any() };
 
-  constructor(private readonly mongoFactory: MongoFactory = getMongoResource) {}
+  constructor(
+    private readonly mongoFactory: MongoFactory = getMongoResource,
+    private readonly publishUpdated: ChatUpdatePublisher = publishChatUpdated,
+  ) {}
 
   extractActions(input: ChatResourceRequest) {
     const readActions = new Set(["list", "getMessages", "listTools"]);
@@ -240,6 +253,7 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
       const baseQuery: Record<string, unknown> = {
         userId: auth.principal,
         platform: "mycelia",
+        archivedAt: input.archivedOnly ? { $type: "date" } : { $exists: false },
       };
       if (input.query) {
         const pattern = escapeRegex(input.query);
@@ -350,6 +364,7 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
         toolMode: toolPolicy.mode,
         enabledTools: toolPolicy.enabledTools,
         messageCount: 0,
+        pinnedMessageCount: 0,
         platform: "mycelia",
         externalId: input.chatId.toString(),
         type: "private",
@@ -358,7 +373,7 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
         lastMessageDate: now,
       };
       await mongo({ action: "insertOne", collection: "chats", doc });
-      await publishChatUpdated(
+      await this.publishUpdated(
         auth.principal,
         input.chatId.toString(),
         "created",
@@ -382,7 +397,7 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
           $set: { title: input.title, name: input.title, titleSource: "user" },
         },
       });
-      await publishChatUpdated(
+      await this.publishUpdated(
         auth.principal,
         input.chatId.toString(),
         "renamed",
@@ -404,12 +419,40 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
           ? { $set: { favoritedAt } }
           : { $unset: { favoritedAt: "" } },
       });
-      await publishChatUpdated(
+      await this.publishUpdated(
         auth.principal,
         input.chatId.toString(),
         "favorite",
       );
       return { favoritedAt };
+    }
+
+    if (input.action === "setArchived") {
+      if (
+        input.archived && chat.lastRun?.state &&
+        TOOL_POLICY_LOCK_STATES.includes(chat.lastRun.state)
+      ) {
+        throw new Error("An active chat cannot be archived");
+      }
+      const archivedAt = input.archived ? new Date() : undefined;
+      await mongo({
+        action: "updateOne",
+        collection: "chats",
+        query: {
+          _id: input.chatId,
+          userId: auth.principal,
+          platform: "mycelia",
+        },
+        update: input.archived
+          ? { $set: { archivedAt } }
+          : { $unset: { archivedAt: "" } },
+      });
+      await this.publishUpdated(
+        auth.principal,
+        input.chatId.toString(),
+        input.archived ? "archived" : "restored",
+      );
+      return { archivedAt };
     }
 
     if (input.action === "setPreferences") {
@@ -453,7 +496,7 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
             ...(Object.keys(unset).length ? { $unset: unset } : {}),
           },
         });
-        await publishChatUpdated(
+        await this.publishUpdated(
           auth.principal,
           input.chatId.toString(),
           "preferences",
@@ -471,16 +514,48 @@ export class ChatResource implements Resource<ChatResourceRequest, any> {
       });
       if (!message) throw new Error("Message not found in this chat");
       const pinnedAt = input.pinned ? new Date() : undefined;
-      await mongo({
+      const update = await mongo({
         action: "updateOne",
         collection: "messages",
-        query: { _id: input.messageId, chatId: input.chatId },
+        query: {
+          _id: input.messageId,
+          chatId: input.chatId,
+          pinnedAt: input.pinned ? { $exists: false } : { $type: "date" },
+        },
         update: input.pinned
           ? { $set: { pinnedAt } }
           : { $unset: { pinnedAt: "" } },
       });
-      await publishChatUpdated(auth.principal, input.chatId.toString(), "pin");
-      return { pinnedAt };
+      if (update?.modifiedCount) {
+        await mongo({
+          action: "updateOne",
+          collection: "chats",
+          query: {
+            _id: input.chatId,
+            userId: auth.principal,
+            platform: "mycelia",
+          },
+          update: { $inc: { pinnedMessageCount: input.pinned ? 1 : -1 } },
+        });
+        if (!input.pinned) {
+          await mongo({
+            action: "updateOne",
+            collection: "chats",
+            query: {
+              _id: input.chatId,
+              userId: auth.principal,
+              platform: "mycelia",
+            },
+            update: { $max: { pinnedMessageCount: 0 } },
+          });
+        }
+      }
+      await this.publishUpdated(
+        auth.principal,
+        input.chatId.toString(),
+        "pin",
+      );
+      return { pinnedAt, changed: Boolean(update?.modifiedCount) };
     }
 
     if (input.action === "markRead") {

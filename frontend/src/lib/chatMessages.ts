@@ -1,6 +1,25 @@
 import type { UIMessage } from "ai";
 
 /**
+ * Creates a new user UIMessage with a caller-owned durable id.
+ *
+ * AI SDK's text shorthand uses `messageId` for replacing an existing user
+ * message. New messages that need a preallocated Mongo id must therefore be
+ * sent in full UIMessage form with `id`, otherwise sendMessage throws before
+ * the request reaches the backend.
+ */
+export function createUserUIMessage<METADATA = unknown>(
+  id: string,
+  text: string,
+): UIMessage<METADATA> {
+  return {
+    id,
+    role: "user",
+    parts: [{ type: "text", text }],
+  };
+}
+
+/**
  * Converts a persisted chat message document (Mongo `messages` collection)
  * into an AI SDK UIMessage.
  *

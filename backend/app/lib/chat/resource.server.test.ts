@@ -27,6 +27,7 @@ Deno.test("chat summary separates selected and actual response models", () => {
   expect(summary.lastResponseModel).toBe("qwen-local-32b");
   expect(summary.unread).toBe(true);
   expect(summary.toolMode).toBe("auto");
+  expect(summary.pinnedMessageCount).toBe(0);
 });
 
 Deno.test("getMessages scopes the chat lookup to the authenticated owner", async () => {
@@ -59,6 +60,7 @@ Deno.test("chat mutations stop at the shared ownership check", async () => {
   const actions = [
     { action: "rename", chatId, title: "Renamed" },
     { action: "setFavorite", chatId, favorite: true },
+    { action: "setArchived", chatId, archived: true },
     {
       action: "setPreferences",
       chatId,
@@ -123,6 +125,7 @@ Deno.test("chat list groups favorites first and sorts each group by freshness", 
     action: "list",
     limit: 3,
     favoritesOnly: false,
+    archivedOnly: false,
   }, auth);
 
   expect(result.items.map((chat: any) => chat.name)).toEqual([
@@ -138,4 +141,140 @@ Deno.test("chat list groups favorites first and sorts each group by freshness", 
     lastMessageDate: -1,
     _id: -1,
   });
+  expect(
+    chatFinds.every((request) => request.query.archivedAt.$exists === false),
+  ).toBe(true);
+});
+
+Deno.test("archived chat list uses a separate ownership-scoped view", async () => {
+  const calls: any[] = [];
+  const resource = new ChatResource(() => async (request: any) => {
+    calls.push(request);
+    if (request.collection === "chat_runs") return [];
+    if (request.collection === "chats" && request.action === "find") return [];
+    throw new Error(`Unexpected request ${request.action}`);
+  });
+  const auth = new Auth({ principal: "owner-a", policies: [] });
+  await resource.use({
+    action: "list",
+    limit: 20,
+    favoritesOnly: true,
+    archivedOnly: true,
+  }, auth);
+
+  const lookup = calls.find((request) =>
+    request.collection === "chats" && request.action === "find"
+  );
+  expect(lookup.query).toMatchObject({
+    userId: "owner-a",
+    platform: "mycelia",
+    archivedAt: { $type: "date" },
+  });
+});
+
+Deno.test("an active response prevents archiving", async () => {
+  const chatId = new ObjectId();
+  const resource = new ChatResource(() => async (request: any) => {
+    if (request.collection === "chats" && request.action === "findOne") {
+      return {
+        _id: chatId,
+        userId: "owner-a",
+        platform: "mycelia",
+        lastRun: { state: "streaming" },
+      };
+    }
+    throw new Error(`Unexpected request ${request.action}`);
+  });
+  const auth = new Auth({ principal: "owner-a", policies: [] });
+
+  await expect(resource.use({
+    action: "setArchived",
+    chatId,
+    archived: true,
+  }, auth)).rejects.toThrow("An active chat cannot be archived");
+});
+
+Deno.test({
+  name: "pin mutations update the materialized count only on transition",
+  fn: async () => {
+    const chatId = new ObjectId();
+    const messageId = new ObjectId();
+    const calls: any[] = [];
+    const resource = new ChatResource(
+      () => async (request: any) => {
+        calls.push(request);
+        if (request.collection === "chats" && request.action === "findOne") {
+          return { _id: chatId, userId: "owner-a", platform: "mycelia" };
+        }
+        if (
+          request.collection === "messages" && request.action === "findOne"
+        ) {
+          return { _id: messageId };
+        }
+        if (
+          request.collection === "messages" && request.action === "updateOne"
+        ) {
+          return { modifiedCount: 1 };
+        }
+        if (
+          request.collection === "chats" && request.action === "updateOne"
+        ) {
+          return { modifiedCount: 1 };
+        }
+        throw new Error(`Unexpected request ${request.action}`);
+      },
+      () => Promise.resolve(),
+    );
+    const auth = new Auth({ principal: "owner-a", policies: [] });
+    const result = await resource.use({
+      action: "setMessagePinned",
+      chatId,
+      messageId,
+      pinned: true,
+    }, auth);
+
+    expect(result.changed).toBe(true);
+    const countUpdate = calls.find((request) =>
+      request.collection === "chats" && request.action === "updateOne"
+    );
+    expect(countUpdate.update).toEqual({ $inc: { pinnedMessageCount: 1 } });
+    const messageUpdate = calls.find((request) =>
+      request.collection === "messages" && request.action === "updateOne"
+    );
+    expect(messageUpdate.query.pinnedAt).toEqual({ $exists: false });
+
+    const idempotentCalls: any[] = [];
+    const idempotentResource = new ChatResource(
+      () => async (request: any) => {
+        idempotentCalls.push(request);
+        if (request.collection === "chats" && request.action === "findOne") {
+          return { _id: chatId, userId: "owner-a", platform: "mycelia" };
+        }
+        if (
+          request.collection === "messages" && request.action === "findOne"
+        ) {
+          return { _id: messageId };
+        }
+        if (
+          request.collection === "messages" && request.action === "updateOne"
+        ) {
+          return { modifiedCount: 0 };
+        }
+        throw new Error(`Unexpected request ${request.action}`);
+      },
+      () => Promise.resolve(),
+    );
+    const unchanged = await idempotentResource.use({
+      action: "setMessagePinned",
+      chatId,
+      messageId,
+      pinned: true,
+    }, auth);
+    expect(unchanged.changed).toBe(false);
+    expect(
+      idempotentCalls.some((request) =>
+        request.collection === "chats" && request.action === "updateOne"
+      ),
+    ).toBe(false);
+  },
 });

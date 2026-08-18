@@ -35,7 +35,7 @@ import {
 import { toast } from "sonner";
 import { apiClient, callResource } from "@/lib/api";
 import { ObjectId } from "bson";
-import { dbMessageToUIMessage } from "@/lib/chatMessages";
+import { createUserUIMessage, dbMessageToUIMessage } from "@/lib/chatMessages";
 import { formatToolName } from "@/lib/toolPresentation";
 import { myceliaPlatform } from "@/modules/messenger/platforms/mycelia";
 import type { Message as MessengerMessage } from "@myceliasdk/messengers.ts";
@@ -48,6 +48,7 @@ import { useChatSummaries } from "@/hooks/useChatSummaries";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { ChatThreadHeader } from "@/components/chat/ChatThreadHeader";
 import { ChatActivity } from "@/components/chat/ChatActivity";
+import { ChatPinnedNavigation } from "@/components/chat/ChatPinnedNavigation";
 import {
   type ChatMessageMetadata,
   chatStatusLabel,
@@ -219,10 +220,10 @@ function ChatMessageContent({
 function useIsMobile(): boolean {
   const [mobile, setMobile] = useState(() =>
     typeof window !== "undefined" &&
-    window.matchMedia("(max-width: 767px)").matches
+    globalThis.matchMedia("(max-width: 767px)").matches
   );
   useEffect(() => {
-    const query = window.matchMedia("(max-width: 767px)");
+    const query = globalThis.matchMedia("(max-width: 767px)");
     const update = () => setMobile(query.matches);
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
@@ -242,7 +243,8 @@ export default function ChatPage() {
 
   const [query, setQuery] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const chatList = useChatSummaries(query, favoritesOnly);
+  const [archivedOnly, setArchivedOnly] = useState(false);
+  const chatList = useChatSummaries(query, favoritesOnly, archivedOnly);
   const [historyChat, setHistoryChat] = useState<MemoryChatSummary>();
   const selectedChat =
     chatList.items.find((chat) => chat._id.toString() === routeChatId) ??
@@ -468,7 +470,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!atBottom) return;
-    const reducedMotion = window.matchMedia(
+    const reducedMotion = globalThis.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
     messagesEndRef.current?.scrollIntoView({
@@ -524,7 +526,7 @@ export default function ChatPage() {
         navigate(`/chat/${effectiveChatId}`, { replace: true });
       }
       await chat.sendMessage(
-        { text, messageId },
+        createUserUIMessage<ChatMessageMetadata>(messageId, text),
         {
           body: {
             chatId: effectiveChatId,
@@ -551,6 +553,8 @@ export default function ChatPage() {
   const handleNewChat = () => {
     resetDraft();
     navigate("/chat");
+    setArchivedOnly(false);
+    setFavoritesOnly(false);
     setMobileDraftOpen(true);
     setHistoryChat(undefined);
     setSelectedModel(defaultChatModel);
@@ -604,6 +608,52 @@ export default function ChatPage() {
       toast.error("Could not update favorite", {
         description: error instanceof Error ? error.message : String(error),
       });
+    }
+  };
+
+  const handleArchive = async (chatId: string, archived: boolean) => {
+    const previous = chatList.items.find((chat) =>
+      chat._id.toString() === chatId
+    );
+    const archivedAt = archived ? new Date() : undefined;
+    chatList.setItems((current) =>
+      current.filter((chat) => chat._id.toString() !== chatId)
+    );
+    if (historyChat?._id.toString() === chatId) {
+      setHistoryChat({ ...historyChat, archivedAt });
+    }
+    try {
+      await callResource("chat", {
+        action: "setArchived",
+        chatId,
+        archived,
+      });
+      if (routeChatId === chatId) {
+        if (archived) {
+          setHistoryChat(undefined);
+          setMobileDraftOpen(false);
+          navigate("/chat");
+        } else {
+          setArchivedOnly(false);
+        }
+      }
+      toast.success(archived ? "Chat archived" : "Chat restored");
+    } catch (error) {
+      if (previous) {
+        chatList.setItems((current) => [
+          previous,
+          ...current.filter((chat) => chat._id.toString() !== chatId),
+        ]);
+      }
+      if (historyChat?._id.toString() === chatId) {
+        setHistoryChat(historyChat);
+      }
+      toast.error(
+        archived ? "Could not archive chat" : "Could not restore chat",
+        {
+          description: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   };
 
@@ -670,6 +720,7 @@ export default function ChatPage() {
     if (!routeChatId || !isValidObjectId(message.id)) return;
     const wasPinned = Boolean(message.metadata?.pinnedAt);
     const pinnedAt = wasPinned ? undefined : new Date();
+    const countDelta = wasPinned ? -1 : 1;
     chat.setMessages((current) =>
       current.map((item) =>
         item.id === message.id
@@ -677,6 +728,22 @@ export default function ChatPage() {
           : item
       )
     );
+    chatList.update(routeChatId, (summary) => ({
+      ...summary,
+      pinnedMessageCount: Math.max(
+        0,
+        summary.pinnedMessageCount + countDelta,
+      ),
+    }));
+    if (historyChat?._id.toString() === routeChatId) {
+      setHistoryChat({
+        ...historyChat,
+        pinnedMessageCount: Math.max(
+          0,
+          historyChat.pinnedMessageCount + countDelta,
+        ),
+      });
+    }
     try {
       await callResource("chat", {
         action: "setMessagePinned",
@@ -698,6 +765,16 @@ export default function ChatPage() {
             : item
         )
       );
+      chatList.update(routeChatId, (summary) => ({
+        ...summary,
+        pinnedMessageCount: Math.max(
+          0,
+          summary.pinnedMessageCount - countDelta,
+        ),
+      }));
+      if (historyChat?._id.toString() === routeChatId) {
+        setHistoryChat(historyChat);
+      }
       toast.error("Could not update pin", {
         description: error instanceof Error ? error.message : String(error),
       });
@@ -738,7 +815,8 @@ export default function ChatPage() {
     message.metadata?.pinnedAt
   );
   const controlsDisabled = creatingDraft || chat.status === "submitted" ||
-    chat.status === "streaming" || needsApproval;
+    chat.status === "streaming" || needsApproval ||
+    Boolean(selectedChat?.archivedAt);
   const resolvedModel = resolvedAliases[selectedModel] || selectedModel ||
     "Configured chat default";
   const title = selectedChat?.title || selectedChat?.name || "New chat";
@@ -753,13 +831,22 @@ export default function ChatPage() {
       error={chatList.error}
       query={query}
       favoritesOnly={favoritesOnly}
+      archivedOnly={archivedOnly}
       onQueryChange={setQuery}
-      onFavoritesOnlyChange={setFavoritesOnly}
+      onFavoritesOnlyChange={(value) => {
+        setFavoritesOnly(value);
+        if (value) setArchivedOnly(false);
+      }}
+      onArchivedOnlyChange={(value) => {
+        setArchivedOnly(value);
+        if (value) setFavoritesOnly(false);
+      }}
       onNewChat={handleNewChat}
       onRetry={() => void chatList.refresh(true)}
       onLoadMore={() => void chatList.loadMore()}
       onRename={handleRename}
       onFavorite={handleFavorite}
+      onArchive={handleArchive}
     />
   );
 
@@ -774,7 +861,6 @@ export default function ChatPage() {
         resolvedModel={resolvedModel}
         toolPolicy={toolPolicy}
         toolCatalog={toolCatalog}
-        pinnedMessages={pinnedMessages}
         controlsDisabled={controlsDisabled}
         onBack={() => {
           setMobileDraftOpen(false);
@@ -788,10 +874,17 @@ export default function ChatPage() {
           routeChatId
             ? handleFavorite(routeChatId, favorite)
             : Promise.resolve()}
+        onArchive={(archived) =>
+          routeChatId
+            ? handleArchive(routeChatId, archived)
+            : Promise.resolve()}
         onModelChange={handleModelChange}
         onToolPolicyChange={handleToolPolicyChange}
+      />
+      <ChatPinnedNavigation
+        messages={pinnedMessages}
         onJumpToMessage={(messageId) => {
-          const reducedMotion = window.matchMedia(
+          const reducedMotion = globalThis.matchMedia(
             "(prefers-reduced-motion: reduce)",
           ).matches;
           document.getElementById(`chat-message-${messageId}`)?.scrollIntoView({
@@ -982,7 +1075,7 @@ export default function ChatPage() {
             variant="secondary"
             className="sticky bottom-2 left-1/2 z-20 -translate-x-1/2 rounded-full shadow"
             onClick={() => {
-              const reducedMotion = window.matchMedia(
+              const reducedMotion = globalThis.matchMedia(
                 "(prefers-reduced-motion: reduce)",
               ).matches;
               messagesEndRef.current?.scrollIntoView({
@@ -1004,6 +1097,8 @@ export default function ChatPage() {
             ref={textareaRef}
             placeholder={needsApproval
               ? "Approve or deny the pending tool first"
+              : selectedChat?.archivedAt
+              ? "Restore this chat to continue"
               : "Type a message…"}
             value={input}
             onChange={(event) => setInput(event.target.value)}

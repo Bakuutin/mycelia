@@ -59,7 +59,9 @@ export const zChat = zBase.extend({
   lastMessageDate: z.date().optional(),
   lastReadAt: z.date().optional(),
   messageCount: z.number().int().nonnegative().optional(),
+  pinnedMessageCount: z.number().int().nonnegative().optional(),
   favoritedAt: z.date().optional(),
+  archivedAt: z.date().optional(),
   model: z.string().optional(),
   providerProfileId: z.string().optional(),
   toolMode: zChatToolMode.optional(),
@@ -75,6 +77,7 @@ export type Chat = z.infer<typeof zChat>;
 
 export const zChatSummary = zChat.extend({
   messageCount: z.number().int().nonnegative(),
+  pinnedMessageCount: z.number().int().nonnegative(),
   toolMode: zChatToolMode,
   enabledTools: z.array(z.string()),
   unread: z.boolean(),

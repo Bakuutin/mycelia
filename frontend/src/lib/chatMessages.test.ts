@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { dbMessageToUIMessage, legacyContentToParts } from "./chatMessages";
+import {
+  createUserUIMessage,
+  dbMessageToUIMessage,
+  legacyContentToParts,
+} from "./chatMessages";
+
+describe("createUserUIMessage", () => {
+  it("uses id instead of the replacement-only messageId field", () => {
+    const message = createUserUIMessage(
+      "aaaaaaaaaaaaaaaaaaaaaaaa",
+      "hello",
+    );
+
+    expect(message).toEqual({
+      id: "aaaaaaaaaaaaaaaaaaaaaaaa",
+      role: "user",
+      parts: [{ type: "text", text: "hello" }],
+    });
+    expect(message).not.toHaveProperty("messageId");
+  });
+});
 
 describe("legacyContentToParts", () => {
   it("converts a plain string into a text part", () => {
