@@ -282,6 +282,14 @@ immutable tag before deploying. See
    environment variables, enable **Prune services**, and select **Update the
    stack**.
 
+Removing `COMPOSE_PROFILES` does not necessarily remove profile containers that
+were started by an earlier deployment: those services are still present in the
+Compose file, so Portainer may not classify them as prunable. After the update,
+verify the container table. For a one-process candidate it must contain only
+`diarization-1`. Stop and remove any leftover `diarization-2` through
+`diarization-6` containers manually, without selecting automatic volume removal.
+Keep the named models volume.
+
 #### Keep the previous stack for comparison and rollback
 
 Do not overwrite, delete, or rename the current Portainer stack. Record its
@@ -364,6 +372,11 @@ Auto-detected and manually selected legacy routes are always constrained to one
 reserved slot. Keep old and candidate GPU stacks stopped when not being
 measured, switch the route only after pause/drain, and require one real
 `/diarize` before resuming campaign work.
+
+The Jobs page shows the detected contract beside every diarizator route:
+`Current · /ready`, `Legacy · auto`, `Legacy · manual`, or an unresolved state.
+These badges reuse the existing health snapshot and do not add provider probes
+or database queries.
 
 Finally send a permitted test audio file and require HTTP 200 from `/diarize`:
 

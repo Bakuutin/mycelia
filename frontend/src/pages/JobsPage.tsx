@@ -106,6 +106,11 @@ import { useActionDialog } from "@/components/ActionDialogProvider";
 import { DiarizationLaunchDialog } from "@/components/DiarizationLaunchDialog";
 import { DiarizationRuntimeCard } from "@/components/DiarizationRuntimeCard";
 import type { DiarizationRuntimeRoute } from "@/lib/diarizationRuntime";
+import {
+  type DetectedDiarizatorReadinessMode,
+  type DiarizatorReadinessMode,
+  getDiarizatorReadinessBadge,
+} from "@/lib/diarizationReadiness";
 
 type WorkerStatus = {
   checkedAt: string;
@@ -171,10 +176,39 @@ type ExternalServiceHealth = {
     model?: string;
     priority: number;
     concurrency?: number;
+    readinessMode?: DiarizatorReadinessMode;
+    detectedReadinessMode?: DetectedDiarizatorReadinessMode;
     latencyMs?: number;
     message: string;
   }>;
 };
+
+function DiarizatorReadinessStatusBadge({
+  route,
+  compact = false,
+}: {
+  route: NonNullable<ExternalServiceHealth["routes"]>[number];
+  compact?: boolean;
+}) {
+  const readiness = getDiarizatorReadinessBadge(route);
+  return (
+    <Badge
+      variant="outline"
+      className={`shrink-0 py-0 ${
+        compact ? "px-1 text-[9px]" : "px-1.5 text-[10px]"
+      } ${
+        readiness.kind === "legacy"
+          ? "border-amber-500/50 text-amber-600"
+          : readiness.kind === "current"
+          ? "border-green-500/50 text-green-600"
+          : "text-muted-foreground"
+      }`}
+      title={readiness.title}
+    >
+      {readiness.label}
+    </Badge>
+  );
+}
 
 type PipelineBacklog = {
   ready: number | null;
@@ -4108,6 +4142,12 @@ export default function JobsPage() {
                                   <span className="min-w-0 flex-1 truncate text-[10px] font-medium">
                                     {route.providerProfileName}
                                   </span>
+                                  {service.id === "diarizator" && (
+                                    <DiarizatorReadinessStatusBadge
+                                      route={route}
+                                      compact
+                                    />
+                                  )}
                                   <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
                                     P{route.priority}
                                     {route.concurrency
@@ -4299,10 +4339,13 @@ export default function JobsPage() {
                                         {route.enabled ? "On" : "Off"}
                                       </span>
                                     </div>
-                                    <div className="min-w-[9rem] truncate">
-                                      <span className="font-medium">
+                                    <div className="flex min-w-[9rem] flex-wrap items-center gap-1.5">
+                                      <span className="truncate font-medium">
                                         {route.providerProfileName}
                                       </span>
+                                      <DiarizatorReadinessStatusBadge
+                                        route={route}
+                                      />
                                       <span className="text-muted-foreground">
                                         {` · ${route.concurrency ?? 1} slot${
                                           (route.concurrency ?? 1) === 1
