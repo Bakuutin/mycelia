@@ -179,7 +179,8 @@ const ListJobsSchema = z.object({
     )
     .nullable()
     .optional(),
-  limit: z.number().optional(),
+  limit: z.number().int().min(1).max(5000).optional(),
+  providerProfileId: z.string().trim().min(1).max(200).optional(),
 });
 
 const CancelAllJobsSchema = z.object({
@@ -2958,6 +2959,15 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       : input.view === "operational"
       ? { $nor: [idleAutoQuery] }
       : {};
+    // Provider filtering belongs in Mongo, before the result limit. The Jobs
+    // page otherwise only filters its newest client-side snapshot and can hide
+    // older diarization runs from the same route. New routed jobs always carry
+    // this immutable enqueue-time provider ID.
+    const providerQuery = input.providerProfileId
+      ? {
+        "data.routingContext.providerProfileId": input.providerProfileId,
+      }
+      : {};
 
     const jobs = await mongo({
       action: "find",
@@ -2967,6 +2977,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         state: { $in: queryStatuses },
         dismissedAt: { $exists: false },
         ...viewQuery,
+        ...providerQuery,
       },
       options: {
         sort: { createdAt: -1 },

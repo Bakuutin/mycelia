@@ -19,7 +19,11 @@ const DEFAULT_JOB_STATUSES: JobListStatus[] = [
 export function buildJobsListRequest(
   view: JobsListView,
   types?: string[],
-  options: { statuses?: JobListStatus[]; limit?: number } = {},
+  options: {
+    statuses?: JobListStatus[];
+    limit?: number;
+    providerProfileId?: string;
+  } = {},
 ) {
   return {
     action: "list" as const,
@@ -27,6 +31,9 @@ export function buildJobsListRequest(
     limit: options.limit ?? 1000,
     statuses: options.statuses ?? DEFAULT_JOB_STATUSES,
     ...(types?.length ? { types } : {}),
+    ...(options.providerProfileId
+      ? { providerProfileId: options.providerProfileId }
+      : {}),
   };
 }
 

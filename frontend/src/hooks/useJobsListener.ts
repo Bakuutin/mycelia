@@ -78,6 +78,7 @@ interface UseJobsListenerOptions {
   view?: JobsListView;
   statuses?: JobListStatus[];
   limit?: number;
+  providerProfileId?: string;
   refetchInterval?: number | false;
   onJobFinished?: (job: {
     id: string;
@@ -101,6 +102,9 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
     options.statuses?.length
       ? `statuses:${[...options.statuses].sort().join(",")}`
       : "all-statuses",
+    options.providerProfileId
+      ? `provider:${options.providerProfileId}`
+      : "all-providers",
     `limit:${options.limit ?? 1000}`,
   ];
 
@@ -112,7 +116,11 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
         buildJobsListRequest(
           options.view ?? "operational",
           options.types,
-          { statuses: options.statuses, limit: options.limit },
+          {
+            statuses: options.statuses,
+            limit: options.limit,
+            providerProfileId: options.providerProfileId,
+          },
         ),
       );
       return response as JobInfo[];

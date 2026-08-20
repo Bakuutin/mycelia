@@ -285,7 +285,11 @@ type LlmProfile = {
   priority?: number;
   concurrency?: number;
 };
-type InferenceFilter = { kind: "provider" | "model" | "alias"; value: string };
+type InferenceFilter = {
+  kind: "provider" | "model" | "alias";
+  value: string;
+  providerProfileId?: string;
+};
 
 // Every provider/model/alias name a job's routing data mentions, for the
 // jobs-list inference filter. Covers actual usage (result/progress),
@@ -1570,6 +1574,13 @@ export default function JobsPage() {
     view: jobsView,
     types: !allTypesSelected && filterTypes.size > 0
       ? Array.from(filterTypes)
+      : undefined,
+    // A stable provider ID lets Mongo filter the complete jobs collection
+    // before applying its bounded result limit. Model/alias and legacy
+    // name-only filters remain client-side because they do not have one
+    // canonical indexed field across every historical worker.
+    providerProfileId: inferenceFilter?.kind === "provider"
+      ? inferenceFilter.providerProfileId
       : undefined,
   });
 
@@ -3552,12 +3563,14 @@ export default function JobsPage() {
   const toggleInferenceFilter = (
     kind: InferenceFilter["kind"],
     value: string | undefined,
+    providerProfileId?: string,
   ) => {
     if (!value) return;
     setInferenceFilter((current) =>
-      current && current.kind === kind && current.value === value
+      current && current.kind === kind && current.value === value &&
+        current.providerProfileId === providerProfileId
         ? null
-        : { kind, value }
+        : { kind, value, providerProfileId }
     );
   };
 
@@ -3567,15 +3580,18 @@ export default function JobsPage() {
     kind: InferenceFilter["kind"],
     value: string | undefined,
     label?: string,
+    providerProfileId?: string,
   ) =>
     value
       ? (
         <span
           className="cursor-pointer hover:text-primary hover:underline"
-          title={`Filter jobs by ${kind}: ${value}`}
+          title={kind === "provider" && providerProfileId
+            ? `Filter all stored jobs by provider: ${value}`
+            : `Filter jobs by ${kind}: ${value}`}
           onClick={(event) => {
             event.stopPropagation();
-            toggleInferenceFilter(kind, value);
+            toggleInferenceFilter(kind, value, providerProfileId);
           }}
         >
           {label ?? value}
@@ -6405,7 +6421,12 @@ export default function JobsPage() {
                                   ? `Diarizator used by this job: ${route.url}`
                                   : "Diarizator route snapshotted for this job"}
                               >
-                                Diarizator: {route.name}
+                                Diarizator: {inferenceChip(
+                                  "provider",
+                                  route.name,
+                                  undefined,
+                                  route.id,
+                                )}
                                 {route.url ? ` · ${route.url}` : ""}
                               </div>
                             )

@@ -107,6 +107,42 @@ describe("validateDiarizationRoutes", () => {
     )).toMatchObject({ environmentConcurrency: 2 });
   });
 
+  it("manual legacy mode clamps remote and environment routes to one slot", () => {
+    const remote = updateDiarizationRouteConfig(
+      {
+        profiles: [{
+          id: "remote",
+          name: "Remote",
+          baseUrl: "https://voice.example",
+          enabled: true,
+          priority: 10,
+          concurrency: 4,
+          readinessMode: "auto",
+        }],
+        includeEnvironment: true,
+        environmentPriority: 50,
+        environmentConcurrency: 3,
+        environmentReadinessMode: "auto",
+      },
+      "remote",
+      { readinessMode: "legacy" },
+    );
+    expect(remote.profiles[0]).toMatchObject({
+      readinessMode: "legacy",
+      concurrency: 1,
+    });
+
+    const environment = updateDiarizationRouteConfig(
+      remote,
+      "environment",
+      { readinessMode: "legacy" },
+    );
+    expect(environment).toMatchObject({
+      environmentReadinessMode: "legacy",
+      environmentConcurrency: 1,
+    });
+  });
+
   it("sums enabled provider slots for worker synchronization", () => {
     expect(getEnabledDiarizationCapacity(
       [

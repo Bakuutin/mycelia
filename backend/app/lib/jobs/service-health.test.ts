@@ -1,11 +1,14 @@
 import { expect } from "@std/expect";
 import {
+  classifyAutoLegacyDiarizatorHealth,
   classifyServiceResponse,
+  getDiarizatorHealthUrl,
   getDiarizatorReadyUrl,
   getJobServiceDependencies,
   getModelsUrl,
   getProviderHealthUrl,
   normalizeProviderModelId,
+  shouldAutoFallbackToDiarizatorHealth,
   shouldFallbackToSttHealth,
 } from "./service-health.shared.ts";
 
@@ -31,10 +34,45 @@ Deno.test("falls back to STT health when a provider has no models route", () => 
   expect(shouldFallbackToSttHealth("llm", 404)).toBe(false);
 });
 
-Deno.test("probes diarizator readiness without a liveness fallback", () => {
+Deno.test("builds the strict diarizator readiness URL", () => {
   expect(getDiarizatorReadyUrl("http://host:8085/")).toBe(
     "http://host:8085/ready",
   );
+});
+
+Deno.test("auto mode falls back only when a diarizator has no ready endpoint", () => {
+  expect(getDiarizatorHealthUrl("http://host:8085/")).toBe(
+    "http://host:8085/health",
+  );
+  expect(shouldAutoFallbackToDiarizatorHealth("auto", 404)).toBe(true);
+  expect(shouldAutoFallbackToDiarizatorHealth("auto", 405)).toBe(true);
+  expect(shouldAutoFallbackToDiarizatorHealth("auto", 503)).toBe(false);
+  expect(shouldAutoFallbackToDiarizatorHealth("strict", 404)).toBe(false);
+  expect(shouldAutoFallbackToDiarizatorHealth("legacy", 404)).toBe(false);
+});
+
+Deno.test("auto mode accepts only a model-ready legacy diarizator health body", () => {
+  expect(classifyAutoLegacyDiarizatorHealth(
+    200,
+    JSON.stringify({
+      status: "ok",
+      service: "pyannote-diarization",
+      ready: true,
+      device: "cuda",
+    }),
+  )).toMatchObject({ status: "healthy" });
+  expect(classifyAutoLegacyDiarizatorHealth(
+    200,
+    JSON.stringify({
+      status: "ok",
+      service: "pyannote-diarization",
+      ready: false,
+      device: "cuda",
+    }),
+  )).toMatchObject({ status: "unavailable" });
+  expect(classifyAutoLegacyDiarizatorHealth(200, "ok")).toMatchObject({
+    status: "unavailable",
+  });
 });
 
 Deno.test("normalizes Google model resource names for routing", () => {

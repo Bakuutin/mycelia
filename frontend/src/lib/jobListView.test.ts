@@ -53,6 +53,16 @@ describe("jobs list views", () => {
     });
   });
 
+  it("sends an indexed provider filter to the jobs resource", () => {
+    expect(buildJobsListRequest("operational", ["diarization"], {
+      providerProfileId: "gpu-legacy",
+    })).toMatchObject({
+      types: ["diarization"],
+      providerProfileId: "gpu-legacy",
+      limit: 1000,
+    });
+  });
+
   it("does not turn progress events into a fake lifecycle state", () => {
     expect(resolveJobEventState("job.progress", undefined, "active")).toBe(
       "active",

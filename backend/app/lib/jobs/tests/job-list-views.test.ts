@@ -148,3 +148,55 @@ Deno.test(
     expect(transcription.idleAutoRuns).toBe(0);
   }),
 );
+
+Deno.test(
+  "jobs provider filter searches beyond 500 newer jobs before the result limit",
+  withFixtures(["Admin", "Mongo", "JobsResource"], async (
+    admin: Auth,
+    mongo,
+  ) => {
+    const now = Date.now();
+    const targetId = new ObjectId();
+    await mongo.db.collection("jobs").insertMany([
+      ...Array.from({ length: 501 }, (_, index) => ({
+        _id: new ObjectId(),
+        type: "diarization",
+        state: "completed",
+        data: {
+          routingContext: {
+            providerProfileId: "current-gpu",
+            providerProfileName: "Current GPU",
+          },
+        },
+        createdAt: new Date(now - index),
+        finishedAt: new Date(now - index),
+      })),
+      {
+        _id: targetId,
+        type: "diarization",
+        state: "completed",
+        data: {
+          routingContext: {
+            providerProfileId: "legacy-gpu",
+            providerProfileName: "Legacy GPU",
+          },
+        },
+        createdAt: new Date(now - 10_000),
+        finishedAt: new Date(now - 9_000),
+      },
+    ]);
+
+    const result = await admin.getResource("jobs")({
+      action: "list",
+      view: "all",
+      types: ["diarization"],
+      statuses: ["completed"],
+      providerProfileId: "legacy-gpu",
+      limit: 1,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(targetId.toString());
+    expect(result[0].routingContext.providerProfileId).toBe("legacy-gpu");
+  }),
+);

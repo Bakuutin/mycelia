@@ -1,3 +1,5 @@
+export type DiarizationReadinessMode = "auto" | "strict" | "legacy";
+
 export type DiarizationProfile = {
   id: string;
   name: string;
@@ -5,6 +7,7 @@ export type DiarizationProfile = {
   enabled: boolean;
   priority: number;
   concurrency: number;
+  readinessMode?: DiarizationReadinessMode;
 };
 
 export type DiarizationRouteConfig = {
@@ -12,12 +15,18 @@ export type DiarizationRouteConfig = {
   includeEnvironment: boolean;
   environmentPriority: number;
   environmentConcurrency: number;
+  environmentReadinessMode?: DiarizationReadinessMode;
 };
 
 export function updateDiarizationRouteConfig(
   config: DiarizationRouteConfig,
   profileId: string,
-  changes: { enabled?: boolean; priority?: number; concurrency?: number },
+  changes: {
+    enabled?: boolean;
+    priority?: number;
+    concurrency?: number;
+    readinessMode?: DiarizationReadinessMode;
+  },
 ): DiarizationRouteConfig {
   if (
     changes.priority != null &&
@@ -34,18 +43,31 @@ export function updateDiarizationRouteConfig(
     throw new Error("Diarizator slots must be an integer from 1 to 8.");
   }
 
+  const effectiveConcurrency = changes.readinessMode === "legacy"
+    ? 1
+    : changes.concurrency;
   const next = profileId === "environment"
     ? {
       ...config,
       includeEnvironment: changes.enabled ?? config.includeEnvironment,
       environmentPriority: changes.priority ?? config.environmentPriority,
-      environmentConcurrency: changes.concurrency ??
+      environmentConcurrency: effectiveConcurrency ??
         config.environmentConcurrency,
+      environmentReadinessMode: changes.readinessMode ??
+        config.environmentReadinessMode,
     }
     : {
       ...config,
       profiles: config.profiles.map((profile) =>
-        profile.id === profileId ? { ...profile, ...changes } : profile
+        profile.id === profileId
+          ? {
+            ...profile,
+            ...changes,
+            ...(effectiveConcurrency != null
+              ? { concurrency: effectiveConcurrency }
+              : {}),
+          }
+          : profile
       ),
     };
 
@@ -87,6 +109,12 @@ export function validateDiarizationRoutes(
       profile.concurrency > 8
     ) {
       return `${profile.name}: slots must be 1-8.`;
+    }
+    if (
+      profile.readinessMode != null &&
+      !["auto", "strict", "legacy"].includes(profile.readinessMode)
+    ) {
+      return `${profile.name}: select a valid readiness mode.`;
     }
   }
   if (

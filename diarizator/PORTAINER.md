@@ -284,6 +284,12 @@ A/B windows on a 24 GiB GPU; do not assume the current pool plus a candidate
 pool can run concurrently merely because their resident model memory appears
 to fit:
 
+In Mycelia **Settings → Diarization**, leave current images on **Auto detect**
+or **Strict /ready**. Auto accepts an older stack only when a missing `/ready`
+is followed by a model-ready JSON `/health`. Use **Legacy /health** only as an
+explicit override for older response shapes; legacy routes are limited to one
+slot and still require a real `/diarize` before campaign work resumes.
+
 1. Run the fixed control window on the current stack and save its route and
    throughput metrics.
 2. Pause only diarization and wait for `active=0`. Preserve waiting/delayed

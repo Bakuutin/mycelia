@@ -14,15 +14,18 @@ import {
 } from "@/lib/diarization/provider-routing.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import {
+  classifyAutoLegacyDiarizatorHealth,
   classifyServiceResponse,
   type ExternalServiceHealth,
   type ExternalServiceId,
+  getDiarizatorHealthUrl,
   getDiarizatorReadyUrl,
   getJobServiceDependencies,
   getModelsUrl,
   getProviderHealthUrl,
   JOB_SERVICE_DEPENDENCIES,
   normalizeProviderModelId,
+  shouldAutoFallbackToDiarizatorHealth,
   shouldFallbackToSttHealth,
 } from "./service-health.shared.ts";
 export * from "./service-health.shared.ts";
@@ -229,8 +232,22 @@ async function probeProvider(input: {
   }
 }
 
-// Diarizator readiness is separate from liveness: /ready stays unavailable
-// until its requested device and models can actually serve inference.
+function parseHealthMetadata(
+  body: string,
+): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(body);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Strict mode trusts only /ready. Auto mode falls back after a missing endpoint
+// only when the legacy JSON proves that its models are loaded. Manual legacy
+// mode is an explicit operator override for older health response shapes.
 async function probeDiarizator(
   route: ResolvedDiarizatorRoute,
 ): Promise<ExternalServiceHealth> {
@@ -239,33 +256,54 @@ async function probeDiarizator(
     .map(([workerType]) => workerType);
   const checkedAt = new Date().toISOString();
   const baseUrl = route.baseUrl;
-  const healthUrl = getDiarizatorReadyUrl(baseUrl);
+  const readinessMode = route.readinessMode ?? "auto";
+  const firstUrl = readinessMode === "legacy"
+    ? getDiarizatorHealthUrl(baseUrl)
+    : getDiarizatorReadyUrl(baseUrl);
   const startedAt = performance.now();
   try {
-    const response = await fetch(healthUrl, {
+    let response = await fetch(firstUrl, {
       signal: AbortSignal.timeout(5_000),
     });
-    const body = await response.text();
-    let metadata: Record<string, unknown> | undefined;
-    try {
-      metadata = JSON.parse(body);
-    } catch {
-      metadata = undefined;
+    let body = await response.text();
+    let classification = classifyServiceResponse(response.status, body);
+    let detectedReadinessMode: "ready" | "legacy-health" =
+      readinessMode === "legacy" ? "legacy-health" : "ready";
+
+    if (
+      shouldAutoFallbackToDiarizatorHealth(readinessMode, response.status)
+    ) {
+      response = await fetch(getDiarizatorHealthUrl(baseUrl), {
+        signal: AbortSignal.timeout(5_000),
+      });
+      body = await response.text();
+      classification = classifyAutoLegacyDiarizatorHealth(
+        response.status,
+        body,
+      );
+      detectedReadinessMode = "legacy-health";
+    } else if (
+      readinessMode === "legacy" && classification.status === "healthy"
+    ) {
+      classification.message =
+        "Manual legacy /health mode; inference readiness is operator-controlled and the route is limited to one slot";
     }
     return {
       id: "diarizator",
       label: "Diarizator (speaker service)",
-      ...classifyServiceResponse(response.status, body),
+      ...classification,
       configured: true,
       baseUrl,
       source: route.source,
       providerProfileId: route.id,
       providerProfileName: route.name,
+      readinessMode,
+      detectedReadinessMode,
       httpStatus: response.status,
       latencyMs: Math.round(performance.now() - startedAt),
       checkedAt,
       usedBy,
-      metadata,
+      metadata: parseHealthMetadata(body),
     };
   } catch (error) {
     return {
@@ -277,6 +315,7 @@ async function probeDiarizator(
       source: route.source,
       providerProfileId: route.id,
       providerProfileName: route.name,
+      readinessMode,
       latencyMs: Math.round(performance.now() - startedAt),
       message: `${
         error instanceof Error ? error.message : String(error)
@@ -542,7 +581,11 @@ export async function getExternalServicesHealth(
       status: route.enabled ? health?.status ?? "unavailable" : "disabled",
       enabled: route.enabled,
       priority: route.priority,
-      concurrency: route.concurrency,
+      concurrency: health?.detectedReadinessMode === "legacy-health"
+        ? 1
+        : route.concurrency,
+      readinessMode: route.readinessMode ?? "auto",
+      detectedReadinessMode: health?.detectedReadinessMode,
       latencyMs: health?.latencyMs,
       message: route.enabled
         ? health?.message ?? "Route health is unavailable"

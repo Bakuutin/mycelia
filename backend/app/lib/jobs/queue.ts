@@ -26,6 +26,7 @@ import {
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { selectTranscriptionProvider } from "@/lib/transcription/provider-routing.ts";
 import {
+  applyDiarizatorHealthConstraints,
   buildDiarizatorJobSnapshot,
   resolveDiarizatorRoutes,
   selectDiarizatorRoute,
@@ -475,7 +476,10 @@ export async function requeuePersistedJob(input: {
   );
 
   return await reserveAndAddPersistedDiarizatorJob({
-    routes: resolveDiarizatorRoutes(config),
+    routes: applyDiarizatorHealthConstraints(
+      resolveDiarizatorRoutes(config),
+      diarizator?.routes,
+    ),
     healthyIds,
     queue,
     jobId: input.jobId,
@@ -810,7 +814,10 @@ export async function enqueueJob(
     }
     const configResource = await getConfigResource(auth);
     const config = await configResource({ action: "get" });
-    diarizatorRoutes = resolveDiarizatorRoutes(config);
+    diarizatorRoutes = applyDiarizatorHealthConstraints(
+      resolveDiarizatorRoutes(config),
+      diarizator?.routes,
+    );
     requestedDiarizatorProviderId = reuseDiarizatorRoute
       ? mergedData.routingContext?.providerProfileId
       : undefined;

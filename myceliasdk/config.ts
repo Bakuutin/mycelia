@@ -145,6 +145,9 @@ export const zDiarizationProviderProfile = z.object({
   priority: z.number().int().min(1).max(100).default(50),
   // Maximum simultaneous diarization/embed requests routed to this server.
   concurrency: z.number().int().min(1).max(8).default(1),
+  // Auto prefers the inference-aware /ready contract and falls back to a
+  // strongly identifiable legacy /health response only when /ready is absent.
+  readinessMode: z.enum(["auto", "strict", "legacy"]).default("auto"),
 });
 
 export const zDiarizationProfilesConfig = z.object({
@@ -152,6 +155,8 @@ export const zDiarizationProfilesConfig = z.object({
   includeEnvironment: z.boolean().optional().default(true),
   environmentPriority: z.number().int().min(1).max(100).optional().default(50),
   environmentConcurrency: z.number().int().min(1).max(8).optional().default(1),
+  environmentReadinessMode: z.enum(["auto", "strict", "legacy"])
+    .optional().default("auto"),
 }).superRefine((value, context) => {
   const totalConcurrency = value.profiles
     .filter((profile) => profile.enabled)

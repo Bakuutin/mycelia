@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { callResource } from "@/lib/api";
 import {
   type DiarizationProfile,
+  type DiarizationReadinessMode,
   getEnabledDiarizationCapacity,
   validateDiarizationRoutes,
 } from "@/lib/diarizationSettings";
@@ -10,6 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Loader2, Plus, RefreshCw, Save, Server, Trash2 } from "lucide-react";
 
@@ -20,6 +28,8 @@ type RouteHealth = {
   status: "healthy" | "loading" | "unavailable" | "misconfigured" | "disabled";
   enabled: boolean;
   priority: number;
+  readinessMode?: DiarizationReadinessMode;
+  detectedReadinessMode?: "ready" | "legacy-health";
   latencyMs?: number;
   message: string;
 };
@@ -32,6 +42,12 @@ const statusLabel: Record<RouteHealth["status"], string> = {
   disabled: "Disabled",
 };
 
+const readinessModeLabel: Record<DiarizationReadinessMode, string> = {
+  auto: "Auto detect",
+  strict: "Strict /ready",
+  legacy: "Legacy /health",
+};
+
 const emptyProfile = (): DiarizationProfile => ({
   id: `diarizator-${Date.now()}`,
   name: "Remote diarizator",
@@ -39,6 +55,7 @@ const emptyProfile = (): DiarizationProfile => ({
   enabled: true,
   priority: 50,
   concurrency: 1,
+  readinessMode: "auto",
 });
 
 export default function DiarizationSettingsPage() {
@@ -46,6 +63,9 @@ export default function DiarizationSettingsPage() {
   const [includeEnvironment, setIncludeEnvironment] = useState(true);
   const [environmentPriority, setEnvironmentPriority] = useState(50);
   const [environmentConcurrency, setEnvironmentConcurrency] = useState(1);
+  const [environmentReadinessMode, setEnvironmentReadinessMode] = useState<
+    DiarizationReadinessMode
+  >("auto");
   const [health, setHealth] = useState<RouteHealth[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,6 +104,7 @@ export default function DiarizationSettingsPage() {
             (profile: DiarizationProfile) => ({
               ...profile,
               concurrency: profile.concurrency ?? 1,
+              readinessMode: profile.readinessMode ?? "auto",
             }),
           ),
         );
@@ -95,6 +116,9 @@ export default function DiarizationSettingsPage() {
         );
         setEnvironmentConcurrency(
           config?.diarizationProfiles?.environmentConcurrency ?? 1,
+        );
+        setEnvironmentReadinessMode(
+          config?.diarizationProfiles?.environmentReadinessMode ?? "auto",
         );
         await refreshHealth();
       } finally {
@@ -109,15 +133,21 @@ export default function DiarizationSettingsPage() {
   );
 
   const save = async () => {
+    const effectiveEnvironmentConcurrency = environmentReadinessMode ===
+        "legacy"
+      ? 1
+      : environmentConcurrency;
     const normalized = profiles.map((profile) => ({
       ...profile,
       name: profile.name.trim(),
       baseUrl: profile.baseUrl.trim().replace(/\/+$/, ""),
+      readinessMode: profile.readinessMode ?? "auto",
+      concurrency: profile.readinessMode === "legacy" ? 1 : profile.concurrency,
     }));
     const error = validateDiarizationRoutes(
       normalized,
       includeEnvironment,
-      environmentConcurrency,
+      effectiveEnvironmentConcurrency,
     );
     if (error) return setMessage({ ok: false, text: error });
     if (
@@ -132,7 +162,7 @@ export default function DiarizationSettingsPage() {
     const totalConcurrency = getEnabledDiarizationCapacity(
       normalized,
       includeEnvironment,
-      environmentConcurrency,
+      effectiveEnvironmentConcurrency,
     );
     setSaving(true);
     setMessage(null);
@@ -144,7 +174,8 @@ export default function DiarizationSettingsPage() {
             profiles: normalized,
             includeEnvironment,
             environmentPriority,
-            environmentConcurrency,
+            environmentConcurrency: effectiveEnvironmentConcurrency,
+            environmentReadinessMode,
           },
         },
       });
@@ -156,6 +187,7 @@ export default function DiarizationSettingsPage() {
         });
       }
       setProfiles(normalized);
+      setEnvironmentConcurrency(effectiveEnvironmentConcurrency);
       const enabledCount = normalized.filter((profile) =>
         profile.enabled
       ).length +
@@ -230,6 +262,26 @@ export default function DiarizationSettingsPage() {
             </p>
           </div>
           <div className="w-32 space-y-1">
+            <Label>Readiness</Label>
+            <Select
+              value={environmentReadinessMode}
+              onValueChange={(value) => {
+                const mode = value as DiarizationReadinessMode;
+                setEnvironmentReadinessMode(mode);
+                if (mode === "legacy") setEnvironmentConcurrency(1);
+              }}
+            >
+              <SelectTrigger aria-label="Environment readiness mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(readinessModeLabel).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-32 space-y-1">
             <Label htmlFor="diar-env-priority">Priority</Label>
             <Input
               id="diar-env-priority"
@@ -249,7 +301,8 @@ export default function DiarizationSettingsPage() {
               min={1}
               max={8}
               value={environmentConcurrency}
-              disabled={!includeEnvironment}
+              disabled={!includeEnvironment ||
+                environmentReadinessMode === "legacy"}
               onChange={(event) =>
                 setEnvironmentConcurrency(Number(event.target.value))}
             />
@@ -265,6 +318,9 @@ export default function DiarizationSettingsPage() {
               ? "Not checked"
               : "Disabled"}
           </Badge>
+          {environmentHealth?.detectedReadinessMode === "legacy-health" && (
+            <Badge variant="outline">Legacy</Badge>
+          )}
         </div>
         <p className="text-xs text-muted-foreground">
           {environmentHealth?.message ??
@@ -326,6 +382,9 @@ export default function DiarizationSettingsPage() {
                     ? statusLabel[routeHealth.status]
                     : "Save to test"}
                 </Badge>
+                {routeHealth?.detectedReadinessMode === "legacy-health" && (
+                  <Badge variant="outline">Legacy</Badge>
+                )}
                 <Button
                   size="icon"
                   variant="ghost"
@@ -356,6 +415,32 @@ export default function DiarizationSettingsPage() {
                 />
               </div>
               <div className="space-y-2">
+                <Label>Readiness</Label>
+                <Select
+                  value={profile.readinessMode ?? "auto"}
+                  onValueChange={(value) => {
+                    const mode = value as DiarizationReadinessMode;
+                    update({
+                      readinessMode: mode,
+                      ...(mode === "legacy" ? { concurrency: 1 } : {}),
+                    });
+                  }}
+                >
+                  <SelectTrigger aria-label={`${profile.name} readiness mode`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(readinessModeLabel).map(
+                      ([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ),
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
                 <Label>Priority</Label>
                 <Input
                   type="number"
@@ -373,6 +458,7 @@ export default function DiarizationSettingsPage() {
                   min={1}
                   max={8}
                   value={profile.concurrency}
+                  disabled={profile.readinessMode === "legacy"}
                   onChange={(event) =>
                     update({ concurrency: Number(event.target.value) })}
                 />

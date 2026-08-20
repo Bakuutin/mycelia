@@ -8,13 +8,14 @@ export const DIARIZATION_JOB_TYPES = new Set([
 
 export function getDiarizationJobRoute(
   job: JobInfo,
-): { name: string; url?: string } | null {
+): { id?: string; name: string; url?: string } | null {
   if (!DIARIZATION_JOB_TYPES.has(job.type)) return null;
   const url = typeof job.data?.diarizationServerUrl === "string"
     ? job.data.diarizationServerUrl
     : undefined;
+  const id = job.routingContext?.providerProfileId;
   const name = job.routingContext?.providerProfileName ||
-    job.routingContext?.providerProfileId ||
+    id ||
     (url ? "Diarizator" : undefined);
-  return name ? { name, url } : null;
+  return name ? { ...(id ? { id } : {}), name, url } : null;
 }

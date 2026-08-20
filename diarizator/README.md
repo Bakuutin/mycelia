@@ -1,6 +1,8 @@
 # PyAnnote Diarization Service
 
-A minimal inference provider for speaker diarization with embeddings using Pyannote Community-1. Supports matching Pyannote speaker clusters against known profiles.
+A minimal inference provider for speaker diarization with embeddings using
+Pyannote Community-1. Supports matching Pyannote speaker clusters against known
+profiles.
 
 For the complete Mycelia operator workflow — local Mac and remote NVIDIA GPU
 deployment, routing, campaigns, voice enrollment, calibration, identity
@@ -11,7 +13,8 @@ backfill, and Timeline verification — see
 
 - **Speaker Diarization**: Uses pyannote to segment audio by speaker
 - **Embeddings**: Extracts WeSpeaker ResNet34 embeddings for each segment
-- **Speaker Identification**: Optionally match Pyannote speaker centroids against known profiles without replacing diarization labels
+- **Speaker Identification**: Optionally match Pyannote speaker centroids
+  against known profiles without replacing diarization labels
 - **FastAPI Service**: Simple REST API for easy integration
 
 ## Quick Start (Docker)
@@ -40,6 +43,7 @@ AUDIO_BACKEND=soundfile
 Get your HF token from https://huggingface.co/settings/tokens
 
 Accept the terms and conditions for:
+
 - https://huggingface.co/pyannote/speaker-diarization-community-1
 - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
 
@@ -84,10 +88,10 @@ Recommended Docker Desktop resources for Mycelia plus diarization:
 The main Mycelia Compose stack defaults to two 10-second audio chunks per
 diarization request (`DIARIZATION_MAX_SEQUENCE_CHUNKS=2`). This preserves the
 one-chunk overlap used for speaker continuity while avoiding a confirmed Docker
-Desktop OOM when six chunks are combined under an 8 GB VM.
-After assigning 10–12 GB to Docker, or when the worker targets a sufficiently
-large remote/GPU service, increase throughput explicitly. The tested starting
-point for a 24 GiB RTX 4090 pool is:
+Desktop OOM when six chunks are combined under an 8 GB VM. After assigning 10–12
+GB to Docker, or when the worker targets a sufficiently large remote/GPU
+service, increase throughput explicitly. The tested starting point for a 24 GiB
+RTX 4090 pool is:
 
 ```bash
 DIARIZATION_MAX_SEQUENCE_CHUNKS=8
@@ -114,12 +118,12 @@ docker compose --profile gpu exec diarization-service-gpu \
 ```
 
 The GPU image is intentionally `linux/amd64` and uses the CUDA 12.6 PyTorch
-wheels. Confirm that the installed NVIDIA driver supports this CUDA runtime.
-Do not build or run this image as the local Mac default.
+wheels. Confirm that the installed NVIDIA driver supports this CUDA runtime. Do
+not build or run this image as the local Mac default.
 
 The standalone single-process GPU deployment defaults to Pyannote segmentation
-and internal embedding batch sizes of `8`, plus a per-segment identity
-embedding batch of `16`. The six-process Portainer pool uses `8/8/4` and
+and internal embedding batch sizes of `8`, plus a per-segment identity embedding
+batch of `16`. The six-process Portainer pool uses `8/8/4` and
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`: a third batch of `16`
 triggered recoverable CUDA OOM fallback on a shared 24 GiB RTX 4090. Override
 `DIARIZATION_SEGMENTATION_BATCH_SIZE`, `DIARIZATION_EMBEDDING_BATCH_SIZE`, and
@@ -152,19 +156,19 @@ The detailed operator runbook is [`diarizator/PORTAINER.md`](PORTAINER.md).
 
 The checked-in stack defaults to `mycelia-diarization:cu126`. It uses
 `pull_policy: never`, so the exact `linux/amd64` image must exist on the
-Portainer Docker endpoint before the stack is deployed. Set
-`DIARIZATION_IMAGE` in Portainer to use an immutable versioned tag. The stack
-creates the persistent `mycelia_diarization_models` volume automatically. One
-stack publishes one through six private endpoints selected through the
-Compose-native `COMPOSE_PROFILES` variable.
+Portainer Docker endpoint before the stack is deployed. Set `DIARIZATION_IMAGE`
+in Portainer to use an immutable versioned tag. The stack creates the persistent
+`mycelia_diarization_models` volume automatically. One stack publishes one
+through six private endpoints selected through the Compose-native
+`COMPOSE_PROFILES` variable.
 
 #### Build on the remote NVIDIA host (recommended)
 
 The build itself does not need access to the GPU. When the remote Docker host
 has Buildx, enough free disk space, and outbound access to the base-image and
-Python package registries, send the small, commit-exact source archive and
-build there. This is normally much faster than transferring a multi-gigabyte
-finished image over Tailscale.
+Python package registries, send the small, commit-exact source archive and build
+there. This is normally much faster than transferring a multi-gigabyte finished
+image over Tailscale.
 
 Create the archive from committed files at the Mycelia repository root. It
 contains only the tracked `diarizator/` tree; it does not include local `.env`
@@ -183,8 +187,8 @@ scp "${SOURCE_ARCHIVE}" user@gpu-server:~/
 ```
 
 Build the exact archive on the remote host and require its `sha256sum` to match
-the local `shasum` value. `ssh -t` lets `sudo` prompt in the remote terminal;
-do not put a server password in a command, `.env`, or Git.
+the local `shasum` value. `ssh -t` lets `sudo` prompt in the remote terminal; do
+not put a server password in a command, `.env`, or Git.
 
 ```bash
 ssh -t user@gpu-server
@@ -211,16 +215,16 @@ exit
 ```
 
 Use the same value for `IMAGE_TAG` on both hosts. The expected architecture is
-`amd64`. If shell access to Docker is intentionally unavailable, upload the
-same source archive through **Portainer → Images → Build a new image** and set
-the image name to `mycelia-diarization:<IMAGE_TAG>`.
+`amd64`. If shell access to Docker is intentionally unavailable, upload the same
+source archive through **Portainer → Images → Build a new image** and set the
+image name to `mycelia-diarization:<IMAGE_TAG>`.
 
 #### Build locally and transfer the image (fallback)
 
 Use this path when the remote endpoint cannot build or has no required outbound
-network access. Run from the Mycelia repository root. Keep the immutable tag;
-do not overwrite an existing tag because Portainer could keep running the old
-image ID.
+network access. Run from the Mycelia repository root. Keep the immutable tag; do
+not overwrite an existing tag because Portainer could keep running the old image
+ID.
 
 ```bash
 IMAGE_TAG=20260814-abcdef0
@@ -270,21 +274,20 @@ immutable tag before deploying. See
    `diarizator/compose.portainer.yml`.
 4. Under **Environment variables**, add `HF_TOKEN`, the immutable
    `DIARIZATION_IMAGE` tag, `DIARIZATION_BIND_ADDRESS=<TAILSCALE_IP>`,
-   `DIARIZATION_REQUEST_CONCURRENCY=1`, and
-   `DIARIZATION_MAX_QUEUED_REQUESTS=1`.
+   `DIARIZATION_REQUEST_CONCURRENCY=1`, and `DIARIZATION_MAX_QUEUED_REQUESTS=1`.
    Do not place the token in the Compose file or Git.
 5. Set `COMPOSE_PROFILES` to `pool-N`, where `N` is `2` through `6`; delete it
    for one process.
 6. Deploy the stack. For an update, replace the editor contents, preserve all
-   environment variables, enable **Prune services**, and select
-   **Update the stack**.
+   environment variables, enable **Prune services**, and select **Update the
+   stack**.
 
 #### Keep the previous stack for comparison and rollback
 
 Do not overwrite, delete, or rename the current Portainer stack. Record its
 stack name, `DIARIZATION_IMAGE` value, and the image ID of every running
-container. Keep that immutable image on the Docker endpoint; do not run an
-image prune during the comparison.
+container. Keep that immutable image on the Docker endpoint; do not run an image
+prune during the comparison.
 
 Create a separate `gpu-diarization-candidate` stack from the same
 `compose.portainer.yml` with:
@@ -292,10 +295,9 @@ Create a separate `gpu-diarization-candidate` stack from the same
 - the new immutable `DIARIZATION_IMAGE`;
 - `COMPOSE_PROFILES` unset, so the candidate starts with one process;
 - a verified-free port such as `DIARIZATION_PORT_1=8185`;
-- the same `DIARIZATION_MODELS_VOLUME`, so model files are not downloaded
-  again;
-- no enabled Mycelia route until `/ready`, `/health`, and a real `/diarize`
-  have passed.
+- the same `DIARIZATION_MODELS_VOLUME`, so model files are not downloaded again;
+- no enabled Mycelia route until `/ready`, `/health`, and a real `/diarize` have
+  passed.
 
 Do not run the old two-process pool and a second full pool simultaneously on a
 24 GiB card. CUDA workspace peaks are not determined by resident model memory
@@ -311,14 +313,24 @@ alone. Compare sequentially instead:
    the unchanged current stack, verify its recorded image ID and a real
    inference, then re-enable its routes.
 
+For a database-wide comparison after both routes have processed jobs, open
+**Jobs** and click the `Diarizator: <provider>` name in a diarization row. Jobs
+with a snapshotted provider ID are filtered in MongoDB before the bounded result
+limit is applied, so an older control route is not hidden merely because newer
+jobs filled the browser's initial history window. The `20 / 50 / 100 /
+500`
+selector controls how many matching rows are rendered; it does not define which
+part of history is searched. Migration `0059_jobs_provider_history_index.ts`
+adds the compound provider/type/state/time index used by this query.
+
 Stopping a stack preserves its Portainer definition, immutable image, and the
 named model volume. A legacy control image without `/ready` is not compatible
 with a backend that requires the new readiness contract; benchmark it directly
 before the backend switch, or roll back the backend and GPU image together.
 
 The Hugging Face account owning the token must have accepted both gated model
-agreements listed in the prerequisites. The first start can take several
-minutes while the persistent model volume is populated.
+agreements listed in the prerequisites. The first start can take several minutes
+while the persistent model volume is populated.
 
 Verify all runtime layers instead of relying on the green container icon alone:
 
@@ -336,6 +348,23 @@ CUDA device name: <NVIDIA GPU model>
 Models ready - device=cuda
 ```
 
+Mycelia **Settings → Diarization** has a per-route readiness mode for comparing
+current and historical service images:
+
+- **Auto detect** first calls `/ready`. Only a `404` or `405` can trigger a
+  `/health` fallback, and that legacy response must prove `ready=true`, identify
+  itself as a diarization service, and report its device.
+- **Strict /ready** never falls back and is the recommended production mode for
+  current images.
+- **Legacy /health** is an explicit operator override for older services whose
+  `/health` body cannot be auto-identified. It treats HTTP 2xx as available but
+  displays a warning because liveness is not inference readiness.
+
+Auto-detected and manually selected legacy routes are always constrained to one
+reserved slot. Keep old and candidate GPU stacks stopped when not being
+measured, switch the route only after pause/drain, and require one real
+`/diarize` before resuming campaign work.
+
 Finally send a permitted test audio file and require HTTP 200 from `/diarize`:
 
 ```bash
@@ -352,14 +381,14 @@ approved that transfer.
 The canonical stack supports one through six independent processes without
 editing its YAML. Set Portainer's `COMPOSE_PROFILES` stack variable to:
 
-| Processes | `COMPOSE_PROFILES` | Ports |
-| ---: | --- | --- |
-| 1 | unset or empty | `8085` |
-| 2 | `pool-2` | `8085`–`8086` |
-| 3 | `pool-3` | `8085`–`8087` |
-| 4 | `pool-4` | `8085`–`8088` |
-| 5 | `pool-5` | `8085`–`8089` |
-| 6 | `pool-6` | `8085`–`8090` |
+| Processes | `COMPOSE_PROFILES` | Ports         |
+| --------: | ------------------ | ------------- |
+|         1 | unset or empty     | `8085`        |
+|         2 | `pool-2`           | `8085`–`8086` |
+|         3 | `pool-3`           | `8085`–`8087` |
+|         4 | `pool-4`           | `8085`–`8088` |
+|         5 | `pool-5`           | `8085`–`8089` |
+|         6 | `pool-6`           | `8085`–`8090` |
 
 Before changing the value, disable disappearing Mycelia routes, drain work, and
 stop the stack. Then select **Prune services** and **Update the stack**. When
@@ -379,8 +408,8 @@ checklist.
 
 Use `https://gpu-host.example-tailnet.ts.net/`. This trusted Tailscale Serve URL
 proxies to Portainer's self-signed loopback endpoint, so browsers do not need a
-certificate-warning bypass. Do not use the raw `<TAILSCALE_IP>:9443` URL and
-do not expose Portainer with Tailscale Funnel.
+certificate-warning bypass. Do not use the raw `<TAILSCALE_IP>:9443` URL and do
+not expose Portainer with Tailscale Funnel.
 
 #### Duplicate diarization containers in Portainer
 
@@ -388,9 +417,10 @@ Canonical containers belong to the `gpu-diarization` stack and have service
 names `diarization-1` through `diarization-6`. A container such as
 `mycelia-stt-diarization-1` belongs to another stack and is not a pool slot. If
 it is obsolete, remove the `diarization` service from that stack's Compose and
-update the stack; deleting only the container allows Portainer/Compose to
-create it again. A restart loop ending in `HF_TOKEN environment variable is
-required` confirms that the duplicate is not a working provider.
+update the stack; deleting only the container allows Portainer/Compose to create
+it again. A restart loop ending in `HF_TOKEN environment variable is
+required`
+confirms that the duplicate is not a working provider.
 
 ### 3. Connect Mycelia
 
@@ -401,13 +431,17 @@ when the main-stack `diarization` profile is used:
 DIARIZATION_SERVER_URL=http://diarizator:8085
 ```
 
-The standalone `diarizator/docker-compose.yml --profile cpu` path remains
-useful for isolated service development. If used alongside containerized
-Mycelia, configure an explicit reachable URL; Docker Desktop host-port
-hairpinning is not used as the supported default.
+The standalone `diarizator/docker-compose.yml --profile cpu` path remains useful
+for isolated service development. If used alongside containerized Mycelia, the
+two Compose projects do not share service DNS. Add a route in **Settings →
+Diarization** with `Base URL=http://host.docker.internal:8085`, `Slots=1`, and
+**Auto detect**. Disable an environment route that still points to
+`http://diarizator:8085`. Alternatively, set `DIARIZATION_SERVER_URL` to the
+host URL in the main stack and recreate only backend; do not restart MongoDB or
+Redis.
 
-For a remote GPU server, set the backend to the reachable protected URL,
-or add that URL in **Settings → Diarization** and give it a lower priority:
+For a remote GPU server, set the backend to the reachable protected URL, or add
+that URL in **Settings → Diarization** and give it a lower priority:
 
 ```bash
 DIARIZATION_SERVER_URL=https://diarizator.example.com
@@ -429,10 +463,10 @@ curl -fsS http://localhost:8085/health
 
 `/health` is liveness and always reports current `ready`, `computeMode`,
 `device`, `concurrency`, `inflight`, and `queued` state. `/ready` returns HTTP
-503 until the models are loaded; it also remains 503 when `COMPUTE_MODE=gpu`
-was requested but CUDA is unavailable. In Mycelia, open **Jobs → External
-services & routing** or **Settings → Diarization**; the route must show
-`Running`, not only configured.
+503 until the models are loaded; it also remains 503 when `COMPUTE_MODE=gpu` was
+requested but CUDA is unavailable. In Mycelia, open **Jobs → External services &
+routing** or **Settings → Diarization**; the route must show `Running`, not only
+configured.
 
 ### Troubleshooting
 
@@ -455,8 +489,8 @@ docker compose --profile diarization up -d --force-recreate diarizator
 
 `CUDA available: False` on the GPU server
 
-- Confirm the GPU profile was used, the image is `mycelia-diarizator:cu126`,
-  and the NVIDIA Container Toolkit smoke test above succeeds.
+- Confirm the GPU profile was used, the image is `mycelia-diarizator:cu126`, and
+  the NVIDIA Container Toolkit smoke test above succeeds.
 
 Inspect the exact image architecture and dependency flavor:
 
@@ -479,23 +513,28 @@ GPU mode fell back to CPU.
 
 `/diarize` and `/embed` share that gate. With the defaults, one request runs and
 one waits. `DIARIZATION_MAX_QUEUED_REQUESTS=0` disables waiting; values above
-`1` are rejected at startup. A request beyond the configured bound receives
-HTTP 429, a `Retry-After: 1` header, and a JSON body with `retryable: true`.
+`1` are rejected at startup. A request beyond the configured bound receives HTTP
+429, a `Retry-After: 1` header, and a JSON body with `retryable: true`.
 
 ### POST /diarize
 
 Perform speaker diarization on an audio file.
 
 **Request:**
+
 - `file`: Audio file (multipart/form-data)
 - `min_speakers` (optional): Minimum number of speakers to detect
 - `max_speakers` (optional): Maximum number of speakers to detect
-- `collar` (optional, disabled by default): Post-processing gap duration used to merge same-speaker segments
-- `min_duration_off` (optional, disabled by default): Legacy segmentation override; Community-1 defaults are recommended
+- `collar` (optional, disabled by default): Post-processing gap duration used to
+  merge same-speaker segments
+- `min_duration_off` (optional, disabled by default): Legacy segmentation
+  override; Community-1 defaults are recommended
 - `clusters` (optional): JSON array of known speaker clusters with embeddings
-- `similarity_threshold` (optional, default: 0.15): Cosine similarity threshold for cluster matching
+- `similarity_threshold` (optional, default: 0.15): Cosine similarity threshold
+  for cluster matching
 
 **Clusters Format:**
+
 ```json
 [
   {
@@ -512,6 +551,7 @@ Perform speaker diarization on an audio file.
 ```
 
 **Response (without clusters):**
+
 ```json
 {
   "segments": [
@@ -546,6 +586,7 @@ upload, queue, decode, embedding, and total stages. Audio is decoded once in
 memory and the same waveform is reused for diarization and segment embeddings.
 
 **Response (with clusters - seeded clustering):**
+
 ```json
 {
   "segments": [
@@ -591,6 +632,7 @@ memory and the same waveform is reused for diarization and segment embeddings.
 ```
 
 **Example Request:**
+
 ```bash
 curl -X POST "http://localhost:8085/diarize" \
   -F "file=@audio.wav" \
@@ -600,15 +642,19 @@ curl -X POST "http://localhost:8085/diarize" \
 
 ## How It Works
 
-1. **Diarization**: The service uses pyannote to segment audio by speaker, producing initial speaker labels (SPEAKER_00, SPEAKER_01, etc.)
+1. **Diarization**: The service uses pyannote to segment audio by speaker,
+   producing initial speaker labels (SPEAKER_00, SPEAKER_01, etc.)
 
-2. **Embedding Extraction**: For each segment, a WeSpeaker ResNet34 embedding is extracted and normalized
+2. **Embedding Extraction**: For each segment, a WeSpeaker ResNet34 embedding is
+   extracted and normalized
 
-3. **Seeded Clustering** (if clusters provided): 
+3. **Seeded Clustering** (if clusters provided):
    - Segments are matched against known speaker clusters using cosine similarity
-   - Segments above the similarity threshold are assigned to the matching cluster
+   - Segments above the similarity threshold are assigned to the matching
+     cluster
    - Remaining segments are clustered using traditional agglomerative clustering
-   - This allows the diarization to prefer known speakers while still handling unknown speakers
+   - This allows the diarization to prefer known speakers while still handling
+     unknown speakers
 
 ## Configuration
 
@@ -619,7 +665,8 @@ curl -X POST "http://localhost:8085/diarize" \
 - `PYTORCH_CUDA_VERSION`: `cpu`, `cu121`, `cu126`, or `cu128` (default: `cpu`)
 - `SPEAKER_SERVICE_HOST`: Service bind host (default: `0.0.0.0`)
 - `SPEAKER_SERVICE_PORT`: Service port (default: `8085`)
-- `LOG_LEVEL`: Logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)
+- `LOG_LEVEL`: Logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR` (default:
+  `INFO`)
 
 ## Development
 

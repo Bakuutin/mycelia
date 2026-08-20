@@ -16,6 +16,7 @@ describe("getDiarizationJobRoute", () => {
         resolvedAt: "2026-08-10T00:00:00.000Z",
       },
     })).toEqual({
+      id: "remote-diar",
       name: "RTX 4090",
       url: "http://diarizer.example.test:8085",
     });
