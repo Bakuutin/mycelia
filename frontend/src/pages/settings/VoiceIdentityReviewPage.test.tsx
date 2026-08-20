@@ -48,6 +48,9 @@ const profile = {
 const emptyStatus = {
   labels: { sky: 39, notSky: 40, total: 79, recordings: 4 },
   calibrations: [],
+  usableCalibration: null,
+  canClassify: false,
+  blockers: ["No validated calibration matches the current profile revision"],
 };
 const emptyPreview = {
   profile: {
@@ -558,7 +561,22 @@ describe("VoiceIdentityReviewPage", () => {
   it("marks a validated calibration as ready for the 24-hour pilot", async () => {
     const calibratedStatus = {
       ...emptyStatus,
-      calibrations: [{ calibrationId: "sky-r3", status: "validated" }],
+      calibrations: [{
+        calibrationId: "sky-r3",
+        status: "validated",
+        profileId: profile._id,
+        profileRevision: 3,
+        embeddingSpaceId: "space-v1",
+      }],
+      usableCalibration: {
+        calibrationId: "sky-r3",
+        status: "validated",
+        profileId: profile._id,
+        profileRevision: 3,
+        embeddingSpaceId: "space-v1",
+      },
+      canClassify: true,
+      blockers: [],
     };
     mockCallResource.mockImplementation((resource, input: any) => {
       if (resource === "mongo") return Promise.resolve([profile]);

@@ -369,12 +369,25 @@ processed/total/pending chunks, batch, sequences, segments, route, rate, ETA и
 structured errors. `Counting` и ранний `Estimating` нормальны; ETA становится
 полезнее после двух успешных batches.
 
-В **Audio Pipeline → Speaker diarization** показывается общий snapshot текущей
+В **Audio Pipeline → Speaker diarization** показывается live snapshot текущей
 глобальной `missing` campaign: processed/total/pending chunks, ETA, sequences,
-segments и structured errors. `Recent jobs average` там означает сглаженную
-скорость последних jobs, а не сумму одновременно работающих GPU routes. Этот
-блок обновляется вместе с Audio Pipeline раз в 30 секунд или по кнопке
-**Refresh**.
+segments, BullMQ queue и текущие enabled/healthy slots. Блок обновляется каждые
+5 секунд, пока tab видим, и не запускает exact corpus scans. Количество routes и
+slots читается из Settings, поэтому оно меняется автоматически.
+
+Кнопка **Jobs → External services & routing → First 8 on** включает diarization
+routes по порядку списка в пределах общего лимита 8 slots. Routes, которые не
+помещаются в лимит, остаются выключенными; карточка показывает фактическое
+количество enabled/total. Этот же максимум применяется к provider capacity и
+BullMQ worker concurrency.
+
+Во время работы `Combined rate` означает сумму end-to-end средних скоростей всех
+активных tasks, которые уже сообщили progress. ETA считается от этой суммарной
+скорости и обновляется вместе с live snapshot каждые 5 секунд; дополнительного
+Mongo polling для этого нет. Между активными jobs используются недавние
+завершённые `diarization_campaign_rate_samples` по всем GPU lanes. Пока нет ни
+live progress, ни samples, UI явно показывает `legacy single-lane estimate`, а
+не выдаёт rate одного worker за общий throughput.
 
 В активном job остаётся только bounded работа конкретного процесса. **This
 batch** показывает sequences относительно верхнего лимита job и обработанные им
@@ -415,7 +428,8 @@ building/interrupted -> failed
 
 Порядок:
 
-1. Выбрать bounded range в **Audio Pipeline → Voice Identity**.
+1. Выбрать bounded range в **Settings → Voice Identity → Operations &
+   generations**.
 2. Нажать **Re-diarize range**.
 3. Дождаться generation campaign или разобрать errors.
 4. Для `interrupted` resume допустим только при idempotent writes; иначе **Mark
@@ -438,7 +452,7 @@ backup и проверьте restore. Затем **Preview purge**, сверка
 1. Создайте или выберите primary profile (`My Voice`).
 2. Запишите/загрузите несколько чистых samples.
 3. Прикрепите samples к Sky и проверьте карточки внутри профиля.
-4. На Voice Identity нажмите **Re-enroll Sky from saved samples**.
+4. В **Review & calibration** нажмите **Re-enroll Sky from saved samples**.
 5. Проследите `profileReenrollment` job на **Jobs**.
 6. Проверьте новую revision и текущий `embeddingSpaceId`.
 
@@ -523,7 +537,9 @@ backend пересчитывает метрики повторно, поэтом
 ## 10. Identity pilot и backfill
 
 После актуального Sky profile и validated calibration откройте
-`https://localhost:4433/audio/pipeline`, блок **Voice Identity — Sky first**.
+`https://localhost:4433/settings/voice-identity/operations` (**Settings → Voice
+Identity → Operations & generations**). Audio Pipeline показывает компактную
+read-only readiness card со ссылками на эти настройки.
 
 Порядок rollout:
 
@@ -547,11 +563,11 @@ calibrated thresholds превращают score в identity decision.
 Cross-space matching блокируется. Если `legacy-unknown` не проходит validation,
 используйте rolling versioned re-diarization, а не принудительный match.
 
-`Classify existing` создаёт identity campaign. На Audio Pipeline, Voice
-Identity, Jobs и Job Details отображаются общий processed/total, текущий batch,
-Sky, not-Sky, uncertain, incompatible, rate и ETA. Continuation сохраняет тот же
-`campaignId`, поэтому прогресс не возвращается к нулю между jobs. После каждого
-batch Timeline speaker-layer обновляется автоматически.
+`Classify existing` создаёт identity campaign. В Operations & generations,
+Review & calibration, Jobs и Job Details отображаются общий processed/total,
+текущий batch, Sky, not-Sky, uncertain, incompatible, rate и ETA. Continuation
+сохраняет тот же `campaignId`, поэтому прогресс не возвращается к нулю между
+jobs. После каждого batch Timeline speaker-layer обновляется автоматически.
 
 После pilot:
 

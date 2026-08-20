@@ -86,6 +86,7 @@ describe("getDiarizationCampaignProgressView", () => {
       totalChunks: 100,
       pendingChunks: 60,
       chunksPerSecond: 0.75,
+      rateStatus: "aggregate",
       usefulAudioRealtimeMultiple: 7.5,
       rateWindowSeconds: 120,
       successfulSequences: 8,
@@ -96,8 +97,22 @@ describe("getDiarizationCampaignProgressView", () => {
       percent: 40,
       progressLabel: "40 / 100 chunks",
       remainingLabel: "60 chunks remaining in range",
-      rateLabel: "Recent jobs average: 45.0 chunks/min",
+      rateLabel: "Recent completed tasks combined: 45.0 chunks/min",
       etaLabel: "About 2m remaining",
+    });
+  });
+
+  it("labels the live rate as the sum of active task averages", () => {
+    expect(getDiarizationCampaignProgressView({
+      processedChunks: 40,
+      totalChunks: 100,
+      pendingChunks: 60,
+      chunksPerSecond: 1.5,
+      rateStatus: "live",
+      etaSeconds: 40,
+    })).toMatchObject({
+      rateLabel: "All active tasks combined: 90.0 chunks/min",
+      etaLabel: "About 40s remaining",
     });
   });
 

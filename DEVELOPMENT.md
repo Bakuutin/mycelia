@@ -149,18 +149,39 @@ limited to the current sequence plus at most one leased lookahead, stopped
 batches leave no application cursor registered in the backend, and expired
 `diarization_recording_leases` can be acquired by a new worker.
 
-The Audio Pipeline page does not run an exact diarization `audio_chunks` count
-on a timer. Its full source/backlog/session snapshot is loaded only through
-**Calculate current stats**. Within that snapshot, diarization probes at most
-one indexed ready chunk: zero is exact, while existing work is shown either as
-the persisted campaign estimate (`≈N`, with its update time) or as
-`Work
-remains` when no estimate is available. Treat campaign `pendingChunks` as
-an operational estimate, not as an exact scheduler input; claiming and
-completion continue to use canonical chunk state. Campaign totals are atomically
-accounted once per job. Rate and ETA come from recent
-`diarization_campaign_rate_samples` across every provider lane; compare
-`usefulAudioRealtimeMultiple` rather than adding per-worker rates manually.
+The Audio Pipeline page does not run exact corpus counts on a timer. A small
+`/api/audio/pipeline/live` response polls the current global campaign, the
+BullMQ-reconciled diarization queue, effective worker concurrency, and enabled
+and healthy route slots every five seconds while the tab is visible. Route
+capacity is derived from current settings; the dashboard never hardcodes a GPU
+count. The full corpus snapshot is loaded only through **Calculate current
+stats**. Within that snapshot, diarization probes at most one indexed ready
+chunk: zero is exact, while existing work is shown either as the persisted
+campaign estimate (`≈N`, with its update time) or as `Work remains` when no
+estimate is available.
+
+Jobs **First 8 on** enables diarization routes in displayed order up to the
+enforced eight-slot total. Routes that do not fit remain disabled, and the card
+keeps the enabled/total route count visible. The same maximum applies to saved
+provider capacity and BullMQ worker concurrency.
+
+Recent source-file metadata loads independently once and is ordered by
+`source_files.updatedAt`, `start`, and `_id`; it is not described as downstream
+processing activity. Opening one row issues one bounded detail request. Closed
+rows make no audio-chunk, transcription, conversation-chunk, or object query.
+Migration `0060_pipeline_recent_sources_cursor.ts` adds the stable cursor index.
+
+Treat campaign `pendingChunks` as an operational estimate, not as an exact
+scheduler input; claiming and completion continue to use canonical chunk state.
+Campaign totals are atomically accounted once per job. While jobs are active,
+the live endpoint sums each reporting task's end-to-end average rate and derives
+ETA from that combined throughput. It uses the BullMQ progress already loaded
+for queue status, so the five-second refresh adds no Mongo query. A task's rate
+uses completed chunks divided by its current runtime, which makes a stalled
+task's contribution decay instead of remaining optimistically stale. Between
+active jobs, recent `diarization_campaign_rate_samples` provide the combined
+fallback. Until either source exists, the UI labels the campaign EWMA as a
+legacy single-lane estimate.
 
 #### Mongo dashboard load guardrails
 
@@ -179,7 +200,12 @@ Keep live service availability separate from corpus-wide statistics:
   counts remain visible and that card is marked unavailable instead of failing
   the whole request.
 - Voice identity status reads profile/campaign metadata only. The global active
-  diarization classification `$group` runs only through **Calculate exact**.
+  diarization classification `$group` runs only through **Calculate exact**. A
+  calibration is usable only when its profile id, profile revision, and
+  embedding space all match the current primary profile. Adding a sample
+  advances the revision. Removing a retained sample clears the old embedding,
+  marks the profile rebuild pending, and queues `profileReenrollment`; a failed
+  rebuild therefore blocks classification instead of reusing stale thresholds.
 - Completed summarization claims are released in indexed batches of at most 100
   per maintenance pass. Do not replace this with an unbounded `updateMany`
   predicate over all objects.
@@ -238,11 +264,10 @@ Migration `0054_location_full_geometry_metadata.ts` adds normalized full-route
 chunks and durable metadata review. Existing `location_tracks.path` values are
 copied to `renderPath` and receive `geometryCompleteness` of `render-only`; the
 migration never claims that a previously decimated path is complete. Reparse
-committed originals with the
-authenticated location resource action `backfill-import` (one id) or
-`backfill-imports` (bounded batch). Backfill verifies the GridFS source hash,
-fills full geometry/raw metadata and updates the content passport without
-creating timeline observations.
+committed originals with the authenticated location resource action
+`backfill-import` (one id) or `backfill-imports` (bounded batch). Backfill
+verifies the GridFS source hash, fills full geometry/raw metadata and updates
+the content passport without creating timeline observations.
 
 Run backfill only while MongoDB and the backend readiness endpoint are healthy.
 After each batch, verify the import's `contentProfileVersion`, exact geometry
@@ -456,8 +481,11 @@ For diarization, voice enrollment, speaker recognition, and historical backfill:
 2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
 3. Configure and verify the route in Settings → Diarization.
 4. Complete missing diarization coverage.
-5. Enroll Sky, label validation audio, and calibrate identity matching.
-6. Run a bounded identity pilot before historical backfill.
+5. In Settings → Voice Identity, enroll Sky under **Profiles & samples**, label
+   validation audio under **Review & calibration**, and verify the current
+   revision-bound calibration.
+6. Run a bounded identity pilot from **Operations & generations** before
+   historical backfill.
 
 See
 [the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)

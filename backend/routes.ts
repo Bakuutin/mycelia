@@ -33,6 +33,11 @@ import { wellKnownOauthAuthorizationServerHandler } from "@/routes/[.]well-known
 import { wellKnownOauthProtectedResourceHandler } from "@/routes/[.]well-known.oauth-protected-resource.ts";
 import { apiChatHandler } from "@/routes/api.chat.ts";
 import { apiAudioPipelineHandler } from "@/routes/api.audio.pipeline.ts";
+import { apiAudioPipelineLiveHandler } from "@/routes/api.audio.pipeline.live.ts";
+import {
+  apiAudioPipelineSourceDetailsHandler,
+  apiAudioPipelineSourcesHandler,
+} from "@/routes/api.audio.pipeline.sources.ts";
 import { asyncHandler } from "@/middleware/asyncHandler.ts";
 import { withRateLimit } from "@/utils/rateLimit.ts";
 
@@ -49,6 +54,18 @@ export function registerRoutes(app: Express): void {
   app.post("/api/resource/:name", asyncHandler(apiResourceHandler));
   app.post("/api/chat", asyncHandler(apiChatHandler));
   app.get("/api/audio/pipeline", asyncHandler(apiAudioPipelineHandler));
+  app.get(
+    "/api/audio/pipeline/live",
+    asyncHandler(apiAudioPipelineLiveHandler),
+  );
+  app.get(
+    "/api/audio/pipeline/sources",
+    asyncHandler(apiAudioPipelineSourcesHandler),
+  );
+  app.get(
+    "/api/audio/pipeline/sources/:id/details",
+    asyncHandler(apiAudioPipelineSourceDetailsHandler),
+  );
   app.get("/api/files/:id", apiFilesIdHandler);
   app.post(
     "/api/files/upload",

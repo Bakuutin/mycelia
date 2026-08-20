@@ -1795,11 +1795,28 @@ export class SpeakerSegmentsResource
       case "identity-status": {
         const profileId = new ObjectId(input.profileId);
         const [
+          profile,
           annotations,
           calibrations,
           latestJobs,
           latestCampaigns,
         ] = await Promise.all([
+          mongo({
+            action: "findOne",
+            collection: "speaker_profiles",
+            query: { _id: profileId },
+            options: {
+              projection: {
+                name: 1,
+                is_primary: 1,
+                revision: 1,
+                embeddingSpaceId: 1,
+                sample_count: 1,
+                enrollmentStatus: 1,
+                embedding: 1,
+              },
+            },
+          }),
           mongo({
             action: "find",
             collection: "speaker_annotations",
@@ -1831,7 +1848,10 @@ export class SpeakerSegmentsResource
           mongo({
             action: "find",
             collection: "jobs",
-            query: { type: "speakerIdentity" },
+            query: {
+              type: "speakerIdentity",
+              "data.profileId": input.profileId,
+            },
             options: {
               sort: { updatedAt: -1, createdAt: -1 },
               projection: {
@@ -1851,7 +1871,35 @@ export class SpeakerSegmentsResource
             query: { profileId: input.profileId },
             options: { sort: { updatedAt: -1 }, limit: 1 },
           }),
-        ]) as [any[], any[], any[], any[]];
+        ]) as [any, any[], any[], any[], any[]];
+        const profileRevision = Number(profile?.revision ?? 1);
+        const profileEmbeddingSpaceId = profile?.embeddingSpaceId;
+        const usableCalibration =
+          calibrations.find((calibration) =>
+            calibration.status === "validated" &&
+            calibration.profileId === input.profileId &&
+            calibration.profileRevision === profileRevision &&
+            calibration.embeddingSpaceId === profileEmbeddingSpaceId
+          ) ?? null;
+        const blockers: string[] = [];
+        if (!profile) blockers.push("Profile no longer exists");
+        if (!profile?.is_primary) blockers.push("Profile is not primary");
+        if (
+          !Array.isArray(profile?.embedding) || profile.embedding.length === 0
+        ) {
+          blockers.push("Profile has no enrolled embedding");
+        }
+        if (profile?.enrollmentStatus === "pending_rebuild") {
+          blockers.push("Profile embedding rebuild is pending");
+        }
+        if (!profileEmbeddingSpaceId) {
+          blockers.push("Profile has no embedding provenance");
+        }
+        if (profile && !usableCalibration) {
+          blockers.push(
+            "No validated calibration matches the current profile revision and embedding space",
+          );
+        }
         const recordings = new Map<
           string,
           { id: string; sky: number; notSky: number }
@@ -1882,6 +1930,16 @@ export class SpeakerSegmentsResource
           }
         }
         return {
+          profile: profile
+            ? {
+              id: input.profileId,
+              name: profile.name,
+              isPrimary: profile.is_primary === true,
+              revision: profileRevision,
+              embeddingSpaceId: profileEmbeddingSpaceId ?? null,
+              sampleCount: Number(profile.sample_count ?? 0),
+            }
+            : null,
           labels: {
             sky,
             notSky,
@@ -1893,6 +1951,9 @@ export class SpeakerSegmentsResource
             })).sort((a, b) => b.total - a.total),
           },
           calibrations,
+          usableCalibration,
+          canClassify: blockers.length === 0,
+          blockers,
           latestJob: latestJobs[0] ?? null,
           latestCampaign: latestCampaigns[0] ?? null,
         };

@@ -146,6 +146,15 @@ def process_speaker_identity_job(
     })
     if not calibration or calibration.get("status") != "validated":
         raise ValueError("A validated calibration is required before identity backfill")
+    if int(calibration.get("profileRevision", 0)) != data.profileRevision:
+        raise ValueError(
+            "Calibration does not match the current profile revision; validate a new calibration"
+        )
+    profile_space = profile.get("embeddingSpaceId")
+    if not profile_space or calibration.get("embeddingSpaceId") != profile_space:
+        raise ValueError(
+            "Calibration does not match the current profile embedding space; validate a new calibration"
+        )
 
     positive = float(calibration["positiveThreshold"])
     negative = float(calibration["negativeThreshold"])

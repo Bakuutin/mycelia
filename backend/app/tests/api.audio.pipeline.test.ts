@@ -131,6 +131,9 @@ Deno.test(
       segmentsCreated: 84,
       errorCount: 2,
       chunksPerSecond: 0.75,
+      rateStatus: "legacy",
+      rateSampleCount: 0,
+      sampledLanes: 0,
       etaSeconds: 80,
       batchNumber: 4,
       estimatedBatches: 10,
@@ -165,6 +168,7 @@ Deno.test(
         startedAt,
         finishedAt,
         chunksProcessed: 60,
+        providerProfileId: "gpu-1",
         audioSecondsProcessed: 600,
         successfulSequences: 8,
         skippedSequences: 1,
@@ -181,6 +185,7 @@ Deno.test(
         startedAt,
         finishedAt,
         chunksProcessed: 60,
+        providerProfileId: "gpu-2",
         audioSecondsProcessed: 600,
         successfulSequences: 8,
         recordingLeaseBusyOriginals: 1,
@@ -204,6 +209,9 @@ Deno.test(
     expect(data.stats.diarizationCampaign).toMatchObject({
       campaignId: "aggregate-running",
       chunksPerSecond: 1,
+      rateStatus: "aggregate",
+      rateSampleCount: 2,
+      sampledLanes: 2,
       usefulAudioRealtimeMultiple: 10,
       rateWindowSeconds: 120,
       successfulSequences: 16,
@@ -328,6 +336,31 @@ Deno.test(
       claimSkipRatio: null,
       stageTimingsMs: {},
     });
+  }),
+);
+
+Deno.test(
+  "audio pipeline handler: stats-only snapshots skip recent source detail work",
+  withFixtures(["AdminAuthHeaders", "Mongo"], async (
+    headers: HeadersInit,
+    { db },
+  ) => {
+    await db.collection("source_files").insertOne({
+      path: "/audio/recent.m4a",
+      updatedAt: new Date(),
+      ingested: true,
+    });
+    const response = await callExpressHandler(
+      apiAudioPipelineHandler,
+      "http://localhost:3000/api/audio/pipeline?includeSources=false",
+      { headers },
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.sessions).toEqual([]);
+    expect(data.hasMore).toBe(false);
+    expect(data.stats.totalSessions).toBe(1);
+    expect(data.snapshot.cacheSeconds).toBeGreaterThan(0);
   }),
 );
 

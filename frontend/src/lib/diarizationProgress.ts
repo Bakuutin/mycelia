@@ -29,6 +29,7 @@ export type DiarizationCampaignSummary = {
   totalChunks: number | null;
   pendingChunks: number | null;
   chunksPerSecond: number | null;
+  rateStatus?: "live" | "aggregate" | "warming" | "legacy";
   usefulAudioRealtimeMultiple?: number | null;
   rateWindowSeconds?: number | null;
   successfulSequences?: number;
@@ -135,13 +136,26 @@ export function getDiarizationProgressView(
 export function getDiarizationCampaignProgressView(
   campaign: DiarizationCampaignSummary,
 ): DiarizationProgressView {
-  return getDiarizationProgressView({
+  const view = getDiarizationProgressView({
     total_chunks: campaign.totalChunks,
     chunks_processed: campaign.processedChunks,
     chunks_remaining: campaign.pendingChunks ?? undefined,
     chunks_per_second: campaign.chunksPerSecond,
     eta_seconds: campaign.etaSeconds,
   });
+  if (campaign.chunksPerSecond == null || campaign.chunksPerSecond <= 0) {
+    return view;
+  }
+
+  const chunksPerMinute = (campaign.chunksPerSecond * 60).toFixed(1);
+  const rateLabel = campaign.rateStatus === "live"
+    ? `All active tasks combined: ${chunksPerMinute} chunks/min`
+    : campaign.rateStatus === "aggregate"
+    ? `Recent completed tasks combined: ${chunksPerMinute} chunks/min`
+    : campaign.rateStatus === "legacy"
+    ? `Legacy single-lane estimate: ${chunksPerMinute} chunks/min`
+    : view.rateLabel;
+  return { ...view, rateLabel };
 }
 
 function formatSkipRatio(value: number | null | undefined): string | null {

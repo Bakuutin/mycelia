@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
@@ -44,7 +44,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
-import { VoiceIdentityOperations } from "@/components/VoiceIdentityOperations";
+import { VoiceIdentityStatusCard } from "@/components/VoiceIdentityStatusCard";
 import { useActionDialog } from "@/components/ActionDialogProvider";
 import {
   Collapsible,
@@ -172,6 +172,12 @@ interface DiarizationCampaignStats {
   segmentsCreated: number;
   errorCount: number;
   chunksPerSecond: number | null;
+  rateStatus: "live" | "aggregate" | "warming" | "legacy";
+  rateSampleCount: number;
+  sampledLanes: number;
+  activeRateJobCount: number;
+  activeRateReportingJobCount: number;
+  activeRateLaneCount: number;
   usefulAudioRealtimeMultiple: number | null;
   rateWindowSeconds: number | null;
   successfulSequences: number;
@@ -190,6 +196,50 @@ interface DiarizationCampaignStats {
   batchNumber: number | null;
   estimatedBatches: number | null;
   totalEstimated: boolean;
+}
+
+interface DiarizationLiveStatus {
+  checkedAt: Date;
+  warnings: string[];
+  campaign: DiarizationCampaignStats | null;
+  jobs: {
+    available: boolean;
+    active: number | null;
+    waiting: number | null;
+    delayed: number | null;
+    stalePersistedJobs: number;
+    activeLanes: string[];
+  };
+  capacity: {
+    available: boolean;
+    status: string;
+    enabledRoutes: number | null;
+    enabledSlots: number | null;
+    healthyRoutes: number | null;
+    healthySlots: number | null;
+    worker: {
+      running: boolean;
+      effectiveConcurrency: number;
+    };
+  };
+}
+
+interface RecentSourcePage {
+  items: Array<{
+    id: string;
+    start?: Date;
+    updatedAt?: Date;
+    path?: string;
+    sourceKind: string;
+    ingested: boolean;
+    ingestionError?: string;
+    clientId?: string;
+    device?: string;
+    metadata?: AudioSession["metadata"];
+    processingStatus?: string;
+  }>;
+  hasMore: boolean;
+  nextCursor: string | null;
 }
 
 interface PipelineStage {
@@ -224,7 +274,15 @@ interface PipelineJob {
 }
 
 const DEFAULT_SESSION_LIMIT = 10;
-const LOAD_MORE_INCREMENT = 10;
+const TRANSCRIPT_STAGE_TYPES = new Set([
+  "ingestion",
+  "vad",
+  "transcription_sequence_creator",
+  "transcription",
+  "conversation_chunk_creator",
+  "conversation_extractor_merged",
+  "summarization",
+]);
 
 function formatEta(seconds?: number): string {
   if (!seconds || seconds <= 0) return "Unavailable";
@@ -333,7 +391,15 @@ export default function AudioPipelinePage() {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(
     new Set(),
   );
-  const [sessionLimit, setSessionLimit] = useState(DEFAULT_SESSION_LIMIT);
+  const [sourceDetails, setSourceDetails] = useState<
+    Record<string, Partial<AudioSession>>
+  >({});
+  const [sourceDetailErrors, setSourceDetailErrors] = useState<
+    Record<string, string>
+  >({});
+  const [loadingSourceDetails, setLoadingSourceDetails] = useState<Set<string>>(
+    new Set(),
+  );
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
   const {
@@ -344,7 +410,7 @@ export default function AudioPipelinePage() {
     isLoading,
     refetch,
   } = useQuery({
-    queryKey: ["audio-pipeline-sessions", sessionLimit],
+    queryKey: ["audio-pipeline-stats"],
     queryFn: async ({ signal }) => {
       // Use the new aggregated pipeline endpoint
       const requestController = new AbortController();
@@ -358,7 +424,7 @@ export default function AudioPipelinePage() {
       let response: Response;
       try {
         response = await fetch(
-          `${api.baseURL}/api/audio/pipeline?limit=${sessionLimit}`,
+          `${api.baseURL}/api/audio/pipeline?includeSources=false`,
           {
             headers: {
               "Authorization": `Bearer ${await api.getJWT()}`,
@@ -508,6 +574,72 @@ export default function AudioPipelinePage() {
     refetchInterval: false,
   });
 
+  const liveStatusQuery = useQuery({
+    queryKey: ["audio-pipeline-live"],
+    queryFn: async ({ signal }): Promise<DiarizationLiveStatus> => {
+      const response = await fetch(`${api.baseURL}/api/audio/pipeline/live`, {
+        headers: { "Authorization": `Bearer ${await api.getJWT()}` },
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Live diarization status failed (${response.status})`);
+      }
+      const result = EJSON.deserialize(
+        await response.json(),
+      ) as DiarizationLiveStatus;
+      return {
+        ...result,
+        checkedAt: new Date(result.checkedAt),
+        campaign: result.campaign
+          ? {
+            ...result.campaign,
+            updatedAt: result.campaign.updatedAt
+              ? new Date(result.campaign.updatedAt)
+              : undefined,
+          }
+          : null,
+      };
+    },
+    refetchInterval: () =>
+      document.visibilityState === "visible" ? 5_000 : false,
+    staleTime: 3_000,
+    retry: 1,
+  });
+
+  const recentSourcesQuery = useInfiniteQuery({
+    queryKey: ["audio-pipeline-recent-sources"],
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam, signal }): Promise<RecentSourcePage> => {
+      const params = new URLSearchParams({
+        limit: String(DEFAULT_SESSION_LIMIT),
+      });
+      if (pageParam) params.set("cursor", pageParam);
+      const response = await fetch(
+        `${api.baseURL}/api/audio/pipeline/sources?${params.toString()}`,
+        {
+          headers: { "Authorization": `Bearer ${await api.getJWT()}` },
+          signal,
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`Recent sources failed (${response.status})`);
+      }
+      const page = EJSON.deserialize(await response.json()) as RecentSourcePage;
+      return {
+        ...page,
+        items: page.items.map((item) => ({
+          ...item,
+          start: item.start ? new Date(item.start) : undefined,
+          updatedAt: item.updatedAt ? new Date(item.updatedAt) : undefined,
+        })),
+      };
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
   useEffect(() => {
     if (!isLoading) {
       setLoadingTimedOut(false);
@@ -520,16 +652,34 @@ export default function AudioPipelinePage() {
     return () => globalThis.clearTimeout(timeout);
   }, [isLoading]);
 
-  const sessions = sessionsData?.sessions;
-  const hasMoreSessions = sessionsData?.hasMore ?? false;
-
-  const loadMoreSessions = () => {
-    setSessionLimit((prev) => prev + LOAD_MORE_INCREMENT);
-  };
+  const recentSourceItems =
+    recentSourcesQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const sessions: AudioSession[] = recentSourceItems.map((source) => ({
+    _id: source.id,
+    start: source.start,
+    lastActivityAt: source.updatedAt,
+    path: source.path,
+    sourceKind: source.sourceKind,
+    ingested: source.ingested,
+    ingestionError: source.ingestionError,
+    client_id: source.clientId,
+    device: source.device,
+    metadata: source.metadata,
+    processing_status: source.processingStatus,
+    chunks: { total: 0, vadProcessed: 0, withSpeech: 0 },
+    sequences: [],
+    transcriptions: 0,
+    conversationChunks: [],
+    transcriptionDetails: [],
+    conversations: [],
+    ...(sourceDetails[source.id] ?? {}),
+  }));
+  const hasMoreSessions = recentSourcesQuery.hasNextPage;
 
   // Stats are now included in the sessions data
   const stats = sessionsData?.stats;
-  const diarizationCampaign = stats?.diarizationCampaign ?? null;
+  const diarizationCampaign = liveStatusQuery.data?.campaign ??
+    stats?.diarizationCampaign ?? null;
   const diarizationCampaignView = diarizationCampaign
     ? getDiarizationCampaignProgressView(diarizationCampaign)
     : null;
@@ -548,8 +698,11 @@ export default function AudioPipelinePage() {
   const diarizationStage = stats?.stages?.find((stage) =>
     stage.type === "diarization"
   );
-  const queuedDiarizationJobs = (diarizationStage?.waiting ?? 0) +
-    (diarizationStage?.delayed ?? 0);
+  const liveDiarizationJobs = liveStatusQuery.data?.jobs;
+  const activeDiarizationJobs = liveDiarizationJobs?.active ?? null;
+  const queuedDiarizationJobs = liveDiarizationJobs?.available
+    ? (liveDiarizationJobs.waiting ?? 0) + (liveDiarizationJobs.delayed ?? 0)
+    : null;
   const vadCompletion = stats?.totalChunks
     ? Math.min((stats.chunksVadProcessed / stats.totalChunks) * 100, 100)
     : 0;
@@ -558,12 +711,16 @@ export default function AudioPipelinePage() {
   const vadMaximumAudioHours = getMaximumAudioHours(
     stats?.chunksAwaitingVad ?? 0,
   );
-  const activeStages = stats?.stages?.filter((stage) => stage.active > 0) ?? [];
+  const transcriptStages =
+    stats?.stages?.filter((stage) => TRANSCRIPT_STAGE_TYPES.has(stage.type)) ??
+      [];
+  const activeStages = transcriptStages.filter((stage) => stage.active > 0);
   const blockedStages = stats?.stages?.filter(
-    (stage) => stage.paused && stage.backlog > 0,
+    (stage) =>
+      TRANSCRIPT_STAGE_TYPES.has(stage.type) && stage.paused &&
+      stage.backlog > 0,
   ) ?? [];
-  const stagesWithErrors = stats?.stages?.filter((stage) => stage.errors > 0) ??
-    [];
+  const stagesWithErrors = transcriptStages.filter((stage) => stage.errors > 0);
   const pipelineHealth = !stats && !isFetching && !isError
     ? "idle"
     : (isError || loadingTimedOut) && !stats
@@ -614,7 +771,82 @@ export default function AudioPipelinePage() {
     }
   };
 
+  const loadSourceDetails = async (id: string) => {
+    setLoadingSourceDetails((current) => new Set(current).add(id));
+    setSourceDetailErrors((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    try {
+      const response = await fetch(
+        `${api.baseURL}/api/audio/pipeline/sources/${id}/details`,
+        { headers: { "Authorization": `Bearer ${await api.getJWT()}` } },
+      );
+      if (!response.ok) {
+        throw new Error(`Source details failed (${response.status})`);
+      }
+      const details = EJSON.deserialize(await response.json()) as any;
+      setSourceDetails((current) => ({
+        ...current,
+        [id]: {
+          chunks: details.chunks,
+          sequences: (details.sequences ?? []).map((sequence: any) => ({
+            ...sequence,
+            updatedAt: sequence.updatedAt
+              ? new Date(sequence.updatedAt)
+              : undefined,
+          })),
+          transcriptions: details.transcriptions?.count ?? 0,
+          transcriptionDetails: (details.transcriptions?.preview ?? []).map(
+            (transcription: any) => ({
+              _id: transcription.id,
+              start: new Date(transcription.start),
+              end: new Date(transcription.end),
+              text: transcription.text,
+            }),
+          ),
+          conversationChunks: (details.conversationChunks ?? []).map(
+            (chunk: any) => ({
+              ...chunk,
+              start: chunk.start ? new Date(chunk.start) : undefined,
+              end: chunk.end ? new Date(chunk.end) : undefined,
+              updatedAt: chunk.updatedAt
+                ? new Date(chunk.updatedAt)
+                : undefined,
+            }),
+          ),
+          conversations: (details.conversations ?? []).map(
+            (conversation: any) => ({
+              ...conversation,
+              createdAt: conversation.createdAt
+                ? new Date(conversation.createdAt)
+                : undefined,
+            }),
+          ),
+        },
+      }));
+      if ((details.warnings?.length ?? 0) > 0) {
+        toast.warning(
+          "Some source details timed out; loaded the available sections.",
+        );
+      }
+    } catch (error) {
+      setSourceDetailErrors((current) => ({
+        ...current,
+        [id]: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setLoadingSourceDetails((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
   const toggleSession = (id: string) => {
+    const opening = !expandedSessions.has(id);
     setExpandedSessions((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -624,6 +856,9 @@ export default function AudioPipelinePage() {
       }
       return next;
     });
+    if (opening && !sourceDetails[id] && !loadingSourceDetails.has(id)) {
+      void loadSourceDetails(id);
+    }
   };
 
   const getStateColor = (state: string) => {
@@ -708,8 +943,7 @@ export default function AudioPipelinePage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Audio Pipeline</h1>
           <p className="text-muted-foreground">
-            Manual snapshot from source ingestion through conversations and
-            summaries
+            Live speaker processing with manual corpus-wide transcript stats
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -729,7 +963,6 @@ export default function AudioPipelinePage() {
       </div>
 
       <ServiceHealthBanner />
-      <VoiceIdentityOperations />
 
       <Card
         className={pipelineHealth === "idle" || pipelineHealth === "loading"
@@ -814,48 +1047,53 @@ export default function AudioPipelinePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>End-to-end stage status</CardTitle>
+          <CardTitle>Transcript pipeline</CardTitle>
           <CardDescription>
-            Backlog comes from pipeline collections; running and queued state
-            comes from jobs. Paused workers are called out explicitly.
+            Source ingestion through conversation summaries. Speaker processing
+            is tracked separately below because it creates independent
+            generations.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-            {(stats?.stages ?? []).map((stage, index) => {
-              const state = stageState(stage);
-              return (
-                <div
-                  key={stage.type}
-                  className="relative rounded-lg border bg-muted/20 p-3"
-                  data-testid={`pipeline-stage-${stage.type}`}
-                >
-                  {index > 0 && (
-                    <ChevronRight className="absolute -left-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 rounded-full bg-background text-muted-foreground xl:block" />
-                  )}
-                  <p className="text-xs font-medium text-muted-foreground">
-                    {index + 1}. {stage.label}
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold">
-                    {stageBacklogValue(stage)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {stageBacklogLabel(stage)}
-                  </p>
-                  <p className={`mt-2 text-xs font-medium ${state.className}`}>
-                    {state.label}
-                  </p>
-                  {stage.latestJob && (
-                    <Link
-                      to={`/jobs/${stage.latestJob.id}`}
-                      className="mt-2 block truncate text-[11px] text-primary hover:underline"
+            {(stats?.stages ?? [])
+              .filter((stage) => TRANSCRIPT_STAGE_TYPES.has(stage.type))
+              .map((stage, index) => {
+                const state = stageState(stage);
+                return (
+                  <div
+                    key={stage.type}
+                    className="relative rounded-lg border bg-muted/20 p-3"
+                    data-testid={`pipeline-stage-${stage.type}`}
+                  >
+                    {index > 0 && (
+                      <ChevronRight className="absolute -left-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 rounded-full bg-background text-muted-foreground xl:block" />
+                    )}
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {index + 1}. {stage.label}
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold">
+                      {stageBacklogValue(stage)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {stageBacklogLabel(stage)}
+                    </p>
+                    <p
+                      className={`mt-2 text-xs font-medium ${state.className}`}
                     >
-                      Latest: {stage.latestJob.state}
-                    </Link>
-                  )}
-                </div>
-              );
-            })}
+                      {state.label}
+                    </p>
+                    {stage.latestJob && (
+                      <Link
+                        to={`/jobs/${stage.latestJob.id}`}
+                        className="mt-2 block truncate text-[11px] text-primary hover:underline"
+                      >
+                        Latest: {stage.latestJob.state}
+                      </Link>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </CardContent>
       </Card>
@@ -870,8 +1108,8 @@ export default function AudioPipelinePage() {
               </CardTitle>
               <CardDescription className="mt-1">
                 Campaign-wide progress for the current global historical
-                backfill. Rate combines all recently completed GPU lanes;
-                individual worker speed remains on each active job.
+                backfill. Live route capacity and queue state update without
+                running the expensive corpus snapshot.
               </CardDescription>
             </div>
             {diarizationCampaign && (
@@ -881,10 +1119,16 @@ export default function AudioPipelinePage() {
                 </Badge>
                 <span className="text-xs text-muted-foreground">
                   {diarizationCampaign.updatedAt
-                    ? `Updated ${
+                    ? `Campaign updated ${
                       formatDistanceToNow(diarizationCampaign.updatedAt)
                     } ago`
                     : "Update time unavailable"}
+                  {diarizationCampaign.rateStatus === "live" &&
+                      liveStatusQuery.data?.checkedAt
+                    ? ` · speed checked ${
+                      formatDistanceToNow(liveStatusQuery.data.checkedAt)
+                    } ago`
+                    : ""}
                 </span>
               </div>
             )}
@@ -957,9 +1201,20 @@ export default function AudioPipelinePage() {
                     ],
                     [
                       "Active / queued",
-                      `${
-                        diarizationStage?.active ?? 0
-                      } / ${queuedDiarizationJobs}`,
+                      liveDiarizationJobs?.available
+                        ? `${activeDiarizationJobs ?? 0} / ${
+                          queuedDiarizationJobs ?? 0
+                        }`
+                        : "Unavailable",
+                      "text-foreground",
+                    ],
+                    [
+                      "Healthy / enabled slots",
+                      liveStatusQuery.data?.capacity.available
+                        ? `${
+                          liveStatusQuery.data.capacity.healthySlots ?? 0
+                        } / ${liveStatusQuery.data.capacity.enabledSlots ?? 0}`
+                        : "Unavailable",
                       "text-foreground",
                     ],
                     [
@@ -968,6 +1223,15 @@ export default function AudioPipelinePage() {
                       diarizationCampaign.errorCount > 0
                         ? "text-red-500"
                         : "text-foreground",
+                    ],
+                    [
+                      "Combined speed",
+                      diarizationCampaign.chunksPerSecond != null
+                        ? `${
+                          (diarizationCampaign.chunksPerSecond * 60).toFixed(1)
+                        } chunks/min`
+                        : "Warming up",
+                      "text-foreground",
                     ],
                     [
                       "Useful realtime",
@@ -1027,20 +1291,51 @@ export default function AudioPipelinePage() {
                         : ""}
                     </span>
                   )}
+                  <span>
+                    {diarizationCampaign.rateStatus === "live"
+                      ? diarizationCampaign.activeRateReportingJobCount ===
+                          diarizationCampaign.activeRateJobCount
+                        ? `${diarizationCampaign.activeRateJobCount.toLocaleString()} active task average(s) summed across ${diarizationCampaign.activeRateLaneCount.toLocaleString()} lane(s)`
+                        : `${diarizationCampaign.activeRateReportingJobCount.toLocaleString()} / ${diarizationCampaign.activeRateJobCount.toLocaleString()} active task average(s) reporting; others warming up`
+                      : diarizationCampaign.rateStatus === "aggregate"
+                      ? `${diarizationCampaign.rateSampleCount.toLocaleString()} recent samples across ${diarizationCampaign.sampledLanes.toLocaleString()} lane(s)`
+                      : diarizationCampaign.rateStatus === "legacy"
+                      ? "Combined-rate telemetry is waiting for updated workers"
+                      : "Combined rate is warming up"}
+                  </span>
                 </div>
               </>
+            )
+            : liveStatusQuery.isLoading
+            ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                Loading live diarization status…
+              </div>
+            )
+            : liveStatusQuery.isError
+            ? (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm">
+                Live diarization status is unavailable. Jobs continue
+                independently.
+              </div>
             )
             : (
               <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
                 No global diarization backfill campaign has been recorded yet.
                 Current backlog: {diarizationStage
                   ? stageBacklogValue(diarizationStage)
-                  : "unavailable"}; active / queued jobs:{" "}
-                {diarizationStage?.active ?? 0} / {queuedDiarizationJobs}.
+                  : "not calculated"}; active / queued jobs:{" "}
+                {liveDiarizationJobs?.available
+                  ? `${activeDiarizationJobs ?? 0} / ${
+                    queuedDiarizationJobs ?? 0
+                  }`
+                  : "unavailable"}.
               </div>
             )}
         </CardContent>
       </Card>
+
+      <VoiceIdentityStatusCard />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1.4fr]">
         <Card>
@@ -1053,15 +1348,15 @@ export default function AudioPipelinePage() {
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
               {[
-                ["Total", stats?.sourceFiles?.total ?? 0],
-                ["Ingested", stats?.sourceFiles?.ingested ?? 0],
-                ["Pending", stats?.sourceFiles?.pending ?? 0],
-                ["Errors", stats?.sourceFiles?.errors ?? 0],
+                ["Total", stats?.sourceFiles?.total],
+                ["Ingested", stats?.sourceFiles?.ingested],
+                ["Pending", stats?.sourceFiles?.pending],
+                ["Errors", stats?.sourceFiles?.errors],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg bg-muted/40 p-3">
                   <p className="text-xs text-muted-foreground">{label}</p>
                   <p className="mt-1 text-xl font-semibold">
-                    {(value as number).toLocaleString()}
+                    {typeof value === "number" ? value.toLocaleString() : "—"}
                   </p>
                 </div>
               ))}
@@ -1106,7 +1401,9 @@ export default function AudioPipelinePage() {
             ))}
             {(stats?.recentJobs?.length ?? 0) === 0 && (
               <p className="py-5 text-center text-sm text-muted-foreground">
-                No pipeline jobs recorded yet.
+                {stats
+                  ? "No pipeline jobs recorded yet."
+                  : "Calculate current stats to load job history."}
               </p>
             )}
           </CardContent>
@@ -1128,12 +1425,16 @@ export default function AudioPipelinePage() {
               </CardDescription>
             </div>
             <Badge
-              variant={(stats?.chunksAwaitingVad ?? 0) > 0
+              variant={!stats
+                ? "outline"
+                : stats.chunksAwaitingVad > 0
                 ? "secondary"
                 : "outline"}
             >
-              {(stats?.chunksAwaitingVad ?? 0) > 0
-                ? `${stats?.chunksAwaitingVad.toLocaleString()} remaining`
+              {!stats
+                ? "Not calculated"
+                : stats.chunksAwaitingVad > 0
+                ? `${stats.chunksAwaitingVad.toLocaleString()} remaining`
                 : "Up to date"}
             </Badge>
           </div>
@@ -1142,33 +1443,39 @@ export default function AudioPipelinePage() {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span>
-                {(stats?.chunksVadProcessed ?? 0).toLocaleString()} of{" "}
-                {(stats?.totalChunks ?? 0).toLocaleString()} chunks processed
+                {stats
+                  ? `${stats.chunksVadProcessed.toLocaleString()} of ${stats.totalChunks.toLocaleString()} chunks processed`
+                  : "Coverage not calculated"}
               </span>
-              <span className="font-medium">{vadCompletion.toFixed(1)}%</span>
+              <span className="font-medium">
+                {stats ? `${vadCompletion.toFixed(1)}%` : "—"}
+              </span>
             </div>
             <Progress value={vadCompletion} className="h-3" />
-            <p className="text-xs text-muted-foreground">
-              Remaining upper bound: {(stats?.chunksAwaitingVad ?? 0)
-                .toLocaleString()} chunks × {MAX_AUDIO_CHUNK_SECONDS} sec ={" "}
-              {vadMaximumAudioHours.toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })} hours of audio
-            </p>
+            {stats && (
+              <p className="text-xs text-muted-foreground">
+                Remaining upper bound:{" "}
+                {stats.chunksAwaitingVad.toLocaleString()} chunks ×{" "}
+                {MAX_AUDIO_CHUNK_SECONDS} sec ={" "}
+                {vadMaximumAudioHours.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })} hours of audio
+              </p>
+            )}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Total chunks</p>
               <p className="mt-1 text-xl font-semibold">
-                {(stats?.totalChunks ?? 0).toLocaleString()}
+                {stats ? stats.totalChunks.toLocaleString() : "—"}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">VAD completed</p>
               <p className="mt-1 text-xl font-semibold text-green-600">
-                {(stats?.chunksVadProcessed ?? 0).toLocaleString()}
+                {stats ? stats.chunksVadProcessed.toLocaleString() : "—"}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
@@ -1176,7 +1483,7 @@ export default function AudioPipelinePage() {
                 Still awaiting VAD
               </p>
               <p className="mt-1 text-xl font-semibold text-amber-600">
-                {(stats?.chunksAwaitingVad ?? 0).toLocaleString()}
+                {stats ? stats.chunksAwaitingVad.toLocaleString() : "—"}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
@@ -1184,7 +1491,7 @@ export default function AudioPipelinePage() {
                 <Activity className="h-3 w-3" /> Active / queued jobs
               </p>
               <p className="mt-1 text-xl font-semibold">
-                {stats?.vadJobs?.active ?? 0} / {queuedVadJobs}
+                {stats ? `${stats.vadJobs.active} / ${queuedVadJobs}` : "—"}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
@@ -1192,7 +1499,7 @@ export default function AudioPipelinePage() {
                 <Gauge className="h-3 w-3" /> Recent speed
               </p>
               <p className="mt-1 text-xl font-semibold">
-                {(stats?.vadRatePerMinute ?? 0).toFixed(1)}/min
+                {stats ? `${stats.vadRatePerMinute.toFixed(1)}/min` : "—"}
               </p>
               <p className="text-[11px] text-muted-foreground">
                 last 15 minutes
@@ -1203,10 +1510,14 @@ export default function AudioPipelinePage() {
                 <Clock className="h-3 w-3" /> Audio left (maximum)
               </p>
               <p className="mt-1 text-xl font-semibold">
-                {vadMaximumAudioHours.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}h
+                {stats
+                  ? `${
+                    vadMaximumAudioHours.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })
+                  }h`
+                  : "—"}
               </p>
               <p className="text-[11px] text-muted-foreground">
                 assumes {MAX_AUDIO_CHUNK_SECONDS}s per chunk
@@ -1217,9 +1528,11 @@ export default function AudioPipelinePage() {
                 <Timer className="h-3 w-3" /> Estimated wall time
               </p>
               <p className="mt-1 text-sm font-semibold">
-                {(stats?.chunksAwaitingVad ?? 0) === 0
+                {!stats
+                  ? "Not calculated"
+                  : stats.chunksAwaitingVad === 0
                   ? "Complete"
-                  : formatEta(stats?.vadEtaSeconds)}
+                  : formatEta(stats.vadEtaSeconds)}
               </p>
             </div>
           </div>
@@ -1304,12 +1617,14 @@ export default function AudioPipelinePage() {
               </CardDescription>
             </div>
             <Badge
-              variant={(stats?.transcriptionPendingChunks ?? 0) > 0
+              variant={stats && stats.transcriptionPendingChunks > 0
                 ? "secondary"
                 : "outline"}
             >
-              {(stats?.transcriptionPendingChunks ?? 0) > 0
-                ? `${stats?.transcriptionPendingChunks.toLocaleString()} pending`
+              {!stats
+                ? "Not calculated"
+                : stats.transcriptionPendingChunks > 0
+                ? `${stats.transcriptionPendingChunks.toLocaleString()} pending`
                 : "Up to date"}
             </Badge>
           </div>
@@ -1319,7 +1634,9 @@ export default function AudioPipelinePage() {
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Pending chunks</p>
               <p className="mt-1 text-xl font-semibold text-amber-600">
-                {(stats?.transcriptionPendingChunks ?? 0).toLocaleString()}
+                {stats
+                  ? stats.transcriptionPendingChunks.toLocaleString()
+                  : "—"}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
@@ -1327,13 +1644,17 @@ export default function AudioPipelinePage() {
                 <Clock className="h-3 w-3" /> Audio left (maximum)
               </p>
               <p className="mt-1 text-xl font-semibold">
-                {(stats?.transcriptionPendingMaximumHours ?? 0).toLocaleString(
-                  undefined,
-                  {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  },
-                )}h
+                {stats
+                  ? `${
+                    stats.transcriptionPendingMaximumHours.toLocaleString(
+                      undefined,
+                      {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      },
+                    )
+                  }h`
+                  : "—"}
               </p>
               <p className="text-[11px] text-muted-foreground">
                 assumes {MAX_AUDIO_CHUNK_SECONDS}s per chunk
@@ -1342,7 +1663,7 @@ export default function AudioPipelinePage() {
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Sequences ready</p>
               <p className="mt-1 text-xl font-semibold">
-                {(stats?.sequencesReady ?? 0).toLocaleString()}
+                {stats ? stats.sequencesReady.toLocaleString() : "—"}
               </p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
@@ -1350,13 +1671,14 @@ export default function AudioPipelinePage() {
                 Sequences processing / errors
               </p>
               <p className="mt-1 text-xl font-semibold">
-                {(stats?.sequencesProcessing ?? 0).toLocaleString()} /{" "}
+                {stats ? stats.sequencesProcessing.toLocaleString() : "—"} /
+                {" "}
                 <span
                   className={(stats?.sequencesError ?? 0) > 0
                     ? "text-red-500"
                     : undefined}
                 >
-                  {(stats?.sequencesError ?? 0).toLocaleString()}
+                  {stats ? stats.sequencesError.toLocaleString() : "—"}
                 </span>
               </p>
             </div>
@@ -1432,35 +1754,32 @@ export default function AudioPipelinePage() {
       {/* Sessions List */}
       <Card>
         <CardHeader>
-          <CardTitle>Recently active audio sources</CardTitle>
+          <CardTitle>Recent source files</CardTitle>
           <CardDescription>
-            Ordered by ingestion or processing activity, not only by recording
-            time. Click a source to see its downstream records.
+            Ordered by source ingestion, retry, or source-record update—not by
+            downstream processing. Details load only when a row is opened.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {isLoading && loadingTimedOut
+          {recentSourcesQuery.isError
             ? (
               <div className="space-y-3 p-8 text-center text-muted-foreground">
                 <p>
-                  Source details are taking too long to load. Background workers
-                  are unaffected.
+                  Recent source metadata is unavailable. Corpus statistics and
+                  background workers are unaffected.
                 </p>
-                <Button variant="outline" onClick={() => void refetch()}>
-                  Retry dashboard
+                <Button
+                  variant="outline"
+                  onClick={() => void recentSourcesQuery.refetch()}
+                >
+                  Retry sources
                 </Button>
               </div>
             )
-            : isLoading
+            : recentSourcesQuery.isLoading
             ? (
               <div className="p-8 text-center text-muted-foreground">
-                Loading sessions...
-              </div>
-            )
-            : !sessionsData
-            ? (
-              <div className="p-8 text-center text-muted-foreground">
-                Calculate current stats to load recent audio sources.
+                Loading recent source files…
               </div>
             )
             : !sessions?.length
@@ -1517,7 +1836,7 @@ export default function AudioPipelinePage() {
                                 session.metadata?.format || "unknown"}{" "}
                               {session.metadata?.rate}Hz &middot;{" "}
                               {session.lastActivityAt
-                                ? `active ${
+                                ? `source updated ${
                                   formatDistanceToNow(session.lastActivityAt, {
                                     addSuffix: true,
                                   })
@@ -1541,25 +1860,31 @@ export default function AudioPipelinePage() {
                         <div className="flex w-full items-center gap-6 overflow-x-auto pb-1 xl:w-auto xl:pb-0">
                           {/* Pipeline stages mini-view */}
                           <div className="flex items-center gap-2">
-                            {getStageProgress(session).map((stage, i) => (
-                              <div
-                                key={stage.name}
-                                className="flex items-center gap-1"
-                              >
-                                {i > 0 && (
-                                  <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                                )}
+                            {sourceDetails[session._id]
+                              ? getStageProgress(session).map((stage, i) => (
                                 <div
-                                  className={`text-xs px-2 py-0.5 rounded ${
-                                    stage.done
-                                      ? "bg-green-500/10 text-green-600"
-                                      : "bg-muted text-muted-foreground"
-                                  }`}
+                                  key={stage.name}
+                                  className="flex items-center gap-1"
                                 >
-                                  {stage.name}: {stage.count.toLocaleString()}
+                                  {i > 0 && (
+                                    <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                                  )}
+                                  <div
+                                    className={`text-xs px-2 py-0.5 rounded ${
+                                      stage.done
+                                        ? "bg-green-500/10 text-green-600"
+                                        : "bg-muted text-muted-foreground"
+                                    }`}
+                                  >
+                                    {stage.name}: {stage.count.toLocaleString()}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              ))
+                              : (
+                                <Badge variant="outline">
+                                  Open for downstream details
+                                </Badge>
+                              )}
                           </div>
                           <ChevronRight
                             className={`h-5 w-5 text-muted-foreground transition-transform ${
@@ -1573,7 +1898,28 @@ export default function AudioPipelinePage() {
                     </CollapsibleTrigger>
 
                     <CollapsibleContent>
-                      <div className="px-4 pb-3 pt-2 bg-muted/30 space-y-3">
+                      {loadingSourceDetails.has(session._id) && (
+                        <div className="border-t px-4 py-3 text-sm text-muted-foreground">
+                          Loading bounded downstream details…
+                        </div>
+                      )}
+                      {sourceDetailErrors[session._id] && (
+                        <div className="flex items-center justify-between gap-3 border-t border-red-500/30 bg-red-500/5 px-4 py-3 text-sm">
+                          <span>{sourceDetailErrors[session._id]}</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void loadSourceDetails(session._id)}
+                          >
+                            Retry details
+                          </Button>
+                        </div>
+                      )}
+                      <div
+                        className={`px-4 pb-3 pt-2 bg-muted/30 space-y-3 ${
+                          sourceDetails[session._id] ? "" : "hidden"
+                        }`}
+                      >
                         <PipelineDetailSection
                           title="Ingestion"
                           summary={session.ingestionError
@@ -1901,10 +2247,13 @@ export default function AudioPipelinePage() {
                     <Button
                       variant="outline"
                       className="w-full"
-                      onClick={loadMoreSessions}
+                      disabled={recentSourcesQuery.isFetchingNextPage}
+                      onClick={() => void recentSourcesQuery.fetchNextPage()}
                       data-testid="load-more-sessions"
                     >
-                      Load More Sessions
+                      {recentSourcesQuery.isFetchingNextPage
+                        ? "Loading…"
+                        : "Load more source files"}
                     </Button>
                   </div>
                 )}

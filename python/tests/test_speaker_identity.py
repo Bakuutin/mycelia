@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from bson import ObjectId
-from unittest.mock import patch
 
 from jobs.speaker_identity import (
     SpeakerIdentityJobData,
@@ -68,7 +69,13 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
 
     def resource(_name, request):
         if request["collection"] == "speaker_calibrations":
-            return {"status": "validated", "positiveThreshold": 0.8, "negativeThreshold": 0.2}
+            return {
+                "status": "validated",
+                "profileRevision": 2,
+                "embeddingSpaceId": "space-v1",
+                "positiveThreshold": 0.8,
+                "negativeThreshold": 0.2,
+            }
         if request["action"] == "find":
             segment_queries.append(request["query"])
             return segments
@@ -122,7 +129,13 @@ def test_job_skips_incompatible_spaces_without_failing_the_batch() -> None:
 
     def resource(_name, request):
         if request["collection"] == "speaker_calibrations":
-            return {"status": "validated", "positiveThreshold": 0.8, "negativeThreshold": 0.2}
+            return {
+                "status": "validated",
+                "profileRevision": 2,
+                "embeddingSpaceId": "space-v1",
+                "positiveThreshold": 0.8,
+                "negativeThreshold": 0.2,
+            }
         if request["action"] == "find":
             return segments
         if request["action"] == "bulkWrite":
@@ -149,3 +162,59 @@ def test_job_skips_incompatible_spaces_without_failing_the_batch() -> None:
     assert len(writes) == 1
     assert result["processed"] == 2
     assert result["incompatibleSkipped"] == 1
+
+
+@pytest.mark.parametrize(
+    ("calibration", "message"),
+    [
+        (
+            {
+                "status": "validated",
+                "profileRevision": 1,
+                "embeddingSpaceId": "space-v1",
+            },
+            "current profile revision",
+        ),
+        (
+            {
+                "status": "validated",
+                "profileRevision": 2,
+                "embeddingSpaceId": "space-v2",
+            },
+            "current profile embedding space",
+        ),
+    ],
+)
+def test_job_rejects_stale_or_cross_space_calibration(calibration, message) -> None:
+    profile_id = ObjectId()
+    profile = {
+        "_id": profile_id,
+        "name": "Sky",
+        "embedding": [1.0, 0.0],
+        "revision": 2,
+        "embeddingSpaceId": "space-v1",
+    }
+
+    with (
+        patch("jobs.speaker_identity.get_profile_by_id", return_value=profile),
+        patch(
+            "jobs.speaker_identity.call_resource",
+            return_value={
+                **calibration,
+                "positiveThreshold": 0.8,
+                "negativeThreshold": 0.2,
+            },
+        ),
+        pytest.raises(ValueError, match=message),
+    ):
+        process_speaker_identity_job(
+            "job-stale-calibration",
+            SpeakerIdentityJobData(
+                runId="run-1",
+                profileId=str(profile_id),
+                profileRevision=2,
+                calibrationId="cal-1",
+                limit=10,
+            ),
+            lambda _progress: None,
+        )

@@ -18,6 +18,7 @@ import MapsSettingsPage from "./pages/settings/MapsSettingsPage";
 import WorkerDetailPage from "./pages/settings/WorkerDetailPage";
 import VoiceProfilesPage from "./pages/settings/VoiceProfilesPage";
 import VoiceIdentityReviewPage from "./pages/settings/VoiceIdentityReviewPage";
+import VoiceIdentityOperationsPage from "./pages/settings/VoiceIdentityOperationsPage";
 import ConfigSettingsPage from "./pages/settings/ConfigSettingsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import TranscriptPage from "./pages/TranscriptPage";
@@ -214,6 +215,10 @@ export const router = createBrowserRouter([
           {
             path: "voice-identity",
             element: <VoiceIdentityReviewPage />,
+          },
+          {
+            path: "voice-identity/operations",
+            element: <VoiceIdentityOperationsPage />,
           },
         ],
       },

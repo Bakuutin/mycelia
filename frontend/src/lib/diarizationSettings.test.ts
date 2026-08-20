@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getEnabledDiarizationCapacity,
+  setDiarizationRoutesEnabledWithinLimit,
   updateDiarizationRouteConfig,
   validateDiarizationRoutes,
 } from "./diarizationSettings";
@@ -181,5 +182,105 @@ describe("validateDiarizationRoutes", () => {
       true,
       1,
     )).toContain("cannot exceed 8");
+  });
+});
+
+describe("setDiarizationRoutesEnabledWithinLimit", () => {
+  it("enables the first eight one-slot routes and leaves the ninth off", () => {
+    const profiles = Array.from({ length: 8 }, (_, index) => ({
+      id: `gpu-${index + 1}`,
+      name: `GPU ${index + 1}`,
+      baseUrl: `https://gpu-${index + 1}.example`,
+      enabled: false,
+      priority: index + 1,
+      concurrency: 1,
+    }));
+    const result = setDiarizationRoutesEnabledWithinLimit(
+      {
+        profiles,
+        includeEnvironment: false,
+        environmentPriority: 50,
+        environmentConcurrency: 1,
+      },
+      [...profiles.map((profile) => profile.id), "environment"],
+      true,
+    );
+
+    expect(result.enabledRouteIds).toEqual(
+      profiles.map((profile) => profile.id),
+    );
+    expect(result.skippedRouteIds).toEqual(["environment"]);
+    expect(result.enabledCapacity).toBe(8);
+    expect(result.config.profiles.every((profile) => profile.enabled)).toBe(
+      true,
+    );
+    expect(result.config.includeEnvironment).toBe(false);
+  });
+
+  it("uses slot capacity rather than route count", () => {
+    const profiles = [
+      {
+        id: "gpu-a",
+        name: "A",
+        baseUrl: "https://a.example",
+        enabled: false,
+        priority: 1,
+        concurrency: 4,
+      },
+      {
+        id: "gpu-b",
+        name: "B",
+        baseUrl: "https://b.example",
+        enabled: false,
+        priority: 2,
+        concurrency: 4,
+      },
+      {
+        id: "gpu-c",
+        name: "C",
+        baseUrl: "https://c.example",
+        enabled: false,
+        priority: 3,
+        concurrency: 1,
+      },
+    ];
+    const result = setDiarizationRoutesEnabledWithinLimit(
+      {
+        profiles,
+        includeEnvironment: false,
+        environmentPriority: 50,
+        environmentConcurrency: 1,
+      },
+      profiles.map((profile) => profile.id),
+      true,
+    );
+
+    expect(result.enabledRouteIds).toEqual(["gpu-a", "gpu-b"]);
+    expect(result.skippedRouteIds).toEqual(["gpu-c"]);
+    expect(result.enabledCapacity).toBe(8);
+  });
+
+  it("disables every visible route without deleting it", () => {
+    const result = setDiarizationRoutesEnabledWithinLimit(
+      {
+        profiles: [{
+          id: "gpu-a",
+          name: "A",
+          baseUrl: "https://a.example",
+          enabled: true,
+          priority: 1,
+          concurrency: 1,
+        }],
+        includeEnvironment: true,
+        environmentPriority: 50,
+        environmentConcurrency: 1,
+      },
+      ["gpu-a", "environment"],
+      false,
+    );
+
+    expect(result.config.profiles[0].enabled).toBe(false);
+    expect(result.config.includeEnvironment).toBe(false);
+    expect(result.enabledCapacity).toBe(0);
   });
 });

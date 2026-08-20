@@ -98,6 +98,8 @@ import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import {
   type DiarizationRouteConfig,
   getEnabledDiarizationCapacity,
+  MAX_ENABLED_DIARIZATION_SLOTS,
+  setDiarizationRoutesEnabledWithinLimit,
   updateDiarizationRouteConfig,
 } from "@/lib/diarizationSettings";
 import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
@@ -2886,6 +2888,11 @@ export default function JobsPage() {
         action: "get",
       }) as InferenceRoutingConfig;
       const visibleRouteIds = new Set(routeIds);
+      let diarizationBulkResult: {
+        enabledRouteCount: number;
+        skippedRouteCount: number;
+        enabledCapacity: number;
+      } | undefined;
 
       if (serviceId === "llm") {
         const current = config.llmProfiles;
@@ -2936,15 +2943,21 @@ export default function JobsPage() {
       } else {
         const current = config.diarizationProfiles;
         if (!current) throw new Error("No diarization routes are configured");
-        const next: DiarizationRouteConfig = {
-          profiles: current.profiles.map((profile) =>
-            visibleRouteIds.has(profile.id) ? { ...profile, enabled } : profile
-          ),
-          includeEnvironment: visibleRouteIds.has("environment")
-            ? enabled
-            : current.includeEnvironment ?? true,
-          environmentPriority: current.environmentPriority ?? 50,
-          environmentConcurrency: current.environmentConcurrency ?? 1,
+        const bulkResult = setDiarizationRoutesEnabledWithinLimit(
+          {
+            profiles: current.profiles,
+            includeEnvironment: current.includeEnvironment ?? true,
+            environmentPriority: current.environmentPriority ?? 50,
+            environmentConcurrency: current.environmentConcurrency ?? 1,
+          },
+          routeIds,
+          enabled,
+        );
+        const next = bulkResult.config;
+        diarizationBulkResult = {
+          enabledRouteCount: bulkResult.enabledRouteIds.length,
+          skippedRouteCount: bulkResult.skippedRouteIds.length,
+          enabledCapacity: bulkResult.enabledCapacity,
         };
         await api.callResource("config", {
           action: "patch",
@@ -2964,19 +2977,29 @@ export default function JobsPage() {
         }
       }
 
-      return await api.callResource("jobs", {
+      const health = await api.callResource("jobs", {
         action: "services_health",
         force: true,
       }) as ServicesHealth;
+      return { health, diarizationBulkResult };
     },
-    onSuccess: (health, { serviceId, enabled }) => {
+    onSuccess: ({ health, diarizationBulkResult }, { serviceId, enabled }) => {
       queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
       queryClient.setQueryData(["services-health", "jobs-page"], health);
-      toast.success(
-        `${
-          serviceId === "diarizator" ? "Diarization" : serviceId.toUpperCase()
-        } routes ${enabled ? "enabled" : "disabled"}`,
-      );
+      if (
+        serviceId === "diarizator" && enabled &&
+        diarizationBulkResult?.skippedRouteCount
+      ) {
+        toast.success(
+          `Enabled first ${diarizationBulkResult.enabledRouteCount} diarization routes (${diarizationBulkResult.enabledCapacity}/${MAX_ENABLED_DIARIZATION_SLOTS} slots); ${diarizationBulkResult.skippedRouteCount} left off.`,
+        );
+      } else {
+        toast.success(
+          `${
+            serviceId === "diarizator" ? "Diarization" : serviceId.toUpperCase()
+          } routes ${enabled ? "enabled" : "disabled"}`,
+        );
+      }
     },
     onError: (error) => {
       toast.error(
@@ -4000,8 +4023,34 @@ export default function JobsPage() {
                       (service.id === "diarizator" &&
                         updateDiarizationRouteMutation.isPending);
                     const routes = service.routes ?? [];
+                    const diarizationConfig = service.id === "diarizator"
+                      ? inferenceRoutingConfig?.diarizationProfiles
+                      : null;
+                    const diarizationEnableTarget = diarizationConfig
+                      ? setDiarizationRoutesEnabledWithinLimit(
+                        {
+                          profiles: diarizationConfig.profiles,
+                          includeEnvironment:
+                            diarizationConfig.includeEnvironment ?? true,
+                          environmentPriority:
+                            diarizationConfig.environmentPriority ?? 50,
+                          environmentConcurrency:
+                            diarizationConfig.environmentConcurrency ?? 1,
+                        },
+                        routes.map((route) => route.providerProfileId),
+                        true,
+                      )
+                      : null;
+                    const diarizationTargetIds = new Set(
+                      diarizationEnableTarget?.enabledRouteIds ?? [],
+                    );
                     const allRoutesEnabled = routes.length > 0 &&
-                      routes.every((route) => route.enabled);
+                      (diarizationEnableTarget
+                        ? routes.every((route) =>
+                          route.enabled ===
+                            diarizationTargetIds.has(route.providerProfileId)
+                        )
+                        : routes.every((route) => route.enabled));
                     const allRoutesDisabled = routes.length > 0 &&
                       routes.every((route) => !route.enabled);
                     return (
@@ -4080,7 +4129,9 @@ export default function JobsPage() {
                                       enabled: true,
                                     })}
                                 >
-                                  All on
+                                  {service.id === "diarizator"
+                                    ? "First 8 on"
+                                    : "All on"}
                                 </Button>
                                 <Button
                                   type="button"
@@ -4103,8 +4154,9 @@ export default function JobsPage() {
                               </div>
                             </div>
                             <p className="mb-1.5 text-[9px] leading-tight text-muted-foreground">
-                              Availability reflects enabled routes only;
-                              disabled routes are not probed.
+                              {service.id === "diarizator"
+                                ? "8-slot limit: routes are enabled in this list order; routes that do not fit stay off."
+                                : "Availability reflects enabled routes only; disabled routes are not probed."}
                             </p>
                             <div className="space-y-1">
                               {routes.map((route) => (

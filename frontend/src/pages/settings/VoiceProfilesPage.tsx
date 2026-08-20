@@ -62,6 +62,7 @@ import {
   summarizeVoiceSamples,
 } from "@/lib/voiceProfiles";
 import { ServiceHealthBanner } from "@/components/ServiceHealthBanner";
+import { voiceIdentityKeys } from "@/lib/voiceIdentity";
 
 const VOICE_SAMPLES_BUCKET = "voice_samples";
 
@@ -174,16 +175,21 @@ const VoiceProfilesPage = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useJobsListener({
-    types: ["enrollment"],
+    types: ["enrollment", "profileReenrollment"],
     onJobFinished: () => {
-      void queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      void queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker-identity-status"],
+      });
       void queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
     },
   });
 
   // Fetch speaker profiles
   const { data: profiles, isLoading } = useQuery({
-    queryKey: ["speaker_profiles"],
+    queryKey: voiceIdentityKeys.profiles,
     queryFn: async () => {
       const result = await callResource("mongo", {
         action: "find",
@@ -275,7 +281,9 @@ const VoiceProfilesPage = () => {
     },
     onSuccess: () => {
       toast.success("Profile updated");
-      queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
       setEditingProfile(null);
     },
     onError: (error: Error) => {
@@ -305,6 +313,41 @@ const VoiceProfilesPage = () => {
       toast.error("Failed to delete sample", { description: error.message });
     },
   });
+
+  const invalidateAndRebuildProfile = async (
+    profileId: string,
+    sampleCount: number,
+  ) => {
+    const profile = await callResource("mongo", {
+      action: "findOne",
+      collection: "speaker_profiles",
+      query: { _id: { $oid: profileId } },
+      options: { projection: { revision: 1 } },
+    }) as { revision?: number } | null;
+    if (!profile) throw new Error("Voice profile no longer exists");
+    await callResource("mongo", {
+      action: "updateOne",
+      collection: "speaker_profiles",
+      query: { _id: { $oid: profileId } },
+      update: {
+        $set: {
+          revision: (profile.revision ?? 1) + 1,
+          sample_count: sampleCount,
+          enrollmentStatus: "pending_rebuild",
+          updated_at: new Date().toISOString(),
+        },
+        $unset: { embedding: "" },
+      },
+    });
+    return await callResource("jobs", {
+      action: "enqueue",
+      data: { type: "profileReenrollment", profileId },
+      trigger: {
+        type: "manual",
+        reason: "Rebuild voice profile after removing a saved sample",
+      },
+    });
+  };
 
   // Delete attached sample mutation (with profile update)
   const deleteAttachedSampleMutation = useMutation({
@@ -341,24 +384,15 @@ const VoiceProfilesPage = () => {
         });
         toast.info("Profile deleted (no samples remaining)");
       } else {
-        // Update sample count
-        await callResource("mongo", {
-          action: "updateOne",
-          collection: "speaker_profiles",
-          query: { _id: { $oid: profileId } },
-          update: {
-            $set: {
-              sample_count: remaining.length,
-              updated_at: new Date().toISOString(),
-            },
-          },
-        });
+        await invalidateAndRebuildProfile(profileId, remaining.length);
       }
     },
     onSuccess: () => {
       toast.success("Sample deleted");
       queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
-      queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
       setDeletingSample(null);
     },
     onError: (error: Error) => {
@@ -392,7 +426,9 @@ const VoiceProfilesPage = () => {
         description:
           "Existing segment assignments were cleared and voice samples were detached.",
       });
-      queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
+      queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
       queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
     },
     onError: (error: Error) => {
@@ -402,17 +438,40 @@ const VoiceProfilesPage = () => {
 
   // Detach sample from profile mutation
   const detachSampleMutation = useMutation({
-    mutationFn: async (sampleId: string) => {
+    mutationFn: async (
+      { sampleId, profileId }: { sampleId: string; profileId: string },
+    ) => {
       await callResource("mongo", {
         action: "updateOne",
         collection: `${VOICE_SAMPLES_BUCKET}.files`,
         query: { _id: { $oid: sampleId } },
         update: { $unset: { "metadata.profile_id": "" } },
       });
+      const remainingSamples = await callResource("mongo", {
+        action: "find",
+        collection: `${VOICE_SAMPLES_BUCKET}.files`,
+        query: { "metadata.profile_id": profileId },
+        options: { projection: { _id: 1 } },
+      });
+      const remaining = Array.isArray(remainingSamples)
+        ? remainingSamples.length
+        : 0;
+      if (remaining === 0) {
+        await callResource("mongo", {
+          action: "deleteOne",
+          collection: "speaker_profiles",
+          query: { _id: { $oid: profileId } },
+        });
+      } else {
+        await invalidateAndRebuildProfile(profileId, remaining);
+      }
     },
     onSuccess: () => {
-      toast.success("Sample detached from profile");
+      toast.success("Sample detached; profile embedding rebuild queued");
       queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+      queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
     },
     onError: (error: Error) => {
       toast.error("Failed to detach sample", { description: error.message });
@@ -1092,7 +1151,10 @@ const VoiceProfilesPage = () => {
                                 title="Detach from profile"
                                 onClick={() =>
                                   detachSampleMutation.mutate(
-                                    getSampleId(sample),
+                                    {
+                                      sampleId: getSampleId(sample),
+                                      profileId,
+                                    },
                                   )}
                                 disabled={detachSampleMutation.isPending}
                               >

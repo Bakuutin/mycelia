@@ -72,9 +72,9 @@ your own words.
 
 - BullMQ job queue backed by Redis.
 - Worker management UI with pause/resume, statistics, and success rates.
-- Lightweight provider health checks, with corpus-wide pipeline and identity
-  counts available through explicit calculate buttons instead of dashboard
-  polling.
+- Lightweight live diarization campaign, queue, and dynamic route-capacity
+  status, with corpus-wide pipeline and identity counts available through
+  explicit calculate buttons instead of dashboard polling.
 - Pipeline ordering and progress tracking.
 - Configurable worker defaults and prompt templates.
 - Failed-job bulk retry, obsolete-failure dismissal, VAD queue recovery, and
@@ -307,10 +307,10 @@ curl -fsS \
   | jq '{segments: (.segments | length), speakers: [.segments[].speaker] | unique}'
 ```
 
-`/health` is liveness and reports effective batching plus inference
-concurrency. `/ready` becomes HTTP 200 only after the requested compute device
-and both models are ready. Each diarizator process runs one inference at a time;
-Mycelia provider `Slots` must therefore remain `1` per process.
+`/health` is liveness and reports effective batching plus inference concurrency.
+`/ready` becomes HTTP 200 only after the requested compute device and both
+models are ready. Each diarizator process runs one inference at a time; Mycelia
+provider `Slots` must therefore remain `1` per process.
 
 In **Settings → Diarization**, enable the environment route, set it to the
 highest preference (for example priority `1`), and confirm that it reports

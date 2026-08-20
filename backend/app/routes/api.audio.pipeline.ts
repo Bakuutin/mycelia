@@ -23,6 +23,18 @@ const PIPELINE_STATS_MAX_TIME_MS = 6_000;
 const PIPELINE_DETAILS_MAX_TIME_MS = 2_000;
 const DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS = 1_000;
 const MAX_AUDIO_CHUNK_SECONDS = 10;
+const PIPELINE_SNAPSHOT_CACHE_MS = 5 * 60_000;
+const PIPELINE_PARTIAL_SNAPSHOT_CACHE_MS = 60_000;
+const pipelineSnapshotCache = new Map<
+  string,
+  { expiresAt: number; value: unknown }
+>();
+const pipelineSnapshotInFlight = new Map<
+  string,
+  Promise<unknown | undefined>
+>();
+const pipelineSnapshotBackoffUntil = new Map<string, number>();
+const PIPELINE_SNAPSHOT_RETRY_BACKOFF_MS = 2 * 60_000;
 
 function isMissingIndexHint(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -88,6 +100,39 @@ async function hasDiarizationBacklog(
     },
     options: {
       hint: "audio_chunks_diarization_ready_backlog_v1",
+      projection: { _id: 1 },
+      maxTimeMS: DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS,
+    },
+  };
+  try {
+    return Boolean(await mongo(request));
+  } catch (error) {
+    if (!isMissingIndexHint(error)) throw error;
+    return Boolean(
+      await mongo({
+        ...request,
+        options: {
+          projection: { _id: 1 },
+          maxTimeMS: DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS,
+        },
+      }),
+    );
+  }
+}
+
+async function hasSpeakerIdentityBacklog(
+  mongo: ReturnType<typeof getMongoResource>,
+): Promise<boolean> {
+  const request = {
+    action: "findOne" as const,
+    collection: "diarizations",
+    query: {
+      lifecycleStatus: "active",
+      embedding: { $exists: true },
+      "speakerIdentity.identityState": { $exists: false },
+    },
+    options: {
+      hint: "pipeline_speaker_identity_state",
       projection: { _id: 1 },
       maxTimeMS: DIARIZATION_BACKLOG_PROBE_MAX_TIME_MS,
     },
@@ -246,7 +291,7 @@ interface PipelineStats {
   }>;
 }
 
-interface DiarizationCampaignSummary {
+export interface DiarizationCampaignSummary {
   campaignId: string;
   status: string;
   updatedAt?: Date;
@@ -257,6 +302,12 @@ interface DiarizationCampaignSummary {
   segmentsCreated: number;
   errorCount: number;
   chunksPerSecond: number | null;
+  rateStatus: "live" | "aggregate" | "warming" | "legacy";
+  rateSampleCount: number;
+  sampledLanes: number;
+  activeRateJobCount: number;
+  activeRateReportingJobCount: number;
+  activeRateLaneCount: number;
   usefulAudioRealtimeMultiple: number | null;
   rateWindowSeconds: number | null;
   successfulSequences: number;
@@ -324,7 +375,7 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-async function getDiarizationCampaignSummary(
+export async function getDiarizationCampaignSummary(
   mongo: ReturnType<typeof getMongoResource>,
 ): Promise<DiarizationCampaignSummary | null> {
   const findLatest = async (statuses: string[]) => {
@@ -380,6 +431,7 @@ async function getDiarizationCampaignSummary(
         finishedAt: 1,
         chunksProcessed: 1,
         audioSecondsProcessed: 1,
+        providerProfileId: 1,
         successfulSequences: 1,
         skippedSequences: 1,
         recordingLeaseBusyOriginals: 1,
@@ -503,6 +555,13 @@ async function getDiarizationCampaignSummary(
       sampleAudioSeconds > 0
     ? sampleAudioSeconds / sampleWindowSeconds
     : null;
+  const sampledLanes = new Set(
+    timedSamples
+      .map((sample) => sample.providerProfileId)
+      .filter((value): value is string =>
+        typeof value === "string" && value.length > 0
+      ),
+  ).size;
   const ratioToSuccessfulSequences = (skips: number): number | null =>
     successfulSequences > 0
       ? skips / successfulSequences
@@ -526,6 +585,11 @@ async function getDiarizationCampaignSummary(
     : null;
   const chunksPerSecondValue = aggregateChunksPerSecond ??
     finiteNumber(campaign.chunksPerSecond);
+  const rateStatus = aggregateChunksPerSecond != null
+    ? "aggregate"
+    : chunksPerSecondValue != null
+    ? "legacy"
+    : "warming";
   const etaSecondsValue =
     chunksPerSecondValue != null && chunksPerSecondValue > 0 &&
       pendingChunks != null
@@ -553,6 +617,12 @@ async function getDiarizationCampaignSummary(
     chunksPerSecond: chunksPerSecondValue != null && chunksPerSecondValue > 0
       ? chunksPerSecondValue
       : null,
+    rateStatus,
+    rateSampleCount: timedSamples.length,
+    sampledLanes,
+    activeRateJobCount: 0,
+    activeRateReportingJobCount: 0,
+    activeRateLaneCount: 0,
     usefulAudioRealtimeMultiple,
     rateWindowSeconds: sampleWindowSeconds,
     successfulSequences,
@@ -802,10 +872,40 @@ async function getVadPipelineStats(
 }
 
 export async function apiAudioPipelineHandler(req: Request, res: Response) {
+  let snapshotKey: string | undefined;
+  let finishSnapshot: ((value: unknown | undefined) => void) | undefined;
   try {
     const auth = await authenticateOr401(req, res);
 
     const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
+    const includeSources = req.query.includeSources !== "false";
+    if (!includeSources) {
+      snapshotKey = `stats-only:${limit}`;
+      const cachedSnapshot = pipelineSnapshotCache.get(snapshotKey);
+      if (cachedSnapshot && cachedSnapshot.expiresAt > Date.now()) {
+        res.json(cachedSnapshot.value);
+        return;
+      }
+      if (
+        (pipelineSnapshotBackoffUntil.get(snapshotKey) ?? 0) > Date.now() &&
+        cachedSnapshot
+      ) {
+        res.json(cachedSnapshot.value);
+        return;
+      }
+      const existingSnapshot = pipelineSnapshotInFlight.get(snapshotKey);
+      if (existingSnapshot) {
+        const shared = await existingSnapshot;
+        if (shared !== undefined) {
+          res.json(shared);
+          return;
+        }
+      }
+      const snapshotPromise = new Promise<unknown | undefined>((resolve) => {
+        finishSnapshot = resolve;
+      });
+      pipelineSnapshotInFlight.set(snapshotKey, snapshotPromise);
+    }
     const mongo = getMongoResource(auth);
     const warnings: string[] = [];
     const safeStat = async <T>(
@@ -826,20 +926,22 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
     // Source activity and recording time are different. Imported recordings can
     // be old while their processing is happening now, so order by the newest
     // known activity timestamp and include every source kind.
-    const sourceFiles = await safeStat(
-      "recent audio sources",
-      mongo({
-        action: "find",
-        collection: "source_files",
-        query: {},
-        options: {
-          sort: { updatedAt: -1, start: -1 },
-          limit: limit + 1,
-          maxTimeMS: PIPELINE_DETAILS_MAX_TIME_MS,
-        },
-      }) as Promise<any[]>,
-      [],
-    );
+    const sourceFiles = includeSources
+      ? await safeStat(
+        "recent audio sources",
+        mongo({
+          action: "find",
+          collection: "source_files",
+          query: {},
+          options: {
+            sort: { updatedAt: -1, start: -1 },
+            limit: limit + 1,
+            maxTimeMS: PIPELINE_DETAILS_MAX_TIME_MS,
+          },
+        }) as Promise<any[]>,
+        [],
+      )
+      : [];
 
     const hasMore = sourceFiles.length > limit;
     const filesToProcess = sourceFiles.slice(0, limit);
@@ -864,7 +966,15 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
                   _id: "$original_id",
                   total: { $sum: 1 },
                   vadProcessed: {
-                    $sum: { $cond: [{ $ne: ["$vad.ran_at", null] }, 1, 0] },
+                    $sum: {
+                      $cond: [
+                        {
+                          $ne: [{ $ifNull: ["$vad.ran_at", null] }, null],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
                   },
                   withSpeech: {
                     $sum: { $cond: [{ $eq: ["$vad.has_speech", true] }, 1, 0] },
@@ -1102,11 +1212,27 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
           recentFailures: [],
         },
       }),
-      countPipelineStats(mongo, "transcription_sequences", { state: "ready" }),
-      countPipelineStats(mongo, "transcription_sequences", {
-        state: "processing",
-      }),
-      countPipelineStats(mongo, "transcription_sequences", { state: "error" }),
+      safeStat(
+        "ready transcription sequences",
+        countPipelineStats(mongo, "transcription_sequences", {
+          state: "ready",
+        }),
+        0,
+      ),
+      safeStat(
+        "processing transcription sequences",
+        countPipelineStats(mongo, "transcription_sequences", {
+          state: "processing",
+        }),
+        0,
+      ),
+      safeStat(
+        "failed transcription sequences",
+        countPipelineStats(mongo, "transcription_sequences", {
+          state: "error",
+        }),
+        0,
+      ),
       safeStat(
         "transcription backlog",
         aggregatePipelineStats(
@@ -1126,91 +1252,117 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         ),
         [],
       ),
-      countPipelineStats(mongo, "conversation_chunks", { state: "ready" }),
-      countPipelineStats(mongo, "conversation_chunks", { state: "processing" }),
-      countPipelineStats(mongo, "conversation_chunks", { state: "error" }),
-      countPipelineStats(mongo, "objects", { isConversation: true }),
-      mongo({
-        action: "aggregate",
-        collection: "source_files",
-        pipeline: [{
-          $group: {
-            _id: null,
-            total: { $sum: 1 },
-            ingested: {
-              $sum: { $cond: [{ $eq: ["$ingested", true] }, 1, 0] },
-            },
-            errors: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $ne: ["$ingested", true] },
-                      {
-                        $ne: [
-                          { $ifNull: ["$ingestion.error", null] },
-                          null,
-                        ],
-                      },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
+      safeStat(
+        "ready conversation chunks",
+        countPipelineStats(mongo, "conversation_chunks", { state: "ready" }),
+        0,
+      ),
+      safeStat(
+        "processing conversation chunks",
+        countPipelineStats(mongo, "conversation_chunks", {
+          state: "processing",
+        }),
+        0,
+      ),
+      safeStat(
+        "failed conversation chunks",
+        countPipelineStats(mongo, "conversation_chunks", { state: "error" }),
+        0,
+      ),
+      safeStat(
+        "total conversations",
+        countPipelineStats(mongo, "objects", { isConversation: true }),
+        0,
+      ),
+      safeStat(
+        "audio source totals",
+        mongo({
+          action: "aggregate",
+          collection: "source_files",
+          pipeline: [{
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              ingested: {
+                $sum: { $cond: [{ $eq: ["$ingested", true] }, 1, 0] },
+              },
+              errors: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$ingested", true] },
+                        {
+                          $ne: [
+                            { $ifNull: ["$ingestion.error", null] },
+                            null,
+                          ],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              pending: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$ingested", true] },
+                        {
+                          $eq: [
+                            { $ifNull: ["$ingestion.error", null] },
+                            null,
+                          ],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
               },
             },
-            pending: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $ne: ["$ingested", true] },
-                      {
-                        $eq: [
-                          { $ifNull: ["$ingestion.error", null] },
-                          null,
-                        ],
-                      },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
+          }],
+          options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
+        }) as Promise<any[]>,
+        [],
+      ),
+      safeStat(
+        "audio source kinds",
+        mongo({
+          action: "aggregate",
+          collection: "source_files",
+          pipeline: [
+            {
+              $project: {
+                kind: {
+                  $ifNull: [
+                    "$metadata.source",
+                    {
+                      $ifNull: [
+                        "$importer",
+                        {
+                          $ifNull: [
+                            "$platform.importer",
+                            { $ifNull: ["$platform.system", "unknown"] },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
               },
             },
-          },
-        }],
-        options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
-      }),
-      mongo({
-        action: "aggregate",
-        collection: "source_files",
-        pipeline: [
-          {
-            $project: {
-              kind: {
-                $ifNull: [
-                  "$metadata.source",
-                  {
-                    $ifNull: [
-                      "$importer",
-                      {
-                        $ifNull: [
-                          "$platform.importer",
-                          { $ifNull: ["$platform.system", "unknown"] },
-                        ],
-                      },
-                    ],
-                  },
-                ],
-              },
-            },
-          },
-          { $group: { _id: "$kind", count: { $sum: 1 } } },
-          { $sort: { count: -1 } },
-        ],
-        options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
-      }),
+            { $group: { _id: "$kind", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+          ],
+          options: { maxTimeMS: PIPELINE_STATS_MAX_TIME_MS },
+        }) as Promise<any[]>,
+        [],
+      ),
       safeStat(
         "sequence creation backlog",
         aggregatePipelineStats(
@@ -1230,13 +1382,21 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         ),
         [],
       ),
-      countPipelineStats(mongo, "transcriptions", {
-        chunk_id: { $exists: false },
-      }),
-      countPipelineStats(
-        mongo,
-        "objects", // Subfield predicate matches the conversation_missing_summary index.
-        { isConversation: true, "summaries.0.date": { $exists: false } },
+      safeStat(
+        "unassigned transcriptions",
+        countPipelineStats(mongo, "transcriptions", {
+          chunk_id: { $exists: false },
+        }),
+        0,
+      ),
+      safeStat(
+        "conversations awaiting summary",
+        countPipelineStats(
+          mongo,
+          "objects", // Subfield predicate matches the conversation_missing_summary index.
+          { isConversation: true, "summaries.0.date": { $exists: false } },
+        ),
+        0,
       ),
       safeStat(
         "diarization backlog",
@@ -1246,12 +1406,8 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       Promise.resolve(0),
       safeStat(
         "speaker identity backlog",
-        countPipelineStats(mongo, "diarizations", {
-          lifecycleStatus: "active",
-          embedding: { $exists: true },
-          speakerIdentity: { $exists: false },
-        }),
-        0,
+        hasSpeakerIdentityBacklog(mongo),
+        null,
       ),
       safeStat(
         "voice enrollment backlog",
@@ -1375,7 +1531,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       summarization: conversationsAwaitingSummary,
       diarization: diarizationBacklog.count,
       speakerMatching: speakerMatchingBacklog,
-      speakerIdentity: speakerIdentityBacklog,
+      speakerIdentity: speakerIdentityBacklog === true ? 1 : 0,
       enrollment: enrollmentBacklog,
     };
     const stageErrors: Record<string, number> = {
@@ -1398,6 +1554,12 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
         backlog: backlogs[type] ?? 0,
         backlogStatus: type === "diarization"
           ? diarizationBacklog.status
+          : type === "speakerIdentity"
+          ? speakerIdentityBacklog == null
+            ? "unavailable"
+            : speakerIdentityBacklog
+            ? "exists"
+            : "exact"
           : "exact",
         backlogAsOf: type === "diarization"
           ? diarizationBacklog.asOf
@@ -1448,11 +1610,55 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       sessions,
       hasMore,
       stats,
+      snapshot: {
+        calculatedAt: new Date(),
+        cacheSeconds: warnings.length > 0
+          ? PIPELINE_PARTIAL_SNAPSHOT_CACHE_MS / 1_000
+          : PIPELINE_SNAPSHOT_CACHE_MS / 1_000,
+        partial: warnings.length > 0,
+      },
     });
 
+    if (snapshotKey) {
+      pipelineSnapshotCache.set(snapshotKey, {
+        expiresAt: Date.now() +
+          (warnings.length > 0
+            ? PIPELINE_PARTIAL_SNAPSHOT_CACHE_MS
+            : PIPELINE_SNAPSHOT_CACHE_MS),
+        value: response,
+      });
+      if (warnings.length > 0) {
+        pipelineSnapshotBackoffUntil.set(
+          snapshotKey,
+          Date.now() + PIPELINE_SNAPSHOT_RETRY_BACKOFF_MS,
+        );
+      } else {
+        pipelineSnapshotBackoffUntil.delete(snapshotKey);
+      }
+    }
+    finishSnapshot?.(response);
     res.json(response);
   } catch (error) {
+    finishSnapshot?.(undefined);
+    if (snapshotKey) {
+      pipelineSnapshotBackoffUntil.set(
+        snapshotKey,
+        Date.now() + PIPELINE_SNAPSHOT_RETRY_BACKOFF_MS,
+      );
+      const staleSnapshot = pipelineSnapshotCache.get(snapshotKey);
+      if (staleSnapshot) {
+        console.warn(
+          "[apiAudioPipelineHandler] returning the last cached snapshot after a refresh failure",
+        );
+        res.json(staleSnapshot.value);
+        return;
+      }
+    }
     console.error("[apiAudioPipelineHandler] error:", error);
     throw error;
+  } finally {
+    if (snapshotKey && finishSnapshot) {
+      pipelineSnapshotInFlight.delete(snapshotKey);
+    }
   }
 }

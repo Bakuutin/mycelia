@@ -65,6 +65,7 @@ def process_profile_reenrollment_job(
         "revision": revision,
         "sample_count": len(samples),
         "total_duration": sum(durations),
+        "enrollmentStatus": "ready",
         "enrollmentProvenance": {
             "source": "saved_samples_rebuild",
             "sampleIds": [sample["_id"] for sample in samples],

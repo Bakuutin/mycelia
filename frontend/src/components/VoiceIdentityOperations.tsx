@@ -22,6 +22,13 @@ import {
 } from "@/lib/voiceIdentityOperations";
 import { useActionDialog } from "@/components/ActionDialogProvider";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
+import {
+  loadVoiceIdentityStatus,
+  loadVoiceProfiles,
+  voiceIdentityKeys,
+  type VoiceIdentityStatus,
+  type VoiceProfile,
+} from "@/lib/voiceIdentity";
 
 type Run = {
   runId: string;
@@ -50,20 +57,6 @@ type Run = {
   };
 };
 
-type Profile = {
-  _id: unknown;
-  name: string;
-  is_primary?: boolean;
-  revision?: number;
-  embeddingSpaceId?: string;
-};
-type Calibration = {
-  calibrationId: string;
-  status: string;
-  profileId: string;
-  profileRevision: number;
-  updatedAt?: Date;
-};
 type IdentityCampaign = {
   campaignId: string;
   status: "counting" | "running" | "completed" | "failed";
@@ -116,33 +109,27 @@ export function VoiceIdentityOperations() {
       callResource("speaker-segments", { action: "list-runs" }) as Promise<
         Run[]
       >,
-    refetchInterval: 10_000,
+    refetchInterval: (query) => {
+      if (document.visibilityState !== "visible") return false;
+      return query.state.data?.some((run) =>
+          ["building", "interrupted", "ready"].includes(run.status)
+        )
+        ? 10_000
+        : false;
+    },
   });
-  const { data: profiles = [] } = useQuery<Profile[]>({
-    queryKey: ["speaker-profiles", "voice-identity"],
-    queryFn: () =>
-      callResource("mongo", {
-        action: "find",
-        collection: "speaker_profiles",
-        query: {},
-        options: { sort: { is_primary: -1 } },
-      }) as Promise<Profile[]>,
+  const { data: profiles = [] } = useQuery<VoiceProfile[]>({
+    queryKey: voiceIdentityKeys.profiles,
+    queryFn: loadVoiceProfiles,
   });
   const primary = profiles.find((profile) => profile.is_primary);
   const primaryId = primary ? normalizeObjectId(primary._id) : null;
-  const { data: calibrations = [] } = useQuery<Calibration[]>({
-    queryKey: ["speaker-calibrations", primaryId],
+  const { data: identityStatus } = useQuery<VoiceIdentityStatus>({
+    queryKey: voiceIdentityKeys.status(primaryId),
     enabled: Boolean(primaryId),
-    queryFn: () =>
-      callResource("speaker-segments", {
-        action: "list-calibrations",
-        profileId: primaryId,
-      }) as Promise<Calibration[]>,
+    queryFn: () => loadVoiceIdentityStatus(primaryId!),
   });
-  const calibration = calibrations.find((item) =>
-    item.status === "validated" &&
-    item.profileRevision === (primary?.revision ?? 1)
-  );
+  const calibration = identityStatus?.usableCalibration;
   const activeRun = runs.find((run) => run.status === "active");
   const { data: identityCampaigns = [] } = useQuery<IdentityCampaign[]>({
     queryKey: ["speaker-identity-campaigns", primaryId, activeRun?.runId],
@@ -154,7 +141,14 @@ export function VoiceIdentityOperations() {
         runId: activeRun?.runId,
         limit: 10,
       }) as Promise<IdentityCampaign[]>,
-    refetchInterval: 5_000,
+    refetchInterval: (query) => {
+      if (document.visibilityState !== "visible") return false;
+      return query.state.data?.some((campaign) =>
+          ["queued", "counting", "running"].includes(campaign.status)
+        )
+        ? 5_000
+        : false;
+    },
   });
   const latestIdentityCampaign = identityCampaigns[0];
   const identityProgress = latestIdentityCampaign
@@ -370,6 +364,11 @@ export function VoiceIdentityOperations() {
             {calibration?.calibrationId ?? "not validated"}
           </span>
         </div>
+        {(identityStatus?.blockers?.length ?? 0) > 0 && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+            {identityStatus?.blockers.join(" · ")}
+          </div>
+        )}
         {rangeMode === "custom" && (
           <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
             <div className="space-y-2">
@@ -398,7 +397,7 @@ export function VoiceIdentityOperations() {
         <div className="flex flex-wrap gap-2">
           <Button
             onClick={() => operation.mutate("classify")}
-            disabled={operation.isPending || !calibration ||
+            disabled={operation.isPending || !identityStatus?.canClassify ||
               Boolean(rangeError)}
           >
             Classify existing

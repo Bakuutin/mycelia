@@ -1,9 +1,10 @@
 """Speaker profile management using MongoDB."""
 
 import logging
-import numpy as np
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
+
+import numpy as np
 from bson import ObjectId
 
 from lib.resources import call_resource
@@ -105,6 +106,7 @@ def create_or_update_profile(
             "sample_count": new_count,
             "total_duration": new_duration,
             "updated_at": now,
+            "revision": int(existing.get("revision", 1)) + 1,
         }
 
         # If setting as primary, also update that field
@@ -195,7 +197,7 @@ def add_sample_to_profile(
         "total_duration": old_duration + duration,
         "updated_at": datetime.now(UTC),
         "embeddingSpaceId": embedding_space_id,
-        "revision": int(profile.get("revision", 1)),
+        "revision": int(profile.get("revision", 1)) + 1,
     }
     result = call_resource("mongo", {
         "action": "updateOne",

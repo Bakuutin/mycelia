@@ -13,6 +13,7 @@ import {
   Server,
   Settings,
   Shield,
+  Sparkles,
   UserRound,
 } from "lucide-react";
 
@@ -77,17 +78,26 @@ const SettingsLayout = () => {
       icon: MapIcon,
       description: "Places database, GPS imports and map preferences",
     },
+  ];
+
+  const voiceIdentitySettings = [
     {
-      name: "Voice Profiles",
+      name: "Profiles & samples",
       path: "/settings/voice-profiles",
       icon: UserRound,
-      description: "Enroll and manage speaker voices",
+      description: "Enroll Sky and manage voice samples",
     },
     {
-      name: "Voice Identity",
+      name: "Review & calibration",
       path: "/settings/voice-identity",
-      icon: UserRound,
-      description: "Review uncertain voices and validate Sky thresholds",
+      icon: Sparkles,
+      description: "Label uncertain voices and validate thresholds",
+    },
+    {
+      name: "Operations & generations",
+      path: "/settings/voice-identity/operations",
+      icon: AudioLines,
+      description: "Classify history or build isolated diarization runs",
     },
   ];
 
@@ -162,6 +172,39 @@ const SettingsLayout = () => {
                 const Icon = tab.icon;
                 const isActive = location.pathname === tab.path ||
                   location.pathname.startsWith(tab.path);
+
+                return (
+                  <Link
+                    key={tab.path}
+                    to={tab.path}
+                    className={`flex items-start gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-medium">{tab.name}</div>
+                      <div className="text-xs opacity-70 mt-0.5">
+                        {tab.description}
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              <UserRound className="w-3 h-3" />
+              Voice Identity
+            </div>
+            <div className="space-y-1">
+              {voiceIdentitySettings.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = location.pathname === tab.path;
 
                 return (
                   <Link

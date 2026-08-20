@@ -5,6 +5,11 @@ import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
+import {
+  loadVoiceIdentityStatus,
+  loadVoiceProfiles,
+  voiceIdentityKeys,
+} from "@/lib/voiceIdentity";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 import { Button } from "@/components/ui/button";
 import {
@@ -143,6 +148,16 @@ type CalibrationMetrics = {
 };
 
 type IdentityStatus = {
+  usableCalibration: {
+    calibrationId: string;
+    status: "validated";
+    profileId: string;
+    profileRevision: number;
+    embeddingSpaceId: string;
+    updatedAt?: Date;
+  } | null;
+  canClassify: boolean;
+  blockers: string[];
   labels: {
     sky: number;
     notSky: number;
@@ -225,14 +240,8 @@ export default function VoiceIdentityReviewPage() {
   const calibrationSectionRef = useRef<HTMLDivElement>(null);
 
   const { data: profiles = [] } = useQuery<any[]>({
-    queryKey: ["speaker_profiles"],
-    queryFn: () =>
-      callResource("mongo", {
-        action: "find",
-        collection: "speaker_profiles",
-        query: {},
-        options: { sort: { is_primary: -1 } },
-      }) as Promise<any[]>,
+    queryKey: voiceIdentityKeys.profiles,
+    queryFn: loadVoiceProfiles,
   });
   const primary = profiles.find((profile) => profile.is_primary);
   const profileId = normalizeObjectId(primary?._id);
@@ -253,13 +262,10 @@ export default function VoiceIdentityReviewPage() {
   const { data: identityStatus, refetch: refetchIdentityStatus } = useQuery<
     IdentityStatus
   >({
-    queryKey: ["speaker-identity-status", profileId],
+    queryKey: voiceIdentityKeys.status(profileId),
     enabled: Boolean(profileId),
     queryFn: () =>
-      callResource("speaker-segments", {
-        action: "identity-status",
-        profileId,
-      }) as Promise<IdentityStatus>,
+      loadVoiceIdentityStatus(profileId!) as Promise<IdentityStatus>,
     refetchInterval: (query) => {
       const status = (query.state.data as IdentityStatus | undefined)
         ?.latestCampaign?.status;
@@ -659,9 +665,7 @@ export default function VoiceIdentityReviewPage() {
         error instanceof Error ? error.message : "Calibration rejected",
       ),
   });
-  const latestCalibration = identityStatus?.calibrations.find((item) =>
-    item.status === "validated"
-  );
+  const latestCalibration = identityStatus?.usableCalibration;
   const labels = identityStatus?.labels ?? {
     sky: 0,
     notSky: 0,

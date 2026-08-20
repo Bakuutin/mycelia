@@ -18,6 +18,15 @@ export type DiarizationRouteConfig = {
   environmentReadinessMode?: DiarizationReadinessMode;
 };
 
+export const MAX_ENABLED_DIARIZATION_SLOTS = 8;
+
+export type DiarizationBulkEnableResult = {
+  config: DiarizationRouteConfig;
+  enabledRouteIds: string[];
+  skippedRouteIds: string[];
+  enabledCapacity: number;
+};
+
 export function updateDiarizationRouteConfig(
   config: DiarizationRouteConfig,
   profileId: string,
@@ -122,9 +131,9 @@ export function validateDiarizationRoutes(
       profiles,
       includeEnvironment,
       environmentConcurrency,
-    ) > 8
+    ) > MAX_ENABLED_DIARIZATION_SLOTS
   ) {
-    return "Enabled diarization slots cannot exceed 8 in total.";
+    return `Enabled diarization slots cannot exceed ${MAX_ENABLED_DIARIZATION_SLOTS} in total.`;
   }
   return null;
 }
@@ -140,4 +149,86 @@ export function getEnabledDiarizationCapacity(
       (sum, profile) => sum + (profile.concurrency ?? 1),
       includeEnvironment ? environmentConcurrency : 0,
     );
+}
+
+export function setDiarizationRoutesEnabledWithinLimit(
+  config: DiarizationRouteConfig,
+  routeIds: string[],
+  enabled: boolean,
+  capacityLimit = MAX_ENABLED_DIARIZATION_SLOTS,
+): DiarizationBulkEnableResult {
+  const visibleRouteIds = new Set(routeIds);
+  const knownRouteCapacity = new Map(
+    config.profiles.map((profile) => [profile.id, profile.concurrency ?? 1]),
+  );
+  knownRouteCapacity.set("environment", config.environmentConcurrency ?? 1);
+
+  if (!enabled) {
+    const next = {
+      ...config,
+      profiles: config.profiles.map((profile) =>
+        visibleRouteIds.has(profile.id)
+          ? { ...profile, enabled: false }
+          : profile
+      ),
+      includeEnvironment: visibleRouteIds.has("environment")
+        ? false
+        : config.includeEnvironment,
+    };
+    return {
+      config: next,
+      enabledRouteIds: [],
+      skippedRouteIds: [],
+      enabledCapacity: getEnabledDiarizationCapacity(
+        next.profiles,
+        next.includeEnvironment,
+        next.environmentConcurrency,
+      ),
+    };
+  }
+
+  const fixedCapacity = config.profiles
+    .filter((profile) => profile.enabled && !visibleRouteIds.has(profile.id))
+    .reduce((sum, profile) => sum + (profile.concurrency ?? 1), 0) +
+    (config.includeEnvironment && !visibleRouteIds.has("environment")
+      ? config.environmentConcurrency ?? 1
+      : 0);
+  let usedCapacity = fixedCapacity;
+  const enabledRouteIds: string[] = [];
+  const skippedRouteIds: string[] = [];
+
+  for (const routeId of routeIds) {
+    const routeCapacity = knownRouteCapacity.get(routeId);
+    if (routeCapacity == null) continue;
+    if (usedCapacity + routeCapacity <= capacityLimit) {
+      enabledRouteIds.push(routeId);
+      usedCapacity += routeCapacity;
+    } else {
+      skippedRouteIds.push(routeId);
+    }
+  }
+
+  const selectedRouteIds = new Set(enabledRouteIds);
+  const next = {
+    ...config,
+    profiles: config.profiles.map((profile) =>
+      visibleRouteIds.has(profile.id)
+        ? { ...profile, enabled: selectedRouteIds.has(profile.id) }
+        : profile
+    ),
+    includeEnvironment: visibleRouteIds.has("environment")
+      ? selectedRouteIds.has("environment")
+      : config.includeEnvironment,
+  };
+
+  return {
+    config: next,
+    enabledRouteIds,
+    skippedRouteIds,
+    enabledCapacity: getEnabledDiarizationCapacity(
+      next.profiles,
+      next.includeEnvironment,
+      next.environmentConcurrency,
+    ),
+  };
 }
