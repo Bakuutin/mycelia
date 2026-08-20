@@ -695,6 +695,14 @@ export default function AudioPipelinePage() {
   const diarizationCampaignOpen = diarizationCampaign
     ? isOpenDiarizationCampaignStatus(diarizationCampaign.status)
     : false;
+  const diarizationRateWindowLabel =
+    diarizationCampaign?.rateWindowSeconds != null
+      ? diarizationCampaign.rateWindowSeconds >= 60
+        ? `${
+          (diarizationCampaign.rateWindowSeconds / 60).toFixed(1)
+        } min window`
+        : `${Math.round(diarizationCampaign.rateWindowSeconds)}s window`
+      : "window warming up";
   const diarizationStage = stats?.stages?.find((stage) =>
     stage.type === "diarization"
   );
@@ -1225,7 +1233,7 @@ export default function AudioPipelinePage() {
                         : "text-foreground",
                     ],
                     [
-                      "Combined speed",
+                      "Rolling speed (≤5 min)",
                       diarizationCampaign.chunksPerSecond != null
                         ? `${
                           (diarizationCampaign.chunksPerSecond * 60).toFixed(1)
@@ -1295,10 +1303,10 @@ export default function AudioPipelinePage() {
                     {diarizationCampaign.rateStatus === "live"
                       ? diarizationCampaign.activeRateReportingJobCount ===
                           diarizationCampaign.activeRateJobCount
-                        ? `${diarizationCampaign.activeRateJobCount.toLocaleString()} active task average(s) summed across ${diarizationCampaign.activeRateLaneCount.toLocaleString()} lane(s)`
-                        : `${diarizationCampaign.activeRateReportingJobCount.toLocaleString()} / ${diarizationCampaign.activeRateJobCount.toLocaleString()} active task average(s) reporting; others warming up`
+                        ? `${diarizationCampaign.activeRateJobCount.toLocaleString()} active task(s) + ${diarizationCampaign.rateSampleCount.toLocaleString()} completed sample(s) · ${diarizationRateWindowLabel}`
+                        : `${diarizationCampaign.activeRateReportingJobCount.toLocaleString()} / ${diarizationCampaign.activeRateJobCount.toLocaleString()} active task(s) reporting + ${diarizationCampaign.rateSampleCount.toLocaleString()} completed sample(s) · ${diarizationRateWindowLabel}`
                       : diarizationCampaign.rateStatus === "aggregate"
-                      ? `${diarizationCampaign.rateSampleCount.toLocaleString()} recent samples across ${diarizationCampaign.sampledLanes.toLocaleString()} lane(s)`
+                      ? `${diarizationCampaign.rateSampleCount.toLocaleString()} completed sample(s) across ${diarizationCampaign.sampledLanes.toLocaleString()} lane(s) · ${diarizationRateWindowLabel}`
                       : diarizationCampaign.rateStatus === "legacy"
                       ? "Combined-rate telemetry is waiting for updated workers"
                       : "Combined rate is warming up"}

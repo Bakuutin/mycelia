@@ -149,9 +149,9 @@ export function getDiarizationCampaignProgressView(
 
   const chunksPerMinute = (campaign.chunksPerSecond * 60).toFixed(1);
   const rateLabel = campaign.rateStatus === "live"
-    ? `All active tasks combined: ${chunksPerMinute} chunks/min`
+    ? `Rolling 5 min, active + completed: ${chunksPerMinute} chunks/min`
     : campaign.rateStatus === "aggregate"
-    ? `Recent completed tasks combined: ${chunksPerMinute} chunks/min`
+    ? `Rolling 5 min, completed tasks: ${chunksPerMinute} chunks/min`
     : campaign.rateStatus === "legacy"
     ? `Legacy single-lane estimate: ${chunksPerMinute} chunks/min`
     : view.rateLabel;

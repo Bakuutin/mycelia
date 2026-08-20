@@ -106,8 +106,6 @@ import { classifyJobFailure, JobErrorStats } from "@/components/JobErrorStats";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
 import { DiarizationLaunchDialog } from "@/components/DiarizationLaunchDialog";
-import { DiarizationRuntimeCard } from "@/components/DiarizationRuntimeCard";
-import type { DiarizationRuntimeRoute } from "@/lib/diarizationRuntime";
 import {
   type DetectedDiarizatorReadinessMode,
   type DiarizatorReadinessMode,
@@ -1620,17 +1618,6 @@ export default function JobsPage() {
       : undefined,
   });
 
-  // The regular table is a history view and follows WebSocket lifecycle
-  // events. Keep a small canonical live query for the stable route/slot view:
-  // it closes the completion -> continuation gap without refetching history.
-  const { jobs: diarizationLiveJobs } = useJobsListener({
-    view: "operational",
-    types: ["diarization"],
-    statuses: ["active", "waiting", "delayed"],
-    limit: 50,
-    refetchInterval: 3000,
-  });
-
   const { data: schemas, isLoading: isLoadingSchemas } = useQuery({
     queryKey: ["job-schemas"],
     queryFn: async () => {
@@ -1807,44 +1794,6 @@ export default function JobsPage() {
     }
     return capacities;
   }, [inferenceRoutingConfig]);
-
-  const diarizationRuntimeRoutes = useMemo<DiarizationRuntimeRoute[]>(() => {
-    const config = inferenceRoutingConfig?.diarizationProfiles;
-    if (!config) return [];
-    const healthRoutes = services.find((service) =>
-      service.id === "diarizator"
-    )?.routes ?? [];
-    const healthById = new Map(
-      healthRoutes.map((route) => [route.providerProfileId, route]),
-    );
-    const routes: DiarizationRuntimeRoute[] = config.profiles.map((profile) => {
-      const health = healthById.get(profile.id);
-      return {
-        id: profile.id,
-        name: profile.name,
-        baseUrl: profile.baseUrl || health?.baseUrl,
-        enabled: profile.enabled,
-        concurrency: profile.concurrency ?? 1,
-        health: health?.status,
-      };
-    });
-    const environmentHealth = healthById.get("environment");
-    const environmentJob = diarizationLiveJobs.find((job) =>
-      job.routingContext?.providerProfileId === "environment"
-    );
-    routes.push({
-      id: "environment",
-      name: environmentHealth?.providerProfileName ?? "Environment diarizator",
-      baseUrl: environmentHealth?.baseUrl ||
-        (typeof environmentJob?.data?.diarizationServerUrl === "string"
-          ? environmentJob.data.diarizationServerUrl
-          : undefined),
-      enabled: config.includeEnvironment ?? true,
-      concurrency: config.environmentConcurrency ?? 1,
-      health: environmentHealth?.status,
-    });
-    return routes;
-  }, [diarizationLiveJobs, inferenceRoutingConfig, services]);
 
   useEffect(() => {
     const configuredSttModel = inferenceRoutingConfig?.transcription?.model;
@@ -5443,14 +5392,17 @@ export default function JobsPage() {
               </div>
             )
             : (
-              <Table className="min-w-[900px] text-xs">
+              <Table className="min-w-[1050px] text-xs">
                 <TableHeader>
                   <TableRow className="h-8">
                     <TableHead className="w-[40px] pl-4">On</TableHead>
                     <TableHead className="w-[105px]">Actions</TableHead>
                     <TableHead>Worker</TableHead>
-                    <TableHead className="text-center w-[145px]">
-                      Concurrency · Batch
+                    <TableHead className="w-[150px] text-center">
+                      Concurrency
+                    </TableHead>
+                    <TableHead className="w-[150px] text-center">
+                      Batch
                     </TableHead>
                     <TableHead className="w-[170px] text-center">
                       <Tooltip>
@@ -5484,7 +5436,9 @@ export default function JobsPage() {
                         </TooltipContent>
                       </Tooltip>
                     </TableHead>
-                    <TableHead className="w-[120px]">Schedule</TableHead>
+                    <TableHead className="w-[150px] text-center">
+                      Schedule
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -5730,7 +5684,7 @@ export default function JobsPage() {
                                   ...current,
                                   [worker.type]: event.target.value,
                                 }))}
-                              className="h-7 w-14 px-2 text-center"
+                              className="h-7 w-16 px-2 text-center"
                               aria-label={`${worker.type} desired concurrency`}
                               disabled={routeManaged}
                               title={routeManaged
@@ -5782,71 +5736,81 @@ export default function JobsPage() {
                               ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
                             {routeManaged && ` · route slots ${routedCapacity}`}
                           </div>
-                          {batchCapableWorkers[worker.type] && (
-                            <>
-                              <div className="mt-1 flex items-center justify-center gap-1">
-                                <Input
-                                  type="number"
-                                  min={batchCapableWorkers[worker.type].min}
-                                  max={batchCapableWorkers[worker.type].max}
-                                  value={batchDrafts[worker.type] ??
-                                    String(
-                                      getEffectiveBatchSize(worker.type) ?? "",
-                                    )}
-                                  onChange={(event) =>
-                                    setBatchDrafts((current) => ({
-                                      ...current,
-                                      [worker.type]: event.target.value,
-                                    }))}
-                                  className="h-7 w-14 px-2 text-center"
-                                  aria-label={`${worker.type} batch size`}
-                                  title={worker.type === "transcription"
-                                    ? "Audio sequences per STT request"
-                                    : worker.type === "diarization"
-                                    ? "Speech sequences processed per diarization job"
-                                    : "Items per LLM call"}
-                                />
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  disabled={setWorkerBatchMutation.isPending ||
-                                    Number(
-                                        batchDrafts[worker.type] ??
-                                          getEffectiveBatchSize(worker.type),
-                                      ) ===
-                                      getEffectiveBatchSize(worker.type)}
-                                  onClick={() =>
-                                    setWorkerBatchMutation.mutate({
-                                      workerType: worker.type,
-                                      batchSize: Number(
-                                        batchDrafts[worker.type] ??
-                                          getEffectiveBatchSize(worker.type),
-                                      ),
-                                    })}
-                                  title="Save batch size (applies to newly enqueued jobs)"
-                                >
-                                  <Save className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                              <div className="text-center text-[10px] text-muted-foreground">
-                                {setWorkerBatchMutation.isPending &&
-                                    setWorkerBatchMutation.variables
-                                        ?.workerType === worker.type
-                                  ? "applying…"
-                                  : `${
-                                    worker.type === "diarization"
-                                      ? "sequences/job"
-                                      : "batch"
-                                  } ${
-                                    getEffectiveBatchSize(worker.type) ?? "—"
-                                  }`}
-                                {` · allowed ${
-                                  batchCapableWorkers[worker.type].min
-                                }–${batchCapableWorkers[worker.type].max}`}
-                              </div>
-                            </>
-                          )}
+                        </TableCell>
+                        <TableCell className="py-1 text-center">
+                          {batchCapableWorkers[worker.type]
+                            ? (
+                              <>
+                                <div className="flex items-center justify-center gap-1">
+                                  <Input
+                                    type="number"
+                                    min={batchCapableWorkers[worker.type].min}
+                                    max={batchCapableWorkers[worker.type].max}
+                                    value={batchDrafts[worker.type] ??
+                                      String(
+                                        getEffectiveBatchSize(worker.type) ??
+                                          "",
+                                      )}
+                                    onChange={(event) =>
+                                      setBatchDrafts((current) => ({
+                                        ...current,
+                                        [worker.type]: event.target.value,
+                                      }))}
+                                    className="h-7 w-16 px-2 text-center"
+                                    aria-label={`${worker.type} batch size`}
+                                    title={worker.type === "transcription"
+                                      ? "Audio sequences per STT request"
+                                      : worker.type === "diarization"
+                                      ? "Speech sequences processed per diarization job"
+                                      : "Items per LLM call"}
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    disabled={setWorkerBatchMutation
+                                      .isPending ||
+                                      Number(
+                                          batchDrafts[worker.type] ??
+                                            getEffectiveBatchSize(worker.type),
+                                        ) ===
+                                        getEffectiveBatchSize(worker.type)}
+                                    onClick={() =>
+                                      setWorkerBatchMutation.mutate({
+                                        workerType: worker.type,
+                                        batchSize: Number(
+                                          batchDrafts[worker.type] ??
+                                            getEffectiveBatchSize(worker.type),
+                                        ),
+                                      })}
+                                    title="Save batch size (applies to newly enqueued jobs)"
+                                  >
+                                    <Save className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                                <div className="text-center text-[10px] text-muted-foreground">
+                                  {setWorkerBatchMutation.isPending &&
+                                      setWorkerBatchMutation.variables
+                                          ?.workerType === worker.type
+                                    ? "applying…"
+                                    : `${
+                                      worker.type === "diarization"
+                                        ? "sequences/job"
+                                        : "batch"
+                                    } ${
+                                      getEffectiveBatchSize(worker.type) ?? "—"
+                                    }`}
+                                  {` · allowed ${
+                                    batchCapableWorkers[worker.type].min
+                                  }–${batchCapableWorkers[worker.type].max}`}
+                                </div>
+                              </>
+                            )
+                            : (
+                              <span className="text-sm text-muted-foreground">
+                                —
+                              </span>
+                            )}
                         </TableCell>
                         <TableCell className="py-1 text-center">
                           <div className="flex items-center justify-center gap-2 text-[10px]">
@@ -5929,12 +5893,12 @@ export default function JobsPage() {
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className="py-1">
+                        <TableCell className="py-1 text-center">
                           {typeof runtime?.defaultTriggerIntervalSeconds ===
                               "number"
                             ? (
                               <>
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center justify-center gap-1">
                                   <Input
                                     type="number"
                                     min={0}
@@ -5977,7 +5941,7 @@ export default function JobsPage() {
                                     <Save className="h-3.5 w-3.5" />
                                   </Button>
                                 </div>
-                                <div className="text-[10px] text-muted-foreground">
+                                <div className="text-center text-[10px] text-muted-foreground">
                                   {Number(
                                       intervalDrafts[worker.type] ??
                                         runtime?.triggerIntervalSeconds ?? 1,
@@ -6088,26 +6052,6 @@ export default function JobsPage() {
           </Button>
         </div>
       )}
-
-      {!isEmptyView && !allTypesSelected && filterTypes.size === 1 &&
-        filterTypes.has("diarization") && diarizationRuntimeRoutes.length > 0 &&
-        (
-          <DiarizationRuntimeCard
-            routes={diarizationRuntimeRoutes}
-            jobs={diarizationLiveJobs}
-            workerConcurrency={workerStatus?.workers.diarization
-              ?.effectiveConcurrency ??
-              routedWorkerCapacities.get("diarization") ?? 0}
-            syncing={setWorkerConcurrencyMutation.isPending &&
-              setWorkerConcurrencyMutation.variables?.workerType ===
-                "diarization"}
-            onSyncConcurrency={(concurrency) =>
-              setWorkerConcurrencyMutation.mutate({
-                workerType: "diarization",
-                concurrency,
-              })}
-          />
-        )}
 
       {!isEmptyView && <JobErrorStats />}
 

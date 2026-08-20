@@ -45,59 +45,67 @@ function campaignSummary(
   };
 }
 
-Deno.test("audio pipeline live status: sums active task average rates", () => {
-  const checkedAt = new Date("2026-08-21T12:02:00Z");
-  const result = applyActiveDiarizationRate(
-    campaignSummary(),
-    [
-      {
-        id: "job-a",
-        state: "active",
-        campaignId: "live-campaign",
-        providerProfileId: "gpu-1",
-        processedOn: checkedAt.getTime() - 120_000,
-        progress: {
+Deno.test(
+  "audio pipeline live status: combines active and completed work in one rolling window",
+  () => {
+    const checkedAt = new Date("2026-08-21T12:02:00Z");
+    const result = applyActiveDiarizationRate(
+      campaignSummary({
+        chunksPerSecond: 0.25,
+        rateStatus: "aggregate",
+        rateWindowSeconds: 300,
+      }),
+      [
+        {
+          id: "job-a",
+          state: "active",
           campaignId: "live-campaign",
-          batch_chunks_processed: 60,
-          elapsed_seconds: 90,
+          providerProfileId: "gpu-1",
+          processedOn: checkedAt.getTime() - 120_000,
+          progress: {
+            campaignId: "live-campaign",
+            batch_chunks_processed: 60,
+            elapsed_seconds: 90,
+          },
         },
-      },
-      {
-        id: "job-b",
-        state: "active",
-        campaignId: "live-campaign",
-        providerProfileId: "gpu-2",
-        processedOn: checkedAt.getTime() - 60_000,
-        progress: {
+        {
+          id: "job-b",
+          state: "active",
           campaignId: "live-campaign",
-          batch_chunks_processed: 30,
-          elapsed_seconds: 55,
+          providerProfileId: "gpu-2",
+          processedOn: checkedAt.getTime() - 60_000,
+          progress: {
+            campaignId: "live-campaign",
+            batch_chunks_processed: 30,
+            elapsed_seconds: 55,
+          },
         },
-      },
-      {
-        id: "other-campaign",
-        state: "active",
-        campaignId: "another-campaign",
-        providerProfileId: "gpu-3",
-        processedOn: checkedAt.getTime() - 60_000,
-        progress: {
+        {
+          id: "other-campaign",
+          state: "active",
           campaignId: "another-campaign",
-          batch_chunks_processed: 600,
+          providerProfileId: "gpu-3",
+          processedOn: checkedAt.getTime() - 60_000,
+          progress: {
+            campaignId: "another-campaign",
+            batch_chunks_processed: 600,
+          },
         },
-      },
-    ],
-    checkedAt,
-  );
+      ],
+      checkedAt,
+    );
 
-  expect(result).toMatchObject({
-    chunksPerSecond: 1,
-    etaSeconds: 810,
-    rateStatus: "live",
-    activeRateJobCount: 2,
-    activeRateReportingJobCount: 2,
-    activeRateLaneCount: 2,
-  });
-});
+    expect(result).toMatchObject({
+      chunksPerSecond: 0.55,
+      etaSeconds: 810 / 0.55,
+      rateStatus: "live",
+      activeRateJobCount: 2,
+      activeRateReportingJobCount: 2,
+      activeRateLaneCount: 2,
+      rateWindowSeconds: 300,
+    });
+  },
+);
 
 Deno.test(
   "audio pipeline live status: reports warming active tasks without replacing fallback rate",

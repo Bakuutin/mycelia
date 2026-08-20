@@ -206,14 +206,12 @@ Deno.test(
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.stats.diarizationCampaign).toMatchObject({
+    const summary = data.stats.diarizationCampaign;
+    expect(summary).toMatchObject({
       campaignId: "aggregate-running",
-      chunksPerSecond: 1,
       rateStatus: "aggregate",
       rateSampleCount: 2,
       sampledLanes: 2,
-      usefulAudioRealtimeMultiple: 10,
-      rateWindowSeconds: 120,
       successfulSequences: 16,
       skippedSequences: 4,
       recordingLeaseBusyOriginals: 3,
@@ -231,8 +229,12 @@ Deno.test(
         },
         server_queue: { count: 2, total: 40, avg: 20, max: 25 },
       },
-      etaSeconds: 60,
     });
+    expect(summary.rateWindowSeconds).toBeGreaterThanOrEqual(179);
+    expect(summary.rateWindowSeconds).toBeLessThan(182);
+    expect(summary.chunksPerSecond).toBeCloseTo(2 / 3, 2);
+    expect(summary.usefulAudioRealtimeMultiple).toBeCloseTo(20 / 3, 1);
+    expect(summary.etaSeconds).toBeCloseTo(90, 0);
   }),
 );
 
@@ -243,7 +245,7 @@ Deno.test(
     { db },
   ) => {
     const now = Date.now();
-    const oldFinishedAt = new Date(now - 14 * 60_000);
+    const oldFinishedAt = new Date(now - 4 * 60_000);
     const oldStartedAt = new Date(oldFinishedAt.getTime() - 1_000);
     await db.collection("diarization_campaigns").insertOne({
       campaignId: "newest-rate-window",

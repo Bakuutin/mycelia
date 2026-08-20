@@ -381,11 +381,12 @@ routes по порядку списка в пределах общего лим�
 количество enabled/total. Этот же максимум применяется к provider capacity и
 BullMQ worker concurrency.
 
-Во время работы `Combined rate` означает сумму end-to-end средних скоростей всех
-активных tasks, которые уже сообщили progress. ETA считается от этой суммарной
-скорости и обновляется вместе с live snapshot каждые 5 секунд; дополнительного
-Mongo polling для этого нет. Между активными jobs используются недавние
-завершённые `diarization_campaign_rate_samples` по всем GPU lanes. Пока нет ни
+`Rolling speed (≤5 min)` объединяет активные и недавно завершённые tasks в одном
+общем временном окне. Завершённые `diarization_campaign_rate_samples` обрезаются
+по границе окна; активная task добавляет оценку chunks только за ту часть окна,
+в которой она работала. Сумма делится на общую длительность окна, поэтому
+ротация bounded continuation jobs не обнуляет скорость, а паузы честно её
+уменьшают. ETA обновляется вместе с live snapshot каждые 5 секунд. Пока нет ни
 live progress, ни samples, UI явно показывает `legacy single-lane estimate`, а
 не выдаёт rate одного worker за общий throughput.
 

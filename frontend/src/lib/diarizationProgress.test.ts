@@ -97,12 +97,12 @@ describe("getDiarizationCampaignProgressView", () => {
       percent: 40,
       progressLabel: "40 / 100 chunks",
       remainingLabel: "60 chunks remaining in range",
-      rateLabel: "Recent completed tasks combined: 45.0 chunks/min",
+      rateLabel: "Rolling 5 min, completed tasks: 45.0 chunks/min",
       etaLabel: "About 2m remaining",
     });
   });
 
-  it("labels the live rate as the sum of active task averages", () => {
+  it("labels the live rate as a rolling active plus completed average", () => {
     expect(getDiarizationCampaignProgressView({
       processedChunks: 40,
       totalChunks: 100,
@@ -111,7 +111,7 @@ describe("getDiarizationCampaignProgressView", () => {
       rateStatus: "live",
       etaSeconds: 40,
     })).toMatchObject({
-      rateLabel: "All active tasks combined: 90.0 chunks/min",
+      rateLabel: "Rolling 5 min, active + completed: 90.0 chunks/min",
       etaLabel: "About 40s remaining",
     });
   });

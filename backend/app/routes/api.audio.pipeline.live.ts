@@ -6,6 +6,7 @@ import { getQueue } from "@/lib/jobs/queue.ts";
 import { getExternalServicesHealth } from "@/lib/jobs/service-health.ts";
 import { getWorkerRuntimeStatus } from "@/lib/jobs/workers.ts";
 import {
+  DIARIZATION_RATE_WINDOW_SECONDS,
   type DiarizationCampaignSummary,
   getDiarizationCampaignSummary,
 } from "@/routes/api.audio.pipeline.ts";
@@ -41,11 +42,12 @@ function progressRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Sum the end-to-end average rate of every reporting task in the active
- * campaign. Each task contributes its completed chunks divided by its current
- * BullMQ runtime, so a stalled task's contribution decays instead of leaving a
- * stale optimistic rate. This uses queue state already loaded by the live
- * endpoint and does not add Mongo polling.
+ * Combine active and recently completed tasks in one rolling wall-clock
+ * window. Active task work is estimated from its end-to-end average and clipped
+ * to the same five-minute window as persisted completion samples. A stalled
+ * task's contribution therefore decays instead of leaving a stale optimistic
+ * rate. This uses queue state already loaded by the live endpoint and does not
+ * add Mongo polling.
  */
 export function applyActiveDiarizationRate(
   campaign: DiarizationCampaignSummary | null,
@@ -81,6 +83,10 @@ export function applyActiveDiarizationRate(
     return [{
       chunks,
       chunksPerSecond,
+      windowSeconds: Math.min(
+        elapsedSeconds,
+        DIARIZATION_RATE_WINDOW_SECONDS,
+      ),
       providerProfileId: job.providerProfileId,
     }];
   });
@@ -93,10 +99,23 @@ export function applyActiveDiarizationRate(
     };
   }
 
-  const chunksPerSecond = reportingJobs.reduce(
-    (total, job) => total + job.chunksPerSecond,
+  const completedWindowSeconds = campaign.rateStatus === "aggregate"
+    ? finitePositiveNumber(campaign.rateWindowSeconds) ?? 0
+    : 0;
+  const completedWindowChunks = campaign.rateStatus === "aggregate"
+    ? (finitePositiveNumber(campaign.chunksPerSecond) ?? 0) *
+      completedWindowSeconds
+    : 0;
+  const rateWindowSeconds = Math.max(
+    completedWindowSeconds,
+    ...reportingJobs.map((job) => job.windowSeconds),
+  );
+  const activeWindowChunks = reportingJobs.reduce(
+    (total, job) => total + job.chunksPerSecond * job.windowSeconds,
     0,
   );
+  const chunksPerSecond = (completedWindowChunks + activeWindowChunks) /
+    rateWindowSeconds;
   const inFlightProcessedChunks = reportingJobs.reduce(
     (total, job) => total + job.chunks,
     0,
@@ -118,6 +137,7 @@ export function applyActiveDiarizationRate(
     activeRateJobCount: activeCampaignJobs.length,
     activeRateReportingJobCount: reportingJobs.length,
     activeRateLaneCount: activeRateLaneCount || reportingJobs.length,
+    rateWindowSeconds,
   };
 }
 

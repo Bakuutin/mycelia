@@ -332,7 +332,8 @@ interface DiarizationStageTimingSummary {
   max: number;
 }
 
-const DIARIZATION_RATE_WINDOW_MS = 15 * 60 * 1000;
+export const DIARIZATION_RATE_WINDOW_SECONDS = 5 * 60;
+const DIARIZATION_RATE_WINDOW_MS = DIARIZATION_RATE_WINDOW_SECONDS * 1000;
 const DIARIZATION_RATE_SAMPLE_LIMIT = 500;
 
 interface PipelineBacklogSnapshot {
@@ -413,7 +414,10 @@ export async function getDiarizationCampaignSummary(
     await findLatest(["completed", "completed_with_errors"]);
   if (!campaign || typeof campaign.campaignId !== "string") return null;
 
-  const rateWindowStart = new Date(Date.now() - DIARIZATION_RATE_WINDOW_MS);
+  const rateWindowEndMs = Date.now();
+  const rateWindowStart = new Date(
+    rateWindowEndMs - DIARIZATION_RATE_WINDOW_MS,
+  );
   const rateSamples = await mongo({
     action: "find",
     collection: "diarization_campaign_rate_samples",
@@ -446,24 +450,41 @@ export async function getDiarizationCampaignSummary(
     sample.startedAt instanceof Date && sample.finishedAt instanceof Date &&
     sample.finishedAt.getTime() >= sample.startedAt.getTime()
   );
-  const sampleWindowSeconds = timedSamples.length > 0
+  const rollingSamples = timedSamples.flatMap((sample) => {
+    const startedAtMs = (sample.startedAt as Date).getTime();
+    const finishedAtMs = (sample.finishedAt as Date).getTime();
+    const durationSeconds = (finishedAtMs - startedAtMs) / 1000;
+    const overlapStartedAtMs = Math.max(
+      startedAtMs,
+      rateWindowStart.getTime(),
+    );
+    const overlapFinishedAtMs = Math.min(finishedAtMs, rateWindowEndMs);
+    const overlapSeconds = (overlapFinishedAtMs - overlapStartedAtMs) / 1000;
+    if (durationSeconds <= 0 || overlapSeconds <= 0) return [];
+    const overlapShare = overlapSeconds / durationSeconds;
+    return [{
+      overlapStartedAtMs,
+      chunks: Math.max(finiteNumber(sample.chunksProcessed) ?? 0, 0) *
+        overlapShare,
+      audioSeconds:
+        Math.max(finiteNumber(sample.audioSecondsProcessed) ?? 0, 0) *
+        overlapShare,
+    }];
+  });
+  const sampleWindowSeconds = rollingSamples.length > 0
     ? Math.max(
       1,
-      (Math.max(
-        ...timedSamples.map((sample) => (sample.finishedAt as Date).getTime()),
-      ) - Math.min(...timedSamples.map((sample) =>
-        (sample.startedAt as Date).getTime()
-      ))) / 1000,
+      (rateWindowEndMs - Math.min(
+        ...rollingSamples.map((sample) => sample.overlapStartedAtMs),
+      )) / 1000,
     )
     : null;
-  const sampleChunks = timedSamples.reduce(
-    (total, sample) =>
-      total + Math.max(finiteNumber(sample.chunksProcessed) ?? 0, 0),
+  const sampleChunks = rollingSamples.reduce(
+    (total, sample) => total + sample.chunks,
     0,
   );
-  const sampleAudioSeconds = timedSamples.reduce(
-    (total, sample) =>
-      total + Math.max(finiteNumber(sample.audioSecondsProcessed) ?? 0, 0),
+  const sampleAudioSeconds = rollingSamples.reduce(
+    (total, sample) => total + sample.audioSeconds,
     0,
   );
   const successfulSequences = timedSamples.reduce(

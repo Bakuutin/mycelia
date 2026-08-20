@@ -165,6 +165,11 @@ enforced eight-slot total. Routes that do not fit remain disabled, and the card
 keeps the enabled/total route count visible. The same maximum applies to saved
 provider capacity and BullMQ worker concurrency.
 
+Jobs → Workers keeps Concurrency, Batch, and Schedule as separate fixed-width
+columns with the same numeric-field/save-button pattern. Diarization route
+health and slots stay in External services & routing; queue state stays in the
+worker row, so there is no second live-slots dashboard.
+
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream
 processing activity. Opening one row issues one bounded detail request. Closed
@@ -173,15 +178,16 @@ Migration `0060_pipeline_recent_sources_cursor.ts` adds the stable cursor index.
 
 Treat campaign `pendingChunks` as an operational estimate, not as an exact
 scheduler input; claiming and completion continue to use canonical chunk state.
-Campaign totals are atomically accounted once per job. While jobs are active,
-the live endpoint sums each reporting task's end-to-end average rate and derives
-ETA from that combined throughput. It uses the BullMQ progress already loaded
-for queue status, so the five-second refresh adds no Mongo query. A task's rate
-uses completed chunks divided by its current runtime, which makes a stalled
-task's contribution decay instead of remaining optimistically stale. Between
-active jobs, recent `diarization_campaign_rate_samples` provide the combined
-fallback. Until either source exists, the UI labels the campaign EWMA as a
-legacy single-lane estimate.
+Campaign totals are atomically accounted once per job. Throughput and ETA use
+one rolling wall-clock window of up to five minutes. Completed
+`diarization_campaign_rate_samples` are clipped at the window boundary; active
+jobs contribute their end-to-end average only for the part of that window in
+which they have run. Their estimated chunks are added and divided by the common
+window duration, so continuation-job rotation does not reset the displayed speed
+and idle gaps lower it honestly. The live endpoint refreshes this bounded sample
+set (at most 500 indexed records) and BullMQ progress every five seconds. A
+stalled active job's contribution decays as its runtime grows. Until either
+source exists, the UI labels the campaign EWMA as a legacy single-lane estimate.
 
 #### Mongo dashboard load guardrails
 

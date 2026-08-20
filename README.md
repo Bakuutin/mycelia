@@ -72,9 +72,10 @@ your own words.
 
 - BullMQ job queue backed by Redis.
 - Worker management UI with pause/resume, statistics, and success rates.
-- Lightweight live diarization campaign, queue, and dynamic route-capacity
-  status, with corpus-wide pipeline and identity counts available through
-  explicit calculate buttons instead of dashboard polling.
+- Lightweight live diarization campaign, five-minute rolling throughput, queue,
+  and dynamic route-capacity status, with corpus-wide pipeline and identity
+  counts available through explicit calculate buttons instead of dashboard
+  polling.
 - Pipeline ordering and progress tracking.
 - Configurable worker defaults and prompt templates.
 - Failed-job bulk retry, obsolete-failure dismissal, VAD queue recovery, and
