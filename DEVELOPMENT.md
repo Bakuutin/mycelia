@@ -134,9 +134,12 @@ density rebuild never writes the shared Timeline histogram collections.
 Historical diarization scans `audio_chunks` through a metadata-only cursor
 (`_id`, source, sequence position, timestamps, and retry state). An expiring,
 token-scoped recording lease prevents two jobs from preparing the same source.
-With prefetch disabled, each sequence is synchronously hydrated and decoded
-under its lease before it is claimed immediately ahead of the provider POST.
-With `DIARIZATION_PREFETCH_SEQUENCES=1`, the same preparation may overlap one
+Each production job first reserves exactly one pending recording and then opens
+a sequence cursor scoped to that `original_id`, so parallel GPU lanes do not
+scan the same recording or prefetch work assigned to another lane. With prefetch
+disabled, each sequence is synchronously hydrated and decoded under its lease
+before it is claimed immediately ahead of the provider POST. With
+`DIARIZATION_PREFETCH_SEQUENCES=1`, the same preparation may overlap one
 provider call as a single bounded lookahead; promotion still requires a claim.
 The cursor uses the diarization work index, a 5-second Mongo deadline, and an
 explicit `mongo.closeCursor` call whenever a batch stops early.

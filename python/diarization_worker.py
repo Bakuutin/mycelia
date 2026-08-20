@@ -45,6 +45,7 @@ MAX_SEQUENCE_GAP = timedelta(
 )
 DIARIZATION_CURSOR_MAX_TIME_MS = 5_000
 DIARIZATION_CURSOR_MAX_DOCUMENTS = 5_000
+DIARIZATION_RECORDING_CANDIDATE_LIMIT = 64
 DIARIZATION_HYDRATE_MAX_TIME_MS = 5_000
 DIARIZATION_METADATA_PROJECTION = {
     '_id': 1,
@@ -632,6 +633,52 @@ def get_diarization_sequences(limit=10, filters=None, max_sequence_length=MAX_SE
     if limit is None or yielded < limit:
         for seq in sequences_by_id.values():
             yield seq
+
+
+def get_diarization_recording_candidates(
+    filters: dict[str, Any] | None = None,
+    *,
+    include_diarized: bool = False,
+    limit: int = DIARIZATION_RECORDING_CANDIDATE_LIMIT,
+) -> Iterator[ObjectId]:
+    """Yield distinct pending recordings in the same order as sequence work.
+
+    A concurrent job leases one of these originals before opening its sequence
+    cursor. This keeps every lane on one recording and prevents one fast lane
+    from prefetching leases that the rest of the GPU pool could process.
+    """
+    if limit < 1:
+        return
+
+    base_filters = _build_pending_chunk_filters(
+        filters,
+        include_diarized=include_diarized,
+    )
+    cursor = mongo_cursor('audio_chunks', base_filters, {
+        "projection": {'original_id': 1},
+        "sort": {"start": 1},
+        "hint": (
+            "audio_chunks_diarization_coverage_v1"
+            if include_diarized
+            else "audio_chunks_diarization_pending_v2"
+        ),
+        "limit": DIARIZATION_CURSOR_MAX_DOCUMENTS,
+        "maxTimeMS": DIARIZATION_CURSOR_MAX_TIME_MS,
+    })
+    seen: set[ObjectId] = set()
+    try:
+        for chunk in cursor:
+            original_id = chunk.get('original_id')
+            if not isinstance(original_id, ObjectId) or original_id in seen:
+                continue
+            seen.add(original_id)
+            yield original_id
+            if len(seen) >= limit:
+                return
+    finally:
+        close_cursor = getattr(cursor, 'close', None)
+        if close_cursor:
+            close_cursor()
 
 
 def combine_chunks_to_wav(sequence: DiarizationSequence) -> tuple[io.BytesIO, int]:

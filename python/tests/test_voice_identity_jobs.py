@@ -380,9 +380,13 @@ class DiarizationJobTest(TestCase):
                 patch("jobs.diarization._update_campaign"),
                 patch("jobs.diarization.count_pending_chunks", return_value=2),
                 patch(
+                    "jobs.diarization.get_diarization_recording_candidates",
+                    return_value=iter([original_id]),
+                ),
+                patch(
                     "jobs.diarization.get_diarization_sequences",
                     return_value=iter(sequences),
-                ),
+                ) as get_sequences,
                 patch(
                     "jobs.diarization.is_diarization_route_enabled",
                     return_value=True,
@@ -434,6 +438,10 @@ class DiarizationJobTest(TestCase):
 
         self.assertEqual(diarize_call.call_count, 1)
         acquire.assert_called_once()
+        self.assertEqual(
+            get_sequences.call_args.kwargs["filters"],
+            {"original_id": original_id},
+        )
         renew.assert_called_once()
         prepare_call.assert_called_once()
         create_session.assert_not_called()
@@ -478,6 +486,10 @@ class DiarizationJobTest(TestCase):
                 patch("jobs.diarization._update_campaign"),
                 patch("jobs.diarization._record_job_rate_sample") as rate_sample,
                 patch("jobs.diarization.count_pending_chunks", return_value=1),
+                patch(
+                    "jobs.diarization.get_diarization_recording_candidates",
+                    return_value=iter([original_id]),
+                ),
                 patch(
                     "jobs.diarization.get_diarization_sequences",
                     return_value=iter([sequence]),
@@ -526,6 +538,104 @@ class DiarizationJobTest(TestCase):
             rate_sample.call_args.kwargs["recording_lease_skipped_sequences"],
             1,
         )
+
+    def test_job_reserves_one_free_recording_before_opening_sequence_cursor(self):
+        busy_original_id = ObjectId()
+        selected_original_id = ObjectId()
+        base = datetime(2026, 8, 18, 8, 0, tzinfo=UTC)
+        sequence = DiarizationSequence(
+            original_id=selected_original_id,
+            chunks=[{
+                "_id": ObjectId(),
+                "original_id": selected_original_id,
+                "index": 0,
+                "start": base,
+            }],
+        )
+        lease = RecordingLease(
+            original_id=selected_original_id,
+            owner="worker-1",
+            token="lease-token",
+            expires_at=base + timedelta(minutes=10),
+        )
+        cancel_event = threading.Event()
+        provider_session = Mock()
+
+        def diarize(_candidate, _worker_id, **kwargs):
+            kwargs["prepared"].close()
+            cancel_event.set()
+            return {
+                "status": "diarized",
+                "chunks_diarized": 1,
+                "segments": 1,
+                "audio_seconds": 1.0,
+            }
+
+        token_ref = job_token_var.set("job-jwt")
+        cancel_ref = job_cancel_event_var.set(cancel_event)
+        try:
+            with (
+                patch("jobs.diarization._campaign_call", return_value=None),
+                patch("jobs.diarization._update_campaign"),
+                patch("jobs.diarization.count_pending_chunks", return_value=2),
+                patch(
+                    "jobs.diarization.get_diarization_recording_candidates",
+                    return_value=iter([busy_original_id, selected_original_id]),
+                ),
+                patch(
+                    "jobs.diarization.get_diarization_sequences",
+                    return_value=iter([sequence]),
+                ) as get_sequences,
+                patch(
+                    "jobs.diarization.get_speaker_profiles_snapshot",
+                    return_value=[],
+                ),
+                patch("jobs.diarization.DIARIZATION_PREFETCH_SEQUENCES", 0),
+                patch("jobs.diarization.call_resource_once", Mock()),
+                patch(
+                    "jobs.diarization.new_provider_session",
+                    return_value=provider_session,
+                ),
+                patch(
+                    "jobs.diarization.acquire_recording_lease",
+                    side_effect=[None, lease],
+                ) as acquire,
+                patch(
+                    "jobs.diarization.renew_recording_lease",
+                    return_value=lease,
+                ),
+                patch(
+                    "jobs.diarization.release_recording_leases",
+                    return_value=1,
+                ),
+                patch(
+                    "jobs.diarization.prepare_diarization_sequence",
+                    return_value=PreparedDiarizationSequence(
+                        sequence=sequence,
+                        wav_file=BytesIO(b"wav"),
+                        total_samples=16_000,
+                    ),
+                ),
+                patch("jobs.diarization.diarize_sequence", side_effect=diarize),
+            ):
+                result = process_diarization_job(
+                    "job-recording-selection",
+                    DiarizationJobData(limit=1),
+                    lambda _progress: None,
+                )
+        finally:
+            job_cancel_event_var.reset(cancel_ref)
+            job_token_var.reset(token_ref)
+
+        self.assertEqual(acquire.call_count, 2)
+        self.assertEqual(
+            get_sequences.call_args.kwargs["filters"],
+            {"original_id": selected_original_id},
+        )
+        self.assertEqual(result["successfulSequences"], 1)
+        self.assertEqual(result["recordingLeaseBusyOriginals"], 1)
+        self.assertEqual(result["recordingLeaseSkippedSequences"], 0)
+        self.assertEqual(result["skippedSequences"], 0)
 
     def test_prefetch_overlaps_provider_and_cancellation_cleans_up_lease(self):
         original_id = ObjectId()
@@ -595,6 +705,10 @@ class DiarizationJobTest(TestCase):
                 patch("jobs.diarization._campaign_call", return_value=None),
                 patch("jobs.diarization._update_campaign"),
                 patch("jobs.diarization.count_pending_chunks", return_value=3),
+                patch(
+                    "jobs.diarization.get_diarization_recording_candidates",
+                    return_value=iter([original_id]),
+                ),
                 patch(
                     "jobs.diarization.get_diarization_sequences",
                     return_value=iter(sequences),

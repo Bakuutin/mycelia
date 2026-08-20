@@ -28,6 +28,7 @@ from diarization_worker import (  # noqa: E402
     claim_sequence,
     combine_chunks_to_wav,
     diarize_sequence,
+    get_diarization_recording_candidates,
     get_diarization_sequences,
     hydrate_claimed_sequence,
     mark_as_diarized,
@@ -211,6 +212,43 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(len(sequences), 1)
         options = cursor.call_args.args[2]
         self.assertNotIn("data", options["projection"])
+        self.assertEqual(options["hint"], "audio_chunks_diarization_pending_v2")
+        self.assertEqual(options["limit"], 5_000)
+        self.assertEqual(options["maxTimeMS"], 5_000)
+
+    def test_recording_candidates_are_distinct_bounded_and_metadata_only(self):
+        first = ObjectId()
+        second = ObjectId()
+
+        class ClosingCursor:
+            def __init__(self):
+                self.items = iter([
+                    {"original_id": first},
+                    {"original_id": first},
+                    {"original_id": second},
+                ])
+                self.closed = False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self.items)
+
+            def close(self):
+                self.closed = True
+
+        source = ClosingCursor()
+        with patch(
+            "diarization_worker.mongo_cursor",
+            return_value=source,
+        ) as cursor:
+            candidates = list(get_diarization_recording_candidates(limit=2))
+
+        self.assertEqual(candidates, [first, second])
+        self.assertTrue(source.closed)
+        options = cursor.call_args.args[2]
+        self.assertEqual(options["projection"], {"original_id": 1})
         self.assertEqual(options["hint"], "audio_chunks_diarization_pending_v2")
         self.assertEqual(options["limit"], 5_000)
         self.assertEqual(options["maxTimeMS"], 5_000)

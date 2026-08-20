@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from bson import ObjectId
 
 from diarization_worker import (
+    get_diarization_recording_candidates,
     get_diarization_sequences,
     diarize_sequence,
     prepare_diarization_sequence,
@@ -574,7 +575,14 @@ def process_diarization_job(
             or sequences_processed >= effective_batch_size
         )
 
-    # Check the operational stop before constructing the Mongo-backed cursor.
+    runtime_token = job_token_var.get()
+    held_leases: dict[str, RecordingLease] = {}
+    initial_lease_seconds: dict[str, float] = {}
+    lease_lock = threading.Lock()
+
+    # Production jobs reserve exactly one recording before constructing the
+    # sequence cursor. Without this boundary, every lane starts at the same
+    # oldest chunk and one fast lane can prefetch leases for multiple originals.
     if not is_diarization_route_enabled(provider_profile_id):
         route_disabled = True
         logger.info(
@@ -584,6 +592,52 @@ def process_diarization_job(
         )
         emit_stopping("Route disabled; stopping before scanning for work")
         sequences: Any = ()
+    elif runtime_token is not None:
+        selected_original_id: ObjectId | None = None
+        for candidate_original_id in get_diarization_recording_candidates(
+            filters=filters if filters else None,
+            include_diarized=building_generation,
+        ):
+            if is_job_cancelled():
+                cancelled = True
+                break
+            lease_started = time.monotonic()
+            lease = acquire_recording_lease(
+                candidate_original_id,
+                worker_id,
+                job_id=job_id,
+                campaign_id=campaign_id,
+                run_id=data.runId,
+                route=data.diarizationServerUrl,
+                resource_call=call_resource_once,
+            )
+            lease_seconds = max(time.monotonic() - lease_started, 0.0)
+            original_key = str(candidate_original_id)
+            if lease is None:
+                blocked_originals.add(original_key)
+                # This is a candidate reservation miss, not a skipped
+                # sequence: the job has not opened that recording's cursor.
+                continue
+            selected_original_id = candidate_original_id
+            with lease_lock:
+                held_leases[original_key] = lease
+                initial_lease_seconds[original_key] = lease_seconds
+            break
+
+        if selected_original_id is None:
+            sequences = ()
+        else:
+            selected_filters = {
+                **filters,
+                "original_id": selected_original_id,
+            }
+            sequences = get_diarization_sequences(
+                limit=None,
+                filters=selected_filters,
+                worker_id=worker_id,
+                include_diarized=building_generation,
+                max_sequence_length=effective_max_sequence_chunks,
+            )
     else:
         sequences = get_diarization_sequences(
             limit=None,
@@ -598,10 +652,7 @@ def process_diarization_job(
         if not building_generation and not route_disabled
         else []
     )
-    runtime_token = job_token_var.get()
     provider_session = new_provider_session()
-    held_leases: dict[str, RecordingLease] = {}
-    lease_lock = threading.Lock()
     executor: Optional[ThreadPoolExecutor] = None
     pending_future: Optional[Future] = None
     prefetch_resource_session = (
@@ -643,7 +694,7 @@ def process_diarization_job(
 
             with lease_lock:
                 lease = held_leases.get(original_key)
-            lease_seconds = 0.0
+                lease_seconds = initial_lease_seconds.pop(original_key, 0.0)
             if lease is None:
                 lease_started = time.monotonic()
                 lease = acquire_recording_lease(
