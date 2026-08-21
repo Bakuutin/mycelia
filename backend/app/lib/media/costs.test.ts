@@ -5,6 +5,7 @@ import {
 } from "@myceliasdk/media.ts";
 import {
   assertMediaPerImportBudget,
+  estimateGoogleConnectorTestGrossUsd,
   estimateMediaGrossUsd,
   gcpUsageLedgerId,
   summarizeGcpUsage,
@@ -104,4 +105,9 @@ Deno.test("Google spend ledger is shared by every Mycelia principal using a proj
     gcpUsageLedgerId("mycelia-media-260821", "2026-08"),
     "mycelia-media-260821:2026-08",
   );
+});
+
+Deno.test("Google connector estimate includes Vertex and Vision plus optional Document AI", () => {
+  assertEquals(estimateGoogleConnectorTestGrossUsd(false), 0.0075);
+  assertEquals(estimateGoogleConnectorTestGrossUsd(true), 0.009);
 });

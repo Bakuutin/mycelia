@@ -123,7 +123,10 @@ In Settings → Google Cloud add the `Google Cloud EU Photo Knowledge` preset,
 fill the project ID, save, confirm the remaining promotional-credit balance
 shown for that project in Cloud Console, and run the synthetic connector test.
 It calls `gemini-3.5-flash-lite` through the Vertex AI EU endpoint and creates a
-`gemini-embedding-001` search vector. The Document AI processor ID is optional.
+`gemini-embedding-001` search vector, then calls Cloud Vision EU OCR with the
+same generated 1×1 PNG. The base test reserves $0.0075 in the conservative
+app ledger. The Document AI processor ID and its additional $0.0015 synthetic
+PDF test are optional. No user media is sent by the connector test.
 
 Google Cloud does not expose a per-request "promo credit only" switch, and Cloud
 Billing reporting is delayed. The app therefore fails closed unless the credit

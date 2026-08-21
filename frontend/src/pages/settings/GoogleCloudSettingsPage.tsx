@@ -85,6 +85,10 @@ type ConnectorStatus = {
     monthlyRemainingUsd: number;
     dailyRemainingUsd: number;
   };
+  connectorTestEstimateUsd: {
+    vertexAndVision: number;
+    withDocumentAi: number;
+  };
 };
 
 const defaultConfig: MediaConfig = {
@@ -168,6 +172,9 @@ export default function GoogleCloudSettingsPage() {
   const selfHosted = config.profiles.find((profile) =>
     profile.providerType === "self-hosted"
   ) as SelfHostedProfile | undefined;
+  const activeProfile = config.profiles.find((profile) =>
+    profile.id === config.activeProfileId
+  );
 
   const updateProfile = (profile: GoogleProfile | SelfHostedProfile) => {
     setConfig((current) => ({
@@ -596,9 +603,25 @@ export default function GoogleCloudSettingsPage() {
             >
               {testing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {" "}
-              Test selected visual provider
+              {activeProfile?.providerType === "google-cloud"
+                ? "Test Vertex + Vision OCR"
+                : "Test selected visual provider"}
             </Button>
           </div>
+          {activeProfile?.providerType === "google-cloud" &&
+            status?.connectorTestEstimateUsd && (
+            <p className="text-xs text-muted-foreground">
+              The synthetic test sends a generated 1×1 PNG to Vertex AI and
+              Cloud Vision EU OCR. It reserves at most ${status
+                .connectorTestEstimateUsd.vertexAndVision.toFixed(4)}.
+              {google?.documentAiProcessorId && (
+                <>
+                  {" "}With the optional Document AI test, the maximum is
+                  ${status.connectorTestEstimateUsd.withDocumentAi.toFixed(4)}.
+                </>
+              )} No user photo is used.
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

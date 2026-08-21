@@ -46,6 +46,10 @@ const status = {
     monthlyRemainingUsd: 0.9925,
     dailyRemainingUsd: 0.0925,
   },
+  connectorTestEstimateUsd: {
+    vertexAndVision: 0.0075,
+    withDocumentAi: 0.009,
+  },
 };
 
 describe("GoogleCloudSettingsPage", () => {
@@ -109,5 +113,41 @@ describe("GoogleCloudSettingsPage", () => {
     expect(screen.getByText("$0.0060")).toBeTruthy();
     expect(screen.getByText("Reserved")).toBeTruthy();
     expect(screen.getByText("$0.0015")).toBeTruthy();
+  });
+
+  it("discloses that the Google connector smoke uses Vertex and Vision", async () => {
+    mockCallResource.mockImplementation((resource, input) => {
+      if (resource === "config" && input.action === "get") {
+        return Promise.resolve({
+          ...emptyConfig,
+          activeProfileId: "google-cloud-media",
+          profiles: [{
+            id: "google-cloud-media",
+            name: "Google Cloud EU Photo Knowledge",
+            providerType: "google-cloud",
+            enabled: true,
+            concurrency: 1,
+            projectId: "mycelia-media-260821",
+            location: "eu",
+            vertexModel: "gemini-3.5-flash-lite",
+            embeddingModel: "gemini-embedding-001",
+            documentAiProcessorVersion: "pretrained-ocr-v2.1-2024-08-07",
+            allowGlobalPhotoAnalysis: false,
+          }],
+        });
+      }
+      if (resource === "media" && input.action === "status") {
+        return Promise.resolve(status);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<GoogleCloudSettingsPage />);
+
+    expect(
+      await screen.findByRole("button", { name: "Test Vertex + Vision OCR" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/reserves at most \$0\.0075/)).toBeTruthy();
+    expect(screen.getByText(/No user photo is used/)).toBeTruthy();
   });
 });

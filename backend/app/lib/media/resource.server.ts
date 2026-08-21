@@ -25,8 +25,12 @@ import {
 } from "./providers.server.ts";
 import {
   assertMediaPerImportBudget,
+  estimateGoogleConnectorTestGrossUsd,
   estimateMediaGrossUsd,
   gcpUsageLedgerId,
+  GOOGLE_DOCUMENT_AI_SMOKE_GROSS_USD,
+  GOOGLE_VERTEX_VISUAL_SMOKE_GROSS_USD,
+  GOOGLE_VISION_OCR_SMOKE_GROSS_USD,
   summarizeGcpUsage,
 } from "./costs.ts";
 import {
@@ -588,6 +592,10 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             ),
           },
           usage: summarizeGcpUsage(usageDocument, config, nowDate),
+          connectorTestEstimateUsd: {
+            vertexAndVision: estimateGoogleConnectorTestGrossUsd(false),
+            withDocumentAi: estimateGoogleConnectorTestGrossUsd(true),
+          },
         };
       }
 
@@ -1390,7 +1398,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
         ));
         const started = performance.now();
         const runMetered = async <T>(
-          service: "vertex-ai" | "document-ai",
+          service: "vertex-ai" | "cloud-vision" | "document-ai",
           amount: number,
           call: (attemptId: string) => Promise<T>,
         ): Promise<T> => {
@@ -1424,7 +1432,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
         };
         const visual = await runMetered(
           "vertex-ai",
-          0.006,
+          GOOGLE_VERTEX_VISUAL_SMOKE_GROSS_USD,
           (requestId) =>
             analyzeWithMediaProvider({
               profile,
@@ -1432,6 +1440,19 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
               mimeType: "image/png",
               pageCount: 1,
               requestedTasks: ["visual-understanding"],
+              requestId,
+            }),
+        );
+        const vision = await runMetered(
+          "cloud-vision",
+          GOOGLE_VISION_OCR_SMOKE_GROSS_USD,
+          (requestId) =>
+            analyzeWithMediaProvider({
+              profile,
+              bytes: png,
+              mimeType: "image/png",
+              pageCount: 1,
+              requestedTasks: ["ocr"],
               requestId,
             }),
         );
@@ -1443,7 +1464,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           page.drawText("Mycelia connector test", { x: 20, y: 100, font });
           documentAi = await runMetered(
             "document-ai",
-            0.0015,
+            GOOGLE_DOCUMENT_AI_SMOKE_GROSS_USD,
             async (requestId) =>
               analyzeWithMediaProvider({
                 profile,
@@ -1462,6 +1483,14 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             provenance: visual.provenance,
             shortCaption: visual.visualUnderstanding?.shortCaption,
             usage: visual.usage,
+          },
+          vision: {
+            provenance: vision.provenance,
+            pages: vision.pages.length,
+            textLength: vision.pages.reduce(
+              (total, page) => total + page.text.length,
+              0,
+            ),
           },
           documentAi: (documentAi as any)?.provenance ?? null,
         };

@@ -17,6 +17,18 @@ export type GcpUsageSnapshot = {
   dailyRemainingUsd: number;
 };
 
+export const GOOGLE_VERTEX_VISUAL_SMOKE_GROSS_USD = 0.006;
+export const GOOGLE_VISION_OCR_SMOKE_GROSS_USD = 0.0015;
+export const GOOGLE_DOCUMENT_AI_SMOKE_GROSS_USD = 0.0015;
+
+export function estimateGoogleConnectorTestGrossUsd(
+  includeDocumentAi: boolean,
+): number {
+  return GOOGLE_VERTEX_VISUAL_SMOKE_GROSS_USD +
+    GOOGLE_VISION_OCR_SMOKE_GROSS_USD +
+    (includeDocumentAi ? GOOGLE_DOCUMENT_AI_SMOKE_GROSS_USD : 0);
+}
+
 export function gcpUsageLedgerId(projectId: string, month: string): string {
   return `${projectId}:${month}`;
 }
