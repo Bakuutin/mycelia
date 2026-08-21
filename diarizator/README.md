@@ -30,9 +30,27 @@ backfill, and Timeline verification — see
 
 ### 1. Configure Environment Variables
 
-Create `diarizator/.env` (Compose reads this file):
+For the canonical Mycelia stack, add the Hugging Face token to the repository
+root `.env`:
 
 ```bash
+HF_TOKEN=your_huggingface_token_here
+```
+
+The root Compose file passes only the diarization variables documented in the
+root `.env.example`; it does not expose every application secret to the model
+service. Optional model and batching overrides belong in that same root file.
+
+For a standalone deployment started from `diarizator/`, create its separate
+environment file instead:
+
+```bash
+cp .env.template .env
+```
+
+Then set at least:
+
+```dotenv
 HF_TOKEN=your_huggingface_token_here
 SPEAKER_SERVICE_HOST=0.0.0.0
 SPEAKER_SERVICE_PORT=8085
@@ -485,10 +503,11 @@ configured.
 
 `401/403 Cannot access gated repo`
 
-- Verify `HF_TOKEN` is in `diarizator/.env` (not only the repository root).
+- For the main Mycelia profile, verify `HF_TOKEN` is in the repository root
+  `.env`. For standalone Compose, verify it is in `diarizator/.env`.
 - Sign in to Hugging Face with the same account as the token and accept both
   model conditions.
-- Recreate the container after changing `.env`.
+- Recreate the container after changing the applicable environment file.
 
 ```bash
 docker compose --profile diarization up -d --force-recreate diarizator

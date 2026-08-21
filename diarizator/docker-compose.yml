@@ -10,8 +10,6 @@ services:
         PYTORCH_CUDA_VERSION: cpu
     image: mycelia-diarizator:cpu
     init: true
-    env_file:
-      - .env
     ports:
       - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
     volumes:
@@ -22,6 +20,9 @@ services:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
       - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-pyannote/wespeaker-voxceleb-resnet34-LM}
+      - DIARIZATION_MODEL_REVISION=${DIARIZATION_MODEL_REVISION:-}
+      - EMBEDDING_MODEL_REVISION=${EMBEDDING_MODEL_REVISION:-}
       - DIARIZATION_SEGMENTATION_BATCH_SIZE=${DIARIZATION_SEGMENTATION_BATCH_SIZE:-8}
       - DIARIZATION_EMBEDDING_BATCH_SIZE=${DIARIZATION_EMBEDDING_BATCH_SIZE:-8}
       - DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE=${DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE:-16}
@@ -34,6 +35,7 @@ services:
       # value, but it must never override the native Mac CPU image flavor.
       - PYTORCH_CUDA_VERSION=cpu
       - AUDIO_BACKEND=${AUDIO_BACKEND:-soundfile}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:$${SPEAKER_SERVICE_PORT:-8085}/ready"]
@@ -56,6 +58,12 @@ services:
       - HF_HOME=/models
       - HF_TOKEN=${HF_TOKEN}
       - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-pyannote/wespeaker-voxceleb-resnet34-LM}
+      - DIARIZATION_MODEL_REVISION=${DIARIZATION_MODEL_REVISION:-}
+      - EMBEDDING_MODEL_REVISION=${EMBEDDING_MODEL_REVISION:-}
+      - DIARIZATION_SEGMENTATION_BATCH_SIZE=${DIARIZATION_SEGMENTATION_BATCH_SIZE:-8}
+      - DIARIZATION_EMBEDDING_BATCH_SIZE=${DIARIZATION_EMBEDDING_BATCH_SIZE:-8}
+      - DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE=${DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE:-16}
       - DIARIZATION_REQUEST_CONCURRENCY=${DIARIZATION_REQUEST_CONCURRENCY:-1}
       - DIARIZATION_MAX_QUEUED_REQUESTS=${DIARIZATION_MAX_QUEUED_REQUESTS:-1}
       - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-0.0.0.0}
@@ -63,6 +71,7 @@ services:
       - COMPUTE_MODE=gpu
       - PYTORCH_CUDA_VERSION=${PYTORCH_CUDA_VERSION:-cu126}
       - AUDIO_BACKEND=${AUDIO_BACKEND:-soundfile}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     deploy:
       resources:
         reservations:

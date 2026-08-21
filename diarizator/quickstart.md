@@ -52,9 +52,11 @@ docker compose up --build -d
 **Need to customize other settings?** Copy `.env.template` to `.env` and modify:
 ```bash
 HF_TOKEN=your_token          # Required for first-time model download
-SIMILARITY_THRESHOLD=0.15    # Speaker ID confidence (0.1-0.3)
 DEEPGRAM_API_KEY=your_key   # For transcription modes
 ```
+
+Speaker-identification confidence is selected per request in the UI/API; it is
+not a process-wide environment setting.
 
 ## First Steps
 
@@ -164,13 +166,14 @@ HF_TOKEN=your_token         # Required for Hugging Face model download
 SPEAKER_SERVICE_PORT=8085   # Backend API port
 REACT_UI_PORT=5173         # Web UI port (internal)
 
-# Settings  
-SIMILARITY_THRESHOLD=0.15   # Speaker ID confidence (0.1-0.3)
+# Settings
 REACT_UI_HTTPS=true        # Enable HTTPS (needed for microphone)
 
 # Optional APIs
 DEEPGRAM_API_KEY=your_key  # For transcription modes
 ```
+
+Speaker-identification confidence is selected per request in the UI/API.
 
 **Note:** Access is unified through nginx proxy at https://localhost/ (port 443) regardless of internal service ports.
 

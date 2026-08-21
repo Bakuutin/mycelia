@@ -23,14 +23,15 @@ fi
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
   cat >&2 <<'EOF'
-HF_TOKEN is not set (checked env, diarizator/.env, .env).
+HF_TOKEN is not set (checked the shell, root .env, and diarizator/.env).
 
 The diarizator needs a Hugging Face token with access to the gated models:
   https://huggingface.co/pyannote/speaker-diarization-community-1
   https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
 
 Accept both licenses, create a token at https://huggingface.co/settings/tokens,
-then add HF_TOKEN=hf_... to diarizator/.env or export it in your shell.
+then add HF_TOKEN=hf_... to the root .env or export it in your shell. Use
+diarizator/.env only for the standalone Compose project.
 EOF
   exit 1
 fi

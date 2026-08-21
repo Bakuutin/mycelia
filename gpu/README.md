@@ -39,8 +39,7 @@ This directory contains Docker Compose configuration for GPU-accelerated AI serv
 
 1. Get your token from https://huggingface.co/settings/tokens
 2. Accept terms for these models:
-   - https://huggingface.co/pyannote/speaker-diarization-3.1
-   - https://huggingface.co/pyannote/segmentation-3.0
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
    - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM
 
 ## Setup
@@ -57,7 +56,13 @@ VRAM: 24GB (recommended 16GB+ for all services)
 
 ### 1. Configure Environment
 
-Create `.env` file in the `gpu/` directory:
+Create the deployment-specific `.env` from its template:
+
+```bash
+cp .env.example .env
+```
+
+Set both required secrets:
 
 ```bash
 # Required for proxy authentication

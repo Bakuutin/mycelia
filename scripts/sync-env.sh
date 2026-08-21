@@ -134,8 +134,7 @@ if [[ ${#OPTIONAL_ENABLED[@]} -gt 0 ]]; then
     echo "(These are commented in .env.example but you've enabled them)"
     echo ""
     for var in "${OPTIONAL_ENABLED[@]}"; do
-        value=$(grep -E "^${var}=" "$ENV_FILE" | head -1 | cut -d= -f2-)
-        echo "  ${var}=${value}"
+        echo "  ${var}"
     done
     echo ""
 fi
@@ -146,8 +145,7 @@ if [[ ${#LEGACY_VARS[@]} -gt 0 ]]; then
     echo "(Not in .env.example - consider removing)"
     echo ""
     for var in "${LEGACY_VARS[@]}"; do
-        value=$(grep -E "^${var}=" "$ENV_FILE" | head -1 | cut -d= -f2-)
-        echo "  ${var}=${value}"
+        echo "  ${var}"
     done
     echo ""
 fi
@@ -172,10 +170,10 @@ for var in "${MISSING_VARS[@]}"; do
     # Check if this var needs a generated value
     if generated=$(generate_value "$var" 2>/dev/null); then
         line="${var}=${generated}"
-        echo "  $line  (generated)"
+        echo "  $var (secure value generated only if applied)"
     else
         line=$(get_var_line "$var")
-        echo "  $line"
+        echo "  $var"
     fi
     LINES_TO_ADD+="$line"$'\n'
 done

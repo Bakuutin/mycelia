@@ -13,17 +13,15 @@ By default, Nginx listens on port `4433` (HTTPS) and routes traffic as follows:
 
 ### Ports
 
-You can customize the ports used by both Nginx and the individual services via environment variables in your `.env` file:
+Nginx is the application entry point. Its host ports can be customized via
+`.env`; frontend, backend, and worker ports stay internal to the Compose
+network.
 
-| Service | Environment Variable | Default Port | Description |
-|---------|----------------------|--------------|-------------|
-| **Nginx** | `NGINX_PORT` | `4433` | Primary HTTPS entry point |
-| **Nginx** | `NGINX_HTTP_PORT` | `80` | HTTP entry point |
-| **Nginx** | `NGINX_HTTPS_PORT` | `443` | Standard HTTPS entry point |
-| **Frontend** | `FRONTEND_PORT` | `8080` | Direct access to Vite/Nginx frontend |
-| **Backend** | `BACKEND_PORT` | `5173` | Direct access to Deno backend |
-| **Worker** | `PYTHON_WORKER_PORT` | `8000` | Direct access to Python worker |
-| **Database** | `MONGO_PORT` | `27017` | Direct access to MongoDB |
+| Endpoint | Environment Variable | Default Port | Description |
+|----------|----------------------|--------------|-------------|
+| **Nginx HTTPS** | `NGINX_PORT` | `4433` | Primary application entry point |
+| **Nginx HTTP** | `NGINX_HTTP_PORT` | `3210` | Plain-HTTP local entry point |
+| **MongoDB** | fixed mapping | `27017` | Local development database access |
 
 ### SSL / Certificates
 
@@ -43,10 +41,11 @@ To use your own certificates (e.g., from Let's Encrypt), place them in `misc/ngi
 
 ## Direct Service Access
 
-While the Nginx proxy is the recommended way to access the application, all services remain accessible directly on their respective ports for backwards compatibility and debugging.
+Frontend, backend, and Python worker are reachable by their service names only
+inside the Compose network. Host access goes through Nginx; MongoDB is the only
+application dependency with a direct development port.
 
-- **Frontend**: [http://localhost:8080](http://localhost:8080)
-- **Backend**: [http://localhost:5173](http://localhost:5173)
+- **HTTP proxy**: [http://localhost:3210](http://localhost:3210)
 - **Proxy**: [https://localhost:4433](https://localhost:4433) (Note: use `https://`)
 
 ## Troubleshooting
@@ -56,4 +55,3 @@ When using self-signed certificates, your browser will show a warning (e.g., `NE
 
 ### WebSocket Connections
 If you are behind an additional proxy (like Cloudflare or another Nginx instance), ensure that `Upgrade` and `Connection` headers are correctly forwarded to support WebSockets.
-

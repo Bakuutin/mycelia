@@ -160,14 +160,25 @@ If you need API tokens in `.env` (for Python daemon or CLI access):
 This starts MongoDB temporarily to generate `MYCELIA_CLIENT_ID` and
 `MYCELIA_TOKEN`.
 
-#### Syncing After Updates
+#### Checking and Syncing After Updates
 
-After pulling updates, new environment variables may be added to `.env.example`:
+After pulling updates, check whether `.env` still matches `.env.example`. The
+checker reports only key names and line numbers; it never prints values:
 
 ```bash
+./scripts/check-env.sh --all    # Audit every configured env contract
+./scripts/check-env.sh          # Audit only the root .env
+./scripts/check-env.sh --strict # Also warn about blank active values
+./scripts/check-env.sh --fix    # Back up .env and apply safe fixes
 ./scripts/sync-env.sh           # Interactive - prompts before adding
 ./scripts/sync-env.sh --dry-run # Preview changes without modifying
 ```
+
+The main stack, standalone diarizator, and remote GPU stack intentionally use
+separate templates. `--all` checks `.env`, `diarizator/.env`, and `gpu/.env`
+when present; an absent optional deployment is reported as not configured.
+Use `--fix --prune-undocumented` only after reviewing the listed key names: it
+backs up the selected file and removes keys that its template no longer owns.
 
 > **Note**: For local development, Mycelia uses a self-signed certificate. You
 > may need to click "Advanced" and "Proceed" in your browser. See

@@ -4,7 +4,10 @@ python/conversations-to-reextract.jsonl
 
 /.cache
 /build
+# Local environment files and checker backups can contain secrets
 .env
+.env.backup-*
+.env.tmp-*
 .local
 *.local
 *.local.*

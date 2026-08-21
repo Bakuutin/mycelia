@@ -195,8 +195,6 @@ services:
       args:
         PYTORCH_CUDA_VERSION: cpu
     init: true
-    env_file:
-      - .env
     ports:
       - "${SPEAKER_SERVICE_PORT:-8085}:${SPEAKER_SERVICE_PORT:-8085}"
     volumes:
@@ -207,11 +205,20 @@ services:
       HF_HOME: /models
       HF_TOKEN: ${HF_TOKEN}
       DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-pyannote/wespeaker-voxceleb-resnet34-LM}
+      DIARIZATION_MODEL_REVISION: ${DIARIZATION_MODEL_REVISION:-}
+      EMBEDDING_MODEL_REVISION: ${EMBEDDING_MODEL_REVISION:-}
+      DIARIZATION_SEGMENTATION_BATCH_SIZE: ${DIARIZATION_SEGMENTATION_BATCH_SIZE:-1}
+      DIARIZATION_EMBEDDING_BATCH_SIZE: ${DIARIZATION_EMBEDDING_BATCH_SIZE:-1}
+      DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE: ${DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE:-1}
+      DIARIZATION_REQUEST_CONCURRENCY: ${DIARIZATION_REQUEST_CONCURRENCY:-1}
+      DIARIZATION_MAX_QUEUED_REQUESTS: ${DIARIZATION_MAX_QUEUED_REQUESTS:-1}
       SPEAKER_SERVICE_HOST: ${SPEAKER_SERVICE_HOST:-0.0.0.0}
       SPEAKER_SERVICE_PORT: ${SPEAKER_SERVICE_PORT:-8085}
       COMPUTE_MODE: cpu
       PYTORCH_CUDA_VERSION: cpu
       AUDIO_BACKEND: ${AUDIO_BACKEND:-soundfile}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     restart: unless-stopped
     healthcheck:
       test: [
@@ -227,8 +234,8 @@ services:
     entrypoint: ["/nginx-entrypoint.sh"]
     command: ["nginx", "-g", "daemon off;"]
     ports:
-      - "4433:4433"
-      - "3210:80"
+      - "${NGINX_PORT:-4433}:4433"
+      - "${NGINX_HTTP_PORT:-3210}:80"
     volumes:
       - ./misc/nginx/templates:/etc/nginx/templates:ro
       - ./misc/nginx/ssl:/etc/nginx/ssl

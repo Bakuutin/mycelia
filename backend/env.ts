@@ -41,6 +41,7 @@ export const env = {
 
   OTEL_EXPORTER_OTLP_ENDPOINT: Deno.env.get("OTEL_EXPORTER_OTLP_ENDPOINT") ??
     "http://localhost:4318",
+  OTEL_ENABLED: Deno.env.get("OTEL_ENABLED") === "true",
 
   MYCELIA_URL: Deno.env.get("MYCELIA_URL") || "http://backend:5173",
   MYCELIA_TOKEN: Deno.env.get("MYCELIA_TOKEN"),

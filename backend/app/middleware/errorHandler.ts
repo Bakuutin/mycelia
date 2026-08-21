@@ -69,7 +69,7 @@ export function errorHandler(
     error instanceof Error ? error.stack : "No stack trace available",
   );
 
-  const isProduction = Deno.env.get("NODE_ENV") === "production";
+  const isProduction = (Deno.env.get("APP_MODE") ?? "prod") !== "dev";
   res.status(500).json({
     success: false,
     error: isProduction

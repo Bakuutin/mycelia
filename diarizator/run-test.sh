@@ -55,20 +55,17 @@ fi
 
 print_info "Speaker Recognition Integration Test Runner"
 print_info "=========================================="
-print_info "HF_TOKEN length: ${#HF_TOKEN}"
-print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
 print_info ".env file exists: $([ -f .env ] && echo 'yes' || echo 'no')"
 
 # Load environment variables (CI or local)
-if [ -f ".env" ] && [ -z "$HF_TOKEN" ]; then
+if [ -f ".env" ] && [ -z "${HF_TOKEN:-}" ]; then
     print_info "Loading environment variables from .env..."
     set -a
     source .env
     set +a
-elif [ -n "$HF_TOKEN" ]; then
+elif [ -n "${HF_TOKEN:-}" ]; then
     print_info "Using environment variables from CI..."
     # Set up CI-specific environment variables that would normally be in .env
-    export SIMILARITY_THRESHOLD=0.15
     export SPEAKER_SERVICE_HOST=speaker-service
     export COMPUTE_MODE=cpu
     export SPEAKER_SERVICE_PORT=8085
@@ -80,10 +77,10 @@ elif [ -n "$HF_TOKEN" ]; then
     
     # Create .env file for the test scripts that expect it
     print_info "Creating .env file for test compatibility..."
+    umask 077
     cat > .env << EOF
 HF_TOKEN=$HF_TOKEN
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
-SIMILARITY_THRESHOLD=$SIMILARITY_THRESHOLD
 SPEAKER_SERVICE_HOST=$SPEAKER_SERVICE_HOST
 COMPUTE_MODE=$COMPUTE_MODE
 SPEAKER_SERVICE_PORT=$SPEAKER_SERVICE_PORT
@@ -101,18 +98,15 @@ else
 fi
 
 # Verify required environment variables
-if [ -z "$HF_TOKEN" ]; then
+if [ -z "${HF_TOKEN:-}" ]; then
     print_error "HF_TOKEN not set"
     exit 1
 fi
 
-if [ -z "$DEEPGRAM_API_KEY" ]; then
+if [ -z "${DEEPGRAM_API_KEY:-}" ]; then
     print_error "DEEPGRAM_API_KEY not set"
     exit 1
 fi
-
-print_info "HF_TOKEN length: ${#HF_TOKEN}"
-print_info "DEEPGRAM_API_KEY length: ${#DEEPGRAM_API_KEY}"
 
 # Install dependencies with uv
 print_info "Installing dependencies with uv..."

@@ -74,7 +74,7 @@ services:
     volumes:
       - ./proxy:/app
     environment:
-      - API_KEY=${PROXY_API_KEY}
+      - API_KEY=${PROXY_API_KEY:?Set PROXY_API_KEY before starting the GPU stack}
       - WHISPER_SERVICE_URL=http://whisper:9000
       - OLLAMA_SERVICE_URL=http://ollama:11434
       - ASR_MODEL=${ASR_MODEL:-large-v3-turbo}

@@ -53,6 +53,52 @@ context; worktrees, database files, logs, local virtual environments,
 `node_modules`, and existing frontend output cannot invalidate application-image
 layers.
 
+#### Environment file consistency
+
+Audit `.env` against `.env.example` after pulling changes:
+
+```bash
+./scripts/check-env.sh --all
+./scripts/check-env.sh
+./scripts/check-env.sh --strict
+./scripts/check-env.sh --json
+```
+
+The report contains key names and line numbers but never values. It shows file
+statistics, missing required keys, optional keys, undocumented keys, duplicate
+definitions, blank values, malformed assignments, and formatting issues. The
+command exits non-zero when the files need attention, so `--json` can be used in
+CI or other automation. `--all` treats the root contract as required and the
+standalone diarizator/GPU deployments as optional; missing optional `.env`
+files are reported without failing the audit.
+
+Apply only safe automatic repairs with:
+
+```bash
+./scripts/check-env.sh --fix
+```
+
+`--fix` creates a private timestamped `.env.backup-*`, adds required missing
+keys, securely generates a missing blank `SECRET_KEY`, normalizes assignment
+spacing, and removes identical duplicate definitions while preserving their
+effective last value. It never deletes undocumented keys and refuses to modify
+conflicting duplicates or malformed assignments.
+
+After reviewing the reported names, remove keys that are no longer owned by a
+specific template with an explicit, single-contract command:
+
+```bash
+./scripts/check-env.sh --fix --prune-undocumented
+./scripts/check-env.sh \
+  --env diarizator/.env \
+  --example diarizator/.env.template \
+  --fix --prune-undocumented
+```
+
+The three contracts remain separate because they are loaded by different
+deployments. Compose services pass explicit diarizator variables instead of
+injecting an entire application `.env` containing unrelated secrets.
+
 #### Readiness and reload diagnostics
 
 Container `running` status is not sufficient evidence that the application has
@@ -350,22 +396,20 @@ point/chunk totals, saved-place/track provenance and pending metadata conflicts.
 A missing source or hash mismatch is a failed backfill to investigate, never a
 reason to reconstruct geometry from `renderPath` or delete canonical points.
 
-Ports can be customized via environment variables (in `.env` or inline):
+Only Nginx entry-point ports are configurable from `.env`. Application service
+ports remain internal to the Compose network; MongoDB keeps its explicit local
+development port.
 
-| Service           | Variable             | Default |
-| ----------------- | -------------------- | ------- |
-| **Nginx (Proxy)** | `NGINX_PORT`         | `4433`  |
-| **Nginx (HTTP)**  | `NGINX_HTTP_PORT`    | `80`    |
-| **Nginx (HTTPS)** | `NGINX_HTTPS_PORT`   | `443`   |
-| **Frontend**      | `FRONTEND_PORT`      | `8080`  |
-| **Backend**       | `BACKEND_PORT`       | `5173`  |
-| **Worker**        | `PYTHON_WORKER_PORT` | `8000`  |
-| **Database**      | `MONGO_PORT`         | `27017` |
+| Published endpoint | Variable          | Default |
+| ------------------ | ----------------- | ------- |
+| **Nginx HTTPS**    | `NGINX_PORT`      | `4433`  |
+| **Nginx HTTP**     | `NGINX_HTTP_PORT` | `3210`  |
+| **MongoDB**        | fixed mapping     | `27017` |
 
 Example:
 
 ```bash
-NGINX_PORT=5000 FRONTEND_PORT=3000 BACKEND_PORT=4000 docker compose up -d
+NGINX_PORT=5000 NGINX_HTTP_PORT=5001 docker compose up -d nginx
 ```
 
 For more details on networking and SSL setup, see

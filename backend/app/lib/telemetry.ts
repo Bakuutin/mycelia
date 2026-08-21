@@ -17,70 +17,68 @@ import { IORedisInstrumentation } from "@opentelemetry/instrumentation-ioredis";
 import { metrics, trace } from "@opentelemetry/api";
 import { env } from "#/env.ts";
 
-const otlpEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT;
+let sdk: NodeSDK | undefined;
 
-const traceExporter = new OTLPTraceExporter({
-  url: `${otlpEndpoint}/v1/traces`,
-});
-const metricExporter = new OTLPMetricExporter({
-  url: `${otlpEndpoint}/v1/metrics`,
-});
+if (env.OTEL_ENABLED) {
+  const otlpEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  const traceExporter = new OTLPTraceExporter({
+    url: `${otlpEndpoint}/v1/traces`,
+  });
+  const metricExporter = new OTLPMetricExporter({
+    url: `${otlpEndpoint}/v1/metrics`,
+  });
+  const consoleTraceExporter = new ConsoleSpanExporter();
+  const consoleMetricExporter = new ConsoleMetricExporter();
+  const otlpMetricReader = new PeriodicExportingMetricReader({
+    exporter: metricExporter,
+    exportIntervalMillis: 5000,
+  });
+  const consoleMetricReader = new PeriodicExportingMetricReader({
+    exporter: consoleMetricExporter,
+    exportIntervalMillis: 5000,
+  });
 
-const consoleTraceExporter = new ConsoleSpanExporter();
-const consoleMetricExporter = new ConsoleMetricExporter();
-
-const otlpMetricReader = new PeriodicExportingMetricReader({
-  exporter: metricExporter,
-  exportIntervalMillis: 5000,
-});
-
-const consoleMetricReader = new PeriodicExportingMetricReader({
-  exporter: consoleMetricExporter,
-  exportIntervalMillis: 5000,
-});
-
-// Use SimpleSpanProcessor in test environment to avoid timer leaks
-// BatchSpanProcessor creates timers that can outlive test scope
-const isTest = Deno.env.get("DENO_TESTING") === "true" ||
-               typeof Deno !== "undefined" && Deno.test !== undefined;
-
-// Only log traces to console if explicitly enabled (disabled by default to reduce log noise)
-const enableConsoleTraces = Deno.env.get("OTEL_CONSOLE_TRACES") === "true";
-
-const spanProcessors = isTest
-  ? [
+  // Simple processors avoid timer leaks in tests; production batches spans.
+  const isTest = Deno.env.get("DENO_TESTING") === "true" ||
+    typeof Deno !== "undefined" && Deno.test !== undefined;
+  const enableConsoleTraces = Deno.env.get("OTEL_CONSOLE_TRACES") === "true";
+  const spanProcessors = isTest
+    ? [
       new SimpleSpanProcessor(traceExporter),
-      ...(enableConsoleTraces ? [new SimpleSpanProcessor(consoleTraceExporter)] : []),
+      ...(enableConsoleTraces
+        ? [new SimpleSpanProcessor(consoleTraceExporter)]
+        : []),
     ]
-  : [
+    : [
       new BatchSpanProcessor(traceExporter),
-      ...(enableConsoleTraces ? [new BatchSpanProcessor(consoleTraceExporter)] : []),
+      ...(enableConsoleTraces
+        ? [new BatchSpanProcessor(consoleTraceExporter)]
+        : []),
     ];
 
-// Only log metrics to console if explicitly enabled (disabled by default to reduce log noise)
-const enableConsoleMetrics = Deno.env.get("OTEL_CONSOLE_METRICS") === "true";
-const metricReaders = enableConsoleMetrics
-  ? [otlpMetricReader, consoleMetricReader]
-  : [otlpMetricReader];
+  const enableConsoleMetrics = Deno.env.get("OTEL_CONSOLE_METRICS") === "true";
+  const metricReaders = enableConsoleMetrics
+    ? [otlpMetricReader, consoleMetricReader]
+    : [otlpMetricReader];
 
-const sdk = new NodeSDK({
-  spanProcessors,
-  metricReaders,
-  instrumentations: [
-    new HttpInstrumentation(),
-    new ExpressInstrumentation(),
-    new MongoDBInstrumentation({
-      enhancedDatabaseReporting: true,
-      requireParentSpan: false,
-    }),
-    new IORedisInstrumentation(),
-  ],
-});
-
-sdk.start();
+  sdk = new NodeSDK({
+    spanProcessors,
+    metricReaders,
+    instrumentations: [
+      new HttpInstrumentation(),
+      new ExpressInstrumentation(),
+      new MongoDBInstrumentation({
+        enhancedDatabaseReporting: true,
+        requireParentSpan: false,
+      }),
+      new IORedisInstrumentation(),
+    ],
+  });
+  sdk.start();
+}
 
 export async function shutdownTelemetry(): Promise<void> {
-  await sdk.shutdown();
+  await sdk?.shutdown();
 }
 
 export const tracer = trace.getTracer("mycelia", "1.0.0");

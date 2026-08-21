@@ -64,13 +64,14 @@ if [[ -f "$ENV_FILE" ]]; then
         echo "Warning: .env already exists!"
         echo ""
         echo "Options:"
-        echo "  1. To sync new variables from .env.example, run: ./scripts/sync-env.sh"
-        echo "  2. To overwrite .env completely, run: ./scripts/setup.sh --force"
+        echo "  1. To audit it against .env.example, run: ./scripts/check-env.sh"
+        echo "  2. To apply safe fixes, run: ./scripts/check-env.sh --fix"
+        echo "  3. To overwrite .env completely, run: ./scripts/setup.sh --force"
         echo ""
         read -p "Overwrite existing .env? [y/N] " -n 1 -r
         echo ""
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Aborted. Use ./scripts/sync-env.sh to add missing variables."
+            echo "Aborted. Use ./scripts/check-env.sh to inspect missing variables."
             exit 0
         fi
     fi
